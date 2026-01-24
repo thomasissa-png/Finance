@@ -327,10 +327,82 @@ Finance/
 
 ---
 
-## 🔮 Fonctions Futures
+## 🚀 FONCTION 2 : Sélection Automatique de Turbos SG
 
-- **Fonction 2**: (À définir par l'utilisateur)
-- **Fonction 3**: (À définir par l'utilisateur)
+### Description
+
+Pour chaque opportunité identifiée, l'application **recommande automatiquement le meilleur turbo** (Call ou Put) de la Société Générale.
+
+### 🎯 Avantages
+
+**Amplification des gains avec effet de levier** :
+- Sous-jacent fait **+1%** → Turbo 10x fait **+10%**
+- Sélection automatique selon vos critères
+- Recommandation intégrée dans chaque analyse
+
+### 📊 Critères de Sélection
+
+Les turbos sont filtrés selon :
+- **Levier** : 5x à 15x (optimal : 10x)
+- **Distance à la barrière** : Minimum 10% de sécurité
+- **Échéance** : Au moins 30 jours
+- **Spread** : Maximum 0.5%
+
+### 🎯 Fonctionnement Automatique
+
+1. **Détection du signal**
+   - BUY → Recherche de Turbos CALL (haussiers)
+   - SELL → Recherche de Turbos PUT (baissiers)
+
+2. **Sélection du meilleur turbo**
+   - Filtrage selon critères
+   - Scoring intelligent
+   - Recommandation du turbo optimal
+
+3. **Affichage intégré**
+```
+  🎯 SIGNAL: 📈 ACHAT RECOMMANDÉ
+
+  🚀 TURBO RECOMMANDÉ:
+     Type: CALL (Haussier)
+     ISIN: FR0014008VK3
+     Levier: 10x
+     Échéance: 2026-03-31 (96 jours)
+
+     💡 Si LVMH fait +1.0% → Turbo fait environ +10.0%
+```
+
+### ⚙️ Configuration
+
+Dans `config.yaml` :
+```yaml
+turbos:
+  enabled: true
+  selection:
+    leverage_optimal: 10
+    barrier_distance_min: 10.0
+    min_days_to_expiry: 30
+```
+
+### 📋 Actifs Supportés
+
+- ✅ **15 Actions Euronext Paris** (LVMH, TotalEnergies, etc.)
+- ✅ **5 Indices majeurs** (CAC 40, S&P 500, DAX, etc.)
+- ⚠️ Forex/Métaux/Commodities : selon disponibilité SG
+
+### ⚠️ Mode Simulation Actuel
+
+**Important** : La Fonction 2 fonctionne actuellement en **mode simulation** avec des turbos fictifs mais réalistes.
+
+Pour passer en mode réel, il faudra implémenter le scraping du site Société Générale (structure du site à analyser).
+
+**Voir documentation complète** : [FONCTION2_TURBOS.md](FONCTION2_TURBOS.md)
+
+---
+
+## 🔮 Fonction 3
+
+- **À définir** selon vos besoins
 
 L'application se développe **fonction par fonction** selon vos besoins.
 
@@ -347,6 +419,17 @@ L'application se développe **fonction par fonction** selon vos besoins.
 > - ⚠️ Utilisez un **stop loss** strict
 >
 > **Tradez uniquement ce que vous pouvez vous permettre de perdre.**
+
+### ⚠️ Risques Spécifiques aux Turbos
+
+> **ATTENTION - Produits à effet de levier** :
+>
+> - 🔴 **Barrière désactivante** : Si le sous-jacent touche la barrière, le turbo vaut **0€**
+> - 🔴 **Perte totale possible** : Vous pouvez perdre **100% de votre investissement**
+> - 🔴 **Effet de levier** : Les pertes sont amplifiées autant que les gains
+> - 🔴 **Volatilité extrême** : Les turbos peuvent perdre beaucoup de valeur rapidement
+>
+> **Les turbos sont réservés aux traders expérimentés qui comprennent les risques !**
 
 ---
 

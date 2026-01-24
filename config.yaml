@@ -221,3 +221,61 @@ asset_categories:
   forex: "Devises (Forex)"
   commodities: "Matières Premières"
   indices: "Indices Boursiers"
+
+# ============================================================================
+# FONCTION 2: SÉLECTION DE TURBOS SOCIÉTÉ GÉNÉRALE
+# ============================================================================
+turbos:
+  # Activation de la fonction turbos
+  enabled: true
+
+  # URL de base du site Société Générale
+  base_url: "https://produits-de-bourse.societegenerale.com"
+
+  # Critères de sélection des turbos
+  selection:
+    # Levier préféré (range)
+    leverage_min: 5
+    leverage_max: 15
+    leverage_optimal: 10       # Levier idéal pour objectif +1% → +10%
+
+    # Distance à la barrière (sécurité)
+    barrier_distance_min: 10.0  # Minimum 10% de distance pour éviter désactivation
+
+    # Échéance minimale
+    min_days_to_expiry: 30      # Au moins 1 mois avant échéance
+
+    # Spread maximum acceptable
+    max_spread_percent: 0.5     # Spread max 0.5%
+
+  # Mapping des symboles vers les sous-jacents SG
+  # Format: "SYMBOL": "Nom du sous-jacent sur SG"
+  underlying_mapping:
+    # Actions Euronext Paris
+    "MC.PA": "LVMH"
+    "OR.PA": "L'OREAL"
+    "AI.PA": "AIR LIQUIDE"
+    "SAN.PA": "SANOFI"
+    "TTE.PA": "TOTALENERGIES"
+    "BNP.PA": "BNP PARIBAS"
+    "SU.PA": "SCHNEIDER ELECTRIC"
+    "SAF.PA": "SAFRAN"
+    "RMS.PA": "HERMES"
+    "CS.PA": "AXA"
+    "CAP.PA": "CAPGEMINI"
+    "VIE.PA": "VEOLIA"
+    "DG.PA": "VINCI"
+    "EN.PA": "BOUYGUES"
+    "RI.PA": "PERNOD RICARD"
+
+    # Indices (si disponibles)
+    "^FCHI": "CAC 40"
+    "^GSPC": "S&P 500"
+    "^DJI": "DOW JONES"
+    "^IXIC": "NASDAQ"
+    "^GDAXI": "DAX"
+
+  # Cache des turbos (évite de scraper à chaque fois)
+  cache:
+    enabled: true
+    duration_minutes: 60        # Durée de validité du cache (1 heure)

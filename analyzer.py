@@ -1,6 +1,7 @@
 """
 Module d'analyse et d'interrogation des données
 Fonction 1 : Système de backtesting et réponse aux questions
+Fonction 2 : Sélection automatique de turbos Société Générale
 """
 
 import pandas as pd
@@ -8,6 +9,7 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 from data_fetcher import EuronextDataFetcher
 from indicators import TechnicalIndicators
+from turbos_scraper import TurbosScraper
 from tabulate import tabulate
 from colorama import Fore, Style, init
 
@@ -24,6 +26,7 @@ class TradingAnalyzer:
         """Initialise l'analyseur"""
         self.fetcher = EuronextDataFetcher(config_path)
         self.indicators = TechnicalIndicators()
+        self.turbos_scraper = TurbosScraper(config_path)
         self.enriched_data: Dict[str, pd.DataFrame] = {}
 
     def get_asset_category(self, symbol: str) -> str:
@@ -176,14 +179,33 @@ class TradingAnalyzer:
         # Calcul du potentiel de gain de 1%
         target_gain_reachable = self._check_1percent_potential(df)
 
+        # Déterminer le signal de trading (BUY/SELL/HOLD)
+        signal = self._determine_signal(latest_indicators, trend)
+
+        # Recommandation de turbo (FONCTION 2)
+        turbo_recommendation = None
+        if signal in ['BUY', 'SELL']:
+            current_price = latest_indicators.get('Prix', 0)
+            turbos = self.turbos_scraper.find_turbos_for_asset(symbol, signal, current_price)
+            if turbos:
+                best_turbo = self.turbos_scraper.select_best_turbo(turbos, current_price)
+                if best_turbo:
+                    turbo_recommendation = {
+                        'turbo': best_turbo,
+                        'signal': signal,
+                        'formatted': self.turbos_scraper.format_turbo_recommendation(best_turbo, current_price)
+                    }
+
         return {
             'symbol': symbol,
             'indicateurs': latest_indicators,
             'volatilite_suffisante': is_volatile_enough,
             'volume_suffisant': has_good_volume,
             'tendance': 'Haussière' if trend == 1 else 'Baissière' if trend == -1 else 'Neutre',
+            'signal': signal,
             'potentiel_1pct': target_gain_reachable,
-            'score_trading': self._calculate_trading_score(latest_indicators, volatility, volume_ratio)
+            'score_trading': self._calculate_trading_score(latest_indicators, volatility, volume_ratio),
+            'turbo': turbo_recommendation
         }
 
     def _check_1percent_potential(self, df: pd.DataFrame, lookback_days: int = 10) -> Dict:
@@ -269,6 +291,58 @@ class TradingAnalyzer:
             score += 10
 
         return min(score, 100)
+
+    def _determine_signal(self, indicators: Dict, trend: int) -> str:
+        """
+        Détermine le signal de trading (BUY/SELL/HOLD)
+
+        Args:
+            indicators: Dictionnaire des indicateurs
+            trend: Tendance (-1, 0, 1)
+
+        Returns:
+            'BUY', 'SELL', ou 'HOLD'
+        """
+        rsi = indicators.get('RSI_14', 50)
+        macd = indicators.get('MACD', 0)
+        macd_signal = indicators.get('MACD_Signal', 0)
+        momentum = indicators.get('Momentum_10', 0)
+
+        # Compteur de signaux haussiers et baissiers
+        buy_signals = 0
+        sell_signals = 0
+
+        # RSI
+        if rsi < 40:
+            buy_signals += 1
+        elif rsi > 60:
+            sell_signals += 1
+
+        # MACD
+        if macd > macd_signal:
+            buy_signals += 1
+        else:
+            sell_signals += 1
+
+        # Tendance
+        if trend == 1:
+            buy_signals += 1
+        elif trend == -1:
+            sell_signals += 1
+
+        # Momentum
+        if momentum > 0:
+            buy_signals += 1
+        elif momentum < 0:
+            sell_signals += 1
+
+        # Décision finale
+        if buy_signals >= 3:
+            return 'BUY'
+        elif sell_signals >= 3:
+            return 'SELL'
+        else:
+            return 'HOLD'
 
     def find_best_daily_trading_candidates(self, top_n: int = 3, category: str = None) -> List[Tuple[str, Dict]]:
         """
@@ -370,6 +444,28 @@ class TradingAnalyzer:
         print(f"     SMA 5: {indicators.get('SMA_5', 'N/A')}€ | Distance: {indicators.get('Price_vs_SMA5', 'N/A')}%")
         print(f"     MACD: {indicators.get('MACD', 'N/A')} | Signal: {indicators.get('MACD_Signal', 'N/A')}")
         print(f"     Stochastic K: {indicators.get('Stochastic_K', 'N/A')}")
+
+        # Afficher le signal de trading
+        signal = analysis.get('signal', 'HOLD')
+        if signal == 'BUY':
+            signal_color = Fore.GREEN
+            signal_text = "📈 ACHAT RECOMMANDÉ"
+        elif signal == 'SELL':
+            signal_color = Fore.RED
+            signal_text = "📉 VENTE RECOMMANDÉE"
+        else:
+            signal_color = Fore.YELLOW
+            signal_text = "⏸️  CONSERVER / ATTENDRE"
+
+        print(f"\n  {signal_color}🎯 SIGNAL: {signal_text}{Style.RESET_ALL}")
+
+        # Afficher la recommandation de turbo (FONCTION 2)
+        turbo_rec = analysis.get('turbo')
+        if turbo_rec:
+            print(f"{Fore.CYAN}{turbo_rec['formatted']}{Style.RESET_ALL}")
+        elif signal in ['BUY', 'SELL']:
+            print(f"\n  ℹ️  Aucun turbo SG trouvé pour {symbol} (ou non disponible)")
+
         print()
 
     def answer_question(self, question_type: str, **kwargs):
