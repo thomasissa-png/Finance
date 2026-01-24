@@ -1,0 +1,81 @@
+# Configuration Trading Euronext Paris
+
+# Actions du CAC40 et valeurs liquides pour day trading
+# Suffixe .PA pour Euronext Paris
+stocks:
+  # Valeurs très liquides du CAC40
+  - MC.PA      # LVMH
+  - OR.PA      # L'Oréal
+  - AI.PA      # Air Liquide
+  - SAN.PA     # Sanofi
+  - TTE.PA     # TotalEnergies
+  - BNP.PA     # BNP Paribas
+  - SU.PA      # Schneider Electric
+  - SAF.PA     # Safran
+  - RMS.PA     # Hermès
+  - CS.PA      # AXA
+  - CAP.PA     # Capgemini
+  - VIE.PA     # Veolia
+  - DG.PA      # Vinci
+  - EN.PA      # Bouygues (via ENI si disponible, sinon EN)
+  - RI.PA      # Pernod Ricard
+
+# Paramètres de backtesting
+backtesting:
+  # Période d'analyse
+  days_history: 20
+
+  # Objectif de trading
+  target_gain_percent: 1.0      # Objectif de gain : 1%
+  max_loss_percent: 0.5         # Stop loss : -0.5%
+
+  # Horaires de trading (heure de Paris)
+  market_open: "09:00"
+  market_close: "17:30"
+
+  # Critères de sélection
+  min_volume: 100000            # Volume minimum quotidien
+  min_volatility: 0.5           # Volatilité minimum (%)
+  max_volatility: 3.0           # Volatilité maximum (%)
+
+# Indicateurs techniques à calculer
+indicators:
+  # Tendance
+  - RSI_14
+  - MACD
+  - SMA_5
+  - SMA_10
+  - SMA_20
+  - EMA_5
+  - EMA_10
+
+  # Volatilité
+  - ATR_14
+  - BOLLINGER_BANDS
+
+  # Volume
+  - VOLUME_SMA_20
+  - VOLUME_RATIO
+
+  # Momentum
+  - MOMENTUM_10
+  - ROC_10
+  - STOCHASTIC
+
+  # Support/Résistance
+  - SUPPORT_RESISTANCE
+
+# Filtres pour sélection quotidienne
+selection_criteria:
+  # Momentum positif
+  rsi_range: [40, 60]           # RSI dans une zone neutre/légèrement haussière
+
+  # Volatilité optimale pour 1% de gain
+  volatility_min: 0.8
+  volatility_max: 2.5
+
+  # Volume au-dessus de la moyenne
+  volume_ratio_min: 1.2         # Volume > 120% de la moyenne
+
+  # Tendance court terme
+  price_above_sma5: true        # Prix au-dessus de SMA5
