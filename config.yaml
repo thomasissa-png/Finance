@@ -1,8 +1,9 @@
-# Configuration Trading Euronext Paris
+# Configuration Trading Multi-Marchés
 
-# Actions du CAC40 et valeurs liquides pour day trading
-# Suffixe .PA pour Euronext Paris
-stocks:
+# ============================================================================
+# ACTIONS EURONEXT PARIS (CAC40)
+# ============================================================================
+stocks_euronext:
   # Valeurs très liquides du CAC40
   - MC.PA      # LVMH
   - OR.PA      # L'Oréal
@@ -17,10 +18,139 @@ stocks:
   - CAP.PA     # Capgemini
   - VIE.PA     # Veolia
   - DG.PA      # Vinci
-  - EN.PA      # Bouygues (via ENI si disponible, sinon EN)
+  - EN.PA      # Bouygues
   - RI.PA      # Pernod Ricard
 
-# Paramètres de backtesting
+# ============================================================================
+# MÉTAUX PRÉCIEUX
+# ============================================================================
+metals:
+  - GC=F       # Or (Gold)
+  - SI=F       # Argent (Silver)
+  - PL=F       # Platine (Platinum)
+  - PA=F       # Palladium
+
+# ============================================================================
+# DEVISES / FOREX (Paires majeures)
+# ============================================================================
+forex:
+  - EURUSD=X   # Euro/Dollar US
+  - GBPUSD=X   # Livre Sterling/Dollar US
+  - USDJPY=X   # Dollar US/Yen Japonais
+  - AUDUSD=X   # Dollar Australien/Dollar US
+  - USDCHF=X   # Dollar US/Franc Suisse
+  - USDCAD=X   # Dollar US/Dollar Canadien
+  - NZDUSD=X   # Dollar Néo-Zélandais/Dollar US
+  - EURGBP=X   # Euro/Livre Sterling
+  - EURJPY=X   # Euro/Yen Japonais
+
+# ============================================================================
+# COMMODITIES / MATIÈRES PREMIÈRES
+# ============================================================================
+commodities:
+  # Énergie
+  - CL=F       # Pétrole WTI (West Texas Intermediate)
+  - BZ=F       # Pétrole Brent
+  - NG=F       # Gaz Naturel
+
+  # Agriculture
+  - ZC=F       # Maïs (Corn)
+  - ZW=F       # Blé (Wheat)
+  - ZS=F       # Soja (Soybeans)
+  - KC=F       # Café (Coffee)
+  - SB=F       # Sucre (Sugar)
+
+  # Métaux industriels
+  - HG=F       # Cuivre (Copper)
+
+# ============================================================================
+# INDICES BOURSIERS MONDIAUX
+# ============================================================================
+indices:
+  # France
+  - ^FCHI      # CAC 40
+
+  # États-Unis
+  - ^GSPC      # S&P 500
+  - ^DJI       # Dow Jones Industrial Average
+  - ^IXIC      # Nasdaq Composite
+  - ^RUT       # Russell 2000
+
+  # Europe
+  - ^GDAXI     # DAX (Allemagne)
+  - ^FTSE      # FTSE 100 (UK)
+  - ^IBEX      # IBEX 35 (Espagne)
+  - ^FTSEMIB   # FTSE MIB (Italie)
+
+  # Asie-Pacifique
+  - ^N225      # Nikkei 225 (Japon)
+  - ^HSI       # Hang Seng (Hong Kong)
+  - ^AXJO      # ASX 200 (Australie)
+
+# Liste consolidée de tous les actifs
+stocks:
+  # Actions Euronext Paris
+  - MC.PA
+  - OR.PA
+  - AI.PA
+  - SAN.PA
+  - TTE.PA
+  - BNP.PA
+  - SU.PA
+  - SAF.PA
+  - RMS.PA
+  - CS.PA
+  - CAP.PA
+  - VIE.PA
+  - DG.PA
+  - EN.PA
+  - RI.PA
+
+  # Métaux précieux
+  - GC=F
+  - SI=F
+  - PL=F
+  - PA=F
+
+  # Forex
+  - EURUSD=X
+  - GBPUSD=X
+  - USDJPY=X
+  - AUDUSD=X
+  - USDCHF=X
+  - USDCAD=X
+  - NZDUSD=X
+  - EURGBP=X
+  - EURJPY=X
+
+  # Commodities
+  - CL=F
+  - BZ=F
+  - NG=F
+  - ZC=F
+  - ZW=F
+  - ZS=F
+  - KC=F
+  - SB=F
+  - HG=F
+
+  # Indices
+  - ^FCHI
+  - ^GSPC
+  - ^DJI
+  - ^IXIC
+  - ^RUT
+  - ^GDAXI
+  - ^FTSE
+  - ^IBEX
+  - ^FTSEMIB
+  - ^N225
+  - ^HSI
+  - ^AXJO
+
+# ============================================================================
+# PARAMÈTRES DE BACKTESTING
+# ============================================================================
 backtesting:
   # Période d'analyse
   days_history: 20
@@ -33,10 +163,10 @@ backtesting:
   market_open: "09:00"
   market_close: "17:30"
 
-  # Critères de sélection
-  min_volume: 100000            # Volume minimum quotidien
-  min_volatility: 0.5           # Volatilité minimum (%)
-  max_volatility: 3.0           # Volatilité maximum (%)
+  # Critères de sélection (ajustés pour multi-actifs)
+  min_volume: 10000             # Volume minimum quotidien (réduit pour forex/indices)
+  min_volatility: 0.3           # Volatilité minimum (%) - réduit pour forex
+  max_volatility: 5.0           # Volatilité maximum (%) - augmenté pour forex/commodities
 
 # Indicateurs techniques à calculer
 indicators:
@@ -65,17 +195,29 @@ indicators:
   # Support/Résistance
   - SUPPORT_RESISTANCE
 
-# Filtres pour sélection quotidienne
+# ============================================================================
+# FILTRES POUR SÉLECTION QUOTIDIENNE
+# ============================================================================
 selection_criteria:
   # Momentum positif
-  rsi_range: [40, 60]           # RSI dans une zone neutre/légèrement haussière
+  rsi_range: [35, 65]           # RSI dans une zone neutre/légèrement haussière (élargi pour forex)
 
   # Volatilité optimale pour 1% de gain
-  volatility_min: 0.8
-  volatility_max: 2.5
+  volatility_min: 0.5           # Réduit pour inclure plus d'actifs
+  volatility_max: 4.0           # Augmenté pour forex et commodities
 
   # Volume au-dessus de la moyenne
-  volume_ratio_min: 1.2         # Volume > 120% de la moyenne
+  volume_ratio_min: 0.8         # Réduit car forex/indices ont des patterns différents
 
   # Tendance court terme
-  price_above_sma5: true        # Prix au-dessus de SMA5
+  price_above_sma5: false       # Désactivé pour permettre trading contre-tendance
+
+# ============================================================================
+# CATÉGORIES D'ACTIFS (pour filtrage et affichage)
+# ============================================================================
+asset_categories:
+  actions: "Actions Euronext Paris"
+  metals: "Métaux Précieux"
+  forex: "Devises (Forex)"
+  commodities: "Matières Premières"
+  indices: "Indices Boursiers"

@@ -26,12 +26,110 @@ class TradingAnalyzer:
         self.indicators = TechnicalIndicators()
         self.enriched_data: Dict[str, pd.DataFrame] = {}
 
+    def get_asset_category(self, symbol: str) -> str:
+        """
+        Identifie la catégorie d'un actif basé sur son symbole
+
+        Args:
+            symbol: Symbole de l'actif
+
+        Returns:
+            Catégorie de l'actif
+        """
+        if symbol.endswith('.PA'):
+            return '🏢 Action (Euronext)'
+        elif symbol.endswith('=F'):
+            # Distinguer métaux précieux et commodities
+            if symbol in ['GC=F', 'SI=F', 'PL=F', 'PA=F']:
+                return '🥇 Métal Précieux'
+            else:
+                return '🛢️  Commodity'
+        elif symbol.endswith('=X'):
+            return '💱 Forex'
+        elif symbol.startswith('^'):
+            return '📊 Indice'
+        else:
+            return '❓ Autre'
+
+    def get_asset_name(self, symbol: str) -> str:
+        """
+        Retourne le nom complet d'un actif
+
+        Args:
+            symbol: Symbole de l'actif
+
+        Returns:
+            Nom de l'actif
+        """
+        names = {
+            # Actions Euronext
+            'MC.PA': 'LVMH',
+            'OR.PA': 'L\'Oréal',
+            'AI.PA': 'Air Liquide',
+            'SAN.PA': 'Sanofi',
+            'TTE.PA': 'TotalEnergies',
+            'BNP.PA': 'BNP Paribas',
+            'SU.PA': 'Schneider Electric',
+            'SAF.PA': 'Safran',
+            'RMS.PA': 'Hermès',
+            'CS.PA': 'AXA',
+            'CAP.PA': 'Capgemini',
+            'VIE.PA': 'Veolia',
+            'DG.PA': 'Vinci',
+            'EN.PA': 'Bouygues',
+            'RI.PA': 'Pernod Ricard',
+
+            # Métaux précieux
+            'GC=F': 'Or (Gold)',
+            'SI=F': 'Argent (Silver)',
+            'PL=F': 'Platine (Platinum)',
+            'PA=F': 'Palladium',
+
+            # Forex
+            'EURUSD=X': 'EUR/USD',
+            'GBPUSD=X': 'GBP/USD',
+            'USDJPY=X': 'USD/JPY',
+            'AUDUSD=X': 'AUD/USD',
+            'USDCHF=X': 'USD/CHF',
+            'USDCAD=X': 'USD/CAD',
+            'NZDUSD=X': 'NZD/USD',
+            'EURGBP=X': 'EUR/GBP',
+            'EURJPY=X': 'EUR/JPY',
+
+            # Commodities
+            'CL=F': 'Pétrole WTI',
+            'BZ=F': 'Pétrole Brent',
+            'NG=F': 'Gaz Naturel',
+            'ZC=F': 'Maïs',
+            'ZW=F': 'Blé',
+            'ZS=F': 'Soja',
+            'KC=F': 'Café',
+            'SB=F': 'Sucre',
+            'HG=F': 'Cuivre',
+
+            # Indices
+            '^FCHI': 'CAC 40',
+            '^GSPC': 'S&P 500',
+            '^DJI': 'Dow Jones',
+            '^IXIC': 'Nasdaq',
+            '^RUT': 'Russell 2000',
+            '^GDAXI': 'DAX',
+            '^FTSE': 'FTSE 100',
+            '^IBEX': 'IBEX 35',
+            '^FTSEMIB': 'FTSE MIB',
+            '^N225': 'Nikkei 225',
+            '^HSI': 'Hang Seng',
+            '^AXJO': 'ASX 200'
+        }
+        return names.get(symbol, symbol)
+
     def load_and_prepare_data(self):
         """
         Charge toutes les données et calcule tous les indicateurs
         """
         print(f"\n{Fore.CYAN}{'='*70}")
-        print(f"{Fore.CYAN}📊 CHARGEMENT DES DONNÉES EURONEXT PARIS")
+        print(f"{Fore.CYAN}📊 CHARGEMENT DES DONNÉES MULTI-MARCHÉS")
+        print(f"{Fore.CYAN}   Actions • Forex • Métaux • Commodities • Indices")
         print(f"{Fore.CYAN}{'='*70}\n")
 
         # Récupérer les données brutes
@@ -172,21 +270,39 @@ class TradingAnalyzer:
 
         return min(score, 100)
 
-    def find_best_daily_trading_candidates(self, top_n: int = 3) -> List[Tuple[str, Dict]]:
+    def find_best_daily_trading_candidates(self, top_n: int = 3, category: str = None) -> List[Tuple[str, Dict]]:
         """
         Trouve les N meilleures actions pour du day trading
 
         Args:
             top_n: Nombre de candidats à retourner
+            category: Filtrer par catégorie ('action', 'forex', 'metal', 'commodity', 'indice', None=tous)
 
         Returns:
             Liste de tuples (symbol, analysis)
         """
-        print(f"\n{Fore.CYAN}🎯 RECHERCHE DES MEILLEURES OPPORTUNITÉS POUR DAY TRADING\n")
+        if category:
+            print(f"\n{Fore.CYAN}🎯 RECHERCHE DES MEILLEURES OPPORTUNITÉS ({category.upper()})\n")
+        else:
+            print(f"\n{Fore.CYAN}🎯 RECHERCHE DES MEILLEURES OPPORTUNITÉS (TOUS MARCHÉS)\n")
 
         candidates = []
 
         for symbol in self.enriched_data.keys():
+            # Filtrer par catégorie si spécifié
+            if category:
+                asset_category = self.get_asset_category(symbol).lower()
+                if category == 'action' and not symbol.endswith('.PA'):
+                    continue
+                elif category == 'forex' and not symbol.endswith('=X'):
+                    continue
+                elif category == 'metal' and symbol not in ['GC=F', 'SI=F', 'PL=F', 'PA=F']:
+                    continue
+                elif category == 'commodity' and (not symbol.endswith('=F') or symbol in ['GC=F', 'SI=F', 'PL=F', 'PA=F']):
+                    continue
+                elif category == 'indice' and not symbol.startswith('^'):
+                    continue
+
             analysis = self.get_stock_analysis(symbol)
 
             # Filtres de base
@@ -228,11 +344,18 @@ class TradingAnalyzer:
         else:
             color = Fore.WHITE
 
+        # Récupérer catégorie et nom
+        category = self.get_asset_category(symbol)
+        name = self.get_asset_name(symbol)
+
         print(f"{color}{'='*70}")
-        print(f"{color}#{rank} - {symbol} | Score: {score}/100 ⭐")
+        print(f"{color}#{rank} - {symbol} | {name}")
+        print(f"{color}{category} | Score: {score}/100 ⭐")
         print(f"{color}{'='*70}\n")
 
-        print(f"  💰 Prix actuel: {indicators['Prix']}€")
+        # Adapter l'affichage du prix selon le type d'actif
+        price_unit = "€" if symbol.endswith('.PA') else ""
+        print(f"  💰 Prix actuel: {indicators['Prix']}{price_unit}")
         print(f"  📊 Tendance: {analysis['tendance']}")
         print(f"  📈 Volatilité 5j: {indicators.get('Volatility_5d', 'N/A')}%")
         print(f"  📦 Ratio Volume: {indicators.get('Volume_Ratio', 'N/A')}x")
