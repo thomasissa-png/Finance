@@ -165,16 +165,16 @@ class TradingAnalyzer:
         latest_indicators = self.indicators.get_latest_indicators(df)
 
         # Analyse de la volatilité pour day trading
-        volatility = latest_indicators.get('Volatility_5d', 0)
+        volatility = latest_indicators.get('Volatility_5d') or 0
         is_volatile_enough = volatility >= 0.8
 
         # Analyse du volume
-        volume_ratio = latest_indicators.get('Volume_Ratio', 0)
+        volume_ratio = latest_indicators.get('Volume_Ratio') or 0
         has_good_volume = volume_ratio >= 1.0
 
         # Analyse de la tendance
-        trend = latest_indicators.get('Trend', 0)
-        price_vs_sma5 = latest_indicators.get('Price_vs_SMA5', 0)
+        trend = latest_indicators.get('Trend') or 0
+        price_vs_sma5 = latest_indicators.get('Price_vs_SMA5') or 0
 
         # Calcul du potentiel de gain de 1%
         target_gain_reachable = self._check_1percent_potential(df)
@@ -185,7 +185,7 @@ class TradingAnalyzer:
         # Recommandation de turbo (FONCTION 2)
         turbo_recommendation = None
         if signal in ['BUY', 'SELL']:
-            current_price = latest_indicators.get('Prix', 0)
+            current_price = latest_indicators.get('Prix') or 0
             turbos = self.turbos_scraper.find_turbos_for_asset(symbol, signal, current_price)
             if turbos:
                 best_turbo = self.turbos_scraper.select_best_turbo(turbos, current_price)
@@ -269,7 +269,7 @@ class TradingAnalyzer:
             score += 15
 
         # RSI (25 points max)
-        rsi = indicators.get('RSI_14', 50)
+        rsi = indicators.get('RSI_14') or 50
         if 40 <= rsi <= 60:
             score += 25
         elif 30 <= rsi <= 70:
@@ -280,8 +280,8 @@ class TradingAnalyzer:
             score += 10
 
         # Tendance et momentum (20 points max)
-        trend = indicators.get('Trend', 0)
-        momentum = indicators.get('Momentum_10', 0)
+        trend = indicators.get('Trend') or 0
+        momentum = indicators.get('Momentum_10') or 0
 
         if trend == 1 and momentum > 0:
             score += 20
@@ -303,10 +303,10 @@ class TradingAnalyzer:
         Returns:
             'BUY', 'SELL', ou 'HOLD'
         """
-        rsi = indicators.get('RSI_14', 50)
-        macd = indicators.get('MACD', 0)
-        macd_signal = indicators.get('MACD_Signal', 0)
-        momentum = indicators.get('Momentum_10', 0)
+        rsi = indicators.get('RSI_14') or 50
+        macd = indicators.get('MACD') or 0
+        macd_signal = indicators.get('MACD_Signal') or 0
+        momentum = indicators.get('Momentum_10') or 0
 
         # Compteur de signaux haussiers et baissiers
         buy_signals = 0
