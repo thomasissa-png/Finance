@@ -1,0 +1,422 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Agent Trading{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <!-- Header Stats -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-icon green">&#128200;</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-trades">-</span>
+                <span class="stat-label">Trades Aujourd'hui</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon blue">&#127919;</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-taux">-%</span>
+                <span class="stat-label">Taux Reussite</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon yellow">&#128176;</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-pnl">-</span>
+                <span class="stat-label">PnL Semaine</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon purple">&#128240;</div>
+            <div class="stat-content">
+                <span class="stat-value" id="stat-news">0/3</span>
+                <span class="stat-label">Alertes News</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Grid -->
+    <div class="dashboard-grid">
+        <!-- Left Column - Markets -->
+        <div class="card markets-card">
+            <div class="card-header">
+                <h2>&#128200; Marches en Direct</h2>
+                <button class="btn-refresh" onclick="refreshMarkets()">&#8635; Actualiser</button>
+            </div>
+            <div class="card-body">
+                <div id="markets-loading" class="loading">Chargement des donnees...</div>
+                <div id="markets-content" class="markets-grid" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- Right Column - Last Analysis -->
+        <div class="card analysis-card">
+            <div class="card-header">
+                <h2>&#128161; Derniere Analyse</h2>
+                <span class="analysis-time" id="analysis-time">--:--</span>
+            </div>
+            <div class="card-body">
+                <div id="analysis-loading" class="loading">Chargement...</div>
+                <div id="analysis-content" style="display: none;">
+                    <div class="analysis-section">
+                        <h3>Contexte Marche</h3>
+                        <p id="contexte-marche">-</p>
+                    </div>
+                    <div class="analysis-section">
+                        <h3>Opportunites</h3>
+                        <div id="opportunites-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Actions Row -->
+    <div class="actions-row">
+        <button class="btn btn-primary btn-large" onclick="lancerAnalyse()">
+            <span class="btn-icon">&#128640;</span>
+            Lancer Analyse Maintenant
+        </button>
+        <a href="/trading" class="btn btn-secondary btn-large">
+            <span class="btn-icon">&#128176;</span>
+            Voir Toutes les Opportunites
+        </a>
+    </div>
+
+    <!-- Bottom Grid -->
+    <div class="dashboard-grid-3">
+        <!-- Trades du jour -->
+        <div class="card">
+            <div class="card-header">
+                <h2>&#128176; Trades du Jour</h2>
+            </div>
+            <div class="card-body">
+                <div id="trades-jour" class="trades-list">
+                    <p class="no-data">Aucun trade aujourd'hui</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Evenements -->
+        <div class="card">
+            <div class="card-header">
+                <h2>&#128197; Evenements a Venir</h2>
+            </div>
+            <div class="card-body">
+                <div id="evenements-list">
+                    <p class="no-data">Chargement...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mouvements forts -->
+        <div class="card">
+            <div class="card-header">
+                <h2>&#128293; Mouvements Actifs</h2>
+            </div>
+            <div class="card-body">
+                <div id="mouvements-list">
+                    <p class="no-data">Chargement...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Analyse -->
+<div id="modal-analyse" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>&#128640; Analyse en cours...</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="loading-spinner"></div>
+            <p id="modal-status">Recuperation des donnees de marche...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Variables globales
+let refreshInterval = null;
+
+// Initialisation
+document.addEventListener('DOMContentLoaded', function() {
+    loadDashboard();
+    // Rafraichir toutes les 60 secondes
+    refreshInterval = setInterval(loadDashboard, 60000);
+});
+
+async function loadDashboard() {
+    await Promise.all([
+        refreshMarkets(),
+        loadLastAnalysis(),
+        loadStats(),
+        loadTradesJour()
+    ]);
+}
+
+async function refreshMarkets() {
+    const loading = document.getElementById('markets-loading');
+    const content = document.getElementById('markets-content');
+
+    try {
+        const response = await fetch('/api/donnees-marche');
+        const data = await response.json();
+
+        if (data.success) {
+            renderMarkets(data.donnees);
+            loading.style.display = 'none';
+            content.style.display = 'grid';
+        }
+    } catch (error) {
+        console.error('Erreur markets:', error);
+        loading.textContent = 'Erreur de chargement';
+    }
+}
+
+function renderMarkets(donnees) {
+    const content = document.getElementById('markets-content');
+    const categories = {
+        'Indices': ['CAC 40', 'S&P 500', 'Nasdaq', 'DAX', 'VIX'],
+        'Tech US': ['Apple', 'Microsoft', 'NVIDIA', 'Tesla', 'Meta'],
+        'Commodites': ['Or', 'Petrole Brent', 'Argent', 'Gaz naturel'],
+        'Forex': ['EUR/USD', 'GBP/USD', 'USD/JPY']
+    };
+
+    let html = '';
+    for (const [cat, actifs] of Object.entries(categories)) {
+        html += `<div class="market-category">
+            <h4>${cat}</h4>
+            <div class="market-items">`;
+
+        for (const actif of actifs) {
+            if (donnees[actif]) {
+                const d = donnees[actif];
+                const varClass = d.variation >= 0 ? 'positive' : 'negative';
+                const arrow = d.variation >= 0 ? '&#9650;' : '&#9660;';
+                html += `
+                    <div class="market-item">
+                        <span class="market-name">${actif}</span>
+                        <span class="market-price">${d.prix}</span>
+                        <span class="market-var ${varClass}">${arrow} ${d.variation.toFixed(2)}%</span>
+                    </div>`;
+            }
+        }
+
+        html += '</div></div>';
+    }
+
+    content.innerHTML = html;
+
+    // Stocker les mouvements forts
+    updateMouvementsForts(donnees);
+}
+
+function updateMouvementsForts(donnees) {
+    const list = document.getElementById('mouvements-list');
+
+    // Trier par variation absolue
+    const sorted = Object.entries(donnees)
+        .map(([nom, d]) => ({nom, ...d}))
+        .sort((a, b) => Math.abs(b.variation) - Math.abs(a.variation))
+        .slice(0, 6);
+
+    let html = '';
+    for (const item of sorted) {
+        const varClass = item.variation >= 0 ? 'positive' : 'negative';
+        const icon = item.variation >= 0 ? '&#128293;' : '&#128165;';
+        html += `
+            <div class="mouvement-item ${varClass}">
+                <span class="mouvement-icon">${icon}</span>
+                <span class="mouvement-name">${item.nom}</span>
+                <span class="mouvement-var">${item.variation >= 0 ? '+' : ''}${item.variation.toFixed(2)}%</span>
+            </div>`;
+    }
+
+    list.innerHTML = html || '<p class="no-data">Aucun mouvement significatif</p>';
+}
+
+async function loadLastAnalysis() {
+    const loading = document.getElementById('analysis-loading');
+    const content = document.getElementById('analysis-content');
+
+    try {
+        const response = await fetch('/api/derniere-analyse');
+        const data = await response.json();
+
+        if (data.success && data.analyse) {
+            renderAnalysis(data.analyse);
+            loading.style.display = 'none';
+            content.style.display = 'block';
+        } else {
+            loading.textContent = 'Aucune analyse disponible';
+        }
+    } catch (error) {
+        console.error('Erreur analyse:', error);
+        loading.textContent = 'Erreur de chargement';
+    }
+}
+
+function renderAnalysis(analyse) {
+    document.getElementById('analysis-time').textContent = analyse.heure || '--:--';
+
+    const contenu = analyse.contenu;
+    if (contenu) {
+        document.getElementById('contexte-marche').textContent =
+            contenu.contexte_marche || 'Non disponible';
+
+        // Opportunites
+        const oppList = document.getElementById('opportunites-list');
+        if (contenu.opportunites && contenu.opportunites.length > 0) {
+            let html = '';
+            for (const opp of contenu.opportunites.slice(0, 3)) {
+                const newsTag = opp.is_news_trading ?
+                    '<span class="tag tag-news">NEWS</span>' : '';
+                html += `
+                    <div class="opportunity-card">
+                        <div class="opp-header">
+                            <span class="opp-name">${opp.actif}</span>
+                            ${newsTag}
+                        </div>
+                        <div class="opp-price">${opp.prix_actuel}</div>
+                        <div class="opp-catalyst">${opp.catalyseur || '-'}</div>
+                        <div class="opp-levels">
+                            <span class="level stop">Stop: ${opp.stop}</span>
+                            <span class="level tp">TP1: ${opp.tp1}</span>
+                        </div>
+                    </div>`;
+            }
+            oppList.innerHTML = html;
+        } else {
+            oppList.innerHTML = '<p class="no-data">Aucune opportunite</p>';
+        }
+
+        // Evenements
+        const evtList = document.getElementById('evenements-list');
+        if (contenu.evenements_a_venir && contenu.evenements_a_venir.length > 0) {
+            let html = '';
+            for (const evt of contenu.evenements_a_venir.slice(0, 5)) {
+                const stars = '&#11088;'.repeat(evt.importance || 1);
+                html += `
+                    <div class="event-item">
+                        <span class="event-time">${evt.heure}</span>
+                        <span class="event-name">${evt.evenement}</span>
+                        <span class="event-importance">${stars}</span>
+                    </div>`;
+            }
+            evtList.innerHTML = html;
+        } else {
+            evtList.innerHTML = '<p class="no-data">Aucun evenement programme</p>';
+        }
+    }
+}
+
+async function loadStats() {
+    try {
+        // Stats du jour
+        const respJour = await fetch('/api/performances?periode=jour');
+        const dataJour = await respJour.json();
+
+        if (dataJour.success) {
+            document.getElementById('stat-trades').textContent = dataJour.performances.total;
+            document.getElementById('stat-taux').textContent =
+                dataJour.performances.taux_reussite + '%';
+        }
+
+        // Stats semaine
+        const respSemaine = await fetch('/api/performances?periode=semaine');
+        const dataSemaine = await respSemaine.json();
+
+        if (dataSemaine.success) {
+            const pnl = dataSemaine.performances.pnl_total;
+            document.getElementById('stat-pnl').textContent =
+                (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
+            document.getElementById('stat-pnl').className =
+                'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
+        }
+
+        // Status
+        const respStatus = await fetch('/api/status');
+        const status = await respStatus.json();
+
+        if (status) {
+            document.getElementById('stat-news').textContent =
+                `${status.news_envoyees}/${status.max_news}`;
+            document.getElementById('market-status').textContent = status.marche_info;
+        }
+    } catch (error) {
+        console.error('Erreur stats:', error);
+    }
+}
+
+async function loadTradesJour() {
+    try {
+        const response = await fetch('/api/trades-jour');
+        const data = await response.json();
+
+        const container = document.getElementById('trades-jour');
+
+        if (data.success && data.trades.length > 0) {
+            let html = '';
+            for (const trade of data.trades.slice(0, 5)) {
+                const statusClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'success' :
+                                   trade.resultat === 'STOP' ? 'fail' : 'pending';
+                const statusIcon = statusClass === 'success' ? '&#9989;' :
+                                  statusClass === 'fail' ? '&#10060;' : '&#9203;';
+
+                html += `
+                    <div class="trade-item ${statusClass}">
+                        <div class="trade-info">
+                            <span class="trade-time">${trade.heure_message}</span>
+                            <span class="trade-name">${trade.actif}</span>
+                        </div>
+                        <div class="trade-status">
+                            <span class="trade-icon">${statusIcon}</span>
+                            <span class="trade-result">${trade.resultat || 'En cours'}</span>
+                        </div>
+                    </div>`;
+            }
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p class="no-data">Aucun trade aujourd\'hui</p>';
+        }
+    } catch (error) {
+        console.error('Erreur trades:', error);
+    }
+}
+
+async function lancerAnalyse() {
+    const modal = document.getElementById('modal-analyse');
+    const status = document.getElementById('modal-status');
+
+    modal.style.display = 'flex';
+    status.textContent = 'Recuperation des donnees de marche...';
+
+    try {
+        const response = await fetch('/api/analyse');
+        const data = await response.json();
+
+        if (data.success) {
+            status.textContent = 'Analyse terminee !';
+            setTimeout(() => {
+                closeModal();
+                loadDashboard();
+            }, 1500);
+        } else {
+            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+        }
+    } catch (error) {
+        status.textContent = 'Erreur de connexion';
+    }
+}
+
+function closeModal() {
+    document.getElementById('modal-analyse').style.display = 'none';
+}
+</script>
+{% endblock %}
