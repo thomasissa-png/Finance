@@ -5,136 +5,107 @@
 {% block content %}
 <div class="trading-desk">
 
-    <!-- 1. CONTEXTE DU JOUR (Hero) -->
-    <section class="context-hero">
-        <div class="context-hero-header">
-            <div class="context-hero-icon">📊</div>
-            <div>
-                <h1 class="context-hero-title">Contexte du Jour</h1>
-                <p class="context-hero-subtitle">Dernière mise à jour : <span id="context-time">--:--</span></p>
-            </div>
-            <button class="btn btn-primary" onclick="lancerAnalyse()" style="margin-left: auto;">
-                Nouvelle Analyse
-            </button>
+    <!-- TOP BAR: Titre + Bouton Actualiser -->
+    <div class="page-top-bar">
+        <h1 class="page-top-title">Dashboard</h1>
+        <button class="btn-refresh" id="btn-refresh" onclick="actualiserTout()">
+            ⟳ Actualiser
+        </button>
+    </div>
+
+    <!-- 1. CONTEXTE DU JOUR -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📊</span>
+            <h2 class="section-title">Contexte du Jour</h2>
+            <span class="section-meta">Mis à jour : <span id="context-time">--:--</span></span>
         </div>
-        <div class="context-content" id="context-text">
-            Lancez une analyse pour obtenir le contexte de marché du jour...
-        </div>
-        <div class="context-tags" id="context-tags">
-            <!-- Tags dynamiques -->
+        <div class="section-content">
+            <ul class="context-bullets" id="context-bullets">
+                <li>Lancez une actualisation pour obtenir le contexte du marché...</li>
+            </ul>
+            <div class="context-tags" id="context-tags"></div>
         </div>
     </section>
 
     <!-- 2. NEWS FLASH -->
-    <section class="news-flash" id="news-flash-section">
-        <div class="news-flash-header">
-            <span class="news-flash-icon">⚡</span>
-            <span class="news-flash-title">News Flash</span>
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">⚡</span>
+            <h2 class="section-title">News Flash</h2>
+            <span class="section-meta">Actualités à fort impact</span>
         </div>
-        <div class="news-flash-list" id="news-flash-list">
-            <div class="news-flash-item">
-                <span class="news-time">--:--</span>
-                <div class="news-content">
-                    <span class="news-text">Lancez une analyse pour voir les news à fort impact...</span>
+        <div class="section-content">
+            <div class="news-flash-list" id="news-flash-list">
+                <div class="news-flash-item">
+                    <span class="news-time">--:--</span>
+                    <div class="news-content">
+                        <span class="news-text">Aucune actualité à fort impact pour le moment</span>
+                    </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- 3. PULSE MARCHÉ + ÉVÉNEMENTS CRITIQUES -->
-    <section class="grid-pulse-events">
+    <!-- 3. PULSE MARCHÉ + AGENDA -->
+    <div class="grid-2 mb-3">
         <!-- Pulse Marché -->
-        <div class="card">
-            <div class="card-header">
-                <h2>📈 Pulse Marché</h2>
-                <button class="btn btn-secondary" onclick="refreshMarkets()">⟳ Actualiser</button>
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📈</span>
+                <h2 class="section-title">Pulse Marché</h2>
+                <span class="section-meta" id="pulse-update-time">--:--</span>
             </div>
-            <div class="card-body">
+            <div class="section-content">
                 <div class="pulse-widget" id="pulse-widget">
                     <div class="loading">Chargement...</div>
                 </div>
-                <div class="top-movers" id="top-movers"></div>
             </div>
-        </div>
+        </section>
 
-        <!-- Événements Critiques -->
-        <div class="card">
-            <div class="card-header">
-                <h2>📅 Événements Critiques</h2>
+        <!-- Agenda -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📅</span>
+                <h2 class="section-title">Agenda</h2>
+                <span class="section-meta">Événements du jour</span>
             </div>
-            <div class="card-body">
-                <div class="events-timeline" id="events-timeline">
+            <div class="section-content">
+                <div class="agenda-list" id="agenda-list">
                     <div class="loading">Chargement...</div>
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
+    </div>
 
     <!-- 4. OPPORTUNITÉS ACTIVES -->
-    <section class="opportunities-section">
+    <section class="section">
         <div class="section-header">
-            <h2 class="section-title">
-                <span class="section-title-icon">🎯</span>
-                Opportunités Actives
-            </h2>
+            <span class="section-icon">🎯</span>
+            <h2 class="section-title">Opportunités Actives</h2>
+            <span class="section-meta" id="opp-count">0 opportunités</span>
         </div>
-        <div class="opportunities-scroll" id="opportunities-container">
-            <div class="loading">Chargement des opportunités...</div>
-        </div>
-    </section>
-
-    <!-- 5. PERFORMANCE + ZONES DANGER -->
-    <section class="grid-2">
-        <!-- Performance -->
-        <div class="card">
-            <div class="card-header">
-                <h2>📊 Performance</h2>
-            </div>
-            <div class="card-body">
-                <div class="perf-widget">
-                    <div class="perf-main-stat">
-                        <div class="perf-main-value positive" id="perf-pnl">+0.0%</div>
-                        <div class="perf-main-label">PnL Aujourd'hui</div>
-                    </div>
-                    <div class="perf-stats-row">
-                        <div class="perf-stat success">
-                            <div class="perf-stat-value" id="perf-wins">0</div>
-                            <div class="perf-stat-label">Réussis</div>
-                        </div>
-                        <div class="perf-stat danger">
-                            <div class="perf-stat-value" id="perf-losses">0</div>
-                            <div class="perf-stat-label">Stops</div>
-                        </div>
-                        <div class="perf-stat">
-                            <div class="perf-stat-value" id="perf-rate">0%</div>
-                            <div class="perf-stat-label">Taux</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Zones Danger -->
-        <div class="card card-danger">
-            <div class="card-header">
-                <h2>⚠️ Zones Danger</h2>
-            </div>
-            <div class="card-body">
-                <div class="danger-list" id="danger-zones">
-                    <div class="danger-item">
-                        <span class="danger-icon">✅</span>
-                        <span>Aucune zone critique identifiée</span>
-                    </div>
-                </div>
+        <div class="section-content">
+            <div class="opportunities-scroll" id="opportunities-container">
+                <div class="no-data" style="width: 100%;">Lancez une actualisation pour voir les opportunités</div>
             </div>
         </div>
     </section>
 
-    <!-- Conseil Tactique (optionnel) -->
-    <section class="card" id="tactical-section" style="display: none; margin-top: 24px;">
-        <div class="card-body" style="display: flex; align-items: center; gap: 16px;">
-            <span style="font-size: 1.5rem;">💡</span>
-            <p id="tactical-tip" style="margin: 0; color: var(--text-secondary);"></p>
+    <!-- 5. ZONES DANGER -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">⚠️</span>
+            <h2 class="section-title">Zones Danger</h2>
+            <span class="section-meta">Points de vigilance</span>
+        </div>
+        <div class="section-content">
+            <div class="danger-list" id="danger-zones">
+                <div class="danger-item safe">
+                    <span class="danger-icon">✅</span>
+                    <span>Aucune zone critique identifiée</span>
+                </div>
+            </div>
         </div>
     </section>
 
@@ -144,7 +115,7 @@
 <div id="modal-analyse" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2>Analyse en cours</h2>
+            <h2>Actualisation en cours</h2>
             <button class="modal-close" onclick="closeModal()">&times;</button>
         </div>
         <div class="modal-body" style="text-align: center;">
@@ -168,19 +139,69 @@
 // Variables globales
 let marketData = null;
 let analysisData = null;
+let pulseInterval = null;
+let contextInterval = null;
 
 // Initialisation
 document.addEventListener('DOMContentLoaded', function() {
     loadAllData();
-    setInterval(refreshMarkets, 60000);
+
+    // Auto-refresh Pulse Marché toutes les 30 secondes
+    pulseInterval = setInterval(refreshMarkets, 30000);
+
+    // Auto-refresh Contexte toutes les heures
+    contextInterval = setInterval(loadLastAnalysis, 3600000);
+
+    // Vérifier si le contexte est périmé (> 1h)
+    checkContextFreshness();
 });
 
 async function loadAllData() {
     await Promise.all([
         refreshMarkets(),
-        loadLastAnalysis(),
-        loadPerformance()
+        loadLastAnalysis()
     ]);
+}
+
+// ===== ACTUALISER TOUT =====
+async function actualiserTout() {
+    const btn = document.getElementById('btn-refresh');
+    const modal = document.getElementById('modal-analyse');
+    const status = document.getElementById('modal-status');
+
+    btn.classList.add('loading');
+    btn.textContent = '⟳ Actualisation...';
+    modal.classList.add('active');
+    status.textContent = 'Récupération des données de marché...';
+
+    try {
+        // Rafraîchir les marchés
+        await refreshMarkets();
+        status.textContent = 'Analyse en cours avec Claude...';
+
+        // Lancer l'analyse
+        const response = await fetch('/api/analyse');
+        const data = await response.json();
+
+        if (data.success) {
+            status.textContent = 'Actualisation terminée !';
+            setTimeout(() => {
+                closeModal();
+                loadLastAnalysis();
+            }, 1000);
+        } else {
+            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+        }
+    } catch (error) {
+        status.textContent = 'Erreur de connexion';
+    } finally {
+        btn.classList.remove('loading');
+        btn.textContent = '⟳ Actualiser';
+    }
+}
+
+function closeModal() {
+    document.getElementById('modal-analyse').classList.remove('active');
 }
 
 // ===== MARCHÉS =====
@@ -192,7 +213,11 @@ async function refreshMarkets() {
         if (data.success) {
             marketData = data.donnees;
             renderPulseWidget();
-            renderTopMovers();
+
+            // Mettre à jour l'heure
+            const now = new Date();
+            document.getElementById('pulse-update-time').textContent =
+                now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
         }
     } catch (error) {
         console.error('Erreur markets:', error);
@@ -201,18 +226,26 @@ async function refreshMarkets() {
 
 function renderPulseWidget() {
     const container = document.getElementById('pulse-widget');
-    const indices = ['CAC 40', 'S&P 500', 'Nasdaq', 'VIX', 'EUR/USD'];
+    const indices = [
+        {key: 'CAC 40', name: 'CAC 40'},
+        {key: 'S&P 500', name: 'S&P 500'},
+        {key: 'Nasdaq', name: 'Nasdaq'},
+        {key: 'EUR/USD', name: 'EUR/USD'},
+        {key: 'VIX', name: 'VIX'}
+    ];
 
     let html = '';
-    for (const name of indices) {
-        const d = marketData[name];
+    for (const item of indices) {
+        const d = marketData[item.key];
         if (d) {
             const isPositive = d.variation >= 0;
             const barWidth = Math.min(Math.abs(d.variation) * 15, 100);
+            const priceFormatted = d.prix ? d.prix.toLocaleString('fr-FR', {maximumFractionDigits: 2}) : '-';
 
             html += `
                 <div class="pulse-item">
-                    <span class="pulse-name">${name}</span>
+                    <span class="pulse-name">${item.name}</span>
+                    <span class="pulse-price">${priceFormatted}</span>
                     <div class="pulse-bar-container">
                         <div class="pulse-bar ${isPositive ? 'positive' : 'negative'}"
                              style="width: ${barWidth}%"></div>
@@ -227,29 +260,6 @@ function renderPulseWidget() {
     container.innerHTML = html || '<div class="no-data">Données non disponibles</div>';
 }
 
-function renderTopMovers() {
-    const container = document.getElementById('top-movers');
-
-    // Trier par variation absolue
-    const sorted = Object.entries(marketData)
-        .map(([nom, d]) => ({nom, ...d}))
-        .filter(d => !['VIX', 'EUR/USD', 'GBP/USD', 'USD/JPY'].includes(d.nom))
-        .sort((a, b) => Math.abs(b.variation) - Math.abs(a.variation))
-        .slice(0, 6);
-
-    let html = '<span style="font-size: 0.8125rem; color: var(--text-muted);">🔥 Top movers:</span>';
-    for (const item of sorted) {
-        const isPositive = item.variation >= 0;
-        html += `
-            <div class="mover-chip ${isPositive ? 'positive' : 'negative'}">
-                <span class="name">${item.nom}</span>
-                <span class="var">${isPositive ? '+' : ''}${item.variation.toFixed(1)}%</span>
-            </div>`;
-    }
-
-    container.innerHTML = html;
-}
-
 // ===== ANALYSE =====
 async function loadLastAnalysis() {
     try {
@@ -259,12 +269,28 @@ async function loadLastAnalysis() {
         if (data.success && data.analyse) {
             analysisData = data.analyse;
             renderAnalysis();
-        } else {
-            document.getElementById('opportunities-container').innerHTML =
-                '<div class="no-data" style="width: 100%;">Lancez une analyse pour voir les opportunités</div>';
         }
     } catch (error) {
         console.error('Erreur analyse:', error);
+    }
+}
+
+function checkContextFreshness() {
+    // Vérifier si besoin de rafraîchir automatiquement
+    if (analysisData && analysisData.heure) {
+        const [h, m] = analysisData.heure.split(':').map(Number);
+        const analyseTime = new Date();
+        analyseTime.setHours(h, m, 0, 0);
+
+        const now = new Date();
+        const diffHours = (now - analyseTime) / (1000 * 60 * 60);
+
+        if (diffHours > 1) {
+            // Le contexte est périmé
+            document.getElementById('context-bullets').innerHTML =
+                '<li style="color: var(--accent-orange);">⚠️ Contexte périmé (dernière mise à jour il y a ' +
+                Math.floor(diffHours) + 'h). Cliquez sur Actualiser.</li>';
+        }
     }
 }
 
@@ -273,32 +299,58 @@ function renderAnalysis() {
 
     const contenu = analysisData.contenu;
 
-    // Contexte
+    // Contexte - format bullet points
     document.getElementById('context-time').textContent = analysisData.heure || '--:--';
-    if (contenu.contexte_marche) {
-        document.getElementById('context-text').textContent = contenu.contexte_marche;
-    }
+    renderContextBullets(contenu.contexte_marche);
 
-    // Tags contexte (sentiment)
+    // Tags contexte
     renderContextTags(contenu);
 
     // News Flash
     renderNewsFlash(contenu.news_flash || contenu.actualites || []);
 
+    // Agenda (événements)
+    renderAgenda(contenu.evenements_a_venir || []);
+
     // Opportunités
     renderOpportunities(contenu.opportunites || []);
 
-    // Événements
-    renderEvents(contenu.evenements_a_venir || []);
-
     // Zones danger
     renderDangerZones(contenu.zones_dangereuses || []);
+}
 
-    // Tactical tip
-    if (contenu.tactical_tip) {
-        document.getElementById('tactical-section').style.display = 'block';
-        document.getElementById('tactical-tip').textContent = contenu.tactical_tip;
+function renderContextBullets(contexte) {
+    const container = document.getElementById('context-bullets');
+
+    if (!contexte) {
+        container.innerHTML = '<li>Aucun contexte disponible. Lancez une actualisation.</li>';
+        return;
     }
+
+    // Transformer le texte en bullet points
+    // Séparer par phrases ou par points
+    let points = [];
+
+    // Essayer de séparer par points ou par phrases
+    if (contexte.includes('•')) {
+        points = contexte.split('•').filter(p => p.trim());
+    } else if (contexte.includes('\n')) {
+        points = contexte.split('\n').filter(p => p.trim());
+    } else {
+        // Séparer par phrases (. suivi d'espace et majuscule)
+        points = contexte.split(/\.\s+(?=[A-Z])/).filter(p => p.trim());
+        if (points.length === 1) {
+            // Si une seule phrase, garder tel quel
+            points = [contexte];
+        }
+    }
+
+    let html = '';
+    for (const point of points.slice(0, 5)) { // Max 5 points
+        html += `<li>${point.trim().replace(/\.$/, '')}.</li>`;
+    }
+
+    container.innerHTML = html || '<li>Aucun contexte disponible.</li>';
 }
 
 function renderContextTags(contenu) {
@@ -330,7 +382,7 @@ function renderNewsFlash(news) {
             <div class="news-flash-item">
                 <span class="news-time">--:--</span>
                 <div class="news-content">
-                    <span class="news-text">Pas de news à fort impact pour le moment</span>
+                    <span class="news-text">Aucune actualité à fort impact pour le moment</span>
                 </div>
             </div>`;
         return;
@@ -354,13 +406,57 @@ function renderNewsFlash(news) {
     container.innerHTML = html;
 }
 
+function renderAgenda(events) {
+    const container = document.getElementById('agenda-list');
+
+    if (!events || events.length === 0) {
+        container.innerHTML = '<div class="no-data">Aucun événement prévu</div>';
+        return;
+    }
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    let html = '';
+    for (const evt of events.slice(0, 6)) {
+        const stars = '⭐'.repeat(evt.importance || 1);
+
+        // Déterminer si passé, actif ou à venir
+        let statusClass = '';
+        if (evt.heure) {
+            const [evtHour, evtMin] = evt.heure.split(':').map(Number);
+            if (evtHour < currentHour || (evtHour === currentHour && evtMin < currentMinute)) {
+                statusClass = 'past';
+            } else if (evtHour === currentHour) {
+                statusClass = 'active';
+            }
+        }
+
+        html += `
+            <div class="agenda-item ${statusClass}">
+                <span class="agenda-time">${evt.heure || '--:--'}</span>
+                <div class="agenda-content">
+                    <div class="agenda-name">${evt.evenement || '-'}</div>
+                </div>
+                <span class="agenda-stars">${stars}</span>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
 function renderOpportunities(opportunities) {
     const container = document.getElementById('opportunities-container');
+    const countEl = document.getElementById('opp-count');
 
     if (!opportunities || opportunities.length === 0) {
         container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunité en cours</div>';
+        countEl.textContent = '0 opportunité';
         return;
     }
+
+    countEl.textContent = opportunities.length + ' opportunité' + (opportunities.length > 1 ? 's' : '');
 
     let html = '';
     for (const opp of opportunities) {
@@ -369,7 +465,6 @@ function renderOpportunities(opportunities) {
         const tagText = isNews ? 'NEWS' : 'TECH';
         const cardClass = isNews ? 'news-trading' : '';
 
-        // Calcul position gauge
         const gaugePosition = calculateGaugePosition(opp);
 
         html += `
@@ -440,38 +535,12 @@ function calculateGaugePosition(opp) {
     return Math.max(5, Math.min(95, position));
 }
 
-function renderEvents(events) {
-    const container = document.getElementById('events-timeline');
-
-    if (!events || events.length === 0) {
-        container.innerHTML = '<div class="no-data">Aucun événement prévu</div>';
-        return;
-    }
-
-    let html = '';
-    for (const evt of events.slice(0, 6)) {
-        const stars = '⭐'.repeat(evt.importance || 1);
-        const isActive = evt.importance >= 3;
-
-        html += `
-            <div class="event-item ${isActive ? 'active' : ''}">
-                <span class="event-time">${evt.heure || '--:--'}</span>
-                <div class="event-content">
-                    <div class="event-name">${evt.evenement || '-'}</div>
-                </div>
-                <span class="event-stars">${stars}</span>
-            </div>`;
-    }
-
-    container.innerHTML = html;
-}
-
 function renderDangerZones(zones) {
     const container = document.getElementById('danger-zones');
 
     if (!zones || zones.length === 0) {
         container.innerHTML = `
-            <div class="danger-item">
+            <div class="danger-item safe">
                 <span class="danger-icon">✅</span>
                 <span>Aucune zone critique identifiée</span>
             </div>`;
@@ -488,61 +557,6 @@ function renderDangerZones(zones) {
     }
 
     container.innerHTML = html;
-}
-
-// ===== PERFORMANCE =====
-async function loadPerformance() {
-    try {
-        const response = await fetch('/api/performances?periode=jour');
-        const data = await response.json();
-
-        if (data.success) {
-            const p = data.performances;
-
-            const pnlEl = document.getElementById('perf-pnl');
-            const pnl = p.pnl_total || 0;
-            pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '%';
-            pnlEl.className = 'perf-main-value ' + (pnl >= 0 ? 'positive' : 'negative');
-
-            document.getElementById('perf-wins').textContent = p.reussis || 0;
-            document.getElementById('perf-losses').textContent = p.stops || 0;
-            document.getElementById('perf-rate').textContent = (p.taux_reussite || 0) + '%';
-        }
-    } catch (error) {
-        console.error('Erreur performance:', error);
-    }
-}
-
-// ===== LANCER ANALYSE =====
-async function lancerAnalyse() {
-    const modal = document.getElementById('modal-analyse');
-    const status = document.getElementById('modal-status');
-
-    modal.classList.add('active');
-    status.textContent = 'Récupération des données de marché...';
-
-    try {
-        status.textContent = 'Analyse en cours avec Claude...';
-
-        const response = await fetch('/api/analyse');
-        const data = await response.json();
-
-        if (data.success) {
-            status.textContent = 'Analyse terminée !';
-            setTimeout(() => {
-                closeModal();
-                loadAllData();
-            }, 1000);
-        } else {
-            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
-        }
-    } catch (error) {
-        status.textContent = 'Erreur de connexion';
-    }
-}
-
-function closeModal() {
-    document.getElementById('modal-analyse').classList.remove('active');
 }
 </script>
 {% endblock %}

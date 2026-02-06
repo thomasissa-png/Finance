@@ -6,9 +6,8 @@
 <div class="memoire-page">
 
     <!-- Header -->
-    <div class="page-header">
-        <h1 class="page-title">Mémoire & Performances</h1>
-        <p class="page-subtitle">Suivi de vos trades et journal des actifs</p>
+    <div class="page-top-bar">
+        <h1 class="page-top-title">Mémoire & Performances</h1>
     </div>
 
     <!-- Period Selector -->
@@ -19,86 +18,93 @@
         <button class="period-btn" onclick="changePeriode('all', this)">Tout</button>
     </div>
 
-    <!-- Stats Cards -->
-    <div class="stats-cards">
-        <div class="stat-card info">
-            <div class="stat-card-icon">📊</div>
-            <div class="stat-card-value" id="perf-total">0</div>
-            <div class="stat-card-label">Total Trades</div>
+    <!-- Performance Section -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📊</span>
+            <h2 class="section-title">Performance</h2>
+            <span class="section-meta" id="perf-period">Aujourd'hui</span>
         </div>
-        <div class="stat-card success">
-            <div class="stat-card-icon">✅</div>
-            <div class="stat-card-value" id="perf-reussis">0</div>
-            <div class="stat-card-label">Réussis (TP)</div>
-        </div>
-        <div class="stat-card danger">
-            <div class="stat-card-icon">❌</div>
-            <div class="stat-card-value" id="perf-stops">0</div>
-            <div class="stat-card-label">Stops</div>
-        </div>
-        <div class="stat-card warning">
-            <div class="stat-card-icon">⏳</div>
-            <div class="stat-card-value" id="perf-non-conclus">0</div>
-            <div class="stat-card-label">En cours</div>
-        </div>
-    </div>
+        <div class="section-content">
+            <!-- Stats Cards -->
+            <div class="stats-cards mb-3">
+                <div class="stat-card info">
+                    <div class="stat-card-icon">📊</div>
+                    <div class="stat-card-value" id="perf-total">0</div>
+                    <div class="stat-card-label">Total Trades</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="stat-card-icon">✅</div>
+                    <div class="stat-card-value" id="perf-reussis">0</div>
+                    <div class="stat-card-label">Réussis (TP)</div>
+                </div>
+                <div class="stat-card danger">
+                    <div class="stat-card-icon">❌</div>
+                    <div class="stat-card-value" id="perf-stops">0</div>
+                    <div class="stat-card-label">Stops</div>
+                </div>
+                <div class="stat-card warning">
+                    <div class="stat-card-icon">⏳</div>
+                    <div class="stat-card-value" id="perf-non-conclus">0</div>
+                    <div class="stat-card-label">En cours</div>
+                </div>
+            </div>
 
-    <!-- Main Stats -->
-    <div class="grid-3 mb-3">
-        <div class="card">
-            <div class="card-body" style="text-align: center; padding: 32px;">
-                <div class="perf-main-value positive" id="perf-taux" style="font-size: 2.5rem;">0%</div>
-                <div class="perf-main-label">Taux de Réussite</div>
+            <!-- Main Stats -->
+            <div class="grid-3">
+                <div class="perf-main-stat">
+                    <div class="perf-main-value positive" id="perf-taux">0%</div>
+                    <div class="perf-main-label">Taux de Réussite</div>
+                </div>
+                <div class="perf-main-stat">
+                    <div class="perf-main-value" id="perf-pnl-total">0%</div>
+                    <div class="perf-main-label">PnL Cumulé</div>
+                </div>
+                <div class="perf-main-stat">
+                    <div class="perf-main-value" id="perf-pnl-moyen">0%</div>
+                    <div class="perf-main-label">PnL Moyen / Trade</div>
+                </div>
             </div>
         </div>
-        <div class="card">
-            <div class="card-body" style="text-align: center; padding: 32px;">
-                <div class="perf-main-value" id="perf-pnl-total" style="font-size: 2.5rem;">0%</div>
-                <div class="perf-main-label">PnL Cumulé</div>
-            </div>
-        </div>
-        <div class="card">
-            <div class="card-body" style="text-align: center; padding: 32px;">
-                <div class="perf-main-value" id="perf-pnl-moyen" style="font-size: 2.5rem;">0%</div>
-                <div class="perf-main-label">PnL Moyen / Trade</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Journal Section -->
-    <div class="section-header" style="margin-top: 32px;">
-        <h2 class="section-title">
-            <span class="section-title-icon">📝</span>
-            Journal des Actifs
-        </h2>
-        <button class="btn btn-primary" onclick="showAddEntryModal()">+ Nouvelle entrée</button>
-    </div>
-
-    <div class="journal-layout">
-        <!-- Sidebar: Liste actifs -->
-        <div class="journal-sidebar" id="actifs-journal-list">
-            <div class="loading">Chargement...</div>
-        </div>
-
-        <!-- Main: Journal entries -->
-        <div class="journal-content">
-            <div class="journal-entries" id="journal-entries">
-                <div class="no-data">Sélectionnez un actif pour voir son journal</div>
-            </div>
-        </div>
-    </div>
+    </section>
 
     <!-- Historique Trades -->
-    <div class="card" style="margin-top: 32px;">
-        <div class="card-header">
-            <h2>📜 Historique des Trades</h2>
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📜</span>
+            <h2 class="section-title">Historique des Trades</h2>
+            <span class="section-meta" id="trades-count">0 trades</span>
         </div>
-        <div class="card-body">
+        <div class="section-content">
             <div id="trades-history">
                 <div class="loading">Chargement...</div>
             </div>
         </div>
-    </div>
+    </section>
+
+    <!-- Journal Section -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📝</span>
+            <h2 class="section-title">Journal des Actifs</h2>
+            <button class="btn btn-primary" onclick="showAddEntryModal()" style="margin-left: auto;">+ Nouvelle entrée</button>
+        </div>
+        <div class="section-content">
+            <div class="journal-layout">
+                <!-- Sidebar: Liste actifs -->
+                <div class="journal-sidebar" id="actifs-journal-list">
+                    <div class="loading">Chargement...</div>
+                </div>
+
+                <!-- Main: Journal entries -->
+                <div class="journal-content">
+                    <div class="journal-entries" id="journal-entries">
+                        <div class="no-data">Sélectionnez un actif pour voir son journal</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
 
 </div>
 
@@ -173,6 +179,13 @@ let currentPeriode = 'jour';
 let selectedActif = null;
 let actifsData = {};
 
+const periodLabels = {
+    'jour': "Aujourd'hui",
+    'semaine': '7 derniers jours',
+    'mois': '30 derniers jours',
+    'all': 'Tout'
+};
+
 // Init
 document.addEventListener('DOMContentLoaded', function() {
     loadPerformances();
@@ -185,6 +198,7 @@ function changePeriode(periode, btn) {
     currentPeriode = periode;
     document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+    document.getElementById('perf-period').textContent = periodLabels[periode];
     loadPerformances();
 }
 
@@ -226,8 +240,11 @@ async function loadTradesHistory() {
         const data = await response.json();
 
         const container = document.getElementById('trades-history');
+        const countEl = document.getElementById('trades-count');
 
         if (data.success && data.trades.length > 0) {
+            countEl.textContent = data.trades.length + ' trade' + (data.trades.length > 1 ? 's' : '');
+
             let html = `
                 <table class="data-table">
                     <thead>
@@ -271,6 +288,7 @@ async function loadTradesHistory() {
             html += '</tbody></table>';
             container.innerHTML = html;
         } else {
+            countEl.textContent = '0 trade';
             container.innerHTML = '<div class="no-data">Aucun trade sur cette période</div>';
         }
     } catch (error) {
