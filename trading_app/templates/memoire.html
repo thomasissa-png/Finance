@@ -22,7 +22,7 @@
     <section class="section">
         <div class="section-header">
             <span class="section-icon">📊</span>
-            <h2 class="section-title">Performance</h2>
+            <h2 class="section-title">Performance de l'Agent</h2>
             <span class="section-meta" id="perf-period">Aujourd'hui</span>
         </div>
         <div class="section-content">
@@ -31,7 +31,7 @@
                 <div class="stat-card info">
                     <div class="stat-card-icon">📊</div>
                     <div class="stat-card-value" id="perf-total">0</div>
-                    <div class="stat-card-label">Total Trades</div>
+                    <div class="stat-card-label">Total Recommandations</div>
                 </div>
                 <div class="stat-card success">
                     <div class="stat-card-icon">✅</div>
@@ -64,6 +64,28 @@
                     <div class="perf-main-value" id="perf-pnl-moyen">0%</div>
                     <div class="perf-main-label">PnL Moyen / Trade</div>
                 </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Graphique Évolution -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📈</span>
+            <h2 class="section-title">Évolution des Performances</h2>
+            <div class="chart-controls">
+                <button class="chart-btn active" onclick="changeGranularite('jour', this)">Jour</button>
+                <button class="chart-btn" onclick="changeGranularite('semaine', this)">Semaine</button>
+                <button class="chart-btn" onclick="changeGranularite('mois', this)">Mois</button>
+            </div>
+        </div>
+        <div class="section-content">
+            <div class="chart-container" id="chart-container">
+                <canvas id="perf-chart"></canvas>
+            </div>
+            <div class="chart-legend">
+                <span class="legend-item"><span class="legend-dot green"></span> PnL Cumulé</span>
+                <span class="legend-item"><span class="legend-dot blue"></span> Taux Réussite</span>
             </div>
         </div>
     </section>
@@ -120,10 +142,13 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 // Variables
 let currentPeriode = 'jour';
+let currentGranularite = 'jour';
 let allTrades = [];
+let perfChart = null;
 
 const periodLabels = {
     'jour': "Aujourd'hui",
@@ -135,7 +160,146 @@ const periodLabels = {
 // Init
 document.addEventListener('DOMContentLoaded', function() {
     loadPerformances();
+    loadChartData();
 });
+
+// ===== GRAPHIQUE =====
+function changeGranularite(granularite, btn) {
+    currentGranularite = granularite;
+    document.querySelectorAll('.chart-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadChartData();
+}
+
+async function loadChartData() {
+    try {
+        const response = await fetch(`/api/stats-evolution?granularite=${currentGranularite}&limite=30`);
+        const data = await response.json();
+
+        if (data.success && data.stats.length > 0) {
+            renderChart(data.stats);
+        } else {
+            document.getElementById('chart-container').innerHTML =
+                '<div class="no-data">Pas assez de données pour afficher le graphique</div>';
+        }
+    } catch (error) {
+        console.error('Erreur chargement graphique:', error);
+    }
+}
+
+function renderChart(stats) {
+    const ctx = document.getElementById('perf-chart');
+    if (!ctx) return;
+
+    // Détruire le graphique existant
+    if (perfChart) {
+        perfChart.destroy();
+    }
+
+    const labels = stats.map(s => {
+        if (currentGranularite === 'jour') {
+            return s.date ? s.date.split('-').reverse().slice(0, 2).join('/') : '';
+        } else if (currentGranularite === 'semaine') {
+            return s.periode ? 'S' + s.periode.split('-W')[1] : '';
+        } else {
+            return s.periode ? s.periode.split('-').reverse().join('/') : '';
+        }
+    });
+
+    const pnlData = stats.map(s => s.pnl_cumule_running || 0);
+    const tauxData = stats.map(s => s.taux_reussite || 0);
+
+    perfChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'PnL Cumulé (%)',
+                    data: pnlData,
+                    borderColor: '#10B981',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'Taux Réussite (%)',
+                    data: tauxData,
+                    borderColor: '#3B82F6',
+                    backgroundColor: 'transparent',
+                    borderDash: [5, 5],
+                    tension: 0.3,
+                    yAxisID: 'y1'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    backgroundColor: '#1A1A2E',
+                    titleColor: '#fff',
+                    bodyColor: '#fff',
+                    borderColor: '#3B82F6',
+                    borderWidth: 1
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        color: '#6B7280'
+                    }
+                },
+                y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    title: {
+                        display: true,
+                        text: 'PnL %',
+                        color: '#10B981'
+                    },
+                    grid: {
+                        color: 'rgba(107, 114, 128, 0.1)'
+                    },
+                    ticks: {
+                        color: '#10B981'
+                    }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: {
+                        display: true,
+                        text: 'Taux %',
+                        color: '#3B82F6'
+                    },
+                    min: 0,
+                    max: 100,
+                    grid: {
+                        drawOnChartArea: false
+                    },
+                    ticks: {
+                        color: '#3B82F6'
+                    }
+                }
+            }
+        }
+    });
+}
 
 // ===== PERFORMANCES =====
 function changePeriode(periode, btn) {
@@ -322,6 +486,67 @@ function renderTradesTable() {
     color: var(--text-secondary);
 }
 
+/* Chart */
+.chart-controls {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.chart-btn {
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+}
+
+.chart-btn:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.chart-btn.active {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: white;
+}
+
+.chart-container {
+    height: 300px;
+    position: relative;
+}
+
+.chart-legend {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-light);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
+.legend-dot {
+    width: 12px;
+    height: 3px;
+    border-radius: 2px;
+}
+
+.legend-dot.green { background: #10B981; }
+.legend-dot.blue { background: #3B82F6; }
+
 @media (max-width: 768px) {
     .trades-filters {
         flex-direction: column;
@@ -329,6 +554,9 @@ function renderTradesTable() {
     .filter-inline input,
     .filter-inline select {
         width: 100%;
+    }
+    .chart-container {
+        height: 250px;
     }
 }
 </style>

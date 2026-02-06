@@ -13,73 +13,61 @@
         </button>
     </div>
 
-    <!-- Filtres -->
-    <div class="filters-bar mb-3">
-        <div class="filter-group">
-            <label>Actif</label>
-            <select id="filter-actif" onchange="filterJournal()">
-                <option value="">Tous les actifs</option>
-            </select>
-        </div>
-        <div class="filter-group">
-            <label>Catégorie</label>
-            <select id="filter-categorie" onchange="filterJournal()">
-                <option value="">Toutes</option>
-                <option value="indice">Indices</option>
-                <option value="action_eu">Actions EU</option>
-                <option value="action_us">Actions US</option>
-                <option value="commodite">Commodités</option>
-                <option value="forex">Forex</option>
-            </select>
-        </div>
-        <div class="filter-group">
-            <label>Période</label>
-            <select id="filter-periode" onchange="filterJournal()">
-                <option value="7">7 derniers jours</option>
-                <option value="14">14 derniers jours</option>
-                <option value="30" selected>30 derniers jours</option>
-            </select>
-        </div>
-    </div>
-
-    <!-- Liste des actifs -->
+    <!-- Layout principal -->
     <div class="journal-grid">
-        <!-- Sidebar: Actifs -->
+        <!-- Sidebar: Liste des actifs -->
         <div class="journal-sidebar-list">
             <h3 class="sidebar-title">Actifs suivis</h3>
+            <div class="actifs-filter">
+                <select id="filter-categorie" onchange="filterActifs()">
+                    <option value="">Toutes catégories</option>
+                    <option value="indice">Indices</option>
+                    <option value="action_eu">Actions EU</option>
+                    <option value="action_us">Actions US</option>
+                    <option value="commodite">Commodités</option>
+                    <option value="forex">Forex</option>
+                </select>
+            </div>
             <div id="actifs-list" class="actifs-sidebar">
                 <div class="loading">Chargement...</div>
             </div>
         </div>
 
-        <!-- Main: Journal entries -->
+        <!-- Contenu principal: Journal de l'actif sélectionné -->
         <div class="journal-main">
-            <section class="section">
-                <div class="section-header">
-                    <span class="section-icon">📅</span>
-                    <h2 class="section-title" id="journal-title">Historique quotidien</h2>
-                    <span class="section-meta" id="journal-count">0 entrées</span>
+            <!-- Header actif sélectionné -->
+            <div class="selected-asset-header" id="selected-asset-header" style="display: none;">
+                <div class="asset-header-info">
+                    <h2 class="asset-header-name" id="asset-name">-</h2>
+                    <span class="asset-header-symbol" id="asset-symbol">-</span>
                 </div>
-                <div class="section-content">
-                    <div id="journal-entries">
-                        <div class="loading">Chargement...</div>
+                <div class="asset-header-stats">
+                    <div class="asset-stat">
+                        <span class="stat-label">Variation Jour</span>
+                        <span class="stat-value" id="asset-var-jour">-</span>
+                    </div>
+                    <div class="asset-stat">
+                        <span class="stat-label">Prix</span>
+                        <span class="stat-value" id="asset-prix">-</span>
+                    </div>
+                    <div class="asset-stat">
+                        <span class="stat-label">Opportunités</span>
+                        <span class="stat-value" id="asset-nb-opps">0</span>
                     </div>
                 </div>
-            </section>
+            </div>
 
-            <!-- Historique des opportunités pour l'actif sélectionné -->
-            <section class="section" id="section-opportunites" style="display: none;">
-                <div class="section-header">
-                    <span class="section-icon">🎯</span>
-                    <h2 class="section-title">Historique des Opportunités</h2>
-                    <span class="section-meta" id="opps-count">0 opportunités</span>
-                </div>
-                <div class="section-content">
-                    <div id="opportunites-list">
-                        <div class="no-data">Sélectionnez un actif pour voir les opportunités</div>
-                    </div>
-                </div>
-            </section>
+            <!-- Placeholder quand pas d'actif sélectionné -->
+            <div class="journal-placeholder" id="journal-placeholder">
+                <div class="placeholder-icon">📊</div>
+                <h3>Sélectionnez un actif</h3>
+                <p>Choisissez un actif dans la liste pour voir son journal quotidien</p>
+            </div>
+
+            <!-- Timeline du journal -->
+            <div class="journal-timeline" id="journal-timeline" style="display: none;">
+                <div class="loading">Chargement...</div>
+            </div>
         </div>
     </div>
 
@@ -88,13 +76,13 @@
 
 {% block extra_js %}
 <script>
-let allEntries = [];
-let selectedSymbole = null;
 let actifsData = {};
+let selectedSymbole = null;
+let journalData = [];
+let opportunitesData = [];
 
 document.addEventListener('DOMContentLoaded', function() {
     loadActifs();
-    loadJournalEntries();
 });
 
 async function loadActifs() {
@@ -104,17 +92,6 @@ async function loadActifs() {
 
         if (data.success) {
             actifsData = data.permanents;
-
-            // Remplir le select
-            const select = document.getElementById('filter-actif');
-            for (const [symbole, nom] of Object.entries(actifsData)) {
-                const option = document.createElement('option');
-                option.value = symbole;
-                option.textContent = nom;
-                select.appendChild(option);
-            }
-
-            // Remplir la sidebar
             renderActifsSidebar();
         }
     } catch (error) {
@@ -124,206 +101,216 @@ async function loadActifs() {
 
 function renderActifsSidebar() {
     const container = document.getElementById('actifs-list');
+    const filterCat = document.getElementById('filter-categorie').value;
+
     const categories = {
-        'Indices': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^VIX'],
-        'Actions FR': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA'],
-        'Actions US': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN'],
-        'Commodités': ['GC=F', 'SI=F', 'BZ=F', 'NG=F'],
-        'Forex': ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X']
+        'indice': {'label': 'Indices', 'symboles': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^VIX']},
+        'action_eu': {'label': 'Actions EU', 'symboles': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA', 'SAN.PA', 'BNP.PA']},
+        'action_us': {'label': 'Actions US', 'symboles': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL']},
+        'commodite': {'label': 'Commodités', 'symboles': ['GC=F', 'SI=F', 'BZ=F', 'NG=F']},
+        'forex': {'label': 'Forex', 'symboles': ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X']}
     };
 
     let html = '';
-    for (const [cat, symboles] of Object.entries(categories)) {
+    for (const [catKey, catData] of Object.entries(categories)) {
+        if (filterCat && filterCat !== catKey) continue;
+
         html += `<div class="actif-category">
-            <div class="category-title">${cat}</div>`;
-        for (const sym of symboles) {
+            <div class="category-title">${catData.label}</div>`;
+
+        for (const sym of catData.symboles) {
             if (actifsData[sym]) {
+                const isActive = selectedSymbole === sym;
                 html += `
-                    <div class="actif-item" data-symbole="${sym}" onclick="selectActif('${sym}', this)">
+                    <div class="actif-item ${isActive ? 'active' : ''}" data-symbole="${sym}" onclick="selectActif('${sym}')">
                         <span class="actif-nom">${actifsData[sym]}</span>
-                        <span class="actif-badge" id="badge-${sym.replace(/[^a-zA-Z0-9]/g, '')}">-</span>
                     </div>`;
             }
         }
         html += '</div>';
     }
 
-    container.innerHTML = html;
+    container.innerHTML = html || '<div class="no-data">Aucun actif</div>';
 }
 
-async function loadJournalEntries() {
+function filterActifs() {
+    renderActifsSidebar();
+}
+
+async function selectActif(symbole) {
+    selectedSymbole = symbole;
+    renderActifsSidebar();
+
+    // Afficher le header et masquer le placeholder
+    document.getElementById('journal-placeholder').style.display = 'none';
+    document.getElementById('selected-asset-header').style.display = 'flex';
+    document.getElementById('journal-timeline').style.display = 'block';
+
+    // Mettre à jour le header
+    document.getElementById('asset-name').textContent = actifsData[symbole] || symbole;
+    document.getElementById('asset-symbol').textContent = symbole;
+
+    // Charger les données
+    await Promise.all([
+        loadJournalActif(symbole),
+        loadOpportunitesActif(symbole)
+    ]);
+
+    renderTimeline();
+}
+
+async function loadJournalActif(symbole) {
     try {
-        const symbole = document.getElementById('filter-actif').value;
-        const limite = document.getElementById('filter-periode').value;
-
-        let url = `/api/journal-quotidien?limite=${limite}`;
-        if (symbole) url += `&symbole=${symbole}`;
-
-        const response = await fetch(url);
+        const response = await fetch(`/api/journal-quotidien?symbole=${symbole}&limite=30`);
         const data = await response.json();
 
         if (data.success) {
-            allEntries = data.entries;
-            renderJournalEntries();
-            updateActifBadges();
+            journalData = data.entries;
+
+            // Mettre à jour les stats header
+            if (journalData.length > 0) {
+                const dernierJour = journalData[0];
+                const varClass = dernierJour.variation_jour >= 0 ? 'positive' : 'negative';
+                const varSign = dernierJour.variation_jour >= 0 ? '+' : '';
+                document.getElementById('asset-var-jour').innerHTML =
+                    `<span class="${varClass}">${varSign}${dernierJour.variation_jour?.toFixed(2) || 0}%</span>`;
+                document.getElementById('asset-prix').textContent = dernierJour.prix_cloture?.toFixed(2) || '-';
+            }
         }
     } catch (error) {
-        console.error('Erreur chargement journal:', error);
+        console.error('Erreur journal:', error);
     }
 }
 
-function renderJournalEntries() {
-    const container = document.getElementById('journal-entries');
-    const countEl = document.getElementById('journal-count');
-    const categorie = document.getElementById('filter-categorie').value;
-
-    let entries = allEntries;
-    if (categorie) {
-        entries = entries.filter(e => e.categorie === categorie);
-    }
-    if (selectedSymbole) {
-        entries = entries.filter(e => e.symbole === selectedSymbole);
-    }
-
-    countEl.textContent = entries.length + ' entrée' + (entries.length > 1 ? 's' : '');
-
-    if (entries.length === 0) {
-        container.innerHTML = '<div class="no-data">Aucune entrée de journal. Cliquez sur "Générer maintenant" pour créer le journal du jour.</div>';
-        return;
-    }
-
-    // Grouper par date
-    const parDate = {};
-    for (const entry of entries) {
-        if (!parDate[entry.date]) parDate[entry.date] = [];
-        parDate[entry.date].push(entry);
-    }
-
-    let html = '';
-    for (const [date, dayEntries] of Object.entries(parDate)) {
-        html += `<div class="journal-day">
-            <div class="journal-day-header">${formatDate(date)}</div>
-            <div class="journal-day-entries">`;
-
-        for (const entry of dayEntries) {
-            const varClass = entry.variation_jour >= 0 ? 'positive' : 'negative';
-            const varSign = entry.variation_jour >= 0 ? '+' : '';
-            const hasOpps = entry.opportunites_jour && entry.opportunites_jour.length > 0;
-
-            html += `
-                <div class="journal-entry-card" onclick="selectActif('${entry.symbole}')">
-                    <div class="entry-card-header">
-                        <span class="entry-actif-nom">${entry.nom_actif}</span>
-                        <span class="entry-variation ${varClass}">${varSign}${entry.variation_jour?.toFixed(2) || 0}%</span>
-                    </div>
-                    <div class="entry-card-prices">
-                        <span>Ouv: ${entry.prix_ouverture?.toFixed(2) || '-'}</span>
-                        <span>Clôt: ${entry.prix_cloture?.toFixed(2) || '-'}</span>
-                    </div>
-                    ${entry.commentaire_ia ? `<div class="entry-card-comment">${entry.commentaire_ia}</div>` : ''}
-                    ${hasOpps ? `<div class="entry-card-opps">🎯 ${entry.opportunites_jour.length} opportunité(s)</div>` : ''}
-                </div>`;
-        }
-
-        html += '</div></div>';
-    }
-
-    container.innerHTML = html;
-}
-
-function updateActifBadges() {
-    // Mettre à jour les badges avec la dernière variation
-    const dernierJour = {};
-    for (const entry of allEntries) {
-        if (!dernierJour[entry.symbole] || entry.date > dernierJour[entry.symbole].date) {
-            dernierJour[entry.symbole] = entry;
-        }
-    }
-
-    for (const [symbole, entry] of Object.entries(dernierJour)) {
-        const badgeId = 'badge-' + symbole.replace(/[^a-zA-Z0-9]/g, '');
-        const badge = document.getElementById(badgeId);
-        if (badge) {
-            const varClass = entry.variation_jour >= 0 ? 'positive' : 'negative';
-            const varSign = entry.variation_jour >= 0 ? '+' : '';
-            badge.textContent = `${varSign}${entry.variation_jour?.toFixed(1) || 0}%`;
-            badge.className = `actif-badge ${varClass}`;
-        }
-    }
-}
-
-async function selectActif(symbole, element) {
-    selectedSymbole = symbole;
-
-    // Marquer comme sélectionné
-    document.querySelectorAll('.actif-item').forEach(i => i.classList.remove('active'));
-    if (element) element.classList.add('active');
-
-    // Mettre à jour le titre
-    const nom = actifsData[symbole] || symbole;
-    document.getElementById('journal-title').textContent = `Journal: ${nom}`;
-
-    // Filtrer les entrées
-    renderJournalEntries();
-
-    // Charger les opportunités
-    await loadOpportunites(symbole);
-}
-
-async function loadOpportunites(symbole) {
-    const section = document.getElementById('section-opportunites');
-    const container = document.getElementById('opportunites-list');
-    const countEl = document.getElementById('opps-count');
-
-    section.style.display = 'block';
-
+async function loadOpportunitesActif(symbole) {
     try {
         const response = await fetch(`/api/historique-opportunites/${symbole}`);
         const data = await response.json();
 
-        if (data.success && data.trades.length > 0) {
-            countEl.textContent = data.trades.length + ' opportunité(s)';
-
-            let html = '<table class="data-table"><thead><tr>';
-            html += '<th>Date</th><th>Heure</th><th>Direction</th><th>Type</th>';
-            html += '<th>Entrée</th><th>Stop</th><th>TP1</th><th>Résultat</th><th>PnL</th>';
-            html += '</tr></thead><tbody>';
-
-            for (const trade of data.trades) {
-                const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'positive' :
-                                   trade.resultat === 'STOP' ? 'negative' : '';
-                const dirClass = trade.direction === 'LONG' ? 'positive' : 'negative';
-                const dirIcon = trade.direction === 'LONG' ? '📈' : '📉';
-
-                html += `<tr>
-                    <td>${trade.date || '-'}</td>
-                    <td>${trade.heure_message || '-'}</td>
-                    <td class="${dirClass}">${dirIcon} ${trade.direction || 'LONG'}</td>
-                    <td><span class="opp-tag ${trade.type_setup === 'NEWS' ? 'news' : 'tech'}">${trade.type_setup || '-'}</span></td>
-                    <td style="font-family: 'SF Mono', monospace;">${trade.prix_entree || '-'}</td>
-                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
-                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
-                    <td class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
-                    <td class="${resultClass}" style="font-family: 'SF Mono', monospace;">
-                        ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
-                    </td>
-                </tr>`;
-            }
-
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        } else {
-            countEl.textContent = '0 opportunité';
-            container.innerHTML = '<div class="no-data">Aucune opportunité enregistrée pour cet actif</div>';
+        if (data.success) {
+            opportunitesData = data.trades;
+            document.getElementById('asset-nb-opps').textContent = opportunitesData.length;
         }
     } catch (error) {
-        console.error('Erreur chargement opportunités:', error);
-        container.innerHTML = '<div class="no-data">Erreur de chargement</div>';
+        console.error('Erreur opportunités:', error);
     }
 }
 
-function filterJournal() {
-    loadJournalEntries();
+function renderTimeline() {
+    const container = document.getElementById('journal-timeline');
+
+    if (journalData.length === 0) {
+        container.innerHTML = `
+            <div class="no-data">
+                Aucune donnée de journal pour cet actif.<br>
+                Cliquez sur "Générer maintenant" pour créer le journal du jour.
+            </div>`;
+        return;
+    }
+
+    // Grouper les opportunités par date
+    const oppsByDate = {};
+    for (const opp of opportunitesData) {
+        if (!oppsByDate[opp.date]) oppsByDate[opp.date] = [];
+        oppsByDate[opp.date].push(opp);
+    }
+
+    let html = '';
+    for (const entry of journalData) {
+        const date = entry.date;
+        const oppsJour = oppsByDate[date] || [];
+        const varClass = entry.variation_jour >= 0 ? 'positive' : 'negative';
+        const varSign = entry.variation_jour >= 0 ? '+' : '';
+
+        html += `
+            <div class="timeline-day">
+                <div class="timeline-date">
+                    <span class="date-day">${formatDateFr(date)}</span>
+                </div>
+
+                <div class="timeline-content">
+                    <!-- Performance du jour -->
+                    <div class="day-performance">
+                        <div class="perf-main">
+                            <span class="perf-label">Performance</span>
+                            <span class="perf-value ${varClass}">${varSign}${entry.variation_jour?.toFixed(2) || 0}%</span>
+                        </div>
+                        <div class="perf-prices">
+                            <span>Ouv: ${entry.prix_ouverture?.toFixed(2) || '-'}</span>
+                            <span>Clôt: ${entry.prix_cloture?.toFixed(2) || '-'}</span>
+                        </div>
+                    </div>
+
+                    <!-- Commentaire AI -->
+                    ${entry.commentaire_ia ? `
+                    <div class="day-comment">
+                        <div class="comment-icon">🤖</div>
+                        <div class="comment-text">${entry.commentaire_ia}</div>
+                    </div>
+                    ` : ''}
+
+                    <!-- Opportunités du jour -->
+                    ${oppsJour.length > 0 ? `
+                    <div class="day-opportunities">
+                        <div class="opps-header">
+                            <span class="opps-icon">🎯</span>
+                            <span class="opps-title">${oppsJour.length} Opportunité${oppsJour.length > 1 ? 's' : ''}</span>
+                        </div>
+                        <div class="opps-list">
+                            ${oppsJour.map(opp => renderOpportunite(opp)).join('')}
+                        </div>
+                    </div>
+                    ` : `
+                    <div class="day-no-opps">
+                        <span class="no-opps-icon">○</span>
+                        <span>Pas d'opportunité ce jour</span>
+                    </div>
+                    `}
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderOpportunite(opp) {
+    const dirClass = opp.direction === 'LONG' ? 'positive' : 'negative';
+    const dirIcon = opp.direction === 'LONG' ? '📈' : '📉';
+    const resultClass = opp.resultat === 'TP1' || opp.resultat === 'TP2' ? 'success' :
+                       opp.resultat === 'STOP' ? 'danger' : 'pending';
+    const resultIcon = opp.resultat === 'TP1' || opp.resultat === 'TP2' ? '✅' :
+                      opp.resultat === 'STOP' ? '❌' : '⏳';
+    const typeClass = opp.type_setup === 'NEWS' ? 'news' : 'tech';
+
+    return `
+        <div class="opp-item ${resultClass}">
+            <div class="opp-item-header">
+                <span class="opp-direction ${dirClass}">${dirIcon} ${opp.direction || 'LONG'}</span>
+                <span class="opp-type ${typeClass}">${opp.type_setup || 'TECH'}</span>
+                <span class="opp-time">${opp.heure_message || '-'}</span>
+            </div>
+            <div class="opp-item-body">
+                <div class="opp-prices">
+                    <span>Entrée: ${opp.prix_entree || '-'}</span>
+                    <span class="negative">Stop: ${opp.prix_stop || '-'}</span>
+                    <span class="positive">TP1: ${opp.prix_tp1 || '-'}</span>
+                </div>
+                ${opp.catalyseur ? `<div class="opp-catalyst">${opp.catalyseur}</div>` : ''}
+            </div>
+            <div class="opp-item-result">
+                <span class="result-icon">${resultIcon}</span>
+                <span class="result-text">${opp.resultat || 'En cours'}</span>
+                ${opp.pnl_pct ? `<span class="result-pnl ${opp.pnl_pct >= 0 ? 'positive' : 'negative'}">${opp.pnl_pct >= 0 ? '+' : ''}${opp.pnl_pct.toFixed(2)}%</span>` : ''}
+            </div>
+        </div>`;
+}
+
+function formatDateFr(dateStr) {
+    if (!dateStr) return '-';
+    const [year, month, day] = dateStr.split('-');
+    const date = new Date(year, month - 1, day);
+    const options = {weekday: 'long', day: 'numeric', month: 'long'};
+    return date.toLocaleDateString('fr-FR', options);
 }
 
 async function genererJournal() {
@@ -336,7 +323,11 @@ async function genererJournal() {
         const data = await response.json();
 
         if (data.success) {
-            loadJournalEntries();
+            if (selectedSymbole) {
+                await loadJournalActif(selectedSymbole);
+                renderTimeline();
+            }
+            alert('Journal généré avec succès !');
         } else {
             alert('Erreur lors de la génération');
         }
@@ -348,13 +339,6 @@ async function genererJournal() {
         btn.textContent = '⟳ Générer maintenant';
     }
 }
-
-function formatDate(dateStr) {
-    const [year, month, day] = dateStr.split('-');
-    const date = new Date(year, month - 1, day);
-    const options = {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'};
-    return date.toLocaleDateString('fr-FR', options);
-}
 </script>
 
 <style>
@@ -363,6 +347,7 @@ function formatDate(dateStr) {
     display: grid;
     grid-template-columns: 280px 1fr;
     gap: var(--space-3);
+    min-height: calc(100vh - 200px);
 }
 
 .journal-sidebar-list {
@@ -370,7 +355,9 @@ function formatDate(dateStr) {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     padding: var(--space-2);
-    max-height: calc(100vh - 200px);
+    position: sticky;
+    top: 80px;
+    max-height: calc(100vh - 100px);
     overflow-y: auto;
 }
 
@@ -383,6 +370,19 @@ function formatDate(dateStr) {
     padding: var(--space-1) var(--space-2);
     border-bottom: 1px solid var(--border-light);
     margin-bottom: var(--space-1);
+}
+
+.actifs-filter {
+    padding: var(--space-1);
+}
+
+.actifs-filter select {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    font-size: 0.8125rem;
 }
 
 .actif-category {
@@ -398,10 +398,7 @@ function formatDate(dateStr) {
 }
 
 .actif-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px var(--space-2);
+    padding: 10px var(--space-2);
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: var(--transition);
@@ -417,136 +414,308 @@ function formatDate(dateStr) {
 }
 
 .actif-nom {
-    font-size: 0.875rem;
+    font-size: 0.9375rem;
     color: var(--text-primary);
+    font-weight: 500;
 }
 
-.actif-badge {
-    font-family: 'SF Mono', monospace;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 2px 6px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
-}
-
-.actif-badge.positive {
-    background: var(--accent-green-bg);
-    color: var(--accent-green);
-}
-
-.actif-badge.negative {
-    background: var(--accent-red-bg);
-    color: var(--accent-red);
-}
-
-/* Filters */
-.filters-bar {
-    display: flex;
-    gap: var(--space-3);
-    background: var(--bg-primary);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--border-color);
-}
-
-.filter-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.filter-group label {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    text-transform: uppercase;
-}
-
-.filter-group select {
-    padding: 8px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    font-size: 0.875rem;
-}
-
-/* Journal Entries */
-.journal-day {
-    margin-bottom: var(--space-3);
-}
-
-.journal-day-header {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-    padding: var(--space-1) 0;
-    border-bottom: 1px solid var(--border-light);
-    margin-bottom: var(--space-2);
-    text-transform: capitalize;
-}
-
-.journal-day-entries {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: var(--space-2);
-}
-
-.journal-entry-card {
-    background: var(--bg-secondary);
-    border-radius: var(--radius-md);
-    padding: var(--space-2);
-    cursor: pointer;
-    transition: var(--transition);
-    border: 1px solid transparent;
-}
-
-.journal-entry-card:hover {
-    border-color: var(--accent-primary);
-    transform: translateY(-2px);
-}
-
-.entry-card-header {
+/* Header actif sélectionné */
+.selected-asset-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.asset-header-name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.asset-header-symbol {
+    font-family: 'SF Mono', monospace;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.asset-header-stats {
+    display: flex;
+    gap: var(--space-4);
+}
+
+.asset-stat {
+    text-align: center;
+}
+
+.asset-stat .stat-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.asset-stat .stat-value {
+    font-family: 'SF Mono', monospace;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+/* Placeholder */
+.journal-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-5);
+    text-align: center;
+    background: var(--bg-primary);
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-lg);
+    min-height: 400px;
+}
+
+.placeholder-icon {
+    font-size: 3rem;
+    margin-bottom: var(--space-2);
+}
+
+.journal-placeholder h3 {
+    color: var(--text-primary);
     margin-bottom: var(--space-1);
 }
 
-.entry-actif-nom {
+.journal-placeholder p {
+    color: var(--text-muted);
+}
+
+/* Timeline */
+.journal-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.timeline-day {
+    display: flex;
+    gap: var(--space-3);
+}
+
+.timeline-date {
+    flex: 0 0 120px;
+    text-align: right;
+    padding-top: var(--space-2);
+}
+
+.date-day {
+    font-size: 0.9375rem;
     font-weight: 600;
     color: var(--text-primary);
+    text-transform: capitalize;
 }
 
-.entry-variation {
-    font-family: 'SF Mono', monospace;
-    font-weight: 600;
+.timeline-content {
+    flex: 1;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3);
+    position: relative;
+}
+
+.timeline-content::before {
+    content: '';
+    position: absolute;
+    left: -20px;
+    top: 20px;
+    width: 12px;
+    height: 12px;
+    background: var(--accent-primary);
+    border-radius: 50%;
+    border: 3px solid var(--bg-secondary);
+}
+
+/* Performance du jour */
+.day-performance {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-light);
+    margin-bottom: var(--space-2);
+}
+
+.perf-main {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.perf-label {
     font-size: 0.875rem;
+    color: var(--text-muted);
 }
 
-.entry-card-prices {
+.perf-value {
+    font-family: 'SF Mono', monospace;
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.perf-prices {
     display: flex;
     gap: var(--space-2);
     font-size: 0.8125rem;
     color: var(--text-muted);
+}
+
+/* Commentaire AI */
+.day-comment {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+}
+
+.comment-icon {
+    font-size: 1rem;
+}
+
+.comment-text {
+    font-size: 0.9375rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+/* Opportunités */
+.day-opportunities {
+    margin-top: var(--space-2);
+}
+
+.opps-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-bottom: var(--space-2);
+}
+
+.opps-icon {
+    font-size: 1rem;
+}
+
+.opps-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--accent-primary);
+}
+
+.opps-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.opp-item {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-2);
+    border-left: 3px solid var(--border-color);
+}
+
+.opp-item.success { border-left-color: var(--accent-green); }
+.opp-item.danger { border-left-color: var(--accent-red); }
+.opp-item.pending { border-left-color: var(--accent-orange); }
+
+.opp-item-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin-bottom: var(--space-1);
 }
 
-.entry-card-comment {
+.opp-direction {
+    font-weight: 600;
+    font-size: 0.8125rem;
+}
+
+.opp-type {
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.opp-type.news { background: var(--accent-orange); color: white; }
+.opp-type.tech { background: var(--accent-primary); color: white; }
+
+.opp-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+.opp-item-body {
+    margin-bottom: var(--space-1);
+}
+
+.opp-prices {
+    display: flex;
+    gap: var(--space-2);
+    font-family: 'SF Mono', monospace;
     font-size: 0.8125rem;
     color: var(--text-secondary);
-    line-height: 1.5;
-    margin-top: var(--space-1);
+}
+
+.opp-catalyst {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.opp-item-result {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
     padding-top: var(--space-1);
     border-top: 1px solid var(--border-light);
 }
 
-.entry-card-opps {
-    margin-top: var(--space-1);
+.result-icon {
+    font-size: 0.875rem;
+}
+
+.result-text {
     font-size: 0.8125rem;
-    color: var(--accent-primary);
-    font-weight: 500;
+    font-weight: 600;
+}
+
+.result-pnl {
+    font-family: 'SF Mono', monospace;
+    font-weight: 600;
+    margin-left: auto;
+}
+
+/* Pas d'opportunité */
+.day-no-opps {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    padding-top: var(--space-2);
+}
+
+.no-opps-icon {
+    opacity: 0.5;
 }
 
 @media (max-width: 1024px) {
@@ -555,11 +724,31 @@ function formatDate(dateStr) {
     }
 
     .journal-sidebar-list {
+        position: static;
         max-height: 300px;
     }
 
-    .filters-bar {
-        flex-wrap: wrap;
+    .timeline-day {
+        flex-direction: column;
+    }
+
+    .timeline-date {
+        flex: 0;
+        text-align: left;
+    }
+
+    .timeline-content::before {
+        display: none;
+    }
+
+    .selected-asset-header {
+        flex-direction: column;
+        gap: var(--space-2);
+    }
+
+    .asset-header-stats {
+        width: 100%;
+        justify-content: space-around;
     }
 }
 </style>

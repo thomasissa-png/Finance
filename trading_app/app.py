@@ -399,6 +399,7 @@ RÈGLES:
 - UNIQUEMENT des actifs dont le marché est OUVERT ou s'ouvre dans 2h
 - AU MINIMUM 1 opportunité NEWS TRADING dans tes recommandations
 - TOUTES les heures en CET (heure française)
+- PRÉCISE TOUJOURS si c'est un LONG ou un SHORT
 
 FORMAT DE RÉPONSE EN JSON:
 {
@@ -410,6 +411,7 @@ FORMAT DE RÉPONSE EN JSON:
   "opportunites": [
     {
       "actif": "",
+      "direction": "LONG ou SHORT",
       "prix_actuel": 0,
       "catalyseur": "",
       "is_news_trading": true/false,
@@ -534,10 +536,18 @@ def enregistrer_recommandation(trade_data):
         cursor = conn.cursor()
         maintenant = get_paris_time()
 
-        # Déterminer la direction (LONG par défaut, SHORT si stop > entrée)
-        entree = trade_data.get('entree', 0)
-        stop = trade_data.get('stop', 0)
-        direction = 'SHORT' if stop > entree and entree > 0 else 'LONG'
+        # Déterminer la direction
+        # 1. Utiliser la direction fournie par Claude si disponible
+        # 2. Sinon déduire: SHORT si stop > entrée, LONG sinon
+        entree = float(trade_data.get('entree', 0) or 0)
+        stop = float(trade_data.get('stop', 0) or 0)
+
+        if trade_data.get('direction'):
+            direction = trade_data.get('direction').upper()
+        elif stop > entree and entree > 0:
+            direction = 'SHORT'
+        else:
+            direction = 'LONG'
 
         # Trouver le symbole et la catégorie
         symbole = trade_data.get('symbole', '')
@@ -548,6 +558,13 @@ def enregistrer_recommandation(trade_data):
                 if nom == actif_nom:
                     symbole = sym
                     break
+            # Chercher aussi dans le pool de rotation
+            if not symbole:
+                for pool in POOL_ROTATION.values():
+                    for sym, nom in pool.items():
+                        if nom == actif_nom:
+                            symbole = sym
+                            break
 
         categorie = get_categorie_actif(symbole) if symbole else 'autre'
 
@@ -1403,6 +1420,79 @@ def api_historique_opportunites(symbole):
         'symbole': symbole,
         'trades': trades
     })
+
+@app.route('/api/stats-evolution')
+def api_stats_evolution():
+    """Récupère l'évolution des stats pour le graphique"""
+    try:
+        granularite = request.args.get('granularite', 'jour')  # jour, semaine, mois
+        limite = int(request.args.get('limite', 30))
+
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if granularite == 'jour':
+            cursor.execute('''
+                SELECT date,
+                       COUNT(*) as nb_trades,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                       SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_cumule
+                FROM trades_recommandes
+                GROUP BY date
+                ORDER BY date DESC
+                LIMIT ?
+            ''', (limite,))
+        elif granularite == 'semaine':
+            cursor.execute('''
+                SELECT strftime('%Y-W%W', date) as periode,
+                       MIN(date) as date,
+                       COUNT(*) as nb_trades,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                       SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_cumule
+                FROM trades_recommandes
+                GROUP BY strftime('%Y-W%W', date)
+                ORDER BY periode DESC
+                LIMIT ?
+            ''', (limite,))
+        else:  # mois
+            cursor.execute('''
+                SELECT strftime('%Y-%m', date) as periode,
+                       MIN(date) as date,
+                       COUNT(*) as nb_trades,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                       SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_cumule
+                FROM trades_recommandes
+                GROUP BY strftime('%Y-%m', date)
+                ORDER BY periode DESC
+                LIMIT ?
+            ''', (limite,))
+
+        stats = []
+        pnl_running = 0
+        for row in cursor.fetchall():
+            data = dict(row)
+            pnl_running += data['pnl_cumule'] or 0
+            data['pnl_cumule_running'] = round(pnl_running, 2)
+            conclus = data['reussis'] + data['stops']
+            data['taux_reussite'] = round((data['reussis'] / conclus * 100) if conclus > 0 else 0, 1)
+            stats.append(data)
+
+        conn.close()
+
+        # Inverser pour avoir l'ordre chronologique
+        stats.reverse()
+
+        return jsonify({
+            'success': True,
+            'granularite': granularite,
+            'stats': stats
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/trades-historique')
 def api_trades_historique():

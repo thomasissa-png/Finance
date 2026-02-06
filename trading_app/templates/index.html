@@ -178,18 +178,60 @@ document.addEventListener('DOMContentLoaded', function() {
     // Auto-refresh News Flash toutes les 10 minutes
     newsInterval = setInterval(refreshNews, 600000);
 
-    // Auto-refresh Contexte toutes les heures entre 7h-22h CET
+    // Auto-refresh Contexte toutes les heures entre 7h-23h CET
     contextInterval = setInterval(function() {
         const now = new Date();
         const hour = now.getHours();
-        if (hour >= 7 && hour < 22) {
-            refreshContext();
+        if (hour >= 7 && hour < 23) {
+            console.log('Auto-refresh contexte...');
+            actualiserContexte();
         }
     }, 3600000);
 
-    // Vérifier si le contexte est périmé (> 1h)
-    checkContextFreshness();
+    // Vérifier immédiatement si le contexte doit être rafraîchi
+    setTimeout(checkAndRefreshContext, 5000);
 });
+
+async function checkAndRefreshContext() {
+    // Vérifier si la dernière analyse date de plus d'1h
+    const now = new Date();
+    const hour = now.getHours();
+
+    if (hour >= 7 && hour < 23) {
+        try {
+            const response = await fetch('/api/derniere-analyse');
+            const data = await response.json();
+
+            if (data.success && data.analyse) {
+                const analyseTime = new Date(data.analyse.timestamp);
+                const diffHours = (now - analyseTime) / (1000 * 60 * 60);
+
+                if (diffHours > 1) {
+                    console.log('Contexte périmé, actualisation automatique...');
+                    actualiserContexte();
+                }
+            } else {
+                // Pas d'analyse, en lancer une
+                actualiserContexte();
+            }
+        } catch (error) {
+            console.error('Erreur vérification contexte:', error);
+        }
+    }
+}
+
+async function actualiserContexte() {
+    try {
+        const response = await fetch('/api/analyse');
+        const data = await response.json();
+
+        if (data.success) {
+            loadLastAnalysis();
+        }
+    } catch (error) {
+        console.error('Erreur actualisation contexte:', error);
+    }
+}
 
 async function loadAllData() {
     await Promise.all([
@@ -334,19 +376,6 @@ function renderTopMovers(gainers, losers) {
     container.innerHTML = html;
 }
 
-// ===== REFRESH CONTEXTE =====
-async function refreshContext() {
-    try {
-        const response = await fetch('/api/analyse');
-        const data = await response.json();
-
-        if (data.success) {
-            loadLastAnalysis();
-        }
-    } catch (error) {
-        console.error('Erreur refresh context:', error);
-    }
-}
 
 // ===== ACTUALISER TOUT =====
 async function actualiserTout() {
@@ -475,11 +504,34 @@ function checkContextFreshness() {
         const diffHours = (now - analyseTime) / (1000 * 60 * 60);
 
         if (diffHours > 1) {
-            // Le contexte est périmé
+            // Le contexte est périmé - afficher message et lancer mise à jour auto
             document.getElementById('context-bullets').innerHTML =
-                '<li style="color: var(--accent-orange);">⚠️ Contexte périmé (dernière mise à jour il y a ' +
-                Math.floor(diffHours) + 'h). Cliquez sur Actualiser.</li>';
+                '<li style="color: var(--accent-orange);">⚠️ Contexte périmé, mise à jour automatique en cours...</li>';
+            actualiserContexte();
         }
+    }
+}
+
+// Mettre à jour zones danger quand opportunités changent
+function updateDangerZonesFromOpportunities(opportunities) {
+    if (!opportunities || opportunities.length === 0) return;
+
+    // Si des opportunités ont été identifiées, vérifier les zones de risque
+    const container = document.getElementById('danger-zones');
+    let dangerItems = [];
+
+    for (const opp of opportunities) {
+        if (opp.invalidation) {
+            dangerItems.push(`${opp.actif}: ${opp.invalidation}`);
+        }
+    }
+
+    if (dangerItems.length > 0) {
+        let html = '';
+        for (const danger of dangerItems) {
+            html += `<div class="danger-item"><span class="danger-icon">⚠️</span><span>${danger}</span></div>`;
+        }
+        container.innerHTML = html;
     }
 }
 
