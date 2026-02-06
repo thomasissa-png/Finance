@@ -629,7 +629,7 @@ def enregistrer_recommandation(trade_data):
         return None
 
 def verifier_resultats_trades():
-    """Vérifie et met à jour les résultats des trades ouverts"""
+    """Vérifie et met à jour les résultats des trades ouverts (ordre chronologique)"""
     maintenant = get_paris_time()
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔍 Vérification résultats trades...")
 
@@ -664,50 +664,57 @@ def verifier_resultats_trades():
                 if entree == 0:
                     continue
 
-                # Récupérer les données du jour pour cet actif
+                # Récupérer les données intraday (5min pour avoir l'ordre chronologique)
                 ticker = yf.Ticker(symbole)
-                hist = ticker.history(period="1d", interval="1m")
+                hist = ticker.history(period="1d", interval="5m")
 
                 if hist.empty:
                     continue
-
-                # Vérifier les extremums de la journée
-                high_jour = hist['High'].max()
-                low_jour = hist['Low'].min()
-                prix_actuel = hist['Close'].iloc[-1]
 
                 resultat = None
                 prix_sortie = None
                 pnl_pct = None
 
-                if direction == 'LONG':
-                    # LONG: Stop si prix descend sous stop, TP si prix monte au dessus de TP
-                    if stop > 0 and low_jour <= stop:
-                        resultat = 'STOP'
-                        prix_sortie = stop
-                        pnl_pct = ((stop - entree) / entree) * 100
-                    elif tp2 > 0 and high_jour >= tp2:
-                        resultat = 'TP2'
-                        prix_sortie = tp2
-                        pnl_pct = ((tp2 - entree) / entree) * 100
-                    elif tp1 > 0 and high_jour >= tp1:
-                        resultat = 'TP1'
-                        prix_sortie = tp1
-                        pnl_pct = ((tp1 - entree) / entree) * 100
-                else:
-                    # SHORT: Stop si prix monte au dessus du stop, TP si prix descend sous TP
-                    if stop > 0 and high_jour >= stop:
-                        resultat = 'STOP'
-                        prix_sortie = stop
-                        pnl_pct = ((entree - stop) / entree) * 100
-                    elif tp2 > 0 and low_jour <= tp2:
-                        resultat = 'TP2'
-                        prix_sortie = tp2
-                        pnl_pct = ((entree - tp2) / entree) * 100
-                    elif tp1 > 0 and low_jour <= tp1:
-                        resultat = 'TP1'
-                        prix_sortie = tp1
-                        pnl_pct = ((entree - tp1) / entree) * 100
+                # Parcourir chronologiquement chaque bougie
+                for idx, row in hist.iterrows():
+                    high = row['High']
+                    low = row['Low']
+
+                    if direction == 'LONG':
+                        # LONG: Stop si prix descend sous stop, TP si prix monte au-dessus
+                        # Vérifier le stop d'abord (scénario pessimiste dans une même bougie)
+                        if stop > 0 and low <= stop:
+                            resultat = 'STOP'
+                            prix_sortie = stop
+                            pnl_pct = ((stop - entree) / entree) * 100
+                            break
+                        elif tp2 > 0 and high >= tp2:
+                            resultat = 'TP2'
+                            prix_sortie = tp2
+                            pnl_pct = ((tp2 - entree) / entree) * 100
+                            break
+                        elif tp1 > 0 and high >= tp1:
+                            resultat = 'TP1'
+                            prix_sortie = tp1
+                            pnl_pct = ((tp1 - entree) / entree) * 100
+                            break
+                    else:
+                        # SHORT: Stop si prix monte au-dessus du stop, TP si prix descend
+                        if stop > 0 and high >= stop:
+                            resultat = 'STOP'
+                            prix_sortie = stop
+                            pnl_pct = ((entree - stop) / entree) * 100
+                            break
+                        elif tp2 > 0 and low <= tp2:
+                            resultat = 'TP2'
+                            prix_sortie = tp2
+                            pnl_pct = ((entree - tp2) / entree) * 100
+                            break
+                        elif tp1 > 0 and low <= tp1:
+                            resultat = 'TP1'
+                            prix_sortie = tp1
+                            pnl_pct = ((entree - tp1) / entree) * 100
+                            break
 
                 # Mettre à jour si résultat trouvé
                 if resultat:
