@@ -47,7 +47,7 @@
         </div>
     </section>
 
-    <!-- 3. PULSE MARCHÉ + AGENDA -->
+    <!-- 3. PULSE MARCHÉ + TOP MOVERS -->
     <div class="grid-2 mb-3">
         <!-- Pulse Marché -->
         <section class="section" style="margin-bottom: 0;">
@@ -63,20 +63,34 @@
             </div>
         </section>
 
-        <!-- Agenda -->
+        <!-- Top Movers -->
         <section class="section" style="margin-bottom: 0;">
             <div class="section-header">
-                <span class="section-icon">📅</span>
-                <h2 class="section-title">Agenda</h2>
-                <span class="section-meta">Événements du jour</span>
+                <span class="section-icon">🔥</span>
+                <h2 class="section-title">Top Movers</h2>
+                <span class="section-meta">Plus fortes variations</span>
             </div>
             <div class="section-content">
-                <div class="agenda-list" id="agenda-list">
+                <div class="top-movers-widget" id="top-movers-widget">
                     <div class="loading">Chargement...</div>
                 </div>
             </div>
         </section>
     </div>
+
+    <!-- 3bis. AGENDA -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📅</span>
+            <h2 class="section-title">Agenda</h2>
+            <span class="section-meta">Événements du jour</span>
+        </div>
+        <div class="section-content">
+            <div class="agenda-list" id="agenda-list">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+    </section>
 
     <!-- 4. OPPORTUNITÉS ACTIVES -->
     <section class="section">
@@ -140,17 +154,27 @@
 let marketData = null;
 let analysisData = null;
 let pulseInterval = null;
+let newsInterval = null;
 let contextInterval = null;
 
 // Initialisation
 document.addEventListener('DOMContentLoaded', function() {
     loadAllData();
 
-    // Auto-refresh Pulse Marché toutes les 30 secondes
-    pulseInterval = setInterval(refreshMarkets, 30000);
+    // Auto-refresh Pulse Marché toutes les 15 secondes
+    pulseInterval = setInterval(refreshMarkets, 15000);
 
-    // Auto-refresh Contexte toutes les heures
-    contextInterval = setInterval(loadLastAnalysis, 3600000);
+    // Auto-refresh News Flash toutes les 10 minutes
+    newsInterval = setInterval(refreshNews, 600000);
+
+    // Auto-refresh Contexte toutes les heures entre 7h-22h CET
+    contextInterval = setInterval(function() {
+        const now = new Date();
+        const hour = now.getHours();
+        if (hour >= 7 && hour < 22) {
+            refreshContext();
+        }
+    }, 3600000);
 
     // Vérifier si le contexte est périmé (> 1h)
     checkContextFreshness();
@@ -159,8 +183,114 @@ document.addEventListener('DOMContentLoaded', function() {
 async function loadAllData() {
     await Promise.all([
         refreshMarkets(),
-        loadLastAnalysis()
+        loadLastAnalysis(),
+        refreshNews(),
+        loadTopMovers()
     ]);
+}
+
+// ===== NEWS FLASH via NewsAPI =====
+async function refreshNews() {
+    try {
+        const response = await fetch('/api/news');
+        const data = await response.json();
+
+        if (data.success && data.articles) {
+            renderNewsFlashFromAPI(data.articles);
+        }
+    } catch (error) {
+        console.error('Erreur news:', error);
+    }
+}
+
+function renderNewsFlashFromAPI(articles) {
+    const container = document.getElementById('news-flash-list');
+
+    if (!articles || articles.length === 0) {
+        container.innerHTML = `
+            <div class="news-flash-item">
+                <span class="news-time">--:--</span>
+                <div class="news-content">
+                    <span class="news-text">Aucune actualité disponible</span>
+                </div>
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    for (const article of articles.slice(0, 6)) {
+        html += `
+            <div class="news-flash-item">
+                <span class="news-time">${article.heure || '--:--'}</span>
+                <div class="news-content">
+                    <span class="news-text">${article.titre}</span>
+                    <span class="news-source">${article.source}</span>
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+// ===== TOP MOVERS =====
+async function loadTopMovers() {
+    try {
+        const response = await fetch('/api/top-movers');
+        const data = await response.json();
+
+        if (data.success) {
+            renderTopMovers(data.gainers, data.losers);
+        }
+    } catch (error) {
+        console.error('Erreur top movers:', error);
+    }
+}
+
+function renderTopMovers(gainers, losers) {
+    const container = document.getElementById('top-movers-widget');
+
+    let html = '<div class="movers-grid">';
+
+    // Gainers
+    html += '<div class="movers-column gainers">';
+    html += '<div class="movers-title positive">▲ Hausse</div>';
+    for (const g of gainers.slice(0, 4)) {
+        html += `
+            <div class="mover-item">
+                <span class="mover-name">${g.nom}</span>
+                <span class="mover-value positive">+${g.variation.toFixed(2)}%</span>
+            </div>`;
+    }
+    html += '</div>';
+
+    // Losers
+    html += '<div class="movers-column losers">';
+    html += '<div class="movers-title negative">▼ Baisse</div>';
+    for (const l of losers.slice(0, 4)) {
+        html += `
+            <div class="mover-item">
+                <span class="mover-name">${l.nom}</span>
+                <span class="mover-value negative">${l.variation.toFixed(2)}%</span>
+            </div>`;
+    }
+    html += '</div>';
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+// ===== REFRESH CONTEXTE =====
+async function refreshContext() {
+    try {
+        const response = await fetch('/api/analyse');
+        const data = await response.json();
+
+        if (data.success) {
+            loadLastAnalysis();
+        }
+    } catch (error) {
+        console.error('Erreur refresh context:', error);
+    }
 }
 
 // ===== ACTUALISER TOUT =====
@@ -218,6 +348,9 @@ async function refreshMarkets() {
             const now = new Date();
             document.getElementById('pulse-update-time').textContent =
                 now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+
+            // Rafraîchir aussi les Top Movers
+            loadTopMovers();
         }
     } catch (error) {
         console.error('Erreur markets:', error);
@@ -230,6 +363,7 @@ function renderPulseWidget() {
         {key: 'CAC 40', name: 'CAC 40'},
         {key: 'S&P 500', name: 'S&P 500'},
         {key: 'Nasdaq', name: 'Nasdaq'},
+        {key: 'Or', name: 'Or'},
         {key: 'EUR/USD', name: 'EUR/USD'},
         {key: 'VIX', name: 'VIX'}
     ];

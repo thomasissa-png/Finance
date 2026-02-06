@@ -19,6 +19,7 @@ import yfinance as yf
 from anthropic import Anthropic
 from flask import Flask, render_template, jsonify, request
 from twilio.rest import Client
+import requests
 
 # ============================================================================
 # CONFIGURATION
@@ -39,6 +40,7 @@ NEWS_ENVOYEES_AUJOURDHUI = 0
 MAX_NEWS_PAR_JOUR = 3
 DERNIERE_VERIFICATION_DATE = None
 DB_PATH = 'trading.db'
+NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
@@ -963,6 +965,104 @@ def api_cloture():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/news')
+def api_news():
+    """Récupère les actualités financières via NewsAPI"""
+    if not NEWSAPI_KEY:
+        return jsonify({'success': False, 'error': 'NEWSAPI_KEY non configurée'})
+
+    try:
+        # Requête NewsAPI pour les actualités business/finance
+        url = "https://newsapi.org/v2/top-headlines"
+        params = {
+            'apiKey': NEWSAPI_KEY,
+            'category': 'business',
+            'language': 'fr',
+            'pageSize': 10
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        if data.get('status') != 'ok':
+            # Essayer avec "everything" et des mots-clés finance
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                'apiKey': NEWSAPI_KEY,
+                'q': 'bourse OR CAC40 OR marchés financiers OR trading',
+                'language': 'fr',
+                'sortBy': 'publishedAt',
+                'pageSize': 10
+            }
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+
+        if data.get('status') == 'ok':
+            articles = []
+            for article in data.get('articles', [])[:10]:
+                # Extraire l'heure de publication
+                published = article.get('publishedAt', '')
+                heure = '--:--'
+                if published:
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(published.replace('Z', '+00:00'))
+                        dt_paris = dt.astimezone(TZ_PARIS)
+                        heure = dt_paris.strftime('%H:%M')
+                    except:
+                        pass
+
+                articles.append({
+                    'titre': article.get('title', '')[:100],
+                    'description': article.get('description', '')[:200] if article.get('description') else '',
+                    'source': article.get('source', {}).get('name', 'Inconnu'),
+                    'heure': heure,
+                    'url': article.get('url', ''),
+                    'impact': 'medium'  # Par défaut
+                })
+
+            return jsonify({
+                'success': True,
+                'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+                'articles': articles
+            })
+
+        return jsonify({'success': False, 'error': 'Aucun article trouvé'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/top-movers')
+def api_top_movers():
+    """Récupère les plus fortes variations du jour"""
+    try:
+        donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+
+        # Trier par variation absolue
+        movers = []
+        for nom, data in donnees.items():
+            movers.append({
+                'nom': nom,
+                'symbole': data['symbole'],
+                'prix': data['prix'],
+                'variation': data['variation']
+            })
+
+        # Trier par variation absolue décroissante
+        movers_sorted = sorted(movers, key=lambda x: abs(x['variation']), reverse=True)
+
+        # Séparer gainers et losers
+        gainers = [m for m in movers_sorted if m['variation'] > 0][:5]
+        losers = [m for m in movers_sorted if m['variation'] < 0][:5]
+
+        return jsonify({
+            'success': True,
+            'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+            'gainers': gainers,
+            'losers': losers
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 # ============================================================================
 # WHATSAPP (optionnel)
 # ============================================================================
@@ -1054,20 +1154,13 @@ def run_scheduler():
 
 def start_app():
     """Démarre l'application"""
-    init_database()
-    configurer_schedule()
-
-    # Démarrer le scheduler dans un thread
-    scheduler_thread = Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-
     maintenant = get_paris_time()
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
 ║           AGENT TRADING - INTERFACE WEB                       ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  📅 {maintenant.strftime('%d/%m/%Y %H:%M:%S')} CET                                  ║
-║  🌐 URL: http://localhost:8080                                ║
+║  🌐 URL: http://localhost:5000                                ║
 ║                                                               ║
 ║  ⏰ Analyses AUTO: 8h, 14h30, 17h CET                         ║
 ║  🌙 Clôture: 22h CET                                          ║
@@ -1080,7 +1173,13 @@ def start_app():
 ╚══════════════════════════════════════════════════════════════╝
     """)
 
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)
+
+# Initialisation au niveau module (requis pour Replit)
+init_database()
+configurer_schedule()
+scheduler_thread = Thread(target=run_scheduler, daemon=True)
+scheduler_thread.start()
 
 if __name__ == "__main__":
     start_app()
