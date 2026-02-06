@@ -68,7 +68,22 @@
         </div>
     </section>
 
-    <!-- Graphique Évolution -->
+    <!-- Historique Trades -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📜</span>
+            <h2 class="section-title">Historique des Recommandations</h2>
+            <span class="section-meta" id="trades-count">0 trades</span>
+        </div>
+        <div class="section-content">
+            <!-- Table responsive wrapper -->
+            <div class="table-responsive" id="trades-history">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Graphique Évolution (en bas) -->
     <section class="section">
         <div class="section-header">
             <span class="section-icon">📈</span>
@@ -86,53 +101,6 @@
             <div class="chart-legend">
                 <span class="legend-item"><span class="legend-dot green"></span> PnL Cumulé</span>
                 <span class="legend-item"><span class="legend-dot blue"></span> Taux Réussite</span>
-            </div>
-        </div>
-    </section>
-
-    <!-- Historique Trades -->
-    <section class="section">
-        <div class="section-header">
-            <span class="section-icon">📜</span>
-            <h2 class="section-title">Historique des Recommandations</h2>
-            <span class="section-meta" id="trades-count">0 trades</span>
-        </div>
-        <div class="section-content">
-            <!-- Filtres -->
-            <div class="trades-filters mb-3">
-                <div class="filter-inline">
-                    <input type="text" id="filter-search" placeholder="Rechercher un actif..." onkeyup="filterTrades()">
-                </div>
-                <div class="filter-inline">
-                    <select id="filter-direction" onchange="filterTrades()">
-                        <option value="">Toutes directions</option>
-                        <option value="LONG">📈 LONG</option>
-                        <option value="SHORT">📉 SHORT</option>
-                    </select>
-                </div>
-                <div class="filter-inline">
-                    <select id="filter-categorie" onchange="filterTrades()">
-                        <option value="">Toutes catégories</option>
-                        <option value="indice">Indices</option>
-                        <option value="action_eu">Actions EU</option>
-                        <option value="action_us">Actions US</option>
-                        <option value="commodite">Commodités</option>
-                        <option value="forex">Forex</option>
-                    </select>
-                </div>
-                <div class="filter-inline">
-                    <select id="filter-resultat" onchange="filterTrades()">
-                        <option value="">Tous résultats</option>
-                        <option value="TP1">✅ TP1</option>
-                        <option value="TP2">✅ TP2</option>
-                        <option value="STOP">❌ Stop</option>
-                        <option value="en_cours">⏳ En cours</option>
-                    </select>
-                </div>
-            </div>
-
-            <div id="trades-history">
-                <div class="loading">Chargement...</div>
             </div>
         </div>
     </section>
@@ -344,14 +312,7 @@ async function loadPerformances() {
 
 async function loadTradesHistory() {
     try {
-        const categorie = document.getElementById('filter-categorie').value;
-        const direction = document.getElementById('filter-direction').value;
-        const recherche = document.getElementById('filter-search').value;
-
         let url = `/api/trades-historique?periode=${currentPeriode}`;
-        if (categorie) url += `&categorie=${categorie}`;
-        if (direction) url += `&direction=${direction}`;
-        if (recherche) url += `&recherche=${encodeURIComponent(recherche)}`;
 
         const response = await fetch(url);
         const data = await response.json();
@@ -363,32 +324,74 @@ async function loadTradesHistory() {
     }
 }
 
-function filterTrades() {
-    loadTradesHistory();
+// Filtres stockés
+let tableFilters = {
+    actif: '',
+    direction: '',
+    type: '',
+    categorie: '',
+    resultat: ''
+};
+
+function applyTableFilter(column, value) {
+    tableFilters[column] = value;
+    renderTradesTable();
 }
 
 function renderTradesTable() {
     const container = document.getElementById('trades-history');
     const countEl = document.getElementById('trades-count');
-    const resultatFilter = document.getElementById('filter-resultat').value;
 
-    // Filtrer par résultat côté client
+    // Filtrer par tous les filtres
     let trades = allTrades;
-    if (resultatFilter) {
-        if (resultatFilter === 'en_cours') {
+
+    // Filtre actif (recherche texte)
+    if (tableFilters.actif) {
+        const search = tableFilters.actif.toLowerCase();
+        trades = trades.filter(t => (t.actif || '').toLowerCase().includes(search) ||
+                                    (t.symbole || '').toLowerCase().includes(search));
+    }
+
+    // Filtre direction
+    if (tableFilters.direction) {
+        trades = trades.filter(t => t.direction === tableFilters.direction);
+    }
+
+    // Filtre type (NEWS/TECH)
+    if (tableFilters.type) {
+        trades = trades.filter(t => t.type_setup === tableFilters.type);
+    }
+
+    // Filtre catégorie
+    if (tableFilters.categorie) {
+        trades = trades.filter(t => t.categorie_actif === tableFilters.categorie);
+    }
+
+    // Filtre résultat
+    if (tableFilters.resultat) {
+        if (tableFilters.resultat === 'en_cours') {
             trades = trades.filter(t => !t.resultat);
         } else {
-            trades = trades.filter(t => t.resultat === resultatFilter);
+            trades = trades.filter(t => t.resultat === tableFilters.resultat);
         }
     }
 
     if (trades.length > 0) {
         countEl.textContent = trades.length + ' recommandation' + (trades.length > 1 ? 's' : '');
 
+        const catLabels = {
+            'indice': 'Indice',
+            'action_eu': 'Action EU',
+            'action_us': 'Action US',
+            'commodite': 'Commodité',
+            'forex': 'Forex',
+            'autre': 'Autre'
+        };
+
         let html = `
-            <table class="data-table">
+            <table class="data-table excel-table">
                 <thead>
-                    <tr>
+                    <tr class="header-row">
                         <th>Date</th>
                         <th>Heure</th>
                         <th>Actif</th>
@@ -401,6 +404,51 @@ function renderTradesTable() {
                         <th>Résultat</th>
                         <th>PnL</th>
                     </tr>
+                    <tr class="filter-row">
+                        <th></th>
+                        <th></th>
+                        <th>
+                            <input type="text" class="filter-input" placeholder="🔍"
+                                   value="${tableFilters.actif}" onkeyup="applyTableFilter('actif', this.value)">
+                        </th>
+                        <th>
+                            <select class="filter-select" onchange="applyTableFilter('direction', this.value)">
+                                <option value="">Tous</option>
+                                <option value="LONG" ${tableFilters.direction === 'LONG' ? 'selected' : ''}>📈 LONG</option>
+                                <option value="SHORT" ${tableFilters.direction === 'SHORT' ? 'selected' : ''}>📉 SHORT</option>
+                            </select>
+                        </th>
+                        <th>
+                            <select class="filter-select" onchange="applyTableFilter('type', this.value)">
+                                <option value="">Tous</option>
+                                <option value="NEWS" ${tableFilters.type === 'NEWS' ? 'selected' : ''}>NEWS</option>
+                                <option value="TECHNIQUE" ${tableFilters.type === 'TECHNIQUE' ? 'selected' : ''}>TECH</option>
+                            </select>
+                        </th>
+                        <th>
+                            <select class="filter-select" onchange="applyTableFilter('categorie', this.value)">
+                                <option value="">Toutes</option>
+                                <option value="indice" ${tableFilters.categorie === 'indice' ? 'selected' : ''}>Indices</option>
+                                <option value="action_eu" ${tableFilters.categorie === 'action_eu' ? 'selected' : ''}>Actions EU</option>
+                                <option value="action_us" ${tableFilters.categorie === 'action_us' ? 'selected' : ''}>Actions US</option>
+                                <option value="commodite" ${tableFilters.categorie === 'commodite' ? 'selected' : ''}>Commodités</option>
+                                <option value="forex" ${tableFilters.categorie === 'forex' ? 'selected' : ''}>Forex</option>
+                            </select>
+                        </th>
+                        <th></th>
+                        <th></th>
+                        <th></th>
+                        <th>
+                            <select class="filter-select" onchange="applyTableFilter('resultat', this.value)">
+                                <option value="">Tous</option>
+                                <option value="TP1" ${tableFilters.resultat === 'TP1' ? 'selected' : ''}>✅ TP1</option>
+                                <option value="TP2" ${tableFilters.resultat === 'TP2' ? 'selected' : ''}>✅ TP2</option>
+                                <option value="STOP" ${tableFilters.resultat === 'STOP' ? 'selected' : ''}>❌ Stop</option>
+                                <option value="en_cours" ${tableFilters.resultat === 'en_cours' ? 'selected' : ''}>⏳ En cours</option>
+                            </select>
+                        </th>
+                        <th></th>
+                    </tr>
                 </thead>
                 <tbody>`;
 
@@ -412,28 +460,20 @@ function renderTradesTable() {
                 '<span class="opp-tag tech">TECH</span>';
             const dirClass = trade.direction === 'LONG' ? 'positive' : 'negative';
             const dirIcon = trade.direction === 'LONG' ? '📈' : '📉';
-            const catLabels = {
-                'indice': 'Indice',
-                'action_eu': 'Action EU',
-                'action_us': 'Action US',
-                'commodite': 'Commodité',
-                'forex': 'Forex',
-                'autre': 'Autre'
-            };
 
             html += `
                 <tr>
-                    <td>${trade.date || '-'}</td>
-                    <td>${trade.heure_message || '-'}</td>
-                    <td><strong>${trade.actif || '-'}</strong></td>
-                    <td class="${dirClass}">${dirIcon} ${trade.direction || 'LONG'}</td>
-                    <td>${typeTag}</td>
-                    <td><span class="cat-badge">${catLabels[trade.categorie_actif] || '-'}</span></td>
-                    <td style="font-family: 'SF Mono', monospace;">${trade.prix_entree || '-'}</td>
-                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
-                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
-                    <td class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
-                    <td class="${resultClass}" style="font-family: 'SF Mono', monospace;">
+                    <td data-label="Date">${trade.date || '-'}</td>
+                    <td data-label="Heure">${trade.heure_message || '-'}</td>
+                    <td data-label="Actif"><strong>${trade.actif || '-'}</strong></td>
+                    <td data-label="Direction" class="${dirClass}">${dirIcon} ${trade.direction || 'LONG'}</td>
+                    <td data-label="Type">${typeTag}</td>
+                    <td data-label="Catégorie"><span class="cat-badge">${catLabels[trade.categorie_actif] || '-'}</span></td>
+                    <td data-label="Entrée" class="mono">${trade.prix_entree || '-'}</td>
+                    <td data-label="Stop" class="mono negative">${trade.prix_stop || '-'}</td>
+                    <td data-label="TP1" class="mono positive">${trade.prix_tp1 || '-'}</td>
+                    <td data-label="Résultat" class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
+                    <td data-label="PnL" class="${resultClass} mono">
                         ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
                     </td>
                 </tr>`;
@@ -447,34 +487,72 @@ function renderTradesTable() {
     }
 }
 
+function filterTrades() {
+    // Réinitialiser les filtres du tableau
+    tableFilters = {actif: '', direction: '', type: '', categorie: '', resultat: ''};
+    loadTradesHistory();
+}
+
 </script>
 
 <style>
-/* Filtres trades */
-.trades-filters {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    padding: var(--space-2);
-    background: var(--bg-secondary);
-    border-radius: var(--radius-md);
+/* Table responsive wrapper */
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 calc(var(--space-2) * -1);
+    padding: 0 var(--space-2);
 }
 
-.filter-inline input,
-.filter-inline select {
-    padding: 8px 12px;
+/* Excel-like table */
+.excel-table {
+    min-width: 900px;
+}
+
+.excel-table .header-row th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.excel-table .filter-row th {
+    background: var(--bg-tertiary);
+    padding: 4px;
+}
+
+.filter-input {
+    width: 100%;
+    padding: 4px 8px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
-    min-width: 150px;
+    font-size: 0.75rem;
 }
 
-.filter-inline input:focus,
-.filter-inline select:focus {
+.filter-input:focus {
     outline: none;
     border-color: var(--accent-primary);
+}
+
+.filter-select {
+    width: 100%;
+    padding: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.filter-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.mono {
+    font-family: 'SF Mono', monospace;
 }
 
 .cat-badge {
@@ -548,15 +626,40 @@ function renderTradesTable() {
 .legend-dot.blue { background: #3B82F6; }
 
 @media (max-width: 768px) {
-    .trades-filters {
-        flex-direction: column;
-    }
-    .filter-inline input,
-    .filter-inline select {
-        width: 100%;
-    }
     .chart-container {
         height: 250px;
+    }
+
+    .table-responsive {
+        margin: 0 calc(var(--space-3) * -1);
+        padding: 0 var(--space-3);
+        border-radius: 0;
+    }
+
+    .excel-table {
+        font-size: 0.8125rem;
+    }
+
+    .excel-table th,
+    .excel-table td {
+        padding: 8px 6px;
+    }
+
+    .filter-input,
+    .filter-select {
+        font-size: 0.6875rem;
+        padding: 2px 4px;
+    }
+
+    /* Indication scroll horizontal */
+    .table-responsive::after {
+        content: '← Glisser →';
+        display: block;
+        text-align: center;
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        padding: var(--space-1) 0;
+        opacity: 0.6;
     }
 }
 </style>

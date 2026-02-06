@@ -222,13 +222,29 @@ def init_database():
             categorie TEXT,
             prix_ouverture REAL,
             prix_cloture REAL,
+            prix_max REAL,
+            prix_min REAL,
             variation_jour REAL,
             volume_relatif REAL,
             commentaire_ia TEXT,
             evenements_jour TEXT,
             opportunites_jour TEXT,
+            recommandations_analystes TEXT,
             timestamp DATETIME,
             UNIQUE(date, symbole)
+        )
+    ''')
+
+    # Table pour le bilan général quotidien
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bilan_quotidien (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE UNIQUE,
+            contenu TEXT,
+            points_positifs TEXT,
+            points_negatifs TEXT,
+            lecons_apprises TEXT,
+            timestamp DATETIME
         )
     ''')
 
@@ -239,6 +255,19 @@ def init_database():
         pass
     try:
         cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN categorie_actif TEXT")
+    except:
+        pass
+    # Ajouter colonnes au journal_quotidien si manquantes
+    try:
+        cursor.execute("ALTER TABLE journal_quotidien ADD COLUMN prix_max REAL")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE journal_quotidien ADD COLUMN prix_min REAL")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE journal_quotidien ADD COLUMN recommandations_analystes TEXT")
     except:
         pass
 
@@ -820,6 +849,25 @@ FORMAT DE RÉPONSE EN JSON:
   }
 }"""
 
+SYSTEM_PROMPT_BILAN = """Tu es un spéculateur expérimenté qui fait le bilan de la journée de trading.
+Analyse les données du jour et rédige un bilan honnête et constructif.
+
+Le bilan doit inclure:
+1. Un résumé des marchés du jour (3-4 phrases)
+2. Les points positifs: ce qui a bien fonctionné dans les recommandations
+3. Les points négatifs: ce qui n'a pas fonctionné, les erreurs
+4. Les leçons apprises: ce qu'on peut retenir pour demain
+
+Sois direct, factuel et autocritique. Pas de langue de bois.
+
+FORMAT DE RÉPONSE EN JSON:
+{
+  "resume": "Paragraphe résumant la journée des marchés...",
+  "points_positifs": ["Point 1", "Point 2"],
+  "points_negatifs": ["Point 1", "Point 2"],
+  "lecons_apprises": ["Leçon 1", "Leçon 2"]
+}"""
+
 def generer_commentaires_journal(donnees_actifs):
     """Génère des commentaires AI pour les actifs du journal"""
     if not donnees_actifs:
@@ -852,16 +900,131 @@ Génère un commentaire de journal pour chaque actif, en expliquant brièvement 
         print(f"❌ Erreur commentaires journal: {e}")
         return {}
 
-def enregistrer_journal_quotidien():
-    """Enregistre le journal quotidien pour tous les actifs suivis"""
+def recuperer_recommandations_analystes(symbole):
+    """Récupère les recommandations des analystes via yfinance"""
+    try:
+        ticker = yf.Ticker(symbole)
+        recos = ticker.recommendations
+        if recos is not None and not recos.empty:
+            # Prendre les recommandations récentes (30 derniers jours)
+            recent = recos.tail(5)
+            reco_list = []
+            for idx, row in recent.iterrows():
+                reco_list.append({
+                    'date': str(idx.date()) if hasattr(idx, 'date') else str(idx),
+                    'firm': row.get('Firm', 'N/A'),
+                    'grade': row.get('To Grade', row.get('toGrade', 'N/A')),
+                    'action': row.get('Action', 'N/A')
+                })
+            return reco_list
+        return []
+    except Exception as e:
+        print(f"⚠️ Erreur recommandations {symbole}: {e}")
+        return []
+
+def generer_bilan_quotidien():
+    """Génère le bilan général de la journée"""
     maintenant = get_paris_time()
     aujourdhui = maintenant.date()
 
-    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📝 Enregistrement journal quotidien...")
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Génération bilan quotidien...")
 
     try:
-        # Récupérer les données de tous les actifs
-        donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+        # Récupérer les données de la journée
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer les trades du jour
+        cursor.execute('''
+            SELECT * FROM trades_recommandes WHERE date = ?
+        ''', (aujourdhui,))
+        trades_jour = [dict(row) for row in cursor.fetchall()]
+
+        # Récupérer les journaux du jour
+        cursor.execute('''
+            SELECT * FROM journal_quotidien WHERE date = ?
+        ''', (aujourdhui,))
+        journaux_jour = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        # Préparer les données pour le prompt
+        donnees_bilan = {
+            'date': str(aujourdhui),
+            'nb_recommandations': len(trades_jour),
+            'trades': [{
+                'actif': t['actif'],
+                'direction': t.get('direction', 'LONG'),
+                'type': t.get('type_setup', 'TECH'),
+                'resultat': t.get('resultat', 'En cours'),
+                'pnl': t.get('pnl_pct')
+            } for t in trades_jour],
+            'resume_actifs': [{
+                'nom': j['nom_actif'],
+                'variation': j['variation_jour']
+            } for j in journaux_jour[:10]]
+        }
+
+        donnees_texte = json.dumps(donnees_bilan, ensure_ascii=False, indent=2)
+
+        question = f"""Voici les données de trading pour le {maintenant.strftime('%d/%m/%Y')}:
+
+{donnees_texte}
+
+Fais un bilan honnête de cette journée de trading. Qu'est-ce qui a fonctionné ? Qu'est-ce qui n'a pas fonctionné ? Quelles leçons en tirer ?"""
+
+        message = client_anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1500,
+            system=SYSTEM_PROMPT_BILAN,
+            messages=[{"role": "user", "content": question}]
+        )
+
+        reponse = message.content[0].text
+        match = re.search(r'\{[\s\S]*\}', reponse)
+        if match:
+            bilan = json.loads(match.group())
+
+            # Sauvegarder le bilan
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO bilan_quotidien
+                (date, contenu, points_positifs, points_negatifs, lecons_apprises, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                aujourdhui,
+                bilan.get('resume', ''),
+                json.dumps(bilan.get('points_positifs', []), ensure_ascii=False),
+                json.dumps(bilan.get('points_negatifs', []), ensure_ascii=False),
+                json.dumps(bilan.get('lecons_apprises', []), ensure_ascii=False),
+                maintenant
+            ))
+            conn.commit()
+            conn.close()
+
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Bilan quotidien enregistré")
+            return bilan
+        return None
+    except Exception as e:
+        print(f"❌ Erreur bilan quotidien: {e}")
+        return None
+
+def enregistrer_journal_quotidien(actifs_a_traiter=None):
+    """Enregistre le journal quotidien pour les actifs spécifiés ou tous"""
+    maintenant = get_paris_time()
+    aujourdhui = maintenant.date()
+
+    # Si pas d'actifs spécifiés, traiter tous les actifs permanents
+    if actifs_a_traiter is None:
+        actifs_a_traiter = ACTIFS_PERMANENTS
+
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📝 Enregistrement journal quotidien ({len(actifs_a_traiter)} actifs)...")
+
+    try:
+        # Récupérer les données des actifs
+        donnees = recuperer_donnees_marche(actifs_a_traiter)
 
         # Récupérer les opportunités du jour pour chaque actif
         opportunites_jour = {}
@@ -870,7 +1033,7 @@ def enregistrer_journal_quotidien():
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT actif, symbole, type_setup, prix_entree, prix_tp1, resultat
+                SELECT actif, symbole, type_setup, prix_entree, prix_tp1, resultat, direction
                 FROM trades_recommandes WHERE date = ?
             ''', (aujourdhui,))
             for row in cursor.fetchall():
@@ -881,7 +1044,8 @@ def enregistrer_journal_quotidien():
                     'type': row['type_setup'],
                     'entree': row['prix_entree'],
                     'tp1': row['prix_tp1'],
-                    'resultat': row['resultat']
+                    'resultat': row['resultat'],
+                    'direction': row['direction']
                 })
             conn.close()
         except Exception as e:
@@ -893,6 +1057,8 @@ def enregistrer_journal_quotidien():
             donnees_pour_ia[data['symbole']] = {
                 'nom': nom,
                 'prix': data['prix'],
+                'haut': data.get('haut', 0),
+                'bas': data.get('bas', 0),
                 'variation': data['variation'],
                 'variation_5j': data.get('variation_5j', 0)
             }
@@ -909,12 +1075,17 @@ def enregistrer_journal_quotidien():
             categorie = get_categorie_actif(symbole)
             opps = opportunites_jour.get(symbole, [])
 
+            # Récupérer les recommandations analystes (seulement pour les actions)
+            recos = []
+            if categorie in ['action_eu', 'action_us']:
+                recos = recuperer_recommandations_analystes(symbole)
+
             cursor.execute('''
                 INSERT OR REPLACE INTO journal_quotidien
                 (date, symbole, nom_actif, categorie, prix_ouverture, prix_cloture,
-                 variation_jour, volume_relatif, commentaire_ia, evenements_jour,
-                 opportunites_jour, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 prix_max, prix_min, variation_jour, volume_relatif, commentaire_ia,
+                 evenements_jour, opportunites_jour, recommandations_analystes, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 aujourdhui,
                 symbole,
@@ -922,11 +1093,14 @@ def enregistrer_journal_quotidien():
                 categorie,
                 data.get('ouverture', 0),
                 data['prix'],
+                data.get('haut', 0),
+                data.get('bas', 0),
                 data['variation'],
                 0,  # volume_relatif à calculer
                 commentaires.get(symbole, ''),
                 '',  # evenements_jour
                 json.dumps(opps, ensure_ascii=False) if opps else '',
+                json.dumps(recos, ensure_ascii=False) if recos else '',
                 maintenant
             ))
 
@@ -937,6 +1111,19 @@ def enregistrer_journal_quotidien():
     except Exception as e:
         print(f"❌ Erreur journal quotidien: {e}")
         return False
+
+def enregistrer_journal_fr():
+    """Enregistre le journal pour les actions françaises (18h00)"""
+    actifs_fr = {k: v for k, v in ACTIFS_PERMANENTS.items()
+                 if k.endswith('.PA') or k.startswith('^FCHI') or k == '^GDAXI'}
+    return enregistrer_journal_quotidien(actifs_fr)
+
+def enregistrer_journal_complet():
+    """Enregistre le journal complet + bilan (22h30)"""
+    # D'abord enregistrer le journal de tous les actifs
+    enregistrer_journal_quotidien()
+    # Puis générer le bilan général
+    generer_bilan_quotidien()
 
 def get_journal_quotidien(symbole=None, limite=30):
     """Récupère le journal quotidien"""
@@ -960,13 +1147,18 @@ def get_journal_quotidien(symbole=None, limite=30):
         entries = [dict(row) for row in cursor.fetchall()]
         conn.close()
 
-        # Parser les opportunités JSON
+        # Parser les champs JSON
         for entry in entries:
             if entry.get('opportunites_jour'):
                 try:
                     entry['opportunites_jour'] = json.loads(entry['opportunites_jour'])
                 except:
                     entry['opportunites_jour'] = []
+            if entry.get('recommandations_analystes'):
+                try:
+                    entry['recommandations_analystes'] = json.loads(entry['recommandations_analystes'])
+                except:
+                    entry['recommandations_analystes'] = []
 
         return entries
     except Exception as e:
@@ -1494,6 +1686,56 @@ def api_stats_evolution():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/bilan-quotidien')
+def api_bilan_quotidien():
+    """Récupère le bilan quotidien"""
+    try:
+        date_str = request.args.get('date')
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if date_str:
+            cursor.execute('''
+                SELECT * FROM bilan_quotidien WHERE date = ?
+            ''', (date_str,))
+        else:
+            cursor.execute('''
+                SELECT * FROM bilan_quotidien ORDER BY date DESC LIMIT 1
+            ''')
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            bilan = dict(row)
+            # Parser les JSON
+            try:
+                bilan['points_positifs'] = json.loads(bilan['points_positifs'] or '[]')
+            except:
+                bilan['points_positifs'] = []
+            try:
+                bilan['points_negatifs'] = json.loads(bilan['points_negatifs'] or '[]')
+            except:
+                bilan['points_negatifs'] = []
+            try:
+                bilan['lecons_apprises'] = json.loads(bilan['lecons_apprises'] or '[]')
+            except:
+                bilan['lecons_apprises'] = []
+            return jsonify({'success': True, 'bilan': bilan})
+
+        return jsonify({'success': False, 'error': 'Aucun bilan trouvé'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/bilan-quotidien/generer', methods=['POST'])
+def api_generer_bilan():
+    """Force la génération du bilan quotidien"""
+    bilan = generer_bilan_quotidien()
+    if bilan:
+        return jsonify({'success': True, 'bilan': bilan})
+    return jsonify({'success': False, 'error': 'Erreur génération'})
+
 @app.route('/api/trades-historique')
 def api_trades_historique():
     """Récupère l'historique des trades avec filtres"""
@@ -1612,12 +1854,19 @@ def executer_cloture_planifiee():
     except Exception as e:
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Erreur: {e}")
 
-def executer_journal_quotidien():
-    """Exécute l'enregistrement du journal quotidien"""
+def executer_journal_fr():
+    """Exécute l'enregistrement du journal FR à 18h00"""
     maintenant = get_paris_time()
     if maintenant.weekday() >= 5:
         return
-    enregistrer_journal_quotidien()
+    enregistrer_journal_fr()
+
+def executer_journal_complet():
+    """Exécute l'enregistrement du journal complet + bilan à 22h30"""
+    maintenant = get_paris_time()
+    if maintenant.weekday() >= 5:
+        return
+    enregistrer_journal_complet()
 
 def configurer_schedule():
     """Configure les tâches planifiées"""
@@ -1632,11 +1881,15 @@ def configurer_schedule():
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_cloture_utc).do(executer_cloture_planifiee)
 
-    # Journal quotidien: 17h45 (après clôture FR) et 22h15 (après clôture US)
-    for heure in ["17:45", "22:15"]:
-        heure_utc = get_utc_time_for_paris(heure)
-        for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
-            getattr(schedule.every(), jour).at(heure_utc).do(executer_journal_quotidien)
+    # Journal FR: 18h00 (après clôture marchés EU)
+    heure_journal_fr_utc = get_utc_time_for_paris("18:00")
+    for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+        getattr(schedule.every(), jour).at(heure_journal_fr_utc).do(executer_journal_fr)
+
+    # Journal complet + Bilan: 22h30 (après clôture US)
+    heure_journal_complet_utc = get_utc_time_for_paris("22:30")
+    for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+        getattr(schedule.every(), jour).at(heure_journal_complet_utc).do(executer_journal_complet)
 
 def run_scheduler():
     """Thread pour le scheduler"""

@@ -8,16 +8,23 @@
     <!-- Header -->
     <div class="page-top-bar">
         <h1 class="page-top-title">Journal Automatique</h1>
-        <button class="btn btn-primary" onclick="genererJournal()">
-            ⟳ Générer maintenant
-        </button>
+        <span class="page-top-info">Mise à jour: 18h (FR) • 22h30 (Complet)</span>
     </div>
 
     <!-- Layout principal -->
     <div class="journal-grid">
         <!-- Sidebar: Liste des actifs -->
         <div class="journal-sidebar-list">
-            <h3 class="sidebar-title">Actifs suivis</h3>
+            <h3 class="sidebar-title">Journal</h3>
+            <!-- Général en premier -->
+            <div class="actif-category">
+                <div class="actif-item general-item" id="general-item" onclick="selectGeneral()">
+                    <span class="actif-icon">📊</span>
+                    <span class="actif-nom">Général</span>
+                    <span class="actif-badge">Bilan</span>
+                </div>
+            </div>
+            <h3 class="sidebar-title sidebar-title-small">Actifs suivis</h3>
             <div class="actifs-filter">
                 <select id="filter-categorie" onchange="filterActifs()">
                     <option value="">Toutes catégories</option>
@@ -61,7 +68,18 @@
             <div class="journal-placeholder" id="journal-placeholder">
                 <div class="placeholder-icon">📊</div>
                 <h3>Sélectionnez un actif</h3>
-                <p>Choisissez un actif dans la liste pour voir son journal quotidien</p>
+                <p>Choisissez un actif ou "Général" pour voir le bilan du jour</p>
+            </div>
+
+            <!-- Section Général (bilan quotidien) -->
+            <div class="general-section" id="general-section" style="display: none;">
+                <div class="general-header">
+                    <h2>Bilan de la Journée</h2>
+                    <span class="general-date" id="general-date">-</span>
+                </div>
+                <div id="general-content">
+                    <div class="loading">Chargement...</div>
+                </div>
             </div>
 
             <!-- Timeline du journal -->
@@ -80,10 +98,81 @@ let actifsData = {};
 let selectedSymbole = null;
 let journalData = [];
 let opportunitesData = [];
+let isGeneralSelected = false;
 
 document.addEventListener('DOMContentLoaded', function() {
     loadActifs();
 });
+
+async function selectGeneral() {
+    isGeneralSelected = true;
+    selectedSymbole = null;
+    renderActifsSidebar();
+
+    // Masquer les autres sections
+    document.getElementById('journal-placeholder').style.display = 'none';
+    document.getElementById('selected-asset-header').style.display = 'none';
+    document.getElementById('journal-timeline').style.display = 'none';
+    document.getElementById('general-section').style.display = 'block';
+    document.getElementById('general-item').classList.add('active');
+
+    await loadBilanQuotidien();
+}
+
+async function loadBilanQuotidien() {
+    try {
+        const response = await fetch('/api/bilan-quotidien');
+        const data = await response.json();
+
+        const container = document.getElementById('general-content');
+
+        if (data.success && data.bilan) {
+            const bilan = data.bilan;
+            document.getElementById('general-date').textContent = formatDateFr(bilan.date);
+
+            let html = `
+                <div class="bilan-resume">
+                    <h3>📋 Résumé</h3>
+                    <p>${bilan.contenu || 'Aucun résumé disponible'}</p>
+                </div>
+
+                <div class="bilan-grid">
+                    <div class="bilan-card success">
+                        <h4>✅ Points Positifs</h4>
+                        <ul>
+                            ${(bilan.points_positifs || []).map(p => `<li>${p}</li>`).join('') || '<li>Aucun</li>'}
+                        </ul>
+                    </div>
+
+                    <div class="bilan-card danger">
+                        <h4>❌ Points Négatifs</h4>
+                        <ul>
+                            ${(bilan.points_negatifs || []).map(p => `<li>${p}</li>`).join('') || '<li>Aucun</li>'}
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="bilan-lecons">
+                    <h4>💡 Leçons Apprises</h4>
+                    <ul>
+                        ${(bilan.lecons_apprises || []).map(l => `<li>${l}</li>`).join('') || '<li>Aucune</li>'}
+                    </ul>
+                </div>
+            `;
+
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = `
+                <div class="no-data">
+                    <p>Aucun bilan disponible pour aujourd'hui.</p>
+                    <p class="text-muted">Le bilan est généré automatiquement à 22h30.</p>
+                </div>`;
+        }
+    } catch (error) {
+        console.error('Erreur bilan:', error);
+        document.getElementById('general-content').innerHTML = '<div class="no-data">Erreur de chargement</div>';
+    }
+}
 
 async function loadActifs() {
     try {
@@ -103,6 +192,12 @@ function renderActifsSidebar() {
     const container = document.getElementById('actifs-list');
     const filterCat = document.getElementById('filter-categorie').value;
 
+    // Update general item state
+    const generalItem = document.getElementById('general-item');
+    if (generalItem) {
+        generalItem.className = 'actif-item general-item' + (isGeneralSelected ? ' active' : '');
+    }
+
     const categories = {
         'indice': {'label': 'Indices', 'symboles': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^VIX']},
         'action_eu': {'label': 'Actions EU', 'symboles': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA', 'SAN.PA', 'BNP.PA']},
@@ -120,7 +215,7 @@ function renderActifsSidebar() {
 
         for (const sym of catData.symboles) {
             if (actifsData[sym]) {
-                const isActive = selectedSymbole === sym;
+                const isActive = selectedSymbole === sym && !isGeneralSelected;
                 html += `
                     <div class="actif-item ${isActive ? 'active' : ''}" data-symbole="${sym}" onclick="selectActif('${sym}')">
                         <span class="actif-nom">${actifsData[sym]}</span>
@@ -139,10 +234,12 @@ function filterActifs() {
 
 async function selectActif(symbole) {
     selectedSymbole = symbole;
+    isGeneralSelected = false;
     renderActifsSidebar();
 
-    // Afficher le header et masquer le placeholder
+    // Afficher le header et masquer le placeholder + général
     document.getElementById('journal-placeholder').style.display = 'none';
+    document.getElementById('general-section').style.display = 'none';
     document.getElementById('selected-asset-header').style.display = 'flex';
     document.getElementById('journal-timeline').style.display = 'block';
 
@@ -203,7 +300,7 @@ function renderTimeline() {
         container.innerHTML = `
             <div class="no-data">
                 Aucune donnée de journal pour cet actif.<br>
-                Cliquez sur "Générer maintenant" pour créer le journal du jour.
+                Le journal est mis à jour automatiquement à 18h (FR) et 22h30 (tous).
             </div>`;
         return;
     }
@@ -221,6 +318,7 @@ function renderTimeline() {
         const oppsJour = oppsByDate[date] || [];
         const varClass = entry.variation_jour >= 0 ? 'positive' : 'negative';
         const varSign = entry.variation_jour >= 0 ? '+' : '';
+        const recos = entry.recommandations_analystes || [];
 
         html += `
             <div class="timeline-day">
@@ -237,6 +335,8 @@ function renderTimeline() {
                         </div>
                         <div class="perf-prices">
                             <span>Ouv: ${entry.prix_ouverture?.toFixed(2) || '-'}</span>
+                            <span class="negative">Min: ${entry.prix_min?.toFixed(2) || '-'}</span>
+                            <span class="positive">Max: ${entry.prix_max?.toFixed(2) || '-'}</span>
                             <span>Clôt: ${entry.prix_cloture?.toFixed(2) || '-'}</span>
                         </div>
                     </div>
@@ -246,6 +346,25 @@ function renderTimeline() {
                     <div class="day-comment">
                         <div class="comment-icon">🤖</div>
                         <div class="comment-text">${entry.commentaire_ia}</div>
+                    </div>
+                    ` : ''}
+
+                    <!-- Recommandations Analystes -->
+                    ${recos.length > 0 ? `
+                    <div class="day-analysts">
+                        <div class="analysts-header">
+                            <span class="analysts-icon">📊</span>
+                            <span class="analysts-title">Recommandations Analystes</span>
+                        </div>
+                        <div class="analysts-list">
+                            ${recos.map(r => `
+                                <div class="analyst-item">
+                                    <span class="analyst-firm">${r.firm}</span>
+                                    <span class="analyst-grade">${r.grade}</span>
+                                    ${r.action ? `<span class="analyst-action">${r.action}</span>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
                     </div>
                     ` : ''}
 
@@ -312,37 +431,216 @@ function formatDateFr(dateStr) {
     const options = {weekday: 'long', day: 'numeric', month: 'long'};
     return date.toLocaleDateString('fr-FR', options);
 }
-
-async function genererJournal() {
-    const btn = event.target;
-    btn.disabled = true;
-    btn.textContent = '⟳ Génération...';
-
-    try {
-        const response = await fetch('/api/journal-quotidien/generer', {method: 'POST'});
-        const data = await response.json();
-
-        if (data.success) {
-            if (selectedSymbole) {
-                await loadJournalActif(selectedSymbole);
-                renderTimeline();
-            }
-            alert('Journal généré avec succès !');
-        } else {
-            alert('Erreur lors de la génération');
-        }
-    } catch (error) {
-        console.error('Erreur:', error);
-        alert('Erreur de connexion');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = '⟳ Générer maintenant';
-    }
-}
 </script>
 
 <style>
 /* Journal Page Styles */
+.page-top-info {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+/* General item style */
+.general-item {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
+    border: 1px solid var(--accent-primary);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.general-item .actif-icon {
+    font-size: 1.25rem;
+}
+
+.general-item .actif-badge {
+    margin-left: auto;
+    padding: 2px 8px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.sidebar-title-small {
+    margin-top: var(--space-2);
+    font-size: 0.75rem;
+}
+
+/* General section */
+.general-section {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+}
+
+.general-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-3);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.general-header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+    color: var(--text-primary);
+}
+
+.general-date {
+    font-size: 0.9375rem;
+    color: var(--text-muted);
+    text-transform: capitalize;
+}
+
+.bilan-resume {
+    background: var(--bg-secondary);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+}
+
+.bilan-resume h3 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.bilan-resume p {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.bilan-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.bilan-card {
+    background: var(--bg-secondary);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border-left: 4px solid var(--border-color);
+}
+
+.bilan-card.success {
+    border-left-color: var(--accent-green);
+}
+
+.bilan-card.danger {
+    border-left-color: var(--accent-red);
+}
+
+.bilan-card h4 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 0.9375rem;
+    color: var(--text-primary);
+}
+
+.bilan-card ul {
+    margin: 0;
+    padding-left: var(--space-3);
+}
+
+.bilan-card li {
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    line-height: 1.5;
+}
+
+.bilan-lecons {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(217, 119, 6, 0.1));
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.bilan-lecons h4 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 0.9375rem;
+    color: var(--text-primary);
+}
+
+.bilan-lecons ul {
+    margin: 0;
+    padding-left: var(--space-3);
+}
+
+.bilan-lecons li {
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    line-height: 1.5;
+}
+
+/* Analyst recommendations */
+.day-analysts {
+    margin: var(--space-2) 0;
+    padding: var(--space-2);
+    background: rgba(59, 130, 246, 0.05);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--accent-primary);
+}
+
+.analysts-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-bottom: var(--space-2);
+}
+
+.analysts-icon {
+    font-size: 1rem;
+}
+
+.analysts-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--accent-primary);
+}
+
+.analysts-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.analyst-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--bg-primary);
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+}
+
+.analyst-firm {
+    color: var(--text-secondary);
+}
+
+.analyst-grade {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.analyst-action {
+    padding: 2px 6px;
+    background: var(--accent-orange);
+    color: white;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+}
+
 .journal-grid {
     display: grid;
     grid-template-columns: 280px 1fr;
@@ -749,6 +1047,14 @@ async function genererJournal() {
     .asset-header-stats {
         width: 100%;
         justify-content: space-around;
+    }
+
+    .bilan-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .perf-prices {
+        flex-wrap: wrap;
     }
 }
 </style>
