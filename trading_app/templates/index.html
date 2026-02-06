@@ -21,6 +21,17 @@
             <span class="section-meta">Mis à jour : <span id="context-time">--:--</span></span>
         </div>
         <div class="section-content">
+            <!-- Pré-market (visible le matin) -->
+            <div class="premarket-section" id="premarket-section">
+                <div class="premarket-header">
+                    <span class="premarket-icon">🌅</span>
+                    <span class="premarket-title">Pré-Market / Overnight</span>
+                </div>
+                <div class="premarket-grid" id="premarket-grid">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+
             <ul class="context-bullets" id="context-bullets">
                 <li>Lancez une actualisation pour obtenir le contexte du marché...</li>
             </ul>
@@ -185,8 +196,52 @@ async function loadAllData() {
         refreshMarkets(),
         loadLastAnalysis(),
         refreshNews(),
-        loadTopMovers()
+        loadTopMovers(),
+        loadPremarket()
     ]);
+}
+
+// ===== PRÉ-MARKET =====
+async function loadPremarket() {
+    const section = document.getElementById('premarket-section');
+    const container = document.getElementById('premarket-grid');
+    const now = new Date();
+    const hour = now.getHours();
+
+    // Afficher seulement avant 15h30 (ouverture US)
+    if (hour >= 16) {
+        section.style.display = 'none';
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/premarket');
+        const data = await response.json();
+
+        if (data.success && Object.keys(data.premarket).length > 0) {
+            section.style.display = 'block';
+            let html = '';
+
+            for (const [nom, info] of Object.entries(data.premarket)) {
+                const isPositive = info.variation_overnight >= 0;
+                const varClass = isPositive ? 'positive' : 'negative';
+                const varSign = isPositive ? '+' : '';
+
+                html += `
+                    <div class="premarket-item">
+                        <span class="premarket-name">${nom}</span>
+                        <span class="premarket-value ${varClass}">${varSign}${info.variation_overnight.toFixed(2)}%</span>
+                    </div>`;
+            }
+
+            container.innerHTML = html;
+        } else {
+            section.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Erreur premarket:', error);
+        section.style.display = 'none';
+    }
 }
 
 // ===== NEWS FLASH via NewsAPI =====

@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}Mémoire - Plateforme Trading{% endblock %}
+{% block title %}Performances - Plateforme Trading{% endblock %}
 
 {% block content %}
 <div class="memoire-page">
 
     <!-- Header -->
     <div class="page-top-bar">
-        <h1 class="page-top-title">Mémoire & Performances</h1>
+        <h1 class="page-top-title">Performances</h1>
     </div>
 
     <!-- Period Selector -->
@@ -72,112 +72,58 @@
     <section class="section">
         <div class="section-header">
             <span class="section-icon">📜</span>
-            <h2 class="section-title">Historique des Trades</h2>
+            <h2 class="section-title">Historique des Recommandations</h2>
             <span class="section-meta" id="trades-count">0 trades</span>
         </div>
         <div class="section-content">
+            <!-- Filtres -->
+            <div class="trades-filters mb-3">
+                <div class="filter-inline">
+                    <input type="text" id="filter-search" placeholder="Rechercher un actif..." onkeyup="filterTrades()">
+                </div>
+                <div class="filter-inline">
+                    <select id="filter-direction" onchange="filterTrades()">
+                        <option value="">Toutes directions</option>
+                        <option value="LONG">📈 LONG</option>
+                        <option value="SHORT">📉 SHORT</option>
+                    </select>
+                </div>
+                <div class="filter-inline">
+                    <select id="filter-categorie" onchange="filterTrades()">
+                        <option value="">Toutes catégories</option>
+                        <option value="indice">Indices</option>
+                        <option value="action_eu">Actions EU</option>
+                        <option value="action_us">Actions US</option>
+                        <option value="commodite">Commodités</option>
+                        <option value="forex">Forex</option>
+                    </select>
+                </div>
+                <div class="filter-inline">
+                    <select id="filter-resultat" onchange="filterTrades()">
+                        <option value="">Tous résultats</option>
+                        <option value="TP1">✅ TP1</option>
+                        <option value="TP2">✅ TP2</option>
+                        <option value="STOP">❌ Stop</option>
+                        <option value="en_cours">⏳ En cours</option>
+                    </select>
+                </div>
+            </div>
+
             <div id="trades-history">
                 <div class="loading">Chargement...</div>
             </div>
         </div>
     </section>
 
-    <!-- Journal Section -->
-    <section class="section">
-        <div class="section-header">
-            <span class="section-icon">📝</span>
-            <h2 class="section-title">Journal des Actifs</h2>
-            <button class="btn btn-primary" onclick="showAddEntryModal()" style="margin-left: auto;">+ Nouvelle entrée</button>
-        </div>
-        <div class="section-content">
-            <div class="journal-layout">
-                <!-- Sidebar: Liste actifs -->
-                <div class="journal-sidebar" id="actifs-journal-list">
-                    <div class="loading">Chargement...</div>
-                </div>
-
-                <!-- Main: Journal entries -->
-                <div class="journal-content">
-                    <div class="journal-entries" id="journal-entries">
-                        <div class="no-data">Sélectionnez un actif pour voir son journal</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
 </div>
 
-<!-- Modal Add Journal Entry -->
-<div id="modal-add-entry" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>Nouvelle Entrée Journal</h2>
-            <button class="modal-close" onclick="closeAddEntryModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <form id="form-add-entry" onsubmit="submitJournalEntry(event)">
-                <div class="form-group">
-                    <label>Actif</label>
-                    <select id="entry-actif" required>
-                        <option value="">Sélectionnez...</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Type d'information</label>
-                    <select id="entry-type" required>
-                        <option value="news">News / Actualité</option>
-                        <option value="resultats">Résultats Financiers</option>
-                        <option value="analyse">Analyse Technique</option>
-                        <option value="macro">Macro / Secteur</option>
-                        <option value="autre">Autre</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Titre</label>
-                    <input type="text" id="entry-titre" required placeholder="Ex: Résultats Q4 2024">
-                </div>
-                <div class="form-group">
-                    <label>Contenu</label>
-                    <textarea id="entry-contenu" required rows="4" placeholder="Détails de l'information..."></textarea>
-                </div>
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>Impact sur le cours</label>
-                        <select id="entry-impact">
-                            <option value="">Non défini</option>
-                            <option value="hausse_forte">📈 Hausse Forte (+3%+)</option>
-                            <option value="hausse">🔼 Hausse (+1-3%)</option>
-                            <option value="neutre">◻️ Neutre</option>
-                            <option value="baisse">🔽 Baisse (-1-3%)</option>
-                            <option value="baisse_forte">📉 Baisse Forte (-3%+)</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Importance</label>
-                        <select id="entry-importance">
-                            <option value="1">⭐ Faible</option>
-                            <option value="2" selected>⭐⭐ Moyenne</option>
-                            <option value="3">⭐⭐⭐ Haute</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" onclick="closeAddEntryModal()">Annuler</button>
-                    <button type="submit" class="btn btn-primary">Enregistrer</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
 // Variables
 let currentPeriode = 'jour';
-let selectedActif = null;
-let actifsData = {};
+let allTrades = [];
 
 const periodLabels = {
     'jour': "Aujourd'hui",
@@ -189,8 +135,6 @@ const periodLabels = {
 // Init
 document.addEventListener('DOMContentLoaded', function() {
     loadPerformances();
-    loadJournauxList();
-    loadActifsList();
 });
 
 // ===== PERFORMANCES =====
@@ -236,249 +180,156 @@ async function loadPerformances() {
 
 async function loadTradesHistory() {
     try {
-        const response = await fetch('/api/trades-jour');
+        const categorie = document.getElementById('filter-categorie').value;
+        const direction = document.getElementById('filter-direction').value;
+        const recherche = document.getElementById('filter-search').value;
+
+        let url = `/api/trades-historique?periode=${currentPeriode}`;
+        if (categorie) url += `&categorie=${categorie}`;
+        if (direction) url += `&direction=${direction}`;
+        if (recherche) url += `&recherche=${encodeURIComponent(recherche)}`;
+
+        const response = await fetch(url);
         const data = await response.json();
 
-        const container = document.getElementById('trades-history');
-        const countEl = document.getElementById('trades-count');
-
-        if (data.success && data.trades.length > 0) {
-            countEl.textContent = data.trades.length + ' trade' + (data.trades.length > 1 ? 's' : '');
-
-            let html = `
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Heure</th>
-                            <th>Actif</th>
-                            <th>Type</th>
-                            <th>Entrée</th>
-                            <th>Stop</th>
-                            <th>TP1</th>
-                            <th>Résultat</th>
-                            <th>PnL</th>
-                        </tr>
-                    </thead>
-                    <tbody>`;
-
-            for (const trade of data.trades) {
-                const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'positive' :
-                                   trade.resultat === 'STOP' ? 'negative' : '';
-                const typeTag = trade.type_setup === 'NEWS' ?
-                    '<span class="opp-tag news">NEWS</span>' :
-                    '<span class="opp-tag tech">TECH</span>';
-
-                html += `
-                    <tr>
-                        <td>${trade.date || '-'}</td>
-                        <td>${trade.heure_message || '-'}</td>
-                        <td><strong>${trade.actif || '-'}</strong></td>
-                        <td>${typeTag}</td>
-                        <td style="font-family: 'SF Mono', monospace;">${trade.prix_entree || '-'}</td>
-                        <td style="font-family: 'SF Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
-                        <td style="font-family: 'SF Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
-                        <td class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
-                        <td class="${resultClass}" style="font-family: 'SF Mono', monospace;">
-                            ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
-                        </td>
-                    </tr>`;
-            }
-
-            html += '</tbody></table>';
-            container.innerHTML = html;
-        } else {
-            countEl.textContent = '0 trade';
-            container.innerHTML = '<div class="no-data">Aucun trade sur cette période</div>';
-        }
+        allTrades = data.trades || [];
+        renderTradesTable();
     } catch (error) {
         console.error('Erreur trades:', error);
     }
 }
 
-// ===== JOURNAL =====
-async function loadJournauxList() {
-    try {
-        const response = await fetch('/api/journaux');
-        const data = await response.json();
+function filterTrades() {
+    loadTradesHistory();
+}
 
-        const container = document.getElementById('actifs-journal-list');
+function renderTradesTable() {
+    const container = document.getElementById('trades-history');
+    const countEl = document.getElementById('trades-count');
+    const resultatFilter = document.getElementById('filter-resultat').value;
 
-        if (data.success && data.actifs.length > 0) {
-            let html = '';
-            for (const actif of data.actifs) {
-                html += `
-                    <div class="journal-asset-item" onclick="selectActifJournal('${actif.symbole}', '${actif.nom_actif}', this)">
-                        <div class="asset-info">
-                            <h4>${actif.nom_actif}</h4>
-                            <span class="asset-symbol">${actif.symbole}</span>
-                        </div>
-                        <span class="asset-count">${actif.nb_entrees}</span>
-                    </div>`;
-            }
-            container.innerHTML = html;
+    // Filtrer par résultat côté client
+    let trades = allTrades;
+    if (resultatFilter) {
+        if (resultatFilter === 'en_cours') {
+            trades = trades.filter(t => !t.resultat);
         } else {
-            container.innerHTML = '<div class="no-data">Aucun journal. Ajoutez une première entrée!</div>';
+            trades = trades.filter(t => t.resultat === resultatFilter);
         }
-    } catch (error) {
-        console.error('Erreur journaux:', error);
     }
-}
 
-async function selectActifJournal(symbole, nom, element) {
-    selectedActif = {symbole, nom};
+    if (trades.length > 0) {
+        countEl.textContent = trades.length + ' recommandation' + (trades.length > 1 ? 's' : '');
 
-    // Marquer comme sélectionné
-    document.querySelectorAll('.journal-asset-item').forEach(i => i.classList.remove('active'));
-    if (element) element.classList.add('active');
+        let html = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Heure</th>
+                        <th>Actif</th>
+                        <th>Direction</th>
+                        <th>Type</th>
+                        <th>Catégorie</th>
+                        <th>Entrée</th>
+                        <th>Stop</th>
+                        <th>TP1</th>
+                        <th>Résultat</th>
+                        <th>PnL</th>
+                    </tr>
+                </thead>
+                <tbody>`;
 
-    try {
-        const response = await fetch(`/api/journal/${symbole}`);
-        const data = await response.json();
-
-        const container = document.getElementById('journal-entries');
-
-        if (data.success && data.entries.length > 0) {
-            let html = '';
-            for (const entry of data.entries) {
-                const impactClass = entry.impact_cours?.includes('hausse') ? 'impact-positive' :
-                                   entry.impact_cours?.includes('baisse') ? 'impact-negative' : '';
-                const typeIcons = {
-                    'news': '📰',
-                    'resultats': '📈',
-                    'analyse': '📊',
-                    'macro': '🌍',
-                    'autre': '📝'
-                };
-                const typeIcon = typeIcons[entry.type_info] || '📝';
-
-                html += `
-                    <div class="journal-entry ${impactClass}">
-                        <div class="entry-header">
-                            <span style="font-size: 1.125rem;">${typeIcon}</span>
-                            <span class="entry-type">${entry.type_info}</span>
-                            <span class="entry-date">${entry.date}</span>
-                            <span style="margin-left: auto;">${'⭐'.repeat(entry.importance || 1)}</span>
-                        </div>
-                        <h4 class="entry-title">${entry.titre}</h4>
-                        <p class="entry-content">${entry.contenu}</p>
-                        ${entry.impact_cours ? `<div class="entry-impact ${entry.impact_cours.includes('hausse') ? 'positive' : 'negative'}">${formatImpact(entry.impact_cours)}</div>` : ''}
-                    </div>`;
-            }
-            container.innerHTML = html;
-        } else {
-            container.innerHTML = '<div class="no-data">Aucune entrée pour cet actif</div>';
-        }
-    } catch (error) {
-        console.error('Erreur journal:', error);
-    }
-}
-
-function formatImpact(impact) {
-    const mapping = {
-        'hausse_forte': '📈 Hausse Forte (+3%+)',
-        'hausse': '🔼 Hausse (+1-3%)',
-        'neutre': '◻️ Neutre',
-        'baisse': '🔽 Baisse (-1-3%)',
-        'baisse_forte': '📉 Baisse Forte (-3%+)'
-    };
-    return mapping[impact] || impact;
-}
-
-async function loadActifsList() {
-    try {
-        const response = await fetch('/api/actifs');
-        const data = await response.json();
-
-        if (data.success) {
-            actifsData = {...data.permanents};
-            for (const [cat, actifs] of Object.entries(data.rotation)) {
-                Object.assign(actifsData, actifs);
-            }
-
-            const select = document.getElementById('entry-actif');
-            select.innerHTML = '<option value="">Sélectionnez...</option>';
-
-            // Grouper par catégorie
-            const categories = {
-                'Indices': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^GDAXI', '^VIX'],
-                'Actions FR': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA', 'SAN.PA', 'BNP.PA'],
-                'Actions US': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL'],
-                'Commodités': ['GC=F', 'SI=F', 'BZ=F', 'NG=F'],
-                'Forex': ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X']
+        for (const trade of trades) {
+            const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'positive' :
+                               trade.resultat === 'STOP' ? 'negative' : '';
+            const typeTag = trade.type_setup === 'NEWS' ?
+                '<span class="opp-tag news">NEWS</span>' :
+                '<span class="opp-tag tech">TECH</span>';
+            const dirClass = trade.direction === 'LONG' ? 'positive' : 'negative';
+            const dirIcon = trade.direction === 'LONG' ? '📈' : '📉';
+            const catLabels = {
+                'indice': 'Indice',
+                'action_eu': 'Action EU',
+                'action_us': 'Action US',
+                'commodite': 'Commodité',
+                'forex': 'Forex',
+                'autre': 'Autre'
             };
 
-            for (const [cat, symbols] of Object.entries(categories)) {
-                const optgroup = document.createElement('optgroup');
-                optgroup.label = cat;
-                for (const sym of symbols) {
-                    if (actifsData[sym]) {
-                        const option = document.createElement('option');
-                        option.value = sym;
-                        option.textContent = actifsData[sym];
-                        optgroup.appendChild(option);
-                    }
-                }
-                if (optgroup.children.length > 0) {
-                    select.appendChild(optgroup);
-                }
-            }
+            html += `
+                <tr>
+                    <td>${trade.date || '-'}</td>
+                    <td>${trade.heure_message || '-'}</td>
+                    <td><strong>${trade.actif || '-'}</strong></td>
+                    <td class="${dirClass}">${dirIcon} ${trade.direction || 'LONG'}</td>
+                    <td>${typeTag}</td>
+                    <td><span class="cat-badge">${catLabels[trade.categorie_actif] || '-'}</span></td>
+                    <td style="font-family: 'SF Mono', monospace;">${trade.prix_entree || '-'}</td>
+                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
+                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
+                    <td class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
+                    <td class="${resultClass}" style="font-family: 'SF Mono', monospace;">
+                        ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
+                    </td>
+                </tr>`;
         }
-    } catch (error) {
-        console.error('Erreur actifs:', error);
+
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    } else {
+        countEl.textContent = '0 recommandation';
+        container.innerHTML = '<div class="no-data">Aucune recommandation sur cette période avec ces filtres</div>';
     }
 }
 
-function showAddEntryModal() {
-    if (selectedActif) {
-        document.getElementById('entry-actif').value = selectedActif.symbole;
-    }
-    document.getElementById('modal-add-entry').classList.add('active');
-}
-
-function closeAddEntryModal() {
-    document.getElementById('modal-add-entry').classList.remove('active');
-    document.getElementById('form-add-entry').reset();
-}
-
-async function submitJournalEntry(event) {
-    event.preventDefault();
-
-    const symbole = document.getElementById('entry-actif').value;
-    const nomActif = actifsData[symbole] || symbole;
-
-    const data = {
-        symbole: symbole,
-        nom_actif: nomActif,
-        type_info: document.getElementById('entry-type').value,
-        titre: document.getElementById('entry-titre').value,
-        contenu: document.getElementById('entry-contenu').value,
-        impact_cours: document.getElementById('entry-impact').value,
-        importance: parseInt(document.getElementById('entry-importance').value)
-    };
-
-    try {
-        const response = await fetch('/api/journal', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(data)
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-            closeAddEntryModal();
-            loadJournauxList();
-            if (selectedActif && selectedActif.symbole === symbole) {
-                selectActifJournal(symbole, nomActif, null);
-            }
-        } else {
-            alert('Erreur lors de l\'enregistrement');
-        }
-    } catch (error) {
-        console.error('Erreur:', error);
-        alert('Erreur de connexion');
-    }
-}
 </script>
+
+<style>
+/* Filtres trades */
+.trades-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+}
+
+.filter-inline input,
+.filter-inline select {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    min-width: 150px;
+}
+
+.filter-inline input:focus,
+.filter-inline select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.cat-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+    .trades-filters {
+        flex-direction: column;
+    }
+    .filter-inline input,
+    .filter-inline select {
+        width: 100%;
+    }
+}
+</style>
 {% endblock %}

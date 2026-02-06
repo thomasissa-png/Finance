@@ -1,0 +1,566 @@
+{% extends "base.html" %}
+
+{% block title %}Journal - Plateforme Trading{% endblock %}
+
+{% block content %}
+<div class="journal-page">
+
+    <!-- Header -->
+    <div class="page-top-bar">
+        <h1 class="page-top-title">Journal Automatique</h1>
+        <button class="btn btn-primary" onclick="genererJournal()">
+            ⟳ Générer maintenant
+        </button>
+    </div>
+
+    <!-- Filtres -->
+    <div class="filters-bar mb-3">
+        <div class="filter-group">
+            <label>Actif</label>
+            <select id="filter-actif" onchange="filterJournal()">
+                <option value="">Tous les actifs</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>Catégorie</label>
+            <select id="filter-categorie" onchange="filterJournal()">
+                <option value="">Toutes</option>
+                <option value="indice">Indices</option>
+                <option value="action_eu">Actions EU</option>
+                <option value="action_us">Actions US</option>
+                <option value="commodite">Commodités</option>
+                <option value="forex">Forex</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>Période</label>
+            <select id="filter-periode" onchange="filterJournal()">
+                <option value="7">7 derniers jours</option>
+                <option value="14">14 derniers jours</option>
+                <option value="30" selected>30 derniers jours</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Liste des actifs -->
+    <div class="journal-grid">
+        <!-- Sidebar: Actifs -->
+        <div class="journal-sidebar-list">
+            <h3 class="sidebar-title">Actifs suivis</h3>
+            <div id="actifs-list" class="actifs-sidebar">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+
+        <!-- Main: Journal entries -->
+        <div class="journal-main">
+            <section class="section">
+                <div class="section-header">
+                    <span class="section-icon">📅</span>
+                    <h2 class="section-title" id="journal-title">Historique quotidien</h2>
+                    <span class="section-meta" id="journal-count">0 entrées</span>
+                </div>
+                <div class="section-content">
+                    <div id="journal-entries">
+                        <div class="loading">Chargement...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Historique des opportunités pour l'actif sélectionné -->
+            <section class="section" id="section-opportunites" style="display: none;">
+                <div class="section-header">
+                    <span class="section-icon">🎯</span>
+                    <h2 class="section-title">Historique des Opportunités</h2>
+                    <span class="section-meta" id="opps-count">0 opportunités</span>
+                </div>
+                <div class="section-content">
+                    <div id="opportunites-list">
+                        <div class="no-data">Sélectionnez un actif pour voir les opportunités</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let allEntries = [];
+let selectedSymbole = null;
+let actifsData = {};
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadActifs();
+    loadJournalEntries();
+});
+
+async function loadActifs() {
+    try {
+        const response = await fetch('/api/actifs');
+        const data = await response.json();
+
+        if (data.success) {
+            actifsData = data.permanents;
+
+            // Remplir le select
+            const select = document.getElementById('filter-actif');
+            for (const [symbole, nom] of Object.entries(actifsData)) {
+                const option = document.createElement('option');
+                option.value = symbole;
+                option.textContent = nom;
+                select.appendChild(option);
+            }
+
+            // Remplir la sidebar
+            renderActifsSidebar();
+        }
+    } catch (error) {
+        console.error('Erreur chargement actifs:', error);
+    }
+}
+
+function renderActifsSidebar() {
+    const container = document.getElementById('actifs-list');
+    const categories = {
+        'Indices': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^VIX'],
+        'Actions FR': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA'],
+        'Actions US': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN'],
+        'Commodités': ['GC=F', 'SI=F', 'BZ=F', 'NG=F'],
+        'Forex': ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X']
+    };
+
+    let html = '';
+    for (const [cat, symboles] of Object.entries(categories)) {
+        html += `<div class="actif-category">
+            <div class="category-title">${cat}</div>`;
+        for (const sym of symboles) {
+            if (actifsData[sym]) {
+                html += `
+                    <div class="actif-item" data-symbole="${sym}" onclick="selectActif('${sym}', this)">
+                        <span class="actif-nom">${actifsData[sym]}</span>
+                        <span class="actif-badge" id="badge-${sym.replace(/[^a-zA-Z0-9]/g, '')}">-</span>
+                    </div>`;
+            }
+        }
+        html += '</div>';
+    }
+
+    container.innerHTML = html;
+}
+
+async function loadJournalEntries() {
+    try {
+        const symbole = document.getElementById('filter-actif').value;
+        const limite = document.getElementById('filter-periode').value;
+
+        let url = `/api/journal-quotidien?limite=${limite}`;
+        if (symbole) url += `&symbole=${symbole}`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.success) {
+            allEntries = data.entries;
+            renderJournalEntries();
+            updateActifBadges();
+        }
+    } catch (error) {
+        console.error('Erreur chargement journal:', error);
+    }
+}
+
+function renderJournalEntries() {
+    const container = document.getElementById('journal-entries');
+    const countEl = document.getElementById('journal-count');
+    const categorie = document.getElementById('filter-categorie').value;
+
+    let entries = allEntries;
+    if (categorie) {
+        entries = entries.filter(e => e.categorie === categorie);
+    }
+    if (selectedSymbole) {
+        entries = entries.filter(e => e.symbole === selectedSymbole);
+    }
+
+    countEl.textContent = entries.length + ' entrée' + (entries.length > 1 ? 's' : '');
+
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="no-data">Aucune entrée de journal. Cliquez sur "Générer maintenant" pour créer le journal du jour.</div>';
+        return;
+    }
+
+    // Grouper par date
+    const parDate = {};
+    for (const entry of entries) {
+        if (!parDate[entry.date]) parDate[entry.date] = [];
+        parDate[entry.date].push(entry);
+    }
+
+    let html = '';
+    for (const [date, dayEntries] of Object.entries(parDate)) {
+        html += `<div class="journal-day">
+            <div class="journal-day-header">${formatDate(date)}</div>
+            <div class="journal-day-entries">`;
+
+        for (const entry of dayEntries) {
+            const varClass = entry.variation_jour >= 0 ? 'positive' : 'negative';
+            const varSign = entry.variation_jour >= 0 ? '+' : '';
+            const hasOpps = entry.opportunites_jour && entry.opportunites_jour.length > 0;
+
+            html += `
+                <div class="journal-entry-card" onclick="selectActif('${entry.symbole}')">
+                    <div class="entry-card-header">
+                        <span class="entry-actif-nom">${entry.nom_actif}</span>
+                        <span class="entry-variation ${varClass}">${varSign}${entry.variation_jour?.toFixed(2) || 0}%</span>
+                    </div>
+                    <div class="entry-card-prices">
+                        <span>Ouv: ${entry.prix_ouverture?.toFixed(2) || '-'}</span>
+                        <span>Clôt: ${entry.prix_cloture?.toFixed(2) || '-'}</span>
+                    </div>
+                    ${entry.commentaire_ia ? `<div class="entry-card-comment">${entry.commentaire_ia}</div>` : ''}
+                    ${hasOpps ? `<div class="entry-card-opps">🎯 ${entry.opportunites_jour.length} opportunité(s)</div>` : ''}
+                </div>`;
+        }
+
+        html += '</div></div>';
+    }
+
+    container.innerHTML = html;
+}
+
+function updateActifBadges() {
+    // Mettre à jour les badges avec la dernière variation
+    const dernierJour = {};
+    for (const entry of allEntries) {
+        if (!dernierJour[entry.symbole] || entry.date > dernierJour[entry.symbole].date) {
+            dernierJour[entry.symbole] = entry;
+        }
+    }
+
+    for (const [symbole, entry] of Object.entries(dernierJour)) {
+        const badgeId = 'badge-' + symbole.replace(/[^a-zA-Z0-9]/g, '');
+        const badge = document.getElementById(badgeId);
+        if (badge) {
+            const varClass = entry.variation_jour >= 0 ? 'positive' : 'negative';
+            const varSign = entry.variation_jour >= 0 ? '+' : '';
+            badge.textContent = `${varSign}${entry.variation_jour?.toFixed(1) || 0}%`;
+            badge.className = `actif-badge ${varClass}`;
+        }
+    }
+}
+
+async function selectActif(symbole, element) {
+    selectedSymbole = symbole;
+
+    // Marquer comme sélectionné
+    document.querySelectorAll('.actif-item').forEach(i => i.classList.remove('active'));
+    if (element) element.classList.add('active');
+
+    // Mettre à jour le titre
+    const nom = actifsData[symbole] || symbole;
+    document.getElementById('journal-title').textContent = `Journal: ${nom}`;
+
+    // Filtrer les entrées
+    renderJournalEntries();
+
+    // Charger les opportunités
+    await loadOpportunites(symbole);
+}
+
+async function loadOpportunites(symbole) {
+    const section = document.getElementById('section-opportunites');
+    const container = document.getElementById('opportunites-list');
+    const countEl = document.getElementById('opps-count');
+
+    section.style.display = 'block';
+
+    try {
+        const response = await fetch(`/api/historique-opportunites/${symbole}`);
+        const data = await response.json();
+
+        if (data.success && data.trades.length > 0) {
+            countEl.textContent = data.trades.length + ' opportunité(s)';
+
+            let html = '<table class="data-table"><thead><tr>';
+            html += '<th>Date</th><th>Heure</th><th>Direction</th><th>Type</th>';
+            html += '<th>Entrée</th><th>Stop</th><th>TP1</th><th>Résultat</th><th>PnL</th>';
+            html += '</tr></thead><tbody>';
+
+            for (const trade of data.trades) {
+                const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'positive' :
+                                   trade.resultat === 'STOP' ? 'negative' : '';
+                const dirClass = trade.direction === 'LONG' ? 'positive' : 'negative';
+                const dirIcon = trade.direction === 'LONG' ? '📈' : '📉';
+
+                html += `<tr>
+                    <td>${trade.date || '-'}</td>
+                    <td>${trade.heure_message || '-'}</td>
+                    <td class="${dirClass}">${dirIcon} ${trade.direction || 'LONG'}</td>
+                    <td><span class="opp-tag ${trade.type_setup === 'NEWS' ? 'news' : 'tech'}">${trade.type_setup || '-'}</span></td>
+                    <td style="font-family: 'SF Mono', monospace;">${trade.prix_entree || '-'}</td>
+                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
+                    <td style="font-family: 'SF Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
+                    <td class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
+                    <td class="${resultClass}" style="font-family: 'SF Mono', monospace;">
+                        ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
+                    </td>
+                </tr>`;
+            }
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        } else {
+            countEl.textContent = '0 opportunité';
+            container.innerHTML = '<div class="no-data">Aucune opportunité enregistrée pour cet actif</div>';
+        }
+    } catch (error) {
+        console.error('Erreur chargement opportunités:', error);
+        container.innerHTML = '<div class="no-data">Erreur de chargement</div>';
+    }
+}
+
+function filterJournal() {
+    loadJournalEntries();
+}
+
+async function genererJournal() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '⟳ Génération...';
+
+    try {
+        const response = await fetch('/api/journal-quotidien/generer', {method: 'POST'});
+        const data = await response.json();
+
+        if (data.success) {
+            loadJournalEntries();
+        } else {
+            alert('Erreur lors de la génération');
+        }
+    } catch (error) {
+        console.error('Erreur:', error);
+        alert('Erreur de connexion');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '⟳ Générer maintenant';
+    }
+}
+
+function formatDate(dateStr) {
+    const [year, month, day] = dateStr.split('-');
+    const date = new Date(year, month - 1, day);
+    const options = {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'};
+    return date.toLocaleDateString('fr-FR', options);
+}
+</script>
+
+<style>
+/* Journal Page Styles */
+.journal-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: var(--space-3);
+}
+
+.journal-sidebar-list {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2);
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+}
+
+.sidebar-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-light);
+    margin-bottom: var(--space-1);
+}
+
+.actif-category {
+    margin-bottom: var(--space-2);
+}
+
+.category-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    padding: var(--space-1) var(--space-2);
+    text-transform: uppercase;
+}
+
+.actif-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.actif-item:hover {
+    background: var(--bg-secondary);
+}
+
+.actif-item.active {
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 3px solid var(--accent-primary);
+}
+
+.actif-nom {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
+.actif-badge {
+    font-family: 'SF Mono', monospace;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+}
+
+.actif-badge.positive {
+    background: var(--accent-green-bg);
+    color: var(--accent-green);
+}
+
+.actif-badge.negative {
+    background: var(--accent-red-bg);
+    color: var(--accent-red);
+}
+
+/* Filters */
+.filters-bar {
+    display: flex;
+    gap: var(--space-3);
+    background: var(--bg-primary);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-color);
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.filter-group label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.filter-group select {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+}
+
+/* Journal Entries */
+.journal-day {
+    margin-bottom: var(--space-3);
+}
+
+.journal-day-header {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: var(--space-1) 0;
+    border-bottom: 1px solid var(--border-light);
+    margin-bottom: var(--space-2);
+    text-transform: capitalize;
+}
+
+.journal-day-entries {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-2);
+}
+
+.journal-entry-card {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-2);
+    cursor: pointer;
+    transition: var(--transition);
+    border: 1px solid transparent;
+}
+
+.journal-entry-card:hover {
+    border-color: var(--accent-primary);
+    transform: translateY(-2px);
+}
+
+.entry-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-1);
+}
+
+.entry-actif-nom {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.entry-variation {
+    font-family: 'SF Mono', monospace;
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.entry-card-prices {
+    display: flex;
+    gap: var(--space-2);
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin-bottom: var(--space-1);
+}
+
+.entry-card-comment {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-top: var(--space-1);
+    padding-top: var(--space-1);
+    border-top: 1px solid var(--border-light);
+}
+
+.entry-card-opps {
+    margin-top: var(--space-1);
+    font-size: 0.8125rem;
+    color: var(--accent-primary);
+    font-weight: 500;
+}
+
+@media (max-width: 1024px) {
+    .journal-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .journal-sidebar-list {
+        max-height: 300px;
+    }
+
+    .filters-bar {
+        flex-wrap: wrap;
+    }
+}
+</style>
+{% endblock %}

@@ -212,6 +212,36 @@ def init_database():
         )
     ''')
 
+    # Table du journal quotidien automatique
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS journal_quotidien (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE,
+            symbole TEXT,
+            nom_actif TEXT,
+            categorie TEXT,
+            prix_ouverture REAL,
+            prix_cloture REAL,
+            variation_jour REAL,
+            volume_relatif REAL,
+            commentaire_ia TEXT,
+            evenements_jour TEXT,
+            opportunites_jour TEXT,
+            timestamp DATETIME,
+            UNIQUE(date, symbole)
+        )
+    ''')
+
+    # Ajouter colonnes à trades_recommandes si manquantes
+    try:
+        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN direction TEXT DEFAULT 'LONG'")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN categorie_actif TEXT")
+    except:
+        pass
+
     conn.commit()
     conn.close()
     print("✅ Base de données initialisée")
@@ -504,25 +534,45 @@ def enregistrer_recommandation(trade_data):
         cursor = conn.cursor()
         maintenant = get_paris_time()
 
+        # Déterminer la direction (LONG par défaut, SHORT si stop > entrée)
+        entree = trade_data.get('entree', 0)
+        stop = trade_data.get('stop', 0)
+        direction = 'SHORT' if stop > entree and entree > 0 else 'LONG'
+
+        # Trouver le symbole et la catégorie
+        symbole = trade_data.get('symbole', '')
+        if not symbole:
+            # Essayer de trouver le symbole à partir du nom
+            actif_nom = trade_data.get('actif', '')
+            for sym, nom in ACTIFS_PERMANENTS.items():
+                if nom == actif_nom:
+                    symbole = sym
+                    break
+
+        categorie = get_categorie_actif(symbole) if symbole else 'autre'
+
         cursor.execute('''
             INSERT INTO trades_recommandes
             (date, heure_message, actif, symbole, type_setup, prix_entree, prix_stop,
-             prix_tp1, prix_tp2, prix_actuel, catalyseur, duree_estimee, timestamp_reco)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             prix_tp1, prix_tp2, prix_actuel, catalyseur, duree_estimee, timestamp_reco,
+             direction, categorie_actif)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             maintenant.date(),
             maintenant.strftime('%H:%M'),
             trade_data.get('actif', ''),
-            trade_data.get('symbole', ''),
+            symbole,
             'NEWS' if trade_data.get('is_news_trading') else 'TECHNIQUE',
-            trade_data.get('entree', 0),
-            trade_data.get('stop', 0),
+            entree,
+            stop,
             trade_data.get('tp1', 0),
             trade_data.get('tp2', 0),
             trade_data.get('prix_actuel', 0),
             trade_data.get('catalyseur', ''),
             trade_data.get('duree', ''),
-            maintenant
+            maintenant,
+            direction,
+            categorie
         ))
 
         conn.commit()
@@ -682,6 +732,252 @@ def get_tous_journaux():
         return []
 
 # ============================================================================
+# CATÉGORIES D'ACTIFS
+# ============================================================================
+
+def get_categorie_actif(symbole):
+    """Détermine la catégorie d'un actif"""
+    if symbole.startswith('^'):
+        return 'indice'
+    elif symbole.endswith('.PA') or symbole.endswith('.DE') or symbole.endswith('.MI'):
+        return 'action_eu'
+    elif symbole.endswith('=X'):
+        return 'forex'
+    elif symbole.endswith('=F'):
+        return 'commodite'
+    elif len(symbole) <= 5 and symbole.isalpha():
+        return 'action_us'
+    return 'autre'
+
+# ============================================================================
+# PRÉ-MARKET
+# ============================================================================
+
+def recuperer_donnees_premarket():
+    """Récupère les données pré-market (futures, overnight gaps)"""
+    premarket_symbols = {
+        "ES=F": "S&P 500 Futures",
+        "NQ=F": "Nasdaq Futures",
+        "YM=F": "Dow Futures",
+        "^N225": "Nikkei 225",
+        "^HSI": "Hang Seng",
+        "^STOXX50E": "Euro Stoxx 50"
+    }
+
+    donnees = {}
+    for symbole, nom in premarket_symbols.items():
+        try:
+            ticker = yf.Ticker(symbole)
+            info = ticker.history(period="2d")
+            if len(info) >= 2:
+                prix_hier = info['Close'].iloc[-2]
+                prix_actuel = info['Close'].iloc[-1]
+                variation = ((prix_actuel - prix_hier) / prix_hier) * 100
+
+                donnees[nom] = {
+                    "symbole": symbole,
+                    "prix": round(prix_actuel, 2),
+                    "prix_hier": round(prix_hier, 2),
+                    "variation_overnight": round(variation, 2)
+                }
+        except Exception as e:
+            print(f"⚠️ Erreur premarket {symbole}: {e}")
+
+    return donnees
+
+# ============================================================================
+# JOURNAL QUOTIDIEN AUTOMATIQUE
+# ============================================================================
+
+SYSTEM_PROMPT_JOURNAL = """Tu es un analyste financier qui rédige des commentaires de journal pour un trader.
+Pour chaque actif, tu dois fournir un commentaire concis (2-3 phrases max) expliquant:
+- Ce qui s'est passé aujourd'hui (mouvement de prix, volume)
+- Les raisons probables (actualités, macro, technique)
+- Le contexte pour demain
+
+FORMAT DE RÉPONSE EN JSON:
+{
+  "commentaires": {
+    "SYMBOLE1": "Commentaire pour cet actif...",
+    "SYMBOLE2": "Commentaire pour cet actif..."
+  }
+}"""
+
+def generer_commentaires_journal(donnees_actifs):
+    """Génère des commentaires AI pour les actifs du journal"""
+    if not donnees_actifs:
+        return {}
+
+    donnees_texte = json.dumps(donnees_actifs, ensure_ascii=False, indent=2)
+    maintenant = get_paris_time()
+
+    question = f"""Voici les données des actifs pour le {maintenant.strftime('%d/%m/%Y')}:
+
+{donnees_texte}
+
+Génère un commentaire de journal pour chaque actif, en expliquant brièvement ce qui s'est passé aujourd'hui."""
+
+    try:
+        message = client_anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            system=SYSTEM_PROMPT_JOURNAL,
+            messages=[{"role": "user", "content": question}]
+        )
+
+        reponse = message.content[0].text
+        match = re.search(r'\{[\s\S]*\}', reponse)
+        if match:
+            result = json.loads(match.group())
+            return result.get('commentaires', {})
+        return {}
+    except Exception as e:
+        print(f"❌ Erreur commentaires journal: {e}")
+        return {}
+
+def enregistrer_journal_quotidien():
+    """Enregistre le journal quotidien pour tous les actifs suivis"""
+    maintenant = get_paris_time()
+    aujourdhui = maintenant.date()
+
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📝 Enregistrement journal quotidien...")
+
+    try:
+        # Récupérer les données de tous les actifs
+        donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+
+        # Récupérer les opportunités du jour pour chaque actif
+        opportunites_jour = {}
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT actif, symbole, type_setup, prix_entree, prix_tp1, resultat
+                FROM trades_recommandes WHERE date = ?
+            ''', (aujourdhui,))
+            for row in cursor.fetchall():
+                symbole = row['symbole']
+                if symbole not in opportunites_jour:
+                    opportunites_jour[symbole] = []
+                opportunites_jour[symbole].append({
+                    'type': row['type_setup'],
+                    'entree': row['prix_entree'],
+                    'tp1': row['prix_tp1'],
+                    'resultat': row['resultat']
+                })
+            conn.close()
+        except Exception as e:
+            print(f"⚠️ Erreur récup opportunités: {e}")
+
+        # Préparer les données pour les commentaires AI
+        donnees_pour_ia = {}
+        for nom, data in donnees.items():
+            donnees_pour_ia[data['symbole']] = {
+                'nom': nom,
+                'prix': data['prix'],
+                'variation': data['variation'],
+                'variation_5j': data.get('variation_5j', 0)
+            }
+
+        # Générer les commentaires AI
+        commentaires = generer_commentaires_journal(donnees_pour_ia)
+
+        # Enregistrer dans la base
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        for nom, data in donnees.items():
+            symbole = data['symbole']
+            categorie = get_categorie_actif(symbole)
+            opps = opportunites_jour.get(symbole, [])
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO journal_quotidien
+                (date, symbole, nom_actif, categorie, prix_ouverture, prix_cloture,
+                 variation_jour, volume_relatif, commentaire_ia, evenements_jour,
+                 opportunites_jour, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                aujourdhui,
+                symbole,
+                nom,
+                categorie,
+                data.get('ouverture', 0),
+                data['prix'],
+                data['variation'],
+                0,  # volume_relatif à calculer
+                commentaires.get(symbole, ''),
+                '',  # evenements_jour
+                json.dumps(opps, ensure_ascii=False) if opps else '',
+                maintenant
+            ))
+
+        conn.commit()
+        conn.close()
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Journal quotidien enregistré")
+        return True
+    except Exception as e:
+        print(f"❌ Erreur journal quotidien: {e}")
+        return False
+
+def get_journal_quotidien(symbole=None, limite=30):
+    """Récupère le journal quotidien"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if symbole:
+            cursor.execute('''
+                SELECT * FROM journal_quotidien
+                WHERE symbole = ?
+                ORDER BY date DESC LIMIT ?
+            ''', (symbole, limite))
+        else:
+            cursor.execute('''
+                SELECT * FROM journal_quotidien
+                ORDER BY date DESC, nom_actif ASC LIMIT ?
+            ''', (limite * len(ACTIFS_PERMANENTS),))
+
+        entries = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        # Parser les opportunités JSON
+        for entry in entries:
+            if entry.get('opportunites_jour'):
+                try:
+                    entry['opportunites_jour'] = json.loads(entry['opportunites_jour'])
+                except:
+                    entry['opportunites_jour'] = []
+
+        return entries
+    except Exception as e:
+        print(f"⚠️ Erreur récup journal quotidien: {e}")
+        return []
+
+def get_historique_opportunites(symbole):
+    """Récupère l'historique des opportunités pour un actif"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM trades_recommandes
+            WHERE symbole = ?
+            ORDER BY timestamp_reco DESC
+            LIMIT 50
+        ''', (symbole,))
+
+        trades = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return trades
+    except Exception as e:
+        print(f"⚠️ Erreur historique opportunités: {e}")
+        return []
+
+# ============================================================================
 # ANALYSES SAUVEGARDÉES
 # ============================================================================
 
@@ -793,6 +1089,11 @@ def trading():
 def memoire():
     """Page mémoire - Journal et performances"""
     return render_template('memoire.html')
+
+@app.route('/journal')
+def journal():
+    """Page journal automatique"""
+    return render_template('journal.html')
 
 @app.route('/journal/<symbole>')
 def journal_actif(symbole):
@@ -1063,6 +1364,98 @@ def api_top_movers():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/premarket')
+def api_premarket():
+    """Récupère les données pré-market"""
+    try:
+        donnees = recuperer_donnees_premarket()
+        return jsonify({
+            'success': True,
+            'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+            'premarket': donnees
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/journal-quotidien')
+def api_journal_quotidien():
+    """Récupère le journal quotidien"""
+    symbole = request.args.get('symbole')
+    limite = int(request.args.get('limite', 30))
+    entries = get_journal_quotidien(symbole, limite)
+    return jsonify({
+        'success': True,
+        'entries': entries
+    })
+
+@app.route('/api/journal-quotidien/generer', methods=['POST'])
+def api_generer_journal_quotidien():
+    """Force la génération du journal quotidien"""
+    success = enregistrer_journal_quotidien()
+    return jsonify({'success': success})
+
+@app.route('/api/historique-opportunites/<symbole>')
+def api_historique_opportunites(symbole):
+    """Récupère l'historique des opportunités pour un actif"""
+    trades = get_historique_opportunites(symbole)
+    return jsonify({
+        'success': True,
+        'symbole': symbole,
+        'trades': trades
+    })
+
+@app.route('/api/trades-historique')
+def api_trades_historique():
+    """Récupère l'historique des trades avec filtres"""
+    try:
+        periode = request.args.get('periode', 'semaine')
+        categorie = request.args.get('categorie', '')
+        direction = request.args.get('direction', '')
+        recherche = request.args.get('recherche', '')
+
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        maintenant = get_paris_time()
+        if periode == 'jour':
+            date_debut = maintenant.date()
+        elif periode == 'semaine':
+            date_debut = (maintenant - timedelta(days=7)).date()
+        elif periode == 'mois':
+            date_debut = (maintenant - timedelta(days=30)).date()
+        else:
+            date_debut = (maintenant - timedelta(days=365)).date()
+
+        query = 'SELECT * FROM trades_recommandes WHERE date >= ?'
+        params = [date_debut]
+
+        if categorie:
+            query += ' AND categorie_actif = ?'
+            params.append(categorie)
+
+        if direction:
+            query += ' AND direction = ?'
+            params.append(direction)
+
+        if recherche:
+            query += ' AND (actif LIKE ? OR symbole LIKE ?)'
+            params.extend([f'%{recherche}%', f'%{recherche}%'])
+
+        query += ' ORDER BY timestamp_reco DESC'
+
+        cursor.execute(query, params)
+        trades = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'trades': trades,
+            'count': len(trades)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 # ============================================================================
 # WHATSAPP (optionnel)
 # ============================================================================
@@ -1129,6 +1522,13 @@ def executer_cloture_planifiee():
     except Exception as e:
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Erreur: {e}")
 
+def executer_journal_quotidien():
+    """Exécute l'enregistrement du journal quotidien"""
+    maintenant = get_paris_time()
+    if maintenant.weekday() >= 5:
+        return
+    enregistrer_journal_quotidien()
+
 def configurer_schedule():
     """Configure les tâches planifiées"""
     # Analyses: 8h, 14h30, 17h
@@ -1141,6 +1541,12 @@ def configurer_schedule():
     heure_cloture_utc = get_utc_time_for_paris("22:00")
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_cloture_utc).do(executer_cloture_planifiee)
+
+    # Journal quotidien: 17h45 (après clôture FR) et 22h15 (après clôture US)
+    for heure in ["17:45", "22:15"]:
+        heure_utc = get_utc_time_for_paris(heure)
+        for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+            getattr(schedule.every(), jour).at(heure_utc).do(executer_journal_quotidien)
 
 def run_scheduler():
     """Thread pour le scheduler"""
