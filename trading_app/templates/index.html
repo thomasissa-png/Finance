@@ -1,139 +1,141 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - Agent Trading{% endblock %}
+{% block title %}Trading Desk - Agent Trading{% endblock %}
 
 {% block content %}
-<div class="dashboard">
-    <!-- Header Stats -->
-    <div class="stats-row">
-        <div class="stat-card">
-            <div class="stat-icon green">&#128200;</div>
-            <div class="stat-content">
-                <span class="stat-value" id="stat-trades">-</span>
-                <span class="stat-label">Trades Aujourd'hui</span>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon blue">&#127919;</div>
-            <div class="stat-content">
-                <span class="stat-value" id="stat-taux">-%</span>
-                <span class="stat-label">Taux Reussite</span>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon yellow">&#128176;</div>
-            <div class="stat-content">
-                <span class="stat-value" id="stat-pnl">-</span>
-                <span class="stat-label">PnL Semaine</span>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon purple">&#128240;</div>
-            <div class="stat-content">
-                <span class="stat-value" id="stat-news">0/3</span>
-                <span class="stat-label">Alertes News</span>
-            </div>
-        </div>
-    </div>
+<div class="trading-desk">
 
-    <!-- Main Grid -->
-    <div class="dashboard-grid">
-        <!-- Left Column - Markets -->
-        <div class="card markets-card">
-            <div class="card-header">
-                <h2>&#128200; Marches en Direct</h2>
-                <button class="btn-refresh" onclick="refreshMarkets()">&#8635; Actualiser</button>
-            </div>
-            <div class="card-body">
-                <div id="markets-loading" class="loading">Chargement des donnees...</div>
-                <div id="markets-content" class="markets-grid" style="display: none;"></div>
+    <!-- HERO: Opportunités Actives -->
+    <section class="hero-opportunities">
+        <div class="hero-title">
+            <h1>&#127919; <span>Opportunites Actives</span></h1>
+            <div class="hero-actions">
+                <button class="btn btn-primary" onclick="lancerAnalyse()">
+                    &#128640; Nouvelle Analyse
+                </button>
             </div>
         </div>
 
-        <!-- Right Column - Last Analysis -->
-        <div class="card analysis-card">
+        <div class="opportunities-scroll" id="opportunities-container">
+            <div class="loading">Chargement des opportunites...</div>
+        </div>
+    </section>
+
+    <!-- GRID: Pulse + Events -->
+    <section class="grid-main">
+        <!-- Pulse Marché -->
+        <div class="card card-highlight">
             <div class="card-header">
-                <h2>&#128161; Derniere Analyse</h2>
-                <span class="analysis-time" id="analysis-time">--:--</span>
+                <h2>&#128200; Pulse Marche</h2>
+                <button class="btn-icon" onclick="refreshMarkets()">&#8635;</button>
             </div>
             <div class="card-body">
-                <div id="analysis-loading" class="loading">Chargement...</div>
-                <div id="analysis-content" style="display: none;">
-                    <div class="analysis-section">
-                        <h3>Contexte Marche</h3>
-                        <p id="contexte-marche">-</p>
+                <div class="pulse-widget" id="pulse-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+                <div class="top-movers" id="top-movers"></div>
+            </div>
+        </div>
+
+        <!-- Événements -->
+        <div class="card">
+            <div class="card-header">
+                <h2>&#128197; Evenements Critiques</h2>
+            </div>
+            <div class="card-body">
+                <div class="events-timeline" id="events-timeline">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- GRID: Contexte + Performance + Danger -->
+    <section class="grid-3 mb-3">
+        <!-- Contexte du jour -->
+        <div class="card">
+            <div class="card-header">
+                <h2>&#128172; Contexte du Jour</h2>
+                <span class="text-muted" id="context-time">--:--</span>
+            </div>
+            <div class="card-body">
+                <div class="context-box">
+                    <p class="context-text" id="context-text">
+                        Lancez une analyse pour obtenir le contexte de marche...
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance -->
+        <div class="card card-highlight">
+            <div class="card-header">
+                <h2>&#128202; Performance</h2>
+            </div>
+            <div class="card-body">
+                <div class="perf-mini">
+                    <div class="perf-main-stat">
+                        <div class="perf-main-value positive" id="perf-pnl">+0.0%</div>
+                        <div class="perf-main-label">PnL Aujourd'hui</div>
                     </div>
-                    <div class="analysis-section">
-                        <h3>Opportunites</h3>
-                        <div id="opportunites-list"></div>
+                    <div class="perf-stats-row">
+                        <div class="perf-stat success">
+                            <div class="perf-stat-value" id="perf-wins">0</div>
+                            <div class="perf-stat-label">Reussis</div>
+                        </div>
+                        <div class="perf-stat danger">
+                            <div class="perf-stat-value" id="perf-losses">0</div>
+                            <div class="perf-stat-label">Stops</div>
+                        </div>
+                        <div class="perf-stat">
+                            <div class="perf-stat-value" id="perf-rate">0%</div>
+                            <div class="perf-stat-label">Taux</div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Actions Row -->
-    <div class="actions-row">
-        <button class="btn btn-primary btn-large" onclick="lancerAnalyse()">
-            <span class="btn-icon">&#128640;</span>
-            Lancer Analyse Maintenant
-        </button>
-        <a href="/trading" class="btn btn-secondary btn-large">
-            <span class="btn-icon">&#128176;</span>
-            Voir Toutes les Opportunites
-        </a>
-    </div>
-
-    <!-- Bottom Grid -->
-    <div class="dashboard-grid-3">
-        <!-- Trades du jour -->
-        <div class="card">
+        <!-- Zones Danger -->
+        <div class="card card-danger">
             <div class="card-header">
-                <h2>&#128176; Trades du Jour</h2>
+                <h2>&#9888;&#65039; Zones Danger</h2>
             </div>
             <div class="card-body">
-                <div id="trades-jour" class="trades-list">
-                    <p class="no-data">Aucun trade aujourd'hui</p>
+                <div class="danger-list" id="danger-zones">
+                    <div class="danger-item">
+                        <span class="danger-icon">&#9888;&#65039;</span>
+                        <span>Aucune zone critique identifiee</span>
+                    </div>
                 </div>
             </div>
         </div>
+    </section>
 
-        <!-- Evenements -->
-        <div class="card">
-            <div class="card-header">
-                <h2>&#128197; Evenements a Venir</h2>
-            </div>
-            <div class="card-body">
-                <div id="evenements-list">
-                    <p class="no-data">Chargement...</p>
-                </div>
+    <!-- Tactical Tip -->
+    <section class="card mb-3" id="tactical-section" style="display: none;">
+        <div class="card-body" style="padding: 1.25rem 1.5rem;">
+            <div style="display: flex; align-items: center; gap: 1rem;">
+                <span style="font-size: 1.5rem;">&#128161;</span>
+                <p id="tactical-tip" style="margin: 0; font-size: 1.05rem; color: var(--text-secondary);"></p>
             </div>
         </div>
+    </section>
 
-        <!-- Mouvements forts -->
-        <div class="card">
-            <div class="card-header">
-                <h2>&#128293; Mouvements Actifs</h2>
-            </div>
-            <div class="card-body">
-                <div id="mouvements-list">
-                    <p class="no-data">Chargement...</p>
-                </div>
-            </div>
-        </div>
-    </div>
 </div>
 
 <!-- Modal Analyse -->
-<div id="modal-analyse" class="modal" style="display: none;">
+<div id="modal-analyse" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2>&#128640; Analyse en cours...</h2>
+            <h2>&#128640; Analyse en cours</h2>
             <button class="modal-close" onclick="closeModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="loading-spinner"></div>
-            <p id="modal-status">Recuperation des donnees de marche...</p>
+            <p id="modal-status" style="text-align: center; color: var(--text-secondary);">
+                Recuperation des donnees de marche...
+            </p>
         </div>
     </div>
 </div>
@@ -142,262 +144,306 @@
 {% block extra_js %}
 <script>
 // Variables globales
-let refreshInterval = null;
+let marketData = null;
+let analysisData = null;
 
 // Initialisation
 document.addEventListener('DOMContentLoaded', function() {
-    loadDashboard();
-    // Rafraichir toutes les 60 secondes
-    refreshInterval = setInterval(loadDashboard, 60000);
+    loadAllData();
+    setInterval(refreshMarkets, 60000);
 });
 
-async function loadDashboard() {
+async function loadAllData() {
     await Promise.all([
         refreshMarkets(),
         loadLastAnalysis(),
-        loadStats(),
-        loadTradesJour()
+        loadPerformance()
     ]);
 }
 
+// ===== MARCHÉS =====
 async function refreshMarkets() {
-    const loading = document.getElementById('markets-loading');
-    const content = document.getElementById('markets-content');
-
     try {
         const response = await fetch('/api/donnees-marche');
         const data = await response.json();
 
         if (data.success) {
-            renderMarkets(data.donnees);
-            loading.style.display = 'none';
-            content.style.display = 'grid';
+            marketData = data.donnees;
+            renderPulseWidget();
+            renderTopMovers();
         }
     } catch (error) {
         console.error('Erreur markets:', error);
-        loading.textContent = 'Erreur de chargement';
     }
 }
 
-function renderMarkets(donnees) {
-    const content = document.getElementById('markets-content');
-    const categories = {
-        'Indices': ['CAC 40', 'S&P 500', 'Nasdaq', 'DAX', 'VIX'],
-        'Tech US': ['Apple', 'Microsoft', 'NVIDIA', 'Tesla', 'Meta'],
-        'Commodites': ['Or', 'Petrole Brent', 'Argent', 'Gaz naturel'],
-        'Forex': ['EUR/USD', 'GBP/USD', 'USD/JPY']
-    };
+function renderPulseWidget() {
+    const container = document.getElementById('pulse-widget');
+    const indices = ['CAC 40', 'S&P 500', 'Nasdaq', 'VIX', 'EUR/USD'];
 
     let html = '';
-    for (const [cat, actifs] of Object.entries(categories)) {
-        html += `<div class="market-category">
-            <h4>${cat}</h4>
-            <div class="market-items">`;
+    for (const name of indices) {
+        const d = marketData[name];
+        if (d) {
+            const isPositive = d.variation >= 0;
+            const barWidth = Math.min(Math.abs(d.variation) * 15, 100);
 
-        for (const actif of actifs) {
-            if (donnees[actif]) {
-                const d = donnees[actif];
-                const varClass = d.variation >= 0 ? 'positive' : 'negative';
-                const arrow = d.variation >= 0 ? '&#9650;' : '&#9660;';
-                html += `
-                    <div class="market-item">
-                        <span class="market-name">${actif}</span>
-                        <span class="market-price">${d.prix}</span>
-                        <span class="market-var ${varClass}">${arrow} ${d.variation.toFixed(2)}%</span>
-                    </div>`;
-            }
+            html += `
+                <div class="pulse-item">
+                    <span class="pulse-name">${name}</span>
+                    <div class="pulse-bar-container">
+                        <div class="pulse-bar ${isPositive ? 'positive' : 'negative'}"
+                             style="width: ${barWidth}%"></div>
+                    </div>
+                    <span class="pulse-value ${isPositive ? 'positive' : 'negative'}">
+                        ${isPositive ? '+' : ''}${d.variation.toFixed(2)}%
+                    </span>
+                </div>`;
         }
-
-        html += '</div></div>';
     }
 
-    content.innerHTML = html;
-
-    // Stocker les mouvements forts
-    updateMouvementsForts(donnees);
+    container.innerHTML = html || '<div class="no-data">Donnees non disponibles</div>';
 }
 
-function updateMouvementsForts(donnees) {
-    const list = document.getElementById('mouvements-list');
+function renderTopMovers() {
+    const container = document.getElementById('top-movers');
 
     // Trier par variation absolue
-    const sorted = Object.entries(donnees)
+    const sorted = Object.entries(marketData)
         .map(([nom, d]) => ({nom, ...d}))
+        .filter(d => !['VIX', 'EUR/USD', 'GBP/USD', 'USD/JPY'].includes(d.nom))
         .sort((a, b) => Math.abs(b.variation) - Math.abs(a.variation))
         .slice(0, 6);
 
-    let html = '';
+    let html = '<span style="font-size: 0.85rem; color: var(--text-muted);">&#128293; Top movers:</span>';
     for (const item of sorted) {
-        const varClass = item.variation >= 0 ? 'positive' : 'negative';
-        const icon = item.variation >= 0 ? '&#128293;' : '&#128165;';
+        const isPositive = item.variation >= 0;
         html += `
-            <div class="mouvement-item ${varClass}">
-                <span class="mouvement-icon">${icon}</span>
-                <span class="mouvement-name">${item.nom}</span>
-                <span class="mouvement-var">${item.variation >= 0 ? '+' : ''}${item.variation.toFixed(2)}%</span>
+            <div class="mover-chip ${isPositive ? 'positive' : 'negative'}">
+                <span class="name">${item.nom}</span>
+                <span class="var">${isPositive ? '+' : ''}${item.variation.toFixed(1)}%</span>
             </div>`;
     }
 
-    list.innerHTML = html || '<p class="no-data">Aucun mouvement significatif</p>';
+    container.innerHTML = html;
 }
 
+// ===== ANALYSE =====
 async function loadLastAnalysis() {
-    const loading = document.getElementById('analysis-loading');
-    const content = document.getElementById('analysis-content');
-
     try {
         const response = await fetch('/api/derniere-analyse');
         const data = await response.json();
 
         if (data.success && data.analyse) {
-            renderAnalysis(data.analyse);
-            loading.style.display = 'none';
-            content.style.display = 'block';
+            analysisData = data.analyse;
+            renderAnalysis();
         } else {
-            loading.textContent = 'Aucune analyse disponible';
+            document.getElementById('opportunities-container').innerHTML =
+                '<div class="no-data" style="width: 100%;">Lancez une analyse pour voir les opportunites</div>';
         }
     } catch (error) {
         console.error('Erreur analyse:', error);
-        loading.textContent = 'Erreur de chargement';
     }
 }
 
-function renderAnalysis(analyse) {
-    document.getElementById('analysis-time').textContent = analyse.heure || '--:--';
+function renderAnalysis() {
+    if (!analysisData || !analysisData.contenu) return;
 
-    const contenu = analyse.contenu;
-    if (contenu) {
-        document.getElementById('contexte-marche').textContent =
-            contenu.contexte_marche || 'Non disponible';
+    const contenu = analysisData.contenu;
 
-        // Opportunites
-        const oppList = document.getElementById('opportunites-list');
-        if (contenu.opportunites && contenu.opportunites.length > 0) {
-            let html = '';
-            for (const opp of contenu.opportunites.slice(0, 3)) {
-                const newsTag = opp.is_news_trading ?
-                    '<span class="tag tag-news">NEWS</span>' : '';
-                html += `
-                    <div class="opportunity-card">
-                        <div class="opp-header">
-                            <span class="opp-name">${opp.actif}</span>
-                            ${newsTag}
+    // Contexte
+    document.getElementById('context-time').textContent = analysisData.heure || '--:--';
+    if (contenu.contexte_marche) {
+        document.getElementById('context-text').textContent = contenu.contexte_marche;
+    }
+
+    // Opportunités
+    renderOpportunities(contenu.opportunites || []);
+
+    // Événements
+    renderEvents(contenu.evenements_a_venir || []);
+
+    // Zones danger
+    renderDangerZones(contenu.zones_dangereuses || []);
+
+    // Tactical tip
+    if (contenu.tactical_tip) {
+        document.getElementById('tactical-section').style.display = 'block';
+        document.getElementById('tactical-tip').textContent = contenu.tactical_tip;
+    }
+}
+
+function renderOpportunities(opportunities) {
+    const container = document.getElementById('opportunities-container');
+
+    if (!opportunities || opportunities.length === 0) {
+        container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunite en cours</div>';
+        return;
+    }
+
+    let html = '';
+    for (const opp of opportunities) {
+        const isNews = opp.is_news_trading;
+        const tagClass = isNews ? 'news' : 'tech';
+        const tagText = isNews ? 'NEWS' : 'TECH';
+        const cardClass = isNews ? 'news-trading' : '';
+
+        // Calcul position gauge (simplifié)
+        const gaugePosition = calculateGaugePosition(opp);
+
+        html += `
+            <div class="opp-card ${cardClass}">
+                <div class="opp-header">
+                    <span class="opp-asset">${opp.actif || 'N/A'}</span>
+                    <span class="opp-tag ${tagClass}">${tagText}</span>
+                </div>
+
+                <div class="opp-price">${opp.prix_actuel || '-'}</div>
+
+                <div class="opp-catalyst">${opp.catalyseur || 'Catalyseur non specifie'}</div>
+
+                <div class="price-gauge">
+                    <div class="gauge-track">
+                        <div class="gauge-zones">
+                            <div class="gauge-zone stop"></div>
+                            <div class="gauge-zone entry"></div>
+                            <div class="gauge-zone tp1"></div>
+                            <div class="gauge-zone tp2"></div>
                         </div>
-                        <div class="opp-price">${opp.prix_actuel}</div>
-                        <div class="opp-catalyst">${opp.catalyseur || '-'}</div>
-                        <div class="opp-levels">
-                            <span class="level stop">Stop: ${opp.stop}</span>
-                            <span class="level tp">TP1: ${opp.tp1}</span>
+                        <div class="gauge-current" style="left: ${gaugePosition}%"></div>
+                    </div>
+                    <div class="gauge-labels">
+                        <div class="gauge-label stop">
+                            <span>Stop</span>
+                            <span>${opp.stop || '-'}</span>
                         </div>
-                    </div>`;
-            }
-            oppList.innerHTML = html;
-        } else {
-            oppList.innerHTML = '<p class="no-data">Aucune opportunite</p>';
-        }
+                        <div class="gauge-label entry">
+                            <span>Entree</span>
+                            <span>${opp.entree || '-'}</span>
+                        </div>
+                        <div class="gauge-label tp">
+                            <span>TP1</span>
+                            <span>${opp.tp1 || '-'}</span>
+                        </div>
+                        <div class="gauge-label tp">
+                            <span>TP2</span>
+                            <span>${opp.tp2 || '-'}</span>
+                        </div>
+                    </div>
+                </div>
 
-        // Evenements
-        const evtList = document.getElementById('evenements-list');
-        if (contenu.evenements_a_venir && contenu.evenements_a_venir.length > 0) {
-            let html = '';
-            for (const evt of contenu.evenements_a_venir.slice(0, 5)) {
-                const stars = '&#11088;'.repeat(evt.importance || 1);
-                html += `
-                    <div class="event-item">
-                        <span class="event-time">${evt.heure}</span>
-                        <span class="event-name">${evt.evenement}</span>
-                        <span class="event-importance">${stars}</span>
-                    </div>`;
-            }
-            evtList.innerHTML = html;
-        } else {
-            evtList.innerHTML = '<p class="no-data">Aucun evenement programme</p>';
-        }
+                <div class="opp-meta">
+                    <div class="opp-rr">
+                        R/R: <strong>${opp.ratio_rr || '1:2'}</strong>
+                    </div>
+                    <div class="opp-timer">
+                        &#9203; ${opp.duree || '1-2h'}
+                    </div>
+                </div>
+            </div>`;
     }
+
+    container.innerHTML = html;
 }
 
-async function loadStats() {
-    try {
-        // Stats du jour
-        const respJour = await fetch('/api/performances?periode=jour');
-        const dataJour = await respJour.json();
+function calculateGaugePosition(opp) {
+    // Calcul simplifié de la position sur la jauge
+    const prix = parseFloat(opp.prix_actuel) || 0;
+    const stop = parseFloat(opp.stop) || 0;
+    const tp2 = parseFloat(opp.tp2) || 0;
 
-        if (dataJour.success) {
-            document.getElementById('stat-trades').textContent = dataJour.performances.total;
-            document.getElementById('stat-taux').textContent =
-                dataJour.performances.taux_reussite + '%';
-        }
+    if (stop === 0 || tp2 === 0 || prix === 0) return 50;
 
-        // Stats semaine
-        const respSemaine = await fetch('/api/performances?periode=semaine');
-        const dataSemaine = await respSemaine.json();
+    const range = tp2 - stop;
+    const position = ((prix - stop) / range) * 100;
 
-        if (dataSemaine.success) {
-            const pnl = dataSemaine.performances.pnl_total;
-            document.getElementById('stat-pnl').textContent =
-                (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
-            document.getElementById('stat-pnl').className =
-                'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
-        }
-
-        // Status
-        const respStatus = await fetch('/api/status');
-        const status = await respStatus.json();
-
-        if (status) {
-            document.getElementById('stat-news').textContent =
-                `${status.news_envoyees}/${status.max_news}`;
-            document.getElementById('market-status').textContent = status.marche_info;
-        }
-    } catch (error) {
-        console.error('Erreur stats:', error);
-    }
+    return Math.max(5, Math.min(95, position));
 }
 
-async function loadTradesJour() {
+function renderEvents(events) {
+    const container = document.getElementById('events-timeline');
+
+    if (!events || events.length === 0) {
+        container.innerHTML = '<div class="no-data">Aucun evenement prevu</div>';
+        return;
+    }
+
+    let html = '';
+    for (const evt of events.slice(0, 6)) {
+        const stars = '&#11088;'.repeat(evt.importance || 1);
+        const isActive = evt.importance >= 3;
+
+        html += `
+            <div class="event-item ${isActive ? 'active' : ''}">
+                <span class="event-time">${evt.heure || '--:--'}</span>
+                <div class="event-content">
+                    <div class="event-name">${evt.evenement || '-'}</div>
+                </div>
+                <span class="event-stars">${stars}</span>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderDangerZones(zones) {
+    const container = document.getElementById('danger-zones');
+
+    if (!zones || zones.length === 0) {
+        container.innerHTML = `
+            <div class="danger-item">
+                <span class="danger-icon">&#9989;</span>
+                <span>Aucune zone critique identifiee</span>
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    for (const zone of zones) {
+        html += `
+            <div class="danger-item">
+                <span class="danger-icon">&#9888;&#65039;</span>
+                <span>${zone}</span>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+// ===== PERFORMANCE =====
+async function loadPerformance() {
     try {
-        const response = await fetch('/api/trades-jour');
+        const response = await fetch('/api/performances?periode=jour');
         const data = await response.json();
 
-        const container = document.getElementById('trades-jour');
+        if (data.success) {
+            const p = data.performances;
 
-        if (data.success && data.trades.length > 0) {
-            let html = '';
-            for (const trade of data.trades.slice(0, 5)) {
-                const statusClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'success' :
-                                   trade.resultat === 'STOP' ? 'fail' : 'pending';
-                const statusIcon = statusClass === 'success' ? '&#9989;' :
-                                  statusClass === 'fail' ? '&#10060;' : '&#9203;';
+            const pnlEl = document.getElementById('perf-pnl');
+            const pnl = p.pnl_total || 0;
+            pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '%';
+            pnlEl.className = 'perf-main-value ' + (pnl >= 0 ? 'positive' : 'negative');
 
-                html += `
-                    <div class="trade-item ${statusClass}">
-                        <div class="trade-info">
-                            <span class="trade-time">${trade.heure_message}</span>
-                            <span class="trade-name">${trade.actif}</span>
-                        </div>
-                        <div class="trade-status">
-                            <span class="trade-icon">${statusIcon}</span>
-                            <span class="trade-result">${trade.resultat || 'En cours'}</span>
-                        </div>
-                    </div>`;
-            }
-            container.innerHTML = html;
-        } else {
-            container.innerHTML = '<p class="no-data">Aucun trade aujourd\'hui</p>';
+            document.getElementById('perf-wins').textContent = p.reussis || 0;
+            document.getElementById('perf-losses').textContent = p.stops || 0;
+            document.getElementById('perf-rate').textContent = (p.taux_reussite || 0) + '%';
         }
     } catch (error) {
-        console.error('Erreur trades:', error);
+        console.error('Erreur performance:', error);
     }
 }
 
+// ===== ANALYSE =====
 async function lancerAnalyse() {
     const modal = document.getElementById('modal-analyse');
     const status = document.getElementById('modal-status');
 
-    modal.style.display = 'flex';
+    modal.classList.add('active');
     status.textContent = 'Recuperation des donnees de marche...';
 
     try {
+        status.textContent = 'Analyse en cours avec Claude...';
+
         const response = await fetch('/api/analyse');
         const data = await response.json();
 
@@ -405,8 +451,8 @@ async function lancerAnalyse() {
             status.textContent = 'Analyse terminee !';
             setTimeout(() => {
                 closeModal();
-                loadDashboard();
-            }, 1500);
+                loadAllData();
+            }, 1000);
         } else {
             status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
         }
@@ -416,7 +462,7 @@ async function lancerAnalyse() {
 }
 
 function closeModal() {
-    document.getElementById('modal-analyse').style.display = 'none';
+    document.getElementById('modal-analyse').classList.remove('active');
 }
 </script>
 {% endblock %}
