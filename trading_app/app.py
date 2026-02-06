@@ -244,6 +244,7 @@ def init_database():
             points_positifs TEXT,
             points_negatifs TEXT,
             lecons_apprises TEXT,
+            faits_marquants TEXT,
             timestamp DATETIME
         )
     ''')
@@ -268,6 +269,10 @@ def init_database():
         pass
     try:
         cursor.execute("ALTER TABLE journal_quotidien ADD COLUMN recommandations_analystes TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE bilan_quotidien ADD COLUMN faits_marquants TEXT")
     except:
         pass
 
@@ -1015,18 +1020,35 @@ def recuperer_donnees_premarket():
 # JOURNAL QUOTIDIEN AUTOMATIQUE
 # ============================================================================
 
-SYSTEM_PROMPT_JOURNAL = """Tu es un analyste financier qui rédige des commentaires de journal pour un trader.
-Pour chaque actif, tu dois fournir un commentaire concis (2-3 phrases max) expliquant:
-- Ce qui s'est passé aujourd'hui (mouvement de prix, volume)
-- Les raisons probables (actualités, macro, technique)
-- Le contexte pour demain
+SYSTEM_PROMPT_JOURNAL = """Tu es un spéculateur expérimenté qui tient un carnet de bord quotidien.
+
+Pour chaque actif, rédige un commentaire UNIQUEMENT si quelque chose de notable s'est passé:
+- Mouvement significatif (>1.5% ou inhabituel pour l'actif)
+- Cassure de niveau technique important
+- News ou événement macro impactant
+- Nouveau record historique ou annuel
+- Changement de tendance ou de momentum
+- Corrélation intéressante avec d'autres actifs
+
+Si rien de notable, ne mets PAS de commentaire pour cet actif.
+
+Style: Direct, factuel, langage de trader. Pas de langue de bois.
+Exemples de bons commentaires:
+- "Nouveau record historique à 6150. Le momentum reste puissant, pas de signe d'essoufflement."
+- "Breakout des 2050$ confirmé sur fond de tensions Iran. Le prochain objectif technique est 2100$."
+- "Chute de 4% suite aux résultats décevants. Support à surveiller à 145€."
+- "Range serré 1.08-1.085, attente des NFP demain."
 
 FORMAT DE RÉPONSE EN JSON:
 {
   "commentaires": {
-    "SYMBOLE1": "Commentaire pour cet actif...",
-    "SYMBOLE2": "Commentaire pour cet actif..."
-  }
+    "SYMBOLE1": "Commentaire si notable...",
+    "SYMBOLE2": "Commentaire si notable..."
+  },
+  "faits_marquants": [
+    "Fait marquant 1 de la journée (ex: S&P 500 nouveau record, tensions géopolitiques, etc.)",
+    "Fait marquant 2"
+  ]
 }"""
 
 SYSTEM_PROMPT_BILAN = """Tu es un spéculateur expérimenté qui fait le bilan de la journée de trading.
@@ -1049,9 +1071,9 @@ FORMAT DE RÉPONSE EN JSON:
 }"""
 
 def generer_commentaires_journal(donnees_actifs):
-    """Génère des commentaires AI pour les actifs du journal"""
+    """Génère des commentaires AI pour les actifs du journal (style carnet de bord)"""
     if not donnees_actifs:
-        return {}
+        return {}, []
 
     donnees_texte = json.dumps(donnees_actifs, ensure_ascii=False, indent=2)
     maintenant = get_paris_time()
@@ -1060,12 +1082,16 @@ def generer_commentaires_journal(donnees_actifs):
 
 {donnees_texte}
 
-Génère un commentaire de journal pour chaque actif, en expliquant brièvement ce qui s'est passé aujourd'hui."""
+Rédige ton carnet de bord de spéculateur:
+1. Commente UNIQUEMENT les actifs avec des mouvements notables
+2. Liste les 2-4 faits marquants de la journée (records, événements macro, etc.)
+
+Sois direct et factuel, comme un trader pro."""
 
     try:
         message = client_anthropic.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=2000,
+            max_tokens=3000,
             system=SYSTEM_PROMPT_JOURNAL,
             messages=[{"role": "user", "content": question}]
         )
@@ -1074,11 +1100,11 @@ Génère un commentaire de journal pour chaque actif, en expliquant brièvement 
         match = re.search(r'\{[\s\S]*\}', reponse)
         if match:
             result = json.loads(match.group())
-            return result.get('commentaires', {})
-        return {}
+            return result.get('commentaires', {}), result.get('faits_marquants', [])
+        return {}, []
     except Exception as e:
         print(f"❌ Erreur commentaires journal: {e}")
-        return {}
+        return {}, []
 
 def recuperer_recommandations_analystes(symbole):
     """Récupère les recommandations des analystes via yfinance"""
@@ -1244,7 +1270,27 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
             }
 
         # Générer les commentaires AI
-        commentaires = generer_commentaires_journal(donnees_pour_ia)
+        commentaires, faits_marquants = generer_commentaires_journal(donnees_pour_ia)
+
+        # Sauvegarder les faits marquants dans la table bilan
+        if faits_marquants:
+            try:
+                conn_bilan = sqlite3.connect(DB_PATH)
+                cursor_bilan = conn_bilan.cursor()
+                cursor_bilan.execute('''
+                    INSERT OR REPLACE INTO bilan_quotidien
+                    (date, faits_marquants, timestamp)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(date) DO UPDATE SET faits_marquants = excluded.faits_marquants
+                ''', (
+                    aujourdhui,
+                    json.dumps(faits_marquants, ensure_ascii=False),
+                    maintenant
+                ))
+                conn_bilan.commit()
+                conn_bilan.close()
+            except Exception as e:
+                print(f"⚠️ Erreur sauvegarde faits marquants: {e}")
 
         # Enregistrer dans la base
         conn = sqlite3.connect(DB_PATH)
@@ -1902,6 +1948,10 @@ def api_bilan_quotidien():
                 bilan['lecons_apprises'] = json.loads(bilan['lecons_apprises'] or '[]')
             except:
                 bilan['lecons_apprises'] = []
+            try:
+                bilan['faits_marquants'] = json.loads(bilan['faits_marquants'] or '[]')
+            except:
+                bilan['faits_marquants'] = []
             return jsonify({'success': True, 'bilan': bilan})
 
         return jsonify({'success': False, 'error': 'Aucun bilan trouvé'})
