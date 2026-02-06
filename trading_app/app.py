@@ -628,6 +628,179 @@ def enregistrer_recommandation(trade_data):
         print(f"⚠️ Erreur enregistrement: {e}")
         return None
 
+def verifier_resultats_trades():
+    """Vérifie et met à jour les résultats des trades ouverts"""
+    maintenant = get_paris_time()
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔍 Vérification résultats trades...")
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer les trades sans résultat
+        cursor.execute('''
+            SELECT * FROM trades_recommandes
+            WHERE resultat IS NULL AND symbole IS NOT NULL AND symbole != ''
+        ''')
+        trades_ouverts = [dict(row) for row in cursor.fetchall()]
+
+        if not trades_ouverts:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ℹ️ Aucun trade à vérifier")
+            conn.close()
+            return 0
+
+        nb_mis_a_jour = 0
+
+        for trade in trades_ouverts:
+            try:
+                symbole = trade['symbole']
+                direction = trade.get('direction', 'LONG')
+                entree = float(trade['prix_entree'] or 0)
+                stop = float(trade['prix_stop'] or 0)
+                tp1 = float(trade['prix_tp1'] or 0)
+                tp2 = float(trade['prix_tp2'] or 0)
+
+                if entree == 0:
+                    continue
+
+                # Récupérer les données du jour pour cet actif
+                ticker = yf.Ticker(symbole)
+                hist = ticker.history(period="1d", interval="1m")
+
+                if hist.empty:
+                    continue
+
+                # Vérifier les extremums de la journée
+                high_jour = hist['High'].max()
+                low_jour = hist['Low'].min()
+                prix_actuel = hist['Close'].iloc[-1]
+
+                resultat = None
+                prix_sortie = None
+                pnl_pct = None
+
+                if direction == 'LONG':
+                    # LONG: Stop si prix descend sous stop, TP si prix monte au dessus de TP
+                    if stop > 0 and low_jour <= stop:
+                        resultat = 'STOP'
+                        prix_sortie = stop
+                        pnl_pct = ((stop - entree) / entree) * 100
+                    elif tp2 > 0 and high_jour >= tp2:
+                        resultat = 'TP2'
+                        prix_sortie = tp2
+                        pnl_pct = ((tp2 - entree) / entree) * 100
+                    elif tp1 > 0 and high_jour >= tp1:
+                        resultat = 'TP1'
+                        prix_sortie = tp1
+                        pnl_pct = ((tp1 - entree) / entree) * 100
+                else:
+                    # SHORT: Stop si prix monte au dessus du stop, TP si prix descend sous TP
+                    if stop > 0 and high_jour >= stop:
+                        resultat = 'STOP'
+                        prix_sortie = stop
+                        pnl_pct = ((entree - stop) / entree) * 100
+                    elif tp2 > 0 and low_jour <= tp2:
+                        resultat = 'TP2'
+                        prix_sortie = tp2
+                        pnl_pct = ((entree - tp2) / entree) * 100
+                    elif tp1 > 0 and low_jour <= tp1:
+                        resultat = 'TP1'
+                        prix_sortie = tp1
+                        pnl_pct = ((entree - tp1) / entree) * 100
+
+                # Mettre à jour si résultat trouvé
+                if resultat:
+                    cursor.execute('''
+                        UPDATE trades_recommandes
+                        SET resultat = ?, prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?
+                        WHERE id = ?
+                    ''', (resultat, prix_sortie, round(pnl_pct, 2), maintenant, trade['id']))
+                    nb_mis_a_jour += 1
+                    print(f"   ✅ {trade['actif']}: {resultat} ({pnl_pct:+.2f}%)")
+
+            except Exception as e:
+                print(f"   ⚠️ Erreur trade {trade.get('actif', 'inconnu')}: {e}")
+                continue
+
+        conn.commit()
+        conn.close()
+
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_mis_a_jour} trade(s) mis à jour")
+        return nb_mis_a_jour
+
+    except Exception as e:
+        print(f"❌ Erreur vérification trades: {e}")
+        return 0
+
+def cloturer_trades_jour():
+    """Clôture les trades du jour qui n'ont pas atteint leur objectif"""
+    maintenant = get_paris_time()
+    aujourdhui = maintenant.date()
+
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🌙 Clôture trades du jour...")
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer les trades du jour sans résultat
+        cursor.execute('''
+            SELECT * FROM trades_recommandes
+            WHERE date = ? AND resultat IS NULL AND symbole IS NOT NULL AND symbole != ''
+        ''', (aujourdhui,))
+        trades_ouverts = [dict(row) for row in cursor.fetchall()]
+
+        nb_clotures = 0
+
+        for trade in trades_ouverts:
+            try:
+                symbole = trade['symbole']
+                direction = trade.get('direction', 'LONG')
+                entree = float(trade['prix_entree'] or 0)
+
+                if entree == 0:
+                    continue
+
+                # Récupérer le prix de clôture
+                ticker = yf.Ticker(symbole)
+                hist = ticker.history(period="1d")
+
+                if hist.empty:
+                    continue
+
+                prix_cloture = hist['Close'].iloc[-1]
+
+                # Calculer le PnL
+                if direction == 'LONG':
+                    pnl_pct = ((prix_cloture - entree) / entree) * 100
+                else:
+                    pnl_pct = ((entree - prix_cloture) / entree) * 100
+
+                # Marquer comme NON_CONCLU
+                cursor.execute('''
+                    UPDATE trades_recommandes
+                    SET resultat = 'NON_CONCLU', prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?
+                    WHERE id = ?
+                ''', (prix_cloture, round(pnl_pct, 2), maintenant, trade['id']))
+                nb_clotures += 1
+                print(f"   📊 {trade['actif']}: NON_CONCLU ({pnl_pct:+.2f}%)")
+
+            except Exception as e:
+                print(f"   ⚠️ Erreur clôture {trade.get('actif', 'inconnu')}: {e}")
+                continue
+
+        conn.commit()
+        conn.close()
+
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_clotures} trade(s) clôturé(s)")
+        return nb_clotures
+
+    except Exception as e:
+        print(f"❌ Erreur clôture trades: {e}")
+        return 0
+
 def get_trades_du_jour():
     """Récupère les trades du jour"""
     try:
@@ -1736,6 +1909,21 @@ def api_generer_bilan():
         return jsonify({'success': True, 'bilan': bilan})
     return jsonify({'success': False, 'error': 'Erreur génération'})
 
+@app.route('/api/trades/verifier', methods=['POST'])
+def api_verifier_trades():
+    """Force la vérification des résultats des trades"""
+    nb = verifier_resultats_trades()
+    return jsonify({'success': True, 'trades_mis_a_jour': nb})
+
+@app.route('/api/trades/cloturer', methods=['POST'])
+def api_cloturer_trades():
+    """Force la clôture des trades du jour"""
+    # D'abord vérifier
+    verifier_resultats_trades()
+    # Puis clôturer
+    nb = cloturer_trades_jour()
+    return jsonify({'success': True, 'trades_clotures': nb})
+
 @app.route('/api/trades-historique')
 def api_trades_historique():
     """Récupère l'historique des trades avec filtres"""
@@ -1868,6 +2056,23 @@ def executer_journal_complet():
         return
     enregistrer_journal_complet()
 
+def executer_verification_trades():
+    """Exécute la vérification des trades"""
+    maintenant = get_paris_time()
+    if maintenant.weekday() >= 5:
+        return
+    verifier_resultats_trades()
+
+def executer_cloture_trades():
+    """Exécute la clôture des trades du jour"""
+    maintenant = get_paris_time()
+    if maintenant.weekday() >= 5:
+        return
+    # D'abord vérifier une dernière fois
+    verifier_resultats_trades()
+    # Puis clôturer les trades restants
+    cloturer_trades_jour()
+
 def configurer_schedule():
     """Configure les tâches planifiées"""
     # Analyses: 8h, 14h30, 17h
@@ -1876,10 +2081,28 @@ def configurer_schedule():
         for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
             getattr(schedule.every(), jour).at(heure_utc).do(executer_analyse_planifiee)
 
+    # Vérification trades: toutes les 30 minutes entre 9h et 22h
+    for heure in ["09:30", "10:00", "10:30", "11:00", "11:30", "12:00",
+                  "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
+                  "17:00", "17:30", "18:00", "19:00", "20:00", "21:00"]:
+        heure_utc = get_utc_time_for_paris(heure)
+        for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+            getattr(schedule.every(), jour).at(heure_utc).do(executer_verification_trades)
+
+    # Clôture trades EU: 17h45 (après clôture EU)
+    heure_cloture_eu_utc = get_utc_time_for_paris("17:45")
+    for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+        getattr(schedule.every(), jour).at(heure_cloture_eu_utc).do(executer_verification_trades)
+
     # Clôture: 22h
     heure_cloture_utc = get_utc_time_for_paris("22:00")
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_cloture_utc).do(executer_cloture_planifiee)
+
+    # Clôture trades US + finale: 22h15 (après clôture US)
+    heure_cloture_trades_utc = get_utc_time_for_paris("22:15")
+    for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+        getattr(schedule.every(), jour).at(heure_cloture_trades_utc).do(executer_cloture_trades)
 
     # Journal FR: 18h00 (après clôture marchés EU)
     heure_journal_fr_utc = get_utc_time_for_paris("18:00")
