@@ -1,33 +1,53 @@
 {% extends "base.html" %}
 
-{% block title %}Trading Desk - Agent Trading{% endblock %}
+{% block title %}Dashboard - Plateforme Trading{% endblock %}
 
 {% block content %}
 <div class="trading-desk">
 
-    <!-- HERO: Opportunités Actives -->
-    <section class="hero-opportunities">
-        <div class="hero-title">
-            <h1>&#127919; <span>Opportunites Actives</span></h1>
-            <div class="hero-actions">
-                <button class="btn btn-primary" onclick="lancerAnalyse()">
-                    &#128640; Nouvelle Analyse
-                </button>
+    <!-- 1. CONTEXTE DU JOUR (Hero) -->
+    <section class="context-hero">
+        <div class="context-hero-header">
+            <div class="context-hero-icon">📊</div>
+            <div>
+                <h1 class="context-hero-title">Contexte du Jour</h1>
+                <p class="context-hero-subtitle">Dernière mise à jour : <span id="context-time">--:--</span></p>
             </div>
+            <button class="btn btn-primary" onclick="lancerAnalyse()" style="margin-left: auto;">
+                Nouvelle Analyse
+            </button>
         </div>
-
-        <div class="opportunities-scroll" id="opportunities-container">
-            <div class="loading">Chargement des opportunites...</div>
+        <div class="context-content" id="context-text">
+            Lancez une analyse pour obtenir le contexte de marché du jour...
+        </div>
+        <div class="context-tags" id="context-tags">
+            <!-- Tags dynamiques -->
         </div>
     </section>
 
-    <!-- GRID: Pulse + Events -->
-    <section class="grid-main">
+    <!-- 2. NEWS FLASH -->
+    <section class="news-flash" id="news-flash-section">
+        <div class="news-flash-header">
+            <span class="news-flash-icon">⚡</span>
+            <span class="news-flash-title">News Flash</span>
+        </div>
+        <div class="news-flash-list" id="news-flash-list">
+            <div class="news-flash-item">
+                <span class="news-time">--:--</span>
+                <div class="news-content">
+                    <span class="news-text">Lancez une analyse pour voir les news à fort impact...</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. PULSE MARCHÉ + ÉVÉNEMENTS CRITIQUES -->
+    <section class="grid-pulse-events">
         <!-- Pulse Marché -->
-        <div class="card card-highlight">
+        <div class="card">
             <div class="card-header">
-                <h2>&#128200; Pulse Marche</h2>
-                <button class="btn-icon" onclick="refreshMarkets()">&#8635;</button>
+                <h2>📈 Pulse Marché</h2>
+                <button class="btn btn-secondary" onclick="refreshMarkets()">⟳ Actualiser</button>
             </div>
             <div class="card-body">
                 <div class="pulse-widget" id="pulse-widget">
@@ -37,10 +57,10 @@
             </div>
         </div>
 
-        <!-- Événements -->
+        <!-- Événements Critiques -->
         <div class="card">
             <div class="card-header">
-                <h2>&#128197; Evenements Critiques</h2>
+                <h2>📅 Événements Critiques</h2>
             </div>
             <div class="card-body">
                 <div class="events-timeline" id="events-timeline">
@@ -50,30 +70,28 @@
         </div>
     </section>
 
-    <!-- GRID: Contexte + Performance + Danger -->
-    <section class="grid-3 mb-3">
-        <!-- Contexte du jour -->
+    <!-- 4. OPPORTUNITÉS ACTIVES -->
+    <section class="opportunities-section">
+        <div class="section-header">
+            <h2 class="section-title">
+                <span class="section-title-icon">🎯</span>
+                Opportunités Actives
+            </h2>
+        </div>
+        <div class="opportunities-scroll" id="opportunities-container">
+            <div class="loading">Chargement des opportunités...</div>
+        </div>
+    </section>
+
+    <!-- 5. PERFORMANCE + ZONES DANGER -->
+    <section class="grid-2">
+        <!-- Performance -->
         <div class="card">
             <div class="card-header">
-                <h2>&#128172; Contexte du Jour</h2>
-                <span class="text-muted" id="context-time">--:--</span>
+                <h2>📊 Performance</h2>
             </div>
             <div class="card-body">
-                <div class="context-box">
-                    <p class="context-text" id="context-text">
-                        Lancez une analyse pour obtenir le contexte de marche...
-                    </p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Performance -->
-        <div class="card card-highlight">
-            <div class="card-header">
-                <h2>&#128202; Performance</h2>
-            </div>
-            <div class="card-body">
-                <div class="perf-mini">
+                <div class="perf-widget">
                     <div class="perf-main-stat">
                         <div class="perf-main-value positive" id="perf-pnl">+0.0%</div>
                         <div class="perf-main-label">PnL Aujourd'hui</div>
@@ -81,7 +99,7 @@
                     <div class="perf-stats-row">
                         <div class="perf-stat success">
                             <div class="perf-stat-value" id="perf-wins">0</div>
-                            <div class="perf-stat-label">Reussis</div>
+                            <div class="perf-stat-label">Réussis</div>
                         </div>
                         <div class="perf-stat danger">
                             <div class="perf-stat-value" id="perf-losses">0</div>
@@ -99,26 +117,24 @@
         <!-- Zones Danger -->
         <div class="card card-danger">
             <div class="card-header">
-                <h2>&#9888;&#65039; Zones Danger</h2>
+                <h2>⚠️ Zones Danger</h2>
             </div>
             <div class="card-body">
                 <div class="danger-list" id="danger-zones">
                     <div class="danger-item">
-                        <span class="danger-icon">&#9888;&#65039;</span>
-                        <span>Aucune zone critique identifiee</span>
+                        <span class="danger-icon">✅</span>
+                        <span>Aucune zone critique identifiée</span>
                     </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- Tactical Tip -->
-    <section class="card mb-3" id="tactical-section" style="display: none;">
-        <div class="card-body" style="padding: 1.25rem 1.5rem;">
-            <div style="display: flex; align-items: center; gap: 1rem;">
-                <span style="font-size: 1.5rem;">&#128161;</span>
-                <p id="tactical-tip" style="margin: 0; font-size: 1.05rem; color: var(--text-secondary);"></p>
-            </div>
+    <!-- Conseil Tactique (optionnel) -->
+    <section class="card" id="tactical-section" style="display: none; margin-top: 24px;">
+        <div class="card-body" style="display: flex; align-items: center; gap: 16px;">
+            <span style="font-size: 1.5rem;">💡</span>
+            <p id="tactical-tip" style="margin: 0; color: var(--text-secondary);"></p>
         </div>
     </section>
 
@@ -128,17 +144,23 @@
 <div id="modal-analyse" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2>&#128640; Analyse en cours</h2>
+            <h2>Analyse en cours</h2>
             <button class="modal-close" onclick="closeModal()">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="loading-spinner"></div>
-            <p id="modal-status" style="text-align: center; color: var(--text-secondary);">
-                Recuperation des donnees de marche...
+        <div class="modal-body" style="text-align: center;">
+            <div style="width: 48px; height: 48px; border: 3px solid var(--border-color); border-top-color: var(--accent-blue); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 24px;"></div>
+            <p id="modal-status" style="color: var(--text-secondary);">
+                Récupération des données de marché...
             </p>
         </div>
     </div>
 </div>
+
+<style>
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+</style>
 {% endblock %}
 
 {% block extra_js %}
@@ -202,7 +224,7 @@ function renderPulseWidget() {
         }
     }
 
-    container.innerHTML = html || '<div class="no-data">Donnees non disponibles</div>';
+    container.innerHTML = html || '<div class="no-data">Données non disponibles</div>';
 }
 
 function renderTopMovers() {
@@ -215,7 +237,7 @@ function renderTopMovers() {
         .sort((a, b) => Math.abs(b.variation) - Math.abs(a.variation))
         .slice(0, 6);
 
-    let html = '<span style="font-size: 0.85rem; color: var(--text-muted);">&#128293; Top movers:</span>';
+    let html = '<span style="font-size: 0.8125rem; color: var(--text-muted);">🔥 Top movers:</span>';
     for (const item of sorted) {
         const isPositive = item.variation >= 0;
         html += `
@@ -239,7 +261,7 @@ async function loadLastAnalysis() {
             renderAnalysis();
         } else {
             document.getElementById('opportunities-container').innerHTML =
-                '<div class="no-data" style="width: 100%;">Lancez une analyse pour voir les opportunites</div>';
+                '<div class="no-data" style="width: 100%;">Lancez une analyse pour voir les opportunités</div>';
         }
     } catch (error) {
         console.error('Erreur analyse:', error);
@@ -257,6 +279,12 @@ function renderAnalysis() {
         document.getElementById('context-text').textContent = contenu.contexte_marche;
     }
 
+    // Tags contexte (sentiment)
+    renderContextTags(contenu);
+
+    // News Flash
+    renderNewsFlash(contenu.news_flash || contenu.actualites || []);
+
     // Opportunités
     renderOpportunities(contenu.opportunites || []);
 
@@ -273,11 +301,64 @@ function renderAnalysis() {
     }
 }
 
+function renderContextTags(contenu) {
+    const container = document.getElementById('context-tags');
+    let html = '';
+
+    if (contenu.sentiment) {
+        const sentimentClass = contenu.sentiment.toLowerCase().includes('bull') ? 'bullish' :
+                               contenu.sentiment.toLowerCase().includes('bear') ? 'bearish' : 'neutral';
+        html += `<span class="context-tag ${sentimentClass}">${contenu.sentiment}</span>`;
+    }
+
+    if (contenu.volatilite) {
+        html += `<span class="context-tag">Volatilité: ${contenu.volatilite}</span>`;
+    }
+
+    if (contenu.tendance) {
+        html += `<span class="context-tag">${contenu.tendance}</span>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderNewsFlash(news) {
+    const container = document.getElementById('news-flash-list');
+
+    if (!news || news.length === 0) {
+        container.innerHTML = `
+            <div class="news-flash-item">
+                <span class="news-time">--:--</span>
+                <div class="news-content">
+                    <span class="news-text">Pas de news à fort impact pour le moment</span>
+                </div>
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    for (const item of news.slice(0, 5)) {
+        const impact = item.impact || 'medium';
+        const impactLabel = impact === 'high' ? '🔴 Fort' : impact === 'medium' ? '🟠 Moyen' : '⚪ Faible';
+
+        html += `
+            <div class="news-flash-item">
+                <span class="news-time">${item.heure || '--:--'}</span>
+                <div class="news-content">
+                    <span class="news-text">${item.titre || item.texte || '-'}</span>
+                    <span class="news-impact ${impact}">${impactLabel}</span>
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
 function renderOpportunities(opportunities) {
     const container = document.getElementById('opportunities-container');
 
     if (!opportunities || opportunities.length === 0) {
-        container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunite en cours</div>';
+        container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunité en cours</div>';
         return;
     }
 
@@ -288,7 +369,7 @@ function renderOpportunities(opportunities) {
         const tagText = isNews ? 'NEWS' : 'TECH';
         const cardClass = isNews ? 'news-trading' : '';
 
-        // Calcul position gauge (simplifié)
+        // Calcul position gauge
         const gaugePosition = calculateGaugePosition(opp);
 
         html += `
@@ -300,7 +381,7 @@ function renderOpportunities(opportunities) {
 
                 <div class="opp-price">${opp.prix_actuel || '-'}</div>
 
-                <div class="opp-catalyst">${opp.catalyseur || 'Catalyseur non specifie'}</div>
+                <div class="opp-catalyst">${opp.catalyseur || 'Catalyseur non spécifié'}</div>
 
                 <div class="price-gauge">
                     <div class="gauge-track">
@@ -318,7 +399,7 @@ function renderOpportunities(opportunities) {
                             <span>${opp.stop || '-'}</span>
                         </div>
                         <div class="gauge-label entry">
-                            <span>Entree</span>
+                            <span>Entrée</span>
                             <span>${opp.entree || '-'}</span>
                         </div>
                         <div class="gauge-label tp">
@@ -337,7 +418,7 @@ function renderOpportunities(opportunities) {
                         R/R: <strong>${opp.ratio_rr || '1:2'}</strong>
                     </div>
                     <div class="opp-timer">
-                        &#9203; ${opp.duree || '1-2h'}
+                        ⏱ ${opp.duree || '1-2h'}
                     </div>
                 </div>
             </div>`;
@@ -347,7 +428,6 @@ function renderOpportunities(opportunities) {
 }
 
 function calculateGaugePosition(opp) {
-    // Calcul simplifié de la position sur la jauge
     const prix = parseFloat(opp.prix_actuel) || 0;
     const stop = parseFloat(opp.stop) || 0;
     const tp2 = parseFloat(opp.tp2) || 0;
@@ -364,13 +444,13 @@ function renderEvents(events) {
     const container = document.getElementById('events-timeline');
 
     if (!events || events.length === 0) {
-        container.innerHTML = '<div class="no-data">Aucun evenement prevu</div>';
+        container.innerHTML = '<div class="no-data">Aucun événement prévu</div>';
         return;
     }
 
     let html = '';
     for (const evt of events.slice(0, 6)) {
-        const stars = '&#11088;'.repeat(evt.importance || 1);
+        const stars = '⭐'.repeat(evt.importance || 1);
         const isActive = evt.importance >= 3;
 
         html += `
@@ -392,8 +472,8 @@ function renderDangerZones(zones) {
     if (!zones || zones.length === 0) {
         container.innerHTML = `
             <div class="danger-item">
-                <span class="danger-icon">&#9989;</span>
-                <span>Aucune zone critique identifiee</span>
+                <span class="danger-icon">✅</span>
+                <span>Aucune zone critique identifiée</span>
             </div>`;
         return;
     }
@@ -402,7 +482,7 @@ function renderDangerZones(zones) {
     for (const zone of zones) {
         html += `
             <div class="danger-item">
-                <span class="danger-icon">&#9888;&#65039;</span>
+                <span class="danger-icon">⚠️</span>
                 <span>${zone}</span>
             </div>`;
     }
@@ -433,13 +513,13 @@ async function loadPerformance() {
     }
 }
 
-// ===== ANALYSE =====
+// ===== LANCER ANALYSE =====
 async function lancerAnalyse() {
     const modal = document.getElementById('modal-analyse');
     const status = document.getElementById('modal-status');
 
     modal.classList.add('active');
-    status.textContent = 'Recuperation des donnees de marche...';
+    status.textContent = 'Récupération des données de marché...';
 
     try {
         status.textContent = 'Analyse en cours avec Claude...';
@@ -448,7 +528,7 @@ async function lancerAnalyse() {
         const data = await response.json();
 
         if (data.success) {
-            status.textContent = 'Analyse terminee !';
+            status.textContent = 'Analyse terminée !';
             setTimeout(() => {
                 closeModal();
                 loadAllData();

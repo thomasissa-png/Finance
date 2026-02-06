@@ -1,170 +1,127 @@
 {% extends "base.html" %}
 
-{% block title %}Memoire - Agent Trading{% endblock %}
+{% block title %}Mémoire - Plateforme Trading{% endblock %}
 
 {% block content %}
 <div class="memoire-page">
 
     <!-- Header -->
     <div class="page-header">
-        <h1>&#128218; <span style="background: var(--gradient-green); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Memoire & Performances</span></h1>
+        <h1 class="page-title">Mémoire & Performances</h1>
+        <p class="page-subtitle">Suivi de vos trades et journal des actifs</p>
     </div>
 
-    <!-- Tabs -->
-    <div class="tabs">
-        <button class="tab active" data-tab="performances" onclick="switchTab('performances')">
-            &#128202; Performances
-        </button>
-        <button class="tab" data-tab="journal" onclick="switchTab('journal')">
-            &#128221; Journal Actifs
-        </button>
-        <button class="tab" data-tab="historique" onclick="switchTab('historique')">
-            &#128197; Historique
-        </button>
+    <!-- Period Selector -->
+    <div class="period-selector">
+        <button class="period-btn active" onclick="changePeriode('jour', this)">Aujourd'hui</button>
+        <button class="period-btn" onclick="changePeriode('semaine', this)">7 jours</button>
+        <button class="period-btn" onclick="changePeriode('mois', this)">30 jours</button>
+        <button class="period-btn" onclick="changePeriode('all', this)">Tout</button>
     </div>
 
-    <!-- Tab Contents -->
-    <div class="tab-contents">
-
-        <!-- ===== PERFORMANCES ===== -->
-        <div id="tab-performances" class="tab-content active">
-
-            <!-- Période selector -->
-            <div class="periode-selector">
-                <button class="periode-btn active" onclick="changePeriode('jour', this)">Aujourd'hui</button>
-                <button class="periode-btn" onclick="changePeriode('semaine', this)">7 jours</button>
-                <button class="periode-btn" onclick="changePeriode('mois', this)">30 jours</button>
-                <button class="periode-btn" onclick="changePeriode('all', this)">Tout</button>
-            </div>
-
-            <!-- Stats Cards -->
-            <div class="perf-cards">
-                <div class="perf-card info">
-                    <div class="perf-card-icon">&#128202;</div>
-                    <div class="perf-card-value" id="perf-total">0</div>
-                    <div class="perf-card-label">Total Trades</div>
-                </div>
-                <div class="perf-card success">
-                    <div class="perf-card-icon">&#9989;</div>
-                    <div class="perf-card-value" id="perf-reussis">0</div>
-                    <div class="perf-card-label">Reussis (TP)</div>
-                </div>
-                <div class="perf-card danger">
-                    <div class="perf-card-icon">&#10060;</div>
-                    <div class="perf-card-value" id="perf-stops">0</div>
-                    <div class="perf-card-label">Stops</div>
-                </div>
-                <div class="perf-card warning">
-                    <div class="perf-card-icon">&#9203;</div>
-                    <div class="perf-card-value" id="perf-non-conclus">0</div>
-                    <div class="perf-card-label">Non Conclus</div>
-                </div>
-            </div>
-
-            <!-- Main Stats -->
-            <div class="grid-3 mb-3">
-                <div class="card card-highlight">
-                    <div class="card-body" style="text-align: center; padding: 2rem;">
-                        <div class="perf-main-value positive" id="perf-taux" style="font-size: 3.5rem;">0%</div>
-                        <div class="perf-main-label">Taux de Reussite</div>
-                    </div>
-                </div>
-                <div class="card card-highlight">
-                    <div class="card-body" style="text-align: center; padding: 2rem;">
-                        <div class="perf-main-value" id="perf-pnl-total" style="font-size: 3.5rem;">0%</div>
-                        <div class="perf-main-label">PnL Cumule</div>
-                    </div>
-                </div>
-                <div class="card card-highlight">
-                    <div class="card-body" style="text-align: center; padding: 2rem;">
-                        <div class="perf-main-value" id="perf-pnl-moyen" style="font-size: 3.5rem;">0%</div>
-                        <div class="perf-main-label">PnL Moyen / Trade</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Trades History -->
-            <div class="card">
-                <div class="card-header">
-                    <h2>&#128176; Historique des Trades</h2>
-                </div>
-                <div class="card-body">
-                    <div id="trades-history">
-                        <div class="loading">Chargement...</div>
-                    </div>
-                </div>
-            </div>
+    <!-- Stats Cards -->
+    <div class="stats-cards">
+        <div class="stat-card info">
+            <div class="stat-card-icon">📊</div>
+            <div class="stat-card-value" id="perf-total">0</div>
+            <div class="stat-card-label">Total Trades</div>
         </div>
-
-        <!-- ===== JOURNAL ACTIFS ===== -->
-        <div id="tab-journal" class="tab-content">
-            <div class="journal-layout">
-
-                <!-- Sidebar: Liste actifs -->
-                <div class="card">
-                    <div class="card-header">
-                        <h2>&#128221; Actifs Suivis</h2>
-                        <button class="btn btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="showAddEntryModal()">+ Ajouter</button>
-                    </div>
-                    <div class="card-body" style="padding: 1rem;">
-                        <div class="journal-sidebar" id="actifs-journal-list">
-                            <div class="loading">Chargement...</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Main: Journal entries -->
-                <div class="card">
-                    <div class="card-header">
-                        <h2 id="journal-actif-title">Selectionnez un actif</h2>
-                        <button class="btn btn-secondary" id="btn-add-entry" style="display:none; padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="showAddEntryModal()">+ Nouvelle entree</button>
-                    </div>
-                    <div class="card-body">
-                        <div class="journal-entries" id="journal-entries">
-                            <div class="no-data">Selectionnez un actif pour voir son journal</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="stat-card success">
+            <div class="stat-card-icon">✅</div>
+            <div class="stat-card-value" id="perf-reussis">0</div>
+            <div class="stat-card-label">Réussis (TP)</div>
         </div>
-
-        <!-- ===== HISTORIQUE ANALYSES ===== -->
-        <div id="tab-historique" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h2>&#128197; Analyses du Jour</h2>
-                </div>
-                <div class="card-body">
-                    <div id="analyses-history">
-                        <div class="loading">Chargement...</div>
-                    </div>
-                </div>
-            </div>
+        <div class="stat-card danger">
+            <div class="stat-card-icon">❌</div>
+            <div class="stat-card-value" id="perf-stops">0</div>
+            <div class="stat-card-label">Stops</div>
         </div>
-
+        <div class="stat-card warning">
+            <div class="stat-card-icon">⏳</div>
+            <div class="stat-card-value" id="perf-non-conclus">0</div>
+            <div class="stat-card-label">En cours</div>
+        </div>
     </div>
+
+    <!-- Main Stats -->
+    <div class="grid-3 mb-3">
+        <div class="card">
+            <div class="card-body" style="text-align: center; padding: 32px;">
+                <div class="perf-main-value positive" id="perf-taux" style="font-size: 2.5rem;">0%</div>
+                <div class="perf-main-label">Taux de Réussite</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body" style="text-align: center; padding: 32px;">
+                <div class="perf-main-value" id="perf-pnl-total" style="font-size: 2.5rem;">0%</div>
+                <div class="perf-main-label">PnL Cumulé</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-body" style="text-align: center; padding: 32px;">
+                <div class="perf-main-value" id="perf-pnl-moyen" style="font-size: 2.5rem;">0%</div>
+                <div class="perf-main-label">PnL Moyen / Trade</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Journal Section -->
+    <div class="section-header" style="margin-top: 32px;">
+        <h2 class="section-title">
+            <span class="section-title-icon">📝</span>
+            Journal des Actifs
+        </h2>
+        <button class="btn btn-primary" onclick="showAddEntryModal()">+ Nouvelle entrée</button>
+    </div>
+
+    <div class="journal-layout">
+        <!-- Sidebar: Liste actifs -->
+        <div class="journal-sidebar" id="actifs-journal-list">
+            <div class="loading">Chargement...</div>
+        </div>
+
+        <!-- Main: Journal entries -->
+        <div class="journal-content">
+            <div class="journal-entries" id="journal-entries">
+                <div class="no-data">Sélectionnez un actif pour voir son journal</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Historique Trades -->
+    <div class="card" style="margin-top: 32px;">
+        <div class="card-header">
+            <h2>📜 Historique des Trades</h2>
+        </div>
+        <div class="card-body">
+            <div id="trades-history">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+    </div>
+
 </div>
 
 <!-- Modal Add Journal Entry -->
 <div id="modal-add-entry" class="modal">
-    <div class="modal-content" style="max-width: 600px;">
+    <div class="modal-content">
         <div class="modal-header">
-            <h2>&#128221; Nouvelle Entree Journal</h2>
+            <h2>Nouvelle Entrée Journal</h2>
             <button class="modal-close" onclick="closeAddEntryModal()">&times;</button>
         </div>
-        <div class="modal-body" style="text-align: left;">
+        <div class="modal-body">
             <form id="form-add-entry" onsubmit="submitJournalEntry(event)">
                 <div class="form-group">
                     <label>Actif</label>
                     <select id="entry-actif" required>
-                        <option value="">Selectionnez...</option>
+                        <option value="">Sélectionnez...</option>
                     </select>
                 </div>
                 <div class="form-group">
                     <label>Type d'information</label>
                     <select id="entry-type" required>
-                        <option value="news">News / Actualite</option>
-                        <option value="resultats">Resultats Financiers</option>
+                        <option value="news">News / Actualité</option>
+                        <option value="resultats">Résultats Financiers</option>
                         <option value="analyse">Analyse Technique</option>
                         <option value="macro">Macro / Secteur</option>
                         <option value="autre">Autre</option>
@@ -172,30 +129,30 @@
                 </div>
                 <div class="form-group">
                     <label>Titre</label>
-                    <input type="text" id="entry-titre" required placeholder="Ex: Resultats Q4 2024">
+                    <input type="text" id="entry-titre" required placeholder="Ex: Résultats Q4 2024">
                 </div>
                 <div class="form-group">
                     <label>Contenu</label>
-                    <textarea id="entry-contenu" required rows="4" placeholder="Details de l'information..."></textarea>
+                    <textarea id="entry-contenu" required rows="4" placeholder="Détails de l'information..."></textarea>
                 </div>
                 <div class="grid-2">
                     <div class="form-group">
                         <label>Impact sur le cours</label>
                         <select id="entry-impact">
-                            <option value="">Non defini</option>
-                            <option value="hausse_forte">&#128200; Hausse Forte (+3%+)</option>
-                            <option value="hausse">&#128314; Hausse (+1-3%)</option>
-                            <option value="neutre">&#11036; Neutre</option>
-                            <option value="baisse">&#128315; Baisse (-1-3%)</option>
-                            <option value="baisse_forte">&#128201; Baisse Forte (-3%+)</option>
+                            <option value="">Non défini</option>
+                            <option value="hausse_forte">📈 Hausse Forte (+3%+)</option>
+                            <option value="hausse">🔼 Hausse (+1-3%)</option>
+                            <option value="neutre">◻️ Neutre</option>
+                            <option value="baisse">🔽 Baisse (-1-3%)</option>
+                            <option value="baisse_forte">📉 Baisse Forte (-3%+)</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>Importance</label>
                         <select id="entry-importance">
-                            <option value="1">&#11088; Faible</option>
-                            <option value="2" selected>&#11088;&#11088; Moyenne</option>
-                            <option value="3">&#11088;&#11088;&#11088; Haute</option>
+                            <option value="1">⭐ Faible</option>
+                            <option value="2" selected>⭐⭐ Moyenne</option>
+                            <option value="3">⭐⭐⭐ Haute</option>
                         </select>
                     </div>
                 </div>
@@ -220,22 +177,13 @@ let actifsData = {};
 document.addEventListener('DOMContentLoaded', function() {
     loadPerformances();
     loadJournauxList();
-    loadAnalysesHistory();
     loadActifsList();
 });
-
-function switchTab(tab) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
-
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    document.getElementById(`tab-${tab}`).classList.add('active');
-}
 
 // ===== PERFORMANCES =====
 function changePeriode(periode, btn) {
     currentPeriode = periode;
-    document.querySelectorAll('.periode-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     loadPerformances();
 }
@@ -288,10 +236,10 @@ async function loadTradesHistory() {
                             <th>Heure</th>
                             <th>Actif</th>
                             <th>Type</th>
-                            <th>Entree</th>
+                            <th>Entrée</th>
                             <th>Stop</th>
                             <th>TP1</th>
-                            <th>Resultat</th>
+                            <th>Résultat</th>
                             <th>PnL</th>
                         </tr>
                     </thead>
@@ -310,11 +258,11 @@ async function loadTradesHistory() {
                         <td>${trade.heure_message || '-'}</td>
                         <td><strong>${trade.actif || '-'}</strong></td>
                         <td>${typeTag}</td>
-                        <td style="font-family: 'JetBrains Mono', monospace;">${trade.prix_entree || '-'}</td>
-                        <td style="font-family: 'JetBrains Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
-                        <td style="font-family: 'JetBrains Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
+                        <td style="font-family: 'SF Mono', monospace;">${trade.prix_entree || '-'}</td>
+                        <td style="font-family: 'SF Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
+                        <td style="font-family: 'SF Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
                         <td class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
-                        <td class="${resultClass}" style="font-family: 'JetBrains Mono', monospace;">
+                        <td class="${resultClass}" style="font-family: 'SF Mono', monospace;">
                             ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
                         </td>
                     </tr>`;
@@ -323,7 +271,7 @@ async function loadTradesHistory() {
             html += '</tbody></table>';
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<div class="no-data">Aucun trade sur cette periode</div>';
+            container.innerHTML = '<div class="no-data">Aucun trade sur cette période</div>';
         }
     } catch (error) {
         console.error('Erreur trades:', error);
@@ -352,7 +300,7 @@ async function loadJournauxList() {
             }
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<div class="no-data">Aucun journal. Ajoutez une premiere entree!</div>';
+            container.innerHTML = '<div class="no-data">Aucun journal. Ajoutez une première entrée!</div>';
         }
     } catch (error) {
         console.error('Erreur journaux:', error);
@@ -361,8 +309,6 @@ async function loadJournauxList() {
 
 async function selectActifJournal(symbole, nom, element) {
     selectedActif = {symbole, nom};
-    document.getElementById('journal-actif-title').textContent = `Journal: ${nom}`;
-    document.getElementById('btn-add-entry').style.display = 'inline-flex';
 
     // Marquer comme sélectionné
     document.querySelectorAll('.journal-asset-item').forEach(i => i.classList.remove('active'));
@@ -380,21 +326,21 @@ async function selectActifJournal(symbole, nom, element) {
                 const impactClass = entry.impact_cours?.includes('hausse') ? 'impact-positive' :
                                    entry.impact_cours?.includes('baisse') ? 'impact-negative' : '';
                 const typeIcons = {
-                    'news': '&#128240;',
-                    'resultats': '&#128200;',
-                    'analyse': '&#128202;',
-                    'macro': '&#127758;',
-                    'autre': '&#128221;'
+                    'news': '📰',
+                    'resultats': '📈',
+                    'analyse': '📊',
+                    'macro': '🌍',
+                    'autre': '📝'
                 };
-                const typeIcon = typeIcons[entry.type_info] || '&#128221;';
+                const typeIcon = typeIcons[entry.type_info] || '📝';
 
                 html += `
                     <div class="journal-entry ${impactClass}">
                         <div class="entry-header">
-                            <span style="font-size: 1.25rem;">${typeIcon}</span>
+                            <span style="font-size: 1.125rem;">${typeIcon}</span>
                             <span class="entry-type">${entry.type_info}</span>
                             <span class="entry-date">${entry.date}</span>
-                            <span style="margin-left: auto;">${'&#11088;'.repeat(entry.importance || 1)}</span>
+                            <span style="margin-left: auto;">${'⭐'.repeat(entry.importance || 1)}</span>
                         </div>
                         <h4 class="entry-title">${entry.titre}</h4>
                         <p class="entry-content">${entry.contenu}</p>
@@ -403,7 +349,7 @@ async function selectActifJournal(symbole, nom, element) {
             }
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<div class="no-data">Aucune entree pour cet actif</div>';
+            container.innerHTML = '<div class="no-data">Aucune entrée pour cet actif</div>';
         }
     } catch (error) {
         console.error('Erreur journal:', error);
@@ -412,11 +358,11 @@ async function selectActifJournal(symbole, nom, element) {
 
 function formatImpact(impact) {
     const mapping = {
-        'hausse_forte': '&#128200; Hausse Forte (+3%+)',
-        'hausse': '&#128314; Hausse (+1-3%)',
-        'neutre': '&#11036; Neutre',
-        'baisse': '&#128315; Baisse (-1-3%)',
-        'baisse_forte': '&#128201; Baisse Forte (-3%+)'
+        'hausse_forte': '📈 Hausse Forte (+3%+)',
+        'hausse': '🔼 Hausse (+1-3%)',
+        'neutre': '◻️ Neutre',
+        'baisse': '🔽 Baisse (-1-3%)',
+        'baisse_forte': '📉 Baisse Forte (-3%+)'
     };
     return mapping[impact] || impact;
 }
@@ -433,14 +379,14 @@ async function loadActifsList() {
             }
 
             const select = document.getElementById('entry-actif');
-            select.innerHTML = '<option value="">Selectionnez...</option>';
+            select.innerHTML = '<option value="">Sélectionnez...</option>';
 
             // Grouper par catégorie
             const categories = {
                 'Indices': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^GDAXI', '^VIX'],
                 'Actions FR': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA', 'SAN.PA', 'BNP.PA'],
                 'Actions US': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL'],
-                'Commodites': ['GC=F', 'SI=F', 'BZ=F', 'NG=F'],
+                'Commodités': ['GC=F', 'SI=F', 'BZ=F', 'NG=F'],
                 'Forex': ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X']
             };
 
@@ -514,47 +460,6 @@ async function submitJournalEntry(event) {
     } catch (error) {
         console.error('Erreur:', error);
         alert('Erreur de connexion');
-    }
-}
-
-// ===== HISTORIQUE ANALYSES =====
-async function loadAnalysesHistory() {
-    try {
-        const response = await fetch('/api/analyses-jour');
-        const data = await response.json();
-
-        const container = document.getElementById('analyses-history');
-
-        if (data.success && data.analyses.length > 0) {
-            let html = '<div class="events-timeline">';
-            for (const analyse of data.analyses) {
-                const typeIcons = {
-                    'intraday': '&#128200;',
-                    'planifiee': '&#9203;',
-                    'cloture': '&#127769;'
-                };
-                const icon = typeIcons[analyse.type_analyse] || '&#128202;';
-                const isActive = analyse === data.analyses[0];
-
-                html += `
-                    <div class="event-item ${isActive ? 'active' : ''}">
-                        <span class="event-time">${analyse.heure}</span>
-                        <div class="event-content">
-                            <div class="event-name">
-                                <span style="margin-right: 0.5rem;">${icon}</span>
-                                Analyse ${analyse.type_analyse}
-                            </div>
-                            <div class="event-impact">${analyse.contexte_marche || '-'}</div>
-                        </div>
-                    </div>`;
-            }
-            html += '</div>';
-            container.innerHTML = html;
-        } else {
-            container.innerHTML = '<div class="no-data">Aucune analyse aujourd\'hui</div>';
-        }
-    } catch (error) {
-        console.error('Erreur historique:', error);
     }
 }
 </script>

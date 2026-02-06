@@ -3,25 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Agent Trading{% endblock %}</title>
+    <title>{% block title %}Plateforme Trading{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     {% block extra_css %}{% endblock %}
 </head>
 <body>
     <!-- Navigation -->
     <nav class="navbar">
         <div class="nav-brand">
-            <span class="nav-icon">&#9889;</span>
-            <span class="nav-title">Agent Trading</span>
+            <span class="nav-title">Plateforme<span class="nav-title-highlight">Trading</span></span>
         </div>
 
         <div class="nav-links">
             <a href="/" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
-                &#128200; Dashboard
+                Dashboard
             </a>
             <a href="/memoire" class="nav-link {% if request.endpoint == 'memoire' %}active{% endif %}">
-                &#128218; Memoire
+                Mémoire
             </a>
         </div>
 
@@ -32,7 +31,7 @@
             </div>
             <div class="status-indicator">
                 <span class="status-dot online" id="status-dot"></span>
-                <span id="status-text">Online</span>
+                <span id="status-text">En ligne</span>
             </div>
             <span id="clock" class="nav-clock">--:--:--</span>
         </div>
@@ -46,11 +45,7 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="footer-content">
-            <span>Agent Trading v2.0</span>
-            <div class="footer-links">
-                <a href="/memoire" class="footer-link">Performances</a>
-                <span id="market-status-footer">-</span>
-            </div>
+            <span>Plateforme Trading v2.0</span>
             <span id="last-update">-</span>
         </div>
     </footer>
