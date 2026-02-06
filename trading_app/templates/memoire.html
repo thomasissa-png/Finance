@@ -4,9 +4,10 @@
 
 {% block content %}
 <div class="memoire-page">
+
     <!-- Header -->
     <div class="page-header">
-        <h1>&#128218; Memoire & Performances</h1>
+        <h1>&#128218; <span style="background: var(--gradient-green); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Memoire & Performances</span></h1>
     </div>
 
     <!-- Tabs -->
@@ -15,150 +16,143 @@
             &#128202; Performances
         </button>
         <button class="tab" data-tab="journal" onclick="switchTab('journal')">
-            &#128221; Journal des Actifs
+            &#128221; Journal Actifs
         </button>
         <button class="tab" data-tab="historique" onclick="switchTab('historique')">
-            &#128197; Historique Analyses
+            &#128197; Historique
         </button>
     </div>
 
     <!-- Tab Contents -->
     <div class="tab-contents">
-        <!-- Performances -->
+
+        <!-- ===== PERFORMANCES ===== -->
         <div id="tab-performances" class="tab-content active">
-            <!-- Periode selector -->
+
+            <!-- Période selector -->
             <div class="periode-selector">
-                <button class="periode-btn active" onclick="changePeriode('jour')">Aujourd'hui</button>
-                <button class="periode-btn" onclick="changePeriode('semaine')">7 jours</button>
-                <button class="periode-btn" onclick="changePeriode('mois')">30 jours</button>
-                <button class="periode-btn" onclick="changePeriode('all')">Tout</button>
+                <button class="periode-btn active" onclick="changePeriode('jour', this)">Aujourd'hui</button>
+                <button class="periode-btn" onclick="changePeriode('semaine', this)">7 jours</button>
+                <button class="periode-btn" onclick="changePeriode('mois', this)">30 jours</button>
+                <button class="periode-btn" onclick="changePeriode('all', this)">Tout</button>
             </div>
 
             <!-- Stats Cards -->
-            <div class="perf-stats-grid">
-                <div class="perf-stat-card">
-                    <div class="perf-stat-icon">&#128202;</div>
-                    <div class="perf-stat-value" id="perf-total">0</div>
-                    <div class="perf-stat-label">Total Trades</div>
+            <div class="perf-cards">
+                <div class="perf-card info">
+                    <div class="perf-card-icon">&#128202;</div>
+                    <div class="perf-card-value" id="perf-total">0</div>
+                    <div class="perf-card-label">Total Trades</div>
                 </div>
-                <div class="perf-stat-card success">
-                    <div class="perf-stat-icon">&#9989;</div>
-                    <div class="perf-stat-value" id="perf-reussis">0</div>
-                    <div class="perf-stat-label">Reussis (TP)</div>
+                <div class="perf-card success">
+                    <div class="perf-card-icon">&#9989;</div>
+                    <div class="perf-card-value" id="perf-reussis">0</div>
+                    <div class="perf-card-label">Reussis (TP)</div>
                 </div>
-                <div class="perf-stat-card danger">
-                    <div class="perf-stat-icon">&#10060;</div>
-                    <div class="perf-stat-value" id="perf-stops">0</div>
-                    <div class="perf-stat-label">Stops</div>
+                <div class="perf-card danger">
+                    <div class="perf-card-icon">&#10060;</div>
+                    <div class="perf-card-value" id="perf-stops">0</div>
+                    <div class="perf-card-label">Stops</div>
                 </div>
-                <div class="perf-stat-card warning">
-                    <div class="perf-stat-icon">&#9203;</div>
-                    <div class="perf-stat-value" id="perf-non-conclus">0</div>
-                    <div class="perf-stat-label">Non Conclus</div>
+                <div class="perf-card warning">
+                    <div class="perf-card-icon">&#9203;</div>
+                    <div class="perf-card-value" id="perf-non-conclus">0</div>
+                    <div class="perf-card-label">Non Conclus</div>
                 </div>
             </div>
 
-            <!-- Main stats -->
-            <div class="perf-main-grid">
-                <div class="card">
-                    <div class="card-header">
-                        <h2>&#127919; Taux de Reussite</h2>
-                    </div>
-                    <div class="card-body center">
-                        <div class="big-stat" id="perf-taux">0%</div>
-                        <p class="stat-desc">Sur les trades conclus</p>
+            <!-- Main Stats -->
+            <div class="grid-3 mb-3">
+                <div class="card card-highlight">
+                    <div class="card-body" style="text-align: center; padding: 2rem;">
+                        <div class="perf-main-value positive" id="perf-taux" style="font-size: 3.5rem;">0%</div>
+                        <div class="perf-main-label">Taux de Reussite</div>
                     </div>
                 </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <h2>&#128176; PnL Cumule</h2>
-                    </div>
-                    <div class="card-body center">
-                        <div class="big-stat" id="perf-pnl-total">0%</div>
-                        <p class="stat-desc">Performance totale</p>
+                <div class="card card-highlight">
+                    <div class="card-body" style="text-align: center; padding: 2rem;">
+                        <div class="perf-main-value" id="perf-pnl-total" style="font-size: 3.5rem;">0%</div>
+                        <div class="perf-main-label">PnL Cumule</div>
                     </div>
                 </div>
-
-                <div class="card">
-                    <div class="card-header">
-                        <h2>&#128200; PnL Moyen</h2>
-                    </div>
-                    <div class="card-body center">
-                        <div class="big-stat" id="perf-pnl-moyen">0%</div>
-                        <p class="stat-desc">Par trade conclu</p>
+                <div class="card card-highlight">
+                    <div class="card-body" style="text-align: center; padding: 2rem;">
+                        <div class="perf-main-value" id="perf-pnl-moyen" style="font-size: 3.5rem;">0%</div>
+                        <div class="perf-main-label">PnL Moyen / Trade</div>
                     </div>
                 </div>
             </div>
 
             <!-- Trades History -->
-            <div class="card full-width">
+            <div class="card">
                 <div class="card-header">
                     <h2>&#128176; Historique des Trades</h2>
                 </div>
                 <div class="card-body">
-                    <div id="perf-trades-list" class="trades-table">
-                        <p class="no-data">Chargement...</p>
+                    <div id="trades-history">
+                        <div class="loading">Chargement...</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Journal des actifs -->
+        <!-- ===== JOURNAL ACTIFS ===== -->
         <div id="tab-journal" class="tab-content">
             <div class="journal-layout">
-                <!-- Liste des actifs -->
-                <div class="card actifs-list-card">
+
+                <!-- Sidebar: Liste actifs -->
+                <div class="card">
                     <div class="card-header">
                         <h2>&#128221; Actifs Suivis</h2>
-                        <button class="btn btn-small" onclick="showAddJournalModal()">+ Ajouter</button>
+                        <button class="btn btn-primary" style="padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="showAddEntryModal()">+ Ajouter</button>
                     </div>
-                    <div class="card-body">
-                        <div id="actifs-journal-list" class="actifs-list">
-                            <p class="no-data">Chargement...</p>
+                    <div class="card-body" style="padding: 1rem;">
+                        <div class="journal-sidebar" id="actifs-journal-list">
+                            <div class="loading">Chargement...</div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Detail journal -->
-                <div class="card journal-detail-card">
+                <!-- Main: Journal entries -->
+                <div class="card">
                     <div class="card-header">
                         <h2 id="journal-actif-title">Selectionnez un actif</h2>
-                        <button class="btn btn-small btn-primary" id="btn-add-entry" style="display:none" onclick="showAddEntryModal()">+ Nouvelle entree</button>
+                        <button class="btn btn-secondary" id="btn-add-entry" style="display:none; padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="showAddEntryModal()">+ Nouvelle entree</button>
                     </div>
                     <div class="card-body">
-                        <div id="journal-entries">
-                            <p class="no-data">Selectionnez un actif pour voir son journal</p>
+                        <div class="journal-entries" id="journal-entries">
+                            <div class="no-data">Selectionnez un actif pour voir son journal</div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Historique analyses -->
+        <!-- ===== HISTORIQUE ANALYSES ===== -->
         <div id="tab-historique" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    <h2>&#128197; Historique des Analyses</h2>
+                    <h2>&#128197; Analyses du Jour</h2>
                 </div>
                 <div class="card-body">
                     <div id="analyses-history">
-                        <p class="no-data">Chargement...</p>
+                        <div class="loading">Chargement...</div>
                     </div>
                 </div>
             </div>
         </div>
+
     </div>
 </div>
 
 <!-- Modal Add Journal Entry -->
-<div id="modal-add-entry" class="modal" style="display: none;">
-    <div class="modal-content modal-form">
+<div id="modal-add-entry" class="modal">
+    <div class="modal-content" style="max-width: 600px;">
         <div class="modal-header">
             <h2>&#128221; Nouvelle Entree Journal</h2>
             <button class="modal-close" onclick="closeAddEntryModal()">&times;</button>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" style="text-align: left;">
             <form id="form-add-entry" onsubmit="submitJournalEntry(event)">
                 <div class="form-group">
                     <label>Actif</label>
@@ -184,24 +178,26 @@
                     <label>Contenu</label>
                     <textarea id="entry-contenu" required rows="4" placeholder="Details de l'information..."></textarea>
                 </div>
-                <div class="form-group">
-                    <label>Impact sur le cours</label>
-                    <select id="entry-impact">
-                        <option value="">Non defini</option>
-                        <option value="hausse_forte">&#128200; Hausse Forte (+3%+)</option>
-                        <option value="hausse">&#128314; Hausse (+1-3%)</option>
-                        <option value="neutre">&#11036; Neutre</option>
-                        <option value="baisse">&#128315; Baisse (-1-3%)</option>
-                        <option value="baisse_forte">&#128201; Baisse Forte (-3%+)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Importance (1-3)</label>
-                    <select id="entry-importance">
-                        <option value="1">&#11088; Faible</option>
-                        <option value="2" selected>&#11088;&#11088; Moyenne</option>
-                        <option value="3">&#11088;&#11088;&#11088; Haute</option>
-                    </select>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>Impact sur le cours</label>
+                        <select id="entry-impact">
+                            <option value="">Non defini</option>
+                            <option value="hausse_forte">&#128200; Hausse Forte (+3%+)</option>
+                            <option value="hausse">&#128314; Hausse (+1-3%)</option>
+                            <option value="neutre">&#11036; Neutre</option>
+                            <option value="baisse">&#128315; Baisse (-1-3%)</option>
+                            <option value="baisse_forte">&#128201; Baisse Forte (-3%+)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Importance</label>
+                        <select id="entry-importance">
+                            <option value="1">&#11088; Faible</option>
+                            <option value="2" selected>&#11088;&#11088; Moyenne</option>
+                            <option value="3">&#11088;&#11088;&#11088; Haute</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" onclick="closeAddEntryModal()">Annuler</button>
@@ -218,7 +214,7 @@
 // Variables
 let currentPeriode = 'jour';
 let selectedActif = null;
-let actifsData = null;
+let actifsData = {};
 
 // Init
 document.addEventListener('DOMContentLoaded', function() {
@@ -236,11 +232,11 @@ function switchTab(tab) {
     document.getElementById(`tab-${tab}`).classList.add('active');
 }
 
-// PERFORMANCES
-function changePeriode(periode) {
+// ===== PERFORMANCES =====
+function changePeriode(periode, btn) {
     currentPeriode = periode;
     document.querySelectorAll('.periode-btn').forEach(b => b.classList.remove('active'));
-    event.target.classList.add('active');
+    btn.classList.add('active');
     loadPerformances();
 }
 
@@ -251,38 +247,41 @@ async function loadPerformances() {
 
         if (data.success) {
             const p = data.performances;
+
             document.getElementById('perf-total').textContent = p.total;
             document.getElementById('perf-reussis').textContent = p.reussis;
             document.getElementById('perf-stops').textContent = p.stops;
             document.getElementById('perf-non-conclus').textContent = p.non_conclus;
-            document.getElementById('perf-taux').textContent = p.taux_reussite + '%';
 
-            const pnlTotal = document.getElementById('perf-pnl-total');
-            pnlTotal.textContent = (p.pnl_total >= 0 ? '+' : '') + p.pnl_total + '%';
-            pnlTotal.className = 'big-stat ' + (p.pnl_total >= 0 ? 'positive' : 'negative');
+            const tauxEl = document.getElementById('perf-taux');
+            tauxEl.textContent = p.taux_reussite + '%';
+            tauxEl.className = 'perf-main-value ' + (p.taux_reussite >= 50 ? 'positive' : 'negative');
 
-            const pnlMoyen = document.getElementById('perf-pnl-moyen');
-            pnlMoyen.textContent = (p.pnl_moyen >= 0 ? '+' : '') + p.pnl_moyen + '%';
-            pnlMoyen.className = 'big-stat ' + (p.pnl_moyen >= 0 ? 'positive' : 'negative');
+            const pnlTotalEl = document.getElementById('perf-pnl-total');
+            pnlTotalEl.textContent = (p.pnl_total >= 0 ? '+' : '') + p.pnl_total + '%';
+            pnlTotalEl.className = 'perf-main-value ' + (p.pnl_total >= 0 ? 'positive' : 'negative');
+
+            const pnlMoyenEl = document.getElementById('perf-pnl-moyen');
+            pnlMoyenEl.textContent = (p.pnl_moyen >= 0 ? '+' : '') + p.pnl_moyen + '%';
+            pnlMoyenEl.className = 'perf-main-value ' + (p.pnl_moyen >= 0 ? 'positive' : 'negative');
         }
 
-        // Charger trades
-        loadTradesList();
+        loadTradesHistory();
     } catch (error) {
         console.error('Erreur performances:', error);
     }
 }
 
-async function loadTradesList() {
+async function loadTradesHistory() {
     try {
         const response = await fetch('/api/trades-jour');
         const data = await response.json();
 
-        const container = document.getElementById('perf-trades-list');
+        const container = document.getElementById('trades-history');
 
         if (data.success && data.trades.length > 0) {
             let html = `
-                <table class="trades-table-data">
+                <table class="data-table">
                     <thead>
                         <tr>
                             <th>Date</th>
@@ -299,33 +298,39 @@ async function loadTradesList() {
                     <tbody>`;
 
             for (const trade of data.trades) {
-                const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'success' :
-                                   trade.resultat === 'STOP' ? 'fail' : '';
+                const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'positive' :
+                                   trade.resultat === 'STOP' ? 'negative' : '';
+                const typeTag = trade.type_setup === 'NEWS' ?
+                    '<span class="opp-tag news">NEWS</span>' :
+                    '<span class="opp-tag tech">TECH</span>';
+
                 html += `
-                    <tr class="${resultClass}">
-                        <td>${trade.date}</td>
-                        <td>${trade.heure_message}</td>
-                        <td>${trade.actif}</td>
-                        <td><span class="tag tag-${trade.type_setup.toLowerCase()}">${trade.type_setup}</span></td>
-                        <td>${trade.prix_entree}</td>
-                        <td>${trade.prix_stop}</td>
-                        <td>${trade.prix_tp1}</td>
-                        <td><span class="result-badge ${resultClass}">${trade.resultat || 'En cours'}</span></td>
-                        <td class="${trade.pnl_pct >= 0 ? 'positive' : 'negative'}">${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
+                    <tr>
+                        <td>${trade.date || '-'}</td>
+                        <td>${trade.heure_message || '-'}</td>
+                        <td><strong>${trade.actif || '-'}</strong></td>
+                        <td>${typeTag}</td>
+                        <td style="font-family: 'JetBrains Mono', monospace;">${trade.prix_entree || '-'}</td>
+                        <td style="font-family: 'JetBrains Mono', monospace; color: var(--accent-red);">${trade.prix_stop || '-'}</td>
+                        <td style="font-family: 'JetBrains Mono', monospace; color: var(--accent-green);">${trade.prix_tp1 || '-'}</td>
+                        <td class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
+                        <td class="${resultClass}" style="font-family: 'JetBrains Mono', monospace;">
+                            ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
+                        </td>
                     </tr>`;
             }
 
             html += '</tbody></table>';
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<p class="no-data">Aucun trade sur cette periode</p>';
+            container.innerHTML = '<div class="no-data">Aucun trade sur cette periode</div>';
         }
     } catch (error) {
         console.error('Erreur trades:', error);
     }
 }
 
-// JOURNAL
+// ===== JOURNAL =====
 async function loadJournauxList() {
     try {
         const response = await fetch('/api/journaux');
@@ -337,35 +342,32 @@ async function loadJournauxList() {
             let html = '';
             for (const actif of data.actifs) {
                 html += `
-                    <div class="actif-journal-item" onclick="selectActifJournal('${actif.symbole}', '${actif.nom_actif}')">
-                        <div class="actif-info">
-                            <span class="actif-name">${actif.nom_actif}</span>
-                            <span class="actif-symbol">${actif.symbole}</span>
+                    <div class="journal-asset-item" onclick="selectActifJournal('${actif.symbole}', '${actif.nom_actif}', this)">
+                        <div class="asset-info">
+                            <h4>${actif.nom_actif}</h4>
+                            <span class="asset-symbol">${actif.symbole}</span>
                         </div>
-                        <div class="actif-meta">
-                            <span class="entries-count">${actif.nb_entrees} entrees</span>
-                        </div>
+                        <span class="asset-count">${actif.nb_entrees}</span>
                     </div>`;
             }
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<p class="no-data">Aucun journal. Ajoutez une premiere entree!</p>';
+            container.innerHTML = '<div class="no-data">Aucun journal. Ajoutez une premiere entree!</div>';
         }
     } catch (error) {
         console.error('Erreur journaux:', error);
     }
 }
 
-async function selectActifJournal(symbole, nom) {
+async function selectActifJournal(symbole, nom, element) {
     selectedActif = {symbole, nom};
     document.getElementById('journal-actif-title').textContent = `Journal: ${nom}`;
-    document.getElementById('btn-add-entry').style.display = 'inline-block';
+    document.getElementById('btn-add-entry').style.display = 'inline-flex';
 
-    // Marquer comme selectionne
-    document.querySelectorAll('.actif-journal-item').forEach(i => i.classList.remove('active'));
-    event.currentTarget.classList.add('active');
+    // Marquer comme sélectionné
+    document.querySelectorAll('.journal-asset-item').forEach(i => i.classList.remove('active'));
+    if (element) element.classList.add('active');
 
-    // Charger les entrees
     try {
         const response = await fetch(`/api/journal/${symbole}`);
         const data = await response.json();
@@ -375,31 +377,33 @@ async function selectActifJournal(symbole, nom) {
         if (data.success && data.entries.length > 0) {
             let html = '';
             for (const entry of data.entries) {
-                const impactClass = entry.impact_cours?.includes('hausse') ? 'positive' :
-                                   entry.impact_cours?.includes('baisse') ? 'negative' : '';
-                const typeIcon = {
+                const impactClass = entry.impact_cours?.includes('hausse') ? 'impact-positive' :
+                                   entry.impact_cours?.includes('baisse') ? 'impact-negative' : '';
+                const typeIcons = {
                     'news': '&#128240;',
                     'resultats': '&#128200;',
                     'analyse': '&#128202;',
                     'macro': '&#127758;',
                     'autre': '&#128221;'
-                }[entry.type_info] || '&#128221;';
+                };
+                const typeIcon = typeIcons[entry.type_info] || '&#128221;';
 
                 html += `
-                    <div class="journal-entry">
+                    <div class="journal-entry ${impactClass}">
                         <div class="entry-header">
-                            <span class="entry-icon">${typeIcon}</span>
+                            <span style="font-size: 1.25rem;">${typeIcon}</span>
+                            <span class="entry-type">${entry.type_info}</span>
                             <span class="entry-date">${entry.date}</span>
-                            <span class="entry-importance">${'&#11088;'.repeat(entry.importance)}</span>
+                            <span style="margin-left: auto;">${'&#11088;'.repeat(entry.importance || 1)}</span>
                         </div>
                         <h4 class="entry-title">${entry.titre}</h4>
                         <p class="entry-content">${entry.contenu}</p>
-                        ${entry.impact_cours ? `<div class="entry-impact ${impactClass}">Impact: ${formatImpact(entry.impact_cours)}</div>` : ''}
+                        ${entry.impact_cours ? `<div class="entry-impact ${entry.impact_cours.includes('hausse') ? 'positive' : 'negative'}">${formatImpact(entry.impact_cours)}</div>` : ''}
                     </div>`;
             }
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<p class="no-data">Aucune entree pour cet actif</p>';
+            container.innerHTML = '<div class="no-data">Aucune entree pour cet actif</div>';
         }
     } catch (error) {
         console.error('Erreur journal:', error);
@@ -408,11 +412,11 @@ async function selectActifJournal(symbole, nom) {
 
 function formatImpact(impact) {
     const mapping = {
-        'hausse_forte': '&#128200; Hausse Forte',
-        'hausse': '&#128314; Hausse',
+        'hausse_forte': '&#128200; Hausse Forte (+3%+)',
+        'hausse': '&#128314; Hausse (+1-3%)',
         'neutre': '&#11036; Neutre',
-        'baisse': '&#128315; Baisse',
-        'baisse_forte': '&#128201; Baisse Forte'
+        'baisse': '&#128315; Baisse (-1-3%)',
+        'baisse_forte': '&#128201; Baisse Forte (-3%+)'
     };
     return mapping[impact] || impact;
 }
@@ -428,13 +432,32 @@ async function loadActifsList() {
                 Object.assign(actifsData, actifs);
             }
 
-            // Populate select
             const select = document.getElementById('entry-actif');
-            for (const [symbole, nom] of Object.entries(actifsData)) {
-                const option = document.createElement('option');
-                option.value = symbole;
-                option.textContent = `${nom} (${symbole})`;
-                select.appendChild(option);
+            select.innerHTML = '<option value="">Selectionnez...</option>';
+
+            // Grouper par catégorie
+            const categories = {
+                'Indices': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^GDAXI', '^VIX'],
+                'Actions FR': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA', 'SAN.PA', 'BNP.PA'],
+                'Actions US': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL'],
+                'Commodites': ['GC=F', 'SI=F', 'BZ=F', 'NG=F'],
+                'Forex': ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X']
+            };
+
+            for (const [cat, symbols] of Object.entries(categories)) {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = cat;
+                for (const sym of symbols) {
+                    if (actifsData[sym]) {
+                        const option = document.createElement('option');
+                        option.value = sym;
+                        option.textContent = actifsData[sym];
+                        optgroup.appendChild(option);
+                    }
+                }
+                if (optgroup.children.length > 0) {
+                    select.appendChild(optgroup);
+                }
             }
         }
     } catch (error) {
@@ -446,11 +469,11 @@ function showAddEntryModal() {
     if (selectedActif) {
         document.getElementById('entry-actif').value = selectedActif.symbole;
     }
-    document.getElementById('modal-add-entry').style.display = 'flex';
+    document.getElementById('modal-add-entry').classList.add('active');
 }
 
 function closeAddEntryModal() {
-    document.getElementById('modal-add-entry').style.display = 'none';
+    document.getElementById('modal-add-entry').classList.remove('active');
     document.getElementById('form-add-entry').reset();
 }
 
@@ -483,7 +506,7 @@ async function submitJournalEntry(event) {
             closeAddEntryModal();
             loadJournauxList();
             if (selectedActif && selectedActif.symbole === symbole) {
-                selectActifJournal(symbole, nomActif);
+                selectActifJournal(symbole, nomActif, null);
             }
         } else {
             alert('Erreur lors de l\'enregistrement');
@@ -494,7 +517,7 @@ async function submitJournalEntry(event) {
     }
 }
 
-// HISTORIQUE ANALYSES
+// ===== HISTORIQUE ANALYSES =====
 async function loadAnalysesHistory() {
     try {
         const response = await fetch('/api/analyses-jour');
@@ -503,37 +526,36 @@ async function loadAnalysesHistory() {
         const container = document.getElementById('analyses-history');
 
         if (data.success && data.analyses.length > 0) {
-            let html = '';
+            let html = '<div class="events-timeline">';
             for (const analyse of data.analyses) {
-                const typeIcon = {
+                const typeIcons = {
                     'intraday': '&#128200;',
                     'planifiee': '&#9203;',
                     'cloture': '&#127769;'
-                }[analyse.type_analyse] || '&#128202;';
+                };
+                const icon = typeIcons[analyse.type_analyse] || '&#128202;';
+                const isActive = analyse === data.analyses[0];
 
                 html += `
-                    <div class="analyse-history-item">
-                        <div class="analyse-header">
-                            <span class="analyse-icon">${typeIcon}</span>
-                            <span class="analyse-type">${analyse.type_analyse}</span>
-                            <span class="analyse-time">${analyse.heure}</span>
+                    <div class="event-item ${isActive ? 'active' : ''}">
+                        <span class="event-time">${analyse.heure}</span>
+                        <div class="event-content">
+                            <div class="event-name">
+                                <span style="margin-right: 0.5rem;">${icon}</span>
+                                Analyse ${analyse.type_analyse}
+                            </div>
+                            <div class="event-impact">${analyse.contexte_marche || '-'}</div>
                         </div>
-                        <div class="analyse-context">${analyse.contexte_marche || '-'}</div>
-                        <button class="btn btn-small" onclick="viewAnalyse(${analyse.id})">Voir details</button>
                     </div>`;
             }
+            html += '</div>';
             container.innerHTML = html;
         } else {
-            container.innerHTML = '<p class="no-data">Aucune analyse aujourd\'hui</p>';
+            container.innerHTML = '<div class="no-data">Aucune analyse aujourd\'hui</div>';
         }
     } catch (error) {
         console.error('Erreur historique:', error);
     }
-}
-
-function viewAnalyse(id) {
-    // TODO: Modal avec details
-    console.log('View analyse:', id);
 }
 </script>
 {% endblock %}
