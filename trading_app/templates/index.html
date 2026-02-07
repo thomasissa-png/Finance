@@ -1101,9 +1101,17 @@ async function refreshMarkets() {
 
             // Rafraîchir aussi les Top Movers
             loadTopMovers();
+        } else {
+            // Afficher message d'erreur dans le widget
+            const container = document.getElementById('pulse-widget');
+            container.innerHTML = `<div class="error-message">Erreur: ${data.error || 'Données non disponibles'}</div>`;
+            console.error('API error:', data.error);
         }
     } catch (error) {
         console.error('Erreur markets:', error);
+        // Afficher message d'erreur réseau
+        const container = document.getElementById('pulse-widget');
+        container.innerHTML = '<div class="error-message">Erreur de connexion au serveur</div>';
     }
 }
 

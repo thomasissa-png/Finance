@@ -1523,6 +1523,15 @@ body {
     padding: var(--space-4);
 }
 
+.error-message {
+    color: var(--accent-red);
+    background: var(--accent-red-bg);
+    text-align: center;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+}
+
 /* ============================================================================
    RESPONSIVE
    ============================================================================ */

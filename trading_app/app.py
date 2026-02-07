@@ -65,6 +65,19 @@ TWELVEDATA_FETCH_LOCK = Lock()  # Protège contre le stampede (multiples appels 
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
 
+def to_python_type(val):
+    """Convertit les types numpy en types Python natifs pour la sérialisation JSON.
+    numpy.int64/float64 → int/float Python natif"""
+    if val is None:
+        return None
+    if isinstance(val, (np.integer, np.int64)):
+        return int(val)
+    if isinstance(val, (np.floating, np.float64)):
+        return float(val)
+    if isinstance(val, np.ndarray):
+        return val.tolist()
+    return val
+
 # Calendriers des jours fériés (marchés fermés)
 HOLIDAYS_FR = holidays.France()  # Euronext Paris
 HOLIDAYS_US = holidays.NYSE()     # NYSE et NASDAQ
@@ -745,15 +758,15 @@ def get_fresh_quote_for_trade(symbole):
 
         return {
             "symbole": symbole,
-            "prix": round(price, 4),
-            "open": round(open_price, 4),
-            "high": round(high, 4),
-            "low": round(low, 4),
-            "previous_close": round(prev_close, 4),
-            "volume": volume,
-            "spread_pct": round(spread_pct, 2),  # Volatilité intraday
-            "variation_jour": round(variation_jour, 2),  # % depuis clôture veille
-            "variation_open": round(variation_open, 2),  # % depuis open
+            "prix": float(round(price, 4)),
+            "open": float(round(open_price, 4)),
+            "high": float(round(high, 4)),
+            "low": float(round(low, 4)),
+            "previous_close": float(round(prev_close, 4)),
+            "volume": int(volume),
+            "spread_pct": float(round(spread_pct, 2)),  # Volatilité intraday
+            "variation_jour": float(round(variation_jour, 2)),  # % depuis clôture veille
+            "variation_open": float(round(variation_open, 2)),  # % depuis open
             "timestamp": get_paris_time().isoformat(),
             "is_fresh": True
         }
@@ -1059,7 +1072,7 @@ def calculer_rsi(df, periode=14):
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
 
-    return round(rsi.iloc[-1], 1)
+    return float(round(rsi.iloc[-1], 1))
 
 def calculer_macd(df, fast=12, slow=26, signal=9):
     """
@@ -1083,10 +1096,10 @@ def calculer_macd(df, fast=12, slow=26, signal=9):
     # Histogramme
     histogram = macd_line - signal_line
 
-    # Valeurs actuelles
-    macd_val = round(macd_line.iloc[-1], 4)
-    signal_val = round(signal_line.iloc[-1], 4)
-    hist_val = round(histogram.iloc[-1], 4)
+    # Valeurs actuelles - conversion en float Python natif
+    macd_val = float(round(macd_line.iloc[-1], 4))
+    signal_val = float(round(signal_line.iloc[-1], 4))
+    hist_val = float(round(histogram.iloc[-1], 4))
 
     # Signal
     signal_type = 'BULLISH' if macd_val > signal_val else 'BEARISH'
@@ -1123,7 +1136,7 @@ def calculer_atr(df, periode=14):
     prix_actuel = df['Close'].iloc[-1]
     atr_pct = (atr / prix_actuel) * 100 if prix_actuel > 0 else 0
 
-    return round(atr, 4), round(atr_pct, 2)
+    return float(round(atr, 4)), float(round(atr_pct, 2))
 
 def calculer_indicateurs_complets(symbole):
     """
@@ -1752,20 +1765,21 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                     resistance1 = 2 * pivot - prev_low  # R1
                     support1 = 2 * pivot - prev_high    # S1
 
+                # Convertir en types Python natifs pour éviter erreur JSON "int64 not serializable"
                 donnees[nom] = {
                     "symbole": symbole,
-                    "prix": round(prix_actuel, 2),
-                    "ouverture": round(prix_ouverture, 2),
-                    "haut": round(prix_max, 2),
-                    "bas": round(prix_min, 2),
-                    "variation": round(variation, 2),
-                    "variation_5j": round(var_5j, 2),
-                    "atr": round(atr, 4) if atr else 0,
-                    "atr_pct": round(atr_pct, 2) if atr_pct else 0,
-                    "volume_relatif": round(volume_relatif, 1),
-                    "pivot": round(pivot, 2) if pivot else None,
-                    "support1": round(support1, 2) if support1 else None,
-                    "resistance1": round(resistance1, 2) if resistance1 else None,
+                    "prix": float(round(prix_actuel, 2)),
+                    "ouverture": float(round(prix_ouverture, 2)),
+                    "haut": float(round(prix_max, 2)),
+                    "bas": float(round(prix_min, 2)),
+                    "variation": float(round(variation, 2)),
+                    "variation_5j": float(round(var_5j, 2)),
+                    "atr": float(round(atr, 4)) if atr else 0,
+                    "atr_pct": float(round(atr_pct, 2)) if atr_pct else 0,
+                    "volume_relatif": float(round(volume_relatif, 1)),
+                    "pivot": float(round(pivot, 2)) if pivot else None,
+                    "support1": float(round(support1, 2)) if support1 else None,
+                    "resistance1": float(round(resistance1, 2)) if resistance1 else None,
                     "data_date": last_date_str,
                     "is_fresh": is_fresh
                 }
@@ -1806,7 +1820,7 @@ def calculer_indicateurs_techniques(symbole):
             total_volume = df_intraday['Volume'].sum()
             if total_volume > 0:
                 vwap = df_intraday['TP_Volume'].sum() / total_volume
-                indicateurs['vwap'] = round(vwap, 2)
+                indicateurs['vwap'] = float(round(vwap, 2))
 
         # Pivot Points
         if len(df_daily) >= 2:
@@ -1815,11 +1829,11 @@ def calculer_indicateurs_techniques(symbole):
             prev_close = df_daily['Close'].iloc[-2]
 
             pivot = (prev_high + prev_low + prev_close) / 3
-            indicateurs['pivot'] = round(pivot, 2)
-            indicateurs['r1'] = round(2 * pivot - prev_low, 2)
-            indicateurs['r2'] = round(pivot + (prev_high - prev_low), 2)
-            indicateurs['s1'] = round(2 * pivot - prev_high, 2)
-            indicateurs['s2'] = round(pivot - (prev_high - prev_low), 2)
+            indicateurs['pivot'] = float(round(pivot, 2))
+            indicateurs['r1'] = float(round(2 * pivot - prev_low, 2))
+            indicateurs['r2'] = float(round(pivot + (prev_high - prev_low), 2))
+            indicateurs['s1'] = float(round(2 * pivot - prev_high, 2))
+            indicateurs['s2'] = float(round(pivot - (prev_high - prev_low), 2))
 
         # ATR
         if len(df_daily) >= 15:
@@ -1831,23 +1845,23 @@ def calculer_indicateurs_techniques(symbole):
             true_range = np.max(ranges, axis=1)
             atr = true_range.rolling(14).mean().iloc[-1]
 
-            indicateurs['atr'] = round(atr, 2)
-            indicateurs['atr_pct'] = round((atr / df_daily['Close'].iloc[-1]) * 100, 2)
+            indicateurs['atr'] = float(round(atr, 2))
+            indicateurs['atr_pct'] = float(round((atr / df_daily['Close'].iloc[-1]) * 100, 2))
 
         # Volume relatif
         if len(df_daily) >= 20 and 'Volume' in df_daily.columns:
             volume_actuel = df_daily['Volume'].iloc[-1]
             volume_moyen = df_daily['Volume'].iloc[-20:].mean()
             if volume_moyen > 0:
-                indicateurs['volume_relatif_pct'] = round((volume_actuel / volume_moyen) * 100, 1)
+                indicateurs['volume_relatif_pct'] = float(round((volume_actuel / volume_moyen) * 100, 1))
 
         # Prix actuel et variation (cohérent avec recuperer_donnees_marche: close-to-close)
-        indicateurs['prix_actuel'] = round(df_daily['Close'].iloc[-1], 2)
+        indicateurs['prix_actuel'] = float(round(df_daily['Close'].iloc[-1], 2))
         if len(df_daily) >= 2:
             cloture_precedente = df_daily['Close'].iloc[-2]
-            indicateurs['variation_jour'] = round(
+            indicateurs['variation_jour'] = float(round(
                 ((df_daily['Close'].iloc[-1] - cloture_precedente) / cloture_precedente) * 100, 2
-            )
+            ))
         else:
             indicateurs['variation_jour'] = 0
 
@@ -3056,9 +3070,9 @@ def recuperer_donnees_premarket():
                     variation = ((prix_actuel - prix_hier) / prix_hier) * 100
                     donnees[nom] = {
                         "symbole": symbole,
-                        "prix": round(prix_actuel, 2),
-                        "prix_hier": round(prix_hier, 2),
-                        "variation_overnight": round(variation, 2)
+                        "prix": float(round(prix_actuel, 2)),
+                        "prix_hier": float(round(prix_hier, 2)),
+                        "variation_overnight": float(round(variation, 2))
                     }
         except Exception as e:
             print(f"⚠️ Erreur premarket {symbole}: {e}")
