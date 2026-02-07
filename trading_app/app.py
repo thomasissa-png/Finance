@@ -2058,12 +2058,52 @@ def verifier_resultats_trades():
         if conn:
             conn.close()
 
+def analyser_historique_intraday_pour_tp_stop(symbole, direction, entree, stop, tp1, tp2):
+    """
+    Analyse l'historique intraday complet pour détecter si TP ou Stop a été touché.
+    Retourne: (resultat, prix_sortie, note) ou (None, None, None) si rien touché.
+    """
+    # Récupérer l'historique intraday complet (5min, ~78 bougies = 6.5h)
+    hist, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=78)
+
+    if hist.empty:
+        return None, None, None
+
+    # Parcourir chronologiquement pour trouver le premier événement
+    for idx, row in hist.iterrows():
+        high = row['High']
+        low = row['Low']
+
+        if direction == 'LONG':
+            # Vérifier STOP d'abord (priorité au stop)
+            if stop > 0 and low <= stop:
+                return 'STOP', stop, f"Stop touché à {idx}"
+            # Puis TP2
+            if tp2 and tp2 > 0 and high >= tp2:
+                return 'TP2', tp2, f"TP2 touché à {idx}"
+            # Puis TP1
+            if tp1 and tp1 > 0 and high >= tp1:
+                return 'TP1', tp1, f"TP1 touché à {idx}"
+        else:  # SHORT
+            # Vérifier STOP d'abord
+            if stop > 0 and high >= stop:
+                return 'STOP', stop, f"Stop touché à {idx}"
+            # Puis TP2
+            if tp2 and tp2 > 0 and low <= tp2:
+                return 'TP2', tp2, f"TP2 touché à {idx}"
+            # Puis TP1
+            if tp1 and tp1 > 0 and low <= tp1:
+                return 'TP1', tp1, f"TP1 touché à {idx}"
+
+    return None, None, None
+
 def cloturer_trades_jour():
     """
     Clôture FORCÉE des trades 15 minutes avant fermeture du marché.
-    - Pas de NON_CONCLU: on prend le PnL réel et on détermine WIN ou LOSS
-    - Règle: PnL > 0 = WIN_FORCE, PnL <= 0 = LOSS_FORCE
-    - Ceci évite de laisser des trades overnight (interdit en day trading levier)
+    AMÉLIORATION: Analyse l'historique intraday pour détecter si TP/Stop a été touché
+    plus tôt dans la journée (évite les faux WIN_FORCE/LOSS_FORCE).
+    - Si TP/Stop touché: utilise le vrai résultat (TP1, TP2, STOP)
+    - Sinon: PnL > 0 = WIN_FORCE, PnL <= 0 = LOSS_FORCE
     """
     maintenant = get_paris_time()
     aujourdhui = maintenant.date()
@@ -2092,38 +2132,57 @@ def cloturer_trades_jour():
                 direction = trade.get('direction', 'LONG')
                 entree = float(trade['prix_entree'] or 0)
                 stop = float(trade['prix_stop'] or 0)
+                tp1 = float(trade['prix_tp1'] or 0)
+                tp2 = float(trade['prix_tp2'] or 0)
 
                 if entree == 0:
                     continue
 
-                # Récupérer le prix actuel via Twelve Data (quote temps réel)
-                quote = get_twelvedata_quote(symbole)
+                # AMÉLIORATION: Vérifier si TP/Stop a été touché plus tôt dans la journée
+                resultat_historique, prix_historique, note_historique = analyser_historique_intraday_pour_tp_stop(
+                    symbole, direction, entree, stop, tp1, tp2
+                )
 
-                if not quote:
-                    # Fallback sur les données daily
-                    hist, _ = get_twelvedata_time_series(symbole, outputsize=1, interval="1day")
-                    if hist.empty:
+                if resultat_historique:
+                    # TP ou Stop a été touché plus tôt - utiliser ce résultat
+                    resultat = resultat_historique
+                    prix_sortie = prix_historique
+
+                    if direction == 'LONG':
+                        pnl_pct = ((prix_sortie - entree) / entree) * 100
+                    else:
+                        pnl_pct = ((entree - prix_sortie) / entree) * 100
+
+                    emoji = '🎯' if resultat in ['TP1', 'TP2'] else '🛑'
+                    note_cloture = f" | {note_historique} (détecté à clôture)"
+                else:
+                    # Aucun TP/Stop touché - utiliser le prix actuel
+                    quote = get_twelvedata_quote(symbole)
+
+                    if not quote:
+                        hist, _ = get_twelvedata_time_series(symbole, outputsize=1, interval="1day")
+                        if hist.empty:
+                            continue
+                        prix_sortie = hist['Close'].iloc[-1]
+                    else:
+                        prix_sortie = quote.get('price', 0)
+
+                    if prix_sortie == 0:
                         continue
-                    prix_sortie = hist['Close'].iloc[-1]
-                else:
-                    prix_sortie = quote.get('price', 0)
 
-                if prix_sortie == 0:
-                    continue
+                    if direction == 'LONG':
+                        pnl_pct = ((prix_sortie - entree) / entree) * 100
+                    else:
+                        pnl_pct = ((entree - prix_sortie) / entree) * 100
 
-                # Calculer le PnL
-                if direction == 'LONG':
-                    pnl_pct = ((prix_sortie - entree) / entree) * 100
-                else:
-                    pnl_pct = ((entree - prix_sortie) / entree) * 100
+                    if pnl_pct > 0:
+                        resultat = 'WIN_FORCE'
+                        emoji = '✅'
+                    else:
+                        resultat = 'LOSS_FORCE'
+                        emoji = '❌'
 
-                # Déterminer le résultat: WIN ou LOSS (pas de NON_CONCLU)
-                if pnl_pct > 0:
-                    resultat = 'WIN_FORCE'  # Gagné mais clôture forcée
-                    emoji = '✅'
-                else:
-                    resultat = 'LOSS_FORCE'  # Perdu, clôture forcée
-                    emoji = '❌'
+                    note_cloture = " | Clôture forcée 15min avant fermeture"
 
                 # Calculer la durée
                 duree_minutes = None
@@ -2150,7 +2209,7 @@ def cloturer_trades_jour():
                 ''', (
                     resultat, round(prix_sortie, 4), round(pnl_pct, 2), maintenant,
                     duree_minutes, round(prix_sortie, 4), maintenant,
-                    f" | Clôture forcée 15min avant fermeture",
+                    note_cloture,
                     trade['id']
                 ))
 
