@@ -2971,7 +2971,7 @@ def get_criteres_dynamiques():
             SELECT critere, raison
             FROM criteres_dynamiques
             WHERE categorie = 'ajustement'
-            AND date_maj >= date('now', '-7 days')
+            AND date_maj >= date('now', '-30 days')
             ORDER BY date_maj DESC
         ''')
         ajustements = [{'critere': row['critere'], 'raison': row['raison']}
@@ -3154,8 +3154,8 @@ def valider_tous_ajustements(decision, decideur='utilisateur'):
 
     return resultats
 
-def expirer_ajustements_anciens(jours_max=7):
-    """Expire automatiquement les ajustements non traités après X jours"""
+def expirer_ajustements_anciens(jours_max=21):
+    """Expire automatiquement les ajustements non traités après X jours (21 jours car auto-validation active)"""
     maintenant = get_paris_time()
     date_limite = maintenant - timedelta(days=jours_max)
 
@@ -3787,12 +3787,12 @@ def get_criteres_dynamiques_actifs():
             'date_maj': row['date_maj']
         } for row in cursor.fetchall()}
 
-        # Récupérer les ajustements actifs (validés récemment)
+        # Récupérer les ajustements actifs (validés dans les 30 derniers jours)
         cursor.execute('''
             SELECT categorie, critere, action, raison
             FROM ajustements_proposes
             WHERE statut = 'valide'
-            AND date_decision > date('now', '-14 days')
+            AND date_decision > date('now', '-30 days')
         ''')
 
         ajustements_actifs = [dict(row) for row in cursor.fetchall()]
