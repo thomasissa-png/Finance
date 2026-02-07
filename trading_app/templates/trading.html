@@ -534,6 +534,7 @@ async function loadBilanData() {
                             <th>TP1</th>
                             <th>RSI</th>
                             <th>MACD</th>
+                            <th>A/B Test</th>
                             <th>Résultat</th>
                             <th>PnL</th>
                         </tr>
@@ -549,6 +550,14 @@ async function loadBilanData() {
                 const macd = trade.macd_signal_reco || '-';
                 const macdClass = macd.includes('BULLISH') ? 'positive' : macd.includes('BEARISH') ? 'negative' : '';
 
+                // A/B Test badge
+                let abBadge = '-';
+                if (trade.ab_groupe) {
+                    const abClass = trade.ab_groupe === 'A' ? 'ab-groupe-a' : 'ab-groupe-b';
+                    const abLabel = trade.ab_variante ? trade.ab_variante.substring(0, 15) : trade.ab_groupe;
+                    abBadge = `<span class="ab-badge ${abClass}">🧪 ${trade.ab_groupe}: ${abLabel}</span>`;
+                }
+
                 html += `
                     <tr class="${resultClass}">
                         <td>${trade.heure_message}</td>
@@ -559,6 +568,7 @@ async function loadBilanData() {
                         <td>${trade.prix_tp1}</td>
                         <td>${rsi}</td>
                         <td class="${macdClass}">${macd}</td>
+                        <td>${abBadge}</td>
                         <td>${trade.resultat || 'En cours'}</td>
                         <td>${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
                     </tr>`;

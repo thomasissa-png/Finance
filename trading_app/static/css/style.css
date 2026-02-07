@@ -1533,6 +1533,91 @@ body {
 }
 
 /* ============================================================================
+   A/B TESTING BADGES
+   ============================================================================ */
+
+.ab-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.ab-groupe-a {
+    background: rgba(59, 130, 246, 0.15);
+    color: #3B82F6;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.ab-groupe-b {
+    background: rgba(168, 85, 247, 0.15);
+    color: #A855F7;
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.ab-test-card {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    margin-bottom: var(--space-2);
+}
+
+.ab-test-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2);
+}
+
+.ab-test-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ab-test-status {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--accent-green-bg);
+    color: var(--accent-green);
+}
+
+.ab-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+}
+
+.ab-groupe-stats {
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    text-align: center;
+}
+
+.ab-groupe-stats.groupe-a {
+    background: rgba(59, 130, 246, 0.08);
+}
+
+.ab-groupe-stats.groupe-b {
+    background: rgba(168, 85, 247, 0.08);
+}
+
+.ab-groupe-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.ab-groupe-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+/* ============================================================================
    RESPONSIVE
    ============================================================================ */
 

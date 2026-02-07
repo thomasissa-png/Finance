@@ -156,6 +156,20 @@
         </div>
     </section>
 
+    <!-- 6. A/B TESTS EN COURS -->
+    <section class="section" id="section-ab-tests" style="display: none;">
+        <div class="section-header">
+            <span class="section-icon">🧪</span>
+            <h2 class="section-title">Tests A/B Actifs</h2>
+            <span class="section-meta" id="ab-tests-count">0 tests</span>
+        </div>
+        <div class="section-content">
+            <div id="ab-tests-container">
+                <div class="no-data">Aucun test A/B en cours</div>
+            </div>
+        </div>
+    </section>
+
 </div>
 
 <!-- Modal Analyse -->
@@ -665,8 +679,64 @@ async function loadAllData() {
         loadLastAnalysis(),
         refreshNews(),
         loadPremarket(),
-        loadMacroEvents()
+        loadMacroEvents(),
+        loadABTests()
     ]);
+}
+
+// ===== A/B TESTS =====
+async function loadABTests() {
+    try {
+        const response = await fetch('/api/ab-tests');
+        const data = await response.json();
+
+        const section = document.getElementById('section-ab-tests');
+        const container = document.getElementById('ab-tests-container');
+        const countSpan = document.getElementById('ab-tests-count');
+
+        if (data.success && data.tests_actifs && data.tests_actifs.length > 0) {
+            section.style.display = 'block';
+            countSpan.textContent = `${data.tests_actifs.length} test${data.tests_actifs.length > 1 ? 's' : ''}`;
+
+            let html = '';
+            for (const test of data.tests_actifs) {
+                const statsA = test.stats_groupe_a || {};
+                const statsB = test.stats_groupe_b || {};
+
+                html += `
+                <div class="ab-test-card">
+                    <div class="ab-test-header">
+                        <span class="ab-test-name">🧪 ${test.nom}</span>
+                        <span class="ab-test-status">Actif</span>
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
+                        ${test.description || ''}
+                    </p>
+                    <div class="ab-stats-grid">
+                        <div class="ab-groupe-stats groupe-a">
+                            <div class="ab-groupe-label">Groupe A: ${test.variante_a}</div>
+                            <div class="ab-groupe-value">${statsA.trades || 0} trades</div>
+                            <div style="font-size: 0.8rem;">
+                                Win: ${statsA.win_rate || 0}% | PnL: ${statsA.pnl_total >= 0 ? '+' : ''}${statsA.pnl_total || 0}%
+                            </div>
+                        </div>
+                        <div class="ab-groupe-stats groupe-b">
+                            <div class="ab-groupe-label">Groupe B: ${test.variante_b}</div>
+                            <div class="ab-groupe-value">${statsB.trades || 0} trades</div>
+                            <div style="font-size: 0.8rem;">
+                                Win: ${statsB.win_rate || 0}% | PnL: ${statsB.pnl_total >= 0 ? '+' : ''}${statsB.pnl_total || 0}%
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+            container.innerHTML = html;
+        } else {
+            section.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Erreur A/B tests:', error);
+    }
 }
 
 // ===== ÉVÉNEMENTS MACRO =====

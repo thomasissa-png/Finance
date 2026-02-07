@@ -1471,7 +1471,11 @@ def init_database():
         ("resistance1_reco", "REAL"),       # Resistance 1
         # Ratio Risk/Reward
         ("ratio_rr", "TEXT"),               # Ex: "1:1.5", "1:2", "1:3"
-        ("ratio_rr_justification", "TEXT")  # Justification du ratio choisi
+        ("ratio_rr_justification", "TEXT"), # Justification du ratio choisi
+        # A/B Testing - traçabilité des tests
+        ("ab_test_id", "INTEGER"),          # ID du test A/B (FK vers ab_tests)
+        ("ab_groupe", "TEXT"),              # 'A' ou 'B'
+        ("ab_variante", "TEXT")             # Description de la variante testée
     ]
     for col_nom, col_type in colonnes_trades:
         try:
@@ -2454,14 +2458,26 @@ def enregistrer_recommandation(trade_data):
         ratio_rr = trade_data.get('ratio_rr', '')
         ratio_rr_justification = trade_data.get('ratio_rr_justification', '')
 
+        # A/B Testing - récupérer le groupe et la variante
+        ab_groupe, ab_variante = get_variante_ab_pour_symbole(symbole)
+        ab_test_id = None
+        if ab_groupe:
+            # Trouver le test_id actif pour ce symbole
+            for tid, test in AB_TESTS_ACTIFS.items():
+                groupe_key = 'groupe_a' if ab_groupe == 'A' else 'groupe_b'
+                if symbole in test.get(groupe_key, []):
+                    ab_test_id = tid
+                    break
+
         cursor.execute('''
             INSERT INTO trades_recommandes
             (date, heure_message, actif, symbole, type_setup, prix_entree, prix_stop,
              prix_tp1, prix_tp2, prix_actuel, catalyseur, duree_estimee, timestamp_reco,
              direction, categorie_actif, heure_entree,
              rsi_reco, rsi_signal_reco, macd_signal_reco, atr_pct_reco, volume_relatif_reco,
-             pivot_reco, support1_reco, resistance1_reco, ratio_rr, ratio_rr_justification)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             pivot_reco, support1_reco, resistance1_reco, ratio_rr, ratio_rr_justification,
+             ab_test_id, ab_groupe, ab_variante)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             maintenant.date(),
             maintenant.strftime('%H:%M'),
@@ -2488,7 +2504,10 @@ def enregistrer_recommandation(trade_data):
             support1_reco,
             resistance1_reco,
             ratio_rr,
-            ratio_rr_justification
+            ratio_rr_justification,
+            ab_test_id,
+            ab_groupe,
+            ab_variante
         ))
 
         conn.commit()
@@ -3594,6 +3613,49 @@ def generer_rapport_hebdo():
         ''', (date_debut, date_fin))
         stats_par_atr = [dict(row) for row in cursor.fetchall()]
 
+        # Stats A/B Testing - performances par groupe pour chaque test actif
+        stats_ab_tests = []
+        cursor.execute("SELECT * FROM ab_tests WHERE statut = 'actif'")
+        tests_actifs = [dict(row) for row in cursor.fetchall()]
+
+        for test in tests_actifs:
+            test_id = test['id']
+            # Stats groupe A
+            cursor.execute('''
+                SELECT COUNT(*) as nb,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+                FROM trades_recommandes
+                WHERE ab_test_id = ? AND ab_groupe = 'A' AND date >= ? AND date <= ?
+            ''', (test_id, date_debut, date_fin))
+            stats_a = dict(cursor.fetchone())
+
+            # Stats groupe B
+            cursor.execute('''
+                SELECT COUNT(*) as nb,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+                FROM trades_recommandes
+                WHERE ab_test_id = ? AND ab_groupe = 'B' AND date >= ? AND date <= ?
+            ''', (test_id, date_debut, date_fin))
+            stats_b = dict(cursor.fetchone())
+
+            stats_ab_tests.append({
+                'nom': test['nom'],
+                'variante_a': test['variante_a'],
+                'variante_b': test['variante_b'],
+                'groupe_a': {
+                    'trades': stats_a['nb'] or 0,
+                    'wins': stats_a['wins'] or 0,
+                    'pnl': round(stats_a['pnl'] or 0, 2)
+                },
+                'groupe_b': {
+                    'trades': stats_b['nb'] or 0,
+                    'wins': stats_b['wins'] or 0,
+                    'pnl': round(stats_b['pnl'] or 0, 2)
+                }
+            })
+
         conn.close()
 
         # Préparer les données pour Claude (incluant les analyses d'indicateurs)
@@ -3609,6 +3671,8 @@ def generer_rapport_hebdo():
             'stats_par_macd': stats_par_macd,
             'stats_par_ratio_rr': stats_par_ratio_rr,
             'stats_par_atr': stats_par_atr,
+            # Tests A/B en cours
+            'tests_ab': stats_ab_tests,
             'nb_trades_total': len(trades_semaine)
         }
 
@@ -3624,9 +3688,11 @@ ANALYSE EN PRIORITÉ:
 2. Quel signal MACD a le mieux performé? (stats_par_macd)
 3. Quel ratio R/R a le mieux performé? (stats_par_ratio_rr)
 4. Quel niveau ATR a le mieux performé? (stats_par_atr)
+5. TESTS A/B: Compare les performances des groupes A vs B pour chaque test (tests_ab)
 
 Utilise ces données pour proposer des AJUSTEMENTS PRÉCIS basés sur les indicateurs.
-Identifie les patterns (heures, types de setup, catégories d'actifs, indicateurs)."""
+Identifie les patterns (heures, types de setup, catégories d'actifs, indicateurs).
+Pour les tests A/B, indique quel groupe performe mieux et si l'échantillon est suffisant pour conclure."""
 
         message = client_anthropic.messages.create(
             model="claude-sonnet-4-20250514",
@@ -5181,6 +5247,83 @@ def api_performances():
         'periode': periode,
         'performances': performances
     })
+
+@app.route('/api/ab-tests')
+def api_ab_tests():
+    """Récupère les tests A/B actifs avec leurs performances"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer tous les tests A/B
+        cursor.execute('''
+            SELECT * FROM ab_tests
+            ORDER BY date_debut DESC
+        ''')
+        tests = [dict(row) for row in cursor.fetchall()]
+
+        # Pour chaque test, calculer les performances par groupe
+        for test in tests:
+            test_id = test['id']
+            groupe_a = json.loads(test.get('actifs_groupe_a', '[]'))
+            groupe_b = json.loads(test.get('actifs_groupe_b', '[]'))
+
+            # Stats groupe A
+            if groupe_a:
+                placeholders = ','.join(['?' for _ in groupe_a])
+                cursor.execute(f'''
+                    SELECT COUNT(*) as total,
+                           SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                           AVG(pnl_pct) as pnl_moyen,
+                           SUM(pnl_pct) as pnl_total
+                    FROM trades_recommandes
+                    WHERE ab_test_id = ? AND ab_groupe = 'A'
+                ''', (test_id,))
+                stats_a = dict(cursor.fetchone())
+                test['stats_groupe_a'] = {
+                    'trades': stats_a['total'] or 0,
+                    'win_rate': round((stats_a['wins'] or 0) / stats_a['total'] * 100, 1) if stats_a['total'] else 0,
+                    'pnl_moyen': round(stats_a['pnl_moyen'] or 0, 2),
+                    'pnl_total': round(stats_a['pnl_total'] or 0, 2)
+                }
+            else:
+                test['stats_groupe_a'] = {'trades': 0, 'win_rate': 0, 'pnl_moyen': 0, 'pnl_total': 0}
+
+            # Stats groupe B
+            if groupe_b:
+                cursor.execute(f'''
+                    SELECT COUNT(*) as total,
+                           SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                           AVG(pnl_pct) as pnl_moyen,
+                           SUM(pnl_pct) as pnl_total
+                    FROM trades_recommandes
+                    WHERE ab_test_id = ? AND ab_groupe = 'B'
+                ''', (test_id,))
+                stats_b = dict(cursor.fetchone())
+                test['stats_groupe_b'] = {
+                    'trades': stats_b['total'] or 0,
+                    'win_rate': round((stats_b['wins'] or 0) / stats_b['total'] * 100, 1) if stats_b['total'] else 0,
+                    'pnl_moyen': round(stats_b['pnl_moyen'] or 0, 2),
+                    'pnl_total': round(stats_b['pnl_total'] or 0, 2)
+                }
+            else:
+                test['stats_groupe_b'] = {'trades': 0, 'win_rate': 0, 'pnl_moyen': 0, 'pnl_total': 0}
+
+        conn.close()
+
+        # Séparer tests actifs et terminés
+        tests_actifs = [t for t in tests if t['statut'] == 'actif']
+        tests_termines = [t for t in tests if t['statut'] != 'actif']
+
+        return jsonify({
+            'success': True,
+            'tests_actifs': tests_actifs,
+            'tests_termines': tests_termines[:5],  # 5 derniers terminés
+            'total_actifs': len(tests_actifs)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/journal/<symbole>')
 def api_journal(symbole):
