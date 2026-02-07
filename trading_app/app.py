@@ -188,14 +188,13 @@ POOL_ROTATION = {
 # Mapping Yahoo Finance -> Twelve Data
 # Twelve Data exchange codes: EPA=Euronext Paris, XETRA=Frankfurt, etc.
 SYMBOL_MAPPING_TWELVEDATA = {
-    # Indices - format Twelve Data
-    # Note: CAC40 non disponible sur Twelve Data, utiliser un ETF tracker
-    "^FCHI": "CAC:EPA",        # CAC 40 via ETF Amundi (pas d'indice direct)
-    "^GSPC": "SPX",
-    "^IXIC": "IXIC",
-    "^DJI": "DJI",
-    "^GDAXI": "DAX",
-    "^VIX": "VIX",
+    # Indices - format Twelve Data (vérifié API)
+    "^FCHI": "FCHI",           # CAC 40
+    "^GSPC": "SPX",            # S&P 500
+    "^IXIC": "IXIC",           # NASDAQ Composite
+    "^DJI": "DJI",             # Dow Jones
+    "^GDAXI": "GDAXI",         # DAX
+    "^VIX": "VIX",             # Volatility Index
     # Actions Françaises (Euronext Paris = EPA)
     "AIR.PA": "AIR:EPA",
     "MC.PA": "MC:EPA",
@@ -231,18 +230,18 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "GC=F": "XAU/USD",
     "SI=F": "XAG/USD",
     "PL=F": "XPT/USD",
-    # Énergie - format commodity
-    "BZ=F": "BZ",
-    "CL=F": "CL",
-    "NG=F": "NG",
-    # Commodités agricoles
-    "KC=F": "KC",
-    "CC=F": "CC",
-    "HG=F": "HG",
-    "ZS=F": "ZS",
-    "SB=F": "SB",
-    "ZW=F": "ZW",
-    "ZC=F": "ZC",
+    # Énergie (format Twelve Data vérifié)
+    "BZ=F": "XBR/USD",      # Brent Crude
+    "CL=F": "WTI/USD",      # Crude Oil WTI
+    "NG=F": "NG/USD",       # Natural Gas
+    # Commodités agricoles (format Twelve Data vérifié)
+    "KC=F": "KC1",          # Coffee
+    "CC=F": "CC1",          # Cocoa
+    "HG=F": "HG1",          # Copper
+    "ZS=F": "S_1",          # Soybeans
+    "SB=F": "SB1",          # Sugar
+    "ZW=F": "W_1",          # Wheat
+    "ZC=F": "C_1",          # Corn
     # Forex
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
@@ -251,10 +250,10 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "ES=F": "ES",           # E-mini S&P 500
     "NQ=F": "NQ",           # E-mini Nasdaq 100
     "YM=F": "YM",           # E-mini Dow
-    # Indices asiatiques/européens
-    "^N225": "NI225",       # Nikkei 225
+    # Indices asiatiques/européens (vérifié API)
+    "^N225": "N225",        # Nikkei 225
     "^HSI": "HSI",          # Hang Seng
-    "^STOXX50E": "STOXX50", # Euro Stoxx 50
+    "^STOXX50E": "STOXX50E",# Euro Stoxx 50
 }
 
 def convert_symbol_to_twelvedata(yahoo_symbol):
