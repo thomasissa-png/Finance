@@ -172,7 +172,7 @@ ACTIFS_PERMANENTS = {
 POOL_ROTATION = {
     "tech": {"AMD": "AMD", "INTC": "Intel", "ORCL": "Oracle", "CRM": "Salesforce", "ADBE": "Adobe", "CSCO": "Cisco", "NFLX": "Netflix", "PYPL": "PayPal", "QCOM": "Qualcomm"},
     "auto": {"GM": "General Motors", "F": "Ford", "STLA": "Stellantis", "RNO.PA": "Renault", "MBG.DE": "Mercedes", "BMW.DE": "BMW", "VOW3.DE": "Volkswagen", "RIVN": "Rivian", "LCID": "Lucid"},
-    "luxe": {"KER.PA": "Kering", "CFR.SW": "Richemont", "ML.PA": "Moncler", "BOSS.DE": "Hugo Boss"},
+    "luxe": {"KER.PA": "Kering", "CFR.SW": "Richemont", "MONC.MI": "Moncler", "BOSS.DE": "Hugo Boss"},
     "banques_eu": {"GLE.PA": "Société Générale", "ACA.PA": "Crédit Agricole", "UCG.MI": "Unicredit", "SAN.MC": "Santander", "INGA.AS": "ING", "DBK.DE": "Deutsche Bank"},
     "banques_us": {"BAC": "Bank of America", "C": "Citigroup", "GS": "Goldman Sachs", "WFC": "Wells Fargo", "MS": "Morgan Stanley"},
     "energie": {"CVX": "Chevron", "SHEL": "Shell", "BP": "BP", "ENGI.PA": "Engie", "CL=F": "Pétrole WTI"},
