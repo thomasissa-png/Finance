@@ -188,8 +188,9 @@ POOL_ROTATION = {
 # Mapping Yahoo Finance -> Twelve Data
 # Twelve Data exchange codes: EPA=Euronext Paris, XETRA=Frankfurt, etc.
 SYMBOL_MAPPING_TWELVEDATA = {
-    # Indices
-    "^FCHI": "CAC40",
+    # Indices - format Twelve Data
+    # Note: CAC40 non disponible sur Twelve Data, utiliser un ETF tracker
+    "^FCHI": "CAC:EURONEXT",   # CAC 40 - essai format exchange
     "^GSPC": "SPX",
     "^IXIC": "IXIC",
     "^DJI": "DJI",
@@ -1577,11 +1578,76 @@ def fetch_and_analyze_news():
             if 'heure' not in news:
                 news['heure'] = '--:--'
 
+        # 4. Sauvegarder les news analysées en base
+        sauvegarder_news_analysees(news_analysees)
+
         return news_analysees, None
 
     except Exception as e:
         print(f"⚠️ Erreur fetch_and_analyze_news: {e}")
         return [], str(e)
+
+def sauvegarder_news_analysees(news_list):
+    """Sauvegarde les news analysées dans la table alertes_news"""
+    if not news_list:
+        return
+
+    maintenant = get_paris_time()
+    aujourdhui = maintenant.date()
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        for news in news_list:
+            # Vérifier si la news existe déjà (par titre)
+            cursor.execute('''
+                SELECT id FROM alertes_news WHERE titre = ? AND date = ?
+            ''', (news.get('headline', '')[:200], aujourdhui))
+
+            if cursor.fetchone() is None:
+                # Insérer la nouvelle news
+                actifs_concernes = ', '.join([a.get('symbole', '') for a in news.get('actifs_concernes', [])])
+                cursor.execute('''
+                    INSERT INTO alertes_news (date, heure, titre, contenu, actif, impact, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    aujourdhui,
+                    news.get('heure', '--:--'),
+                    news.get('headline', '')[:200],
+                    news.get('analyse', ''),
+                    actifs_concernes,
+                    news.get('impact', 'faible'),
+                    maintenant
+                ))
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Erreur sauvegarde news: {e}")
+
+def get_news_historique(jours=7):
+    """Récupère l'historique des news analysées"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        date_limite = get_paris_time().date() - timedelta(days=jours)
+
+        cursor.execute('''
+            SELECT * FROM alertes_news
+            WHERE date >= ?
+            ORDER BY date DESC, timestamp DESC
+        ''', (date_limite,))
+
+        news = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return news
+    except Exception as e:
+        print(f"⚠️ Erreur historique news: {e}")
+        return []
 
 def analyser_marche_json(donnees):
     """Analyse le marché et retourne un JSON structuré"""
@@ -4680,6 +4746,39 @@ def api_news_raw():
             })
 
         return jsonify({'success': False, 'error': 'Aucun article trouvé'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/news/historique')
+def api_news_historique():
+    """Récupère l'historique des news analysées avec navigation par jour"""
+    try:
+        jours = int(request.args.get('jours', 7))
+        news = get_news_historique(jours)
+
+        # Grouper par date
+        par_date = {}
+        for n in news:
+            date_str = str(n.get('date', ''))
+            if date_str not in par_date:
+                par_date[date_str] = []
+            par_date[date_str].append({
+                'heure': n.get('heure', '--:--'),
+                'headline': n.get('titre', ''),
+                'analyse': n.get('contenu', ''),
+                'impact': n.get('impact', 'faible'),
+                'actifs': n.get('actif', '').split(', ') if n.get('actif') else []
+            })
+
+        # Convertir en liste triée par date
+        dates_triees = sorted(par_date.keys(), reverse=True)
+        historique = [{'date': d, 'news': par_date[d]} for d in dates_triees]
+
+        return jsonify({
+            'success': True,
+            'historique': historique,
+            'nb_jours': len(historique)
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

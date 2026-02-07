@@ -39,11 +39,16 @@
         </div>
     </section>
 
-    <!-- 2. NEWS FLASH -->
+    <!-- 2. NEWS FLASH avec Navigation Historique -->
     <section class="section">
         <div class="section-header">
             <span class="section-icon">⚡</span>
             <h2 class="section-title">News Flash Trading</h2>
+            <div class="news-navigation">
+                <button class="nav-arrow-small" onclick="naviguerNews(-1)" id="news-prev" title="Jour précédent">◀</button>
+                <span class="nav-date" id="news-nav-date">Aujourd'hui</span>
+                <button class="nav-arrow-small" onclick="naviguerNews(1)" id="news-next" title="Jour suivant" disabled>▶</button>
+            </div>
             <span class="section-meta" id="news-count">Actualités analysées par impact</span>
         </div>
         <div class="section-content">
@@ -371,6 +376,48 @@
     background: linear-gradient(135deg, rgba(100, 116, 139, 0.1) 0%, rgba(71, 85, 105, 0.05) 100%);
     border-radius: 8px;
     border: 1px dashed var(--border-color);
+}
+
+/* News Navigation */
+.news-navigation {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    margin-right: 12px;
+}
+
+.nav-arrow-small {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 10px;
+}
+
+.nav-arrow-small:hover:not(:disabled) {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+.nav-arrow-small:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.nav-date {
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 80px;
+    text-align: center;
 }
 
 /* News Flash avec Impact Trading */
@@ -754,20 +801,68 @@ async function loadPremarket() {
     }
 }
 
-// ===== NEWS FLASH via NewsAPI =====
+// ===== NEWS FLASH via NewsAPI avec Navigation Historique =====
+let newsHistorique = [];
+let newsIndexJour = 0;
+
+async function loadNewsHistorique() {
+    try {
+        const response = await fetch('/api/news/historique?jours=7');
+        const data = await response.json();
+
+        if (data.success && data.historique) {
+            newsHistorique = data.historique;
+        }
+    } catch (error) {
+        console.error('Erreur chargement historique news:', error);
+    }
+}
+
 async function refreshNews() {
     try {
+        // Charger les news du jour
         const response = await fetch('/api/news');
         const data = await response.json();
 
         if (data.success && data.news) {
             renderNewsFlashWithImpact(data.news);
+            // Mettre à jour l'historique
+            await loadNewsHistorique();
+            newsIndexJour = 0;
+            updateNewsNavigation();
         } else if (data.success && data.articles) {
-            // Fallback pour l'ancien format
             renderNewsFlashFromAPI(data.articles);
         }
     } catch (error) {
         console.error('Erreur news:', error);
+    }
+}
+
+function naviguerNews(direction) {
+    const newIndex = newsIndexJour - direction; // -1 = passé, +1 = futur
+    if (newIndex >= 0 && newIndex < newsHistorique.length) {
+        newsIndexJour = newIndex;
+        const jourData = newsHistorique[newsIndexJour];
+        renderNewsFlashWithImpact(jourData.news || []);
+        updateNewsNavigation();
+    }
+}
+
+function updateNewsNavigation() {
+    const prevBtn = document.getElementById('news-prev');
+    const nextBtn = document.getElementById('news-next');
+    const dateLabel = document.getElementById('news-nav-date');
+
+    if (!newsHistorique.length) return;
+
+    prevBtn.disabled = newsIndexJour >= newsHistorique.length - 1;
+    nextBtn.disabled = newsIndexJour <= 0;
+
+    if (newsIndexJour === 0) {
+        dateLabel.textContent = "Aujourd'hui";
+    } else {
+        const jourData = newsHistorique[newsIndexJour];
+        dateLabel.textContent = jourData.date || `J-${newsIndexJour}`;
     }
 }
 

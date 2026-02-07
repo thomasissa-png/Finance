@@ -166,12 +166,16 @@
         </div>
     </section>
 
-    <!-- Rapport Hebdomadaire -->
+    <!-- Rapport Hebdomadaire avec Navigation -->
     <section class="section">
         <div class="section-header">
             <span class="section-icon">📋</span>
             <h2 class="section-title">Rapport Hebdomadaire</h2>
-            <button class="btn-small" onclick="genererRapportHebdo()">Générer</button>
+            <div class="navigation-arrows">
+                <button class="nav-arrow" onclick="naviguerRapport(-1)" id="rapport-prev" title="Semaine précédente">◀</button>
+                <span class="nav-label" id="rapport-nav-label">Cette semaine</span>
+                <button class="nav-arrow" onclick="naviguerRapport(1)" id="rapport-next" title="Semaine suivante" disabled>▶</button>
+            </div>
         </div>
         <div class="section-content" id="rapport-hebdo-content">
             <div class="loading">Chargement...</div>
@@ -405,39 +409,59 @@ function renderBottomActifs(actifs) {
     container.innerHTML = html;
 }
 
-// ===== RAPPORT HEBDOMADAIRE =====
-async function loadRapportHebdo() {
+// ===== RAPPORT HEBDOMADAIRE AVEC NAVIGATION =====
+let rapportsHistorique = [];
+let rapportIndexActuel = 0;
+
+async function loadRapportsHistorique() {
     try {
-        const response = await fetch('/api/rapport-hebdo');
+        const response = await fetch('/api/historique-rapports?limite=20');
         const data = await response.json();
 
-        if (data.success && data.rapport) {
-            renderRapportHebdo(data.rapport);
-        } else {
-            document.getElementById('rapport-hebdo-content').innerHTML =
-                '<div class="no-data">Aucun rapport disponible. Cliquez sur "Générer" pour créer un rapport.</div>';
+        if (data.success && data.rapports) {
+            rapportsHistorique = data.rapports;
+            if (rapportsHistorique.length > 0) {
+                rapportIndexActuel = 0;
+                renderRapportHebdo(rapportsHistorique[0]);
+                updateRapportNavigation();
+            } else {
+                document.getElementById('rapport-hebdo-content').innerHTML =
+                    '<div class="no-data">Aucun rapport disponible. Le rapport est généré automatiquement chaque dimanche à 20h.</div>';
+            }
         }
     } catch (error) {
-        console.error('Erreur rapport hebdo:', error);
+        console.error('Erreur chargement rapports:', error);
     }
 }
 
-async function genererRapportHebdo() {
-    const container = document.getElementById('rapport-hebdo-content');
-    container.innerHTML = '<div class="loading">Génération du rapport en cours...</div>';
-
-    try {
-        const response = await fetch('/api/rapport-hebdo/generer', {method: 'POST'});
-        const data = await response.json();
-
-        if (data.success) {
-            renderRapportHebdo(data.rapport);
-        } else {
-            container.innerHTML = `<div class="error">Erreur: ${data.error}</div>`;
-        }
-    } catch (error) {
-        container.innerHTML = '<div class="error">Erreur de génération</div>';
+function naviguerRapport(direction) {
+    const newIndex = rapportIndexActuel + direction;
+    if (newIndex >= 0 && newIndex < rapportsHistorique.length) {
+        rapportIndexActuel = newIndex;
+        renderRapportHebdo(rapportsHistorique[rapportIndexActuel]);
+        updateRapportNavigation();
     }
+}
+
+function updateRapportNavigation() {
+    const prevBtn = document.getElementById('rapport-prev');
+    const nextBtn = document.getElementById('rapport-next');
+    const label = document.getElementById('rapport-nav-label');
+
+    prevBtn.disabled = rapportIndexActuel >= rapportsHistorique.length - 1;
+    nextBtn.disabled = rapportIndexActuel <= 0;
+
+    if (rapportIndexActuel === 0) {
+        label.textContent = 'Dernière semaine';
+    } else {
+        const rapport = rapportsHistorique[rapportIndexActuel];
+        label.textContent = rapport.semaine || `Semaine -${rapportIndexActuel}`;
+    }
+}
+
+async function loadRapportHebdo() {
+    // Charger l'historique au lieu d'un seul rapport
+    await loadRapportsHistorique();
 }
 
 function renderRapportHebdo(rapport) {
@@ -1417,6 +1441,47 @@ function filterTrades() {
 
 .btn-small:hover {
     opacity: 0.9;
+}
+
+/* Navigation arrows pour rapports */
+.navigation-arrows {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+}
+
+.nav-arrow {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 0.75rem;
+}
+
+.nav-arrow:hover:not(:disabled) {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+.nav-arrow:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.nav-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    min-width: 100px;
+    text-align: center;
 }
 
 .rapport-hebdo {
