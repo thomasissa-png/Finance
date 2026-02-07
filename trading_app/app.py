@@ -9,6 +9,7 @@ import re
 import sqlite3
 from datetime import datetime, timedelta
 from threading import Thread, Lock
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
 import numpy as np
@@ -388,6 +389,108 @@ def get_yahoo_finance_data(symbole, outputsize=30):
         print(f"⚠️ Yahoo Finance {symbole}: {e}")
         return pd.DataFrame(), False
 
+def get_yahoo_finance_batch(symboles_list, outputsize=30):
+    """
+    BATCH Yahoo Finance: Télécharge TOUS les symboles en UN SEUL appel.
+    yfinance.download() supporte les listes de symboles nativement.
+
+    Args:
+        symboles_list: Liste de symboles Yahoo Finance (^GSPC, ^DJI, ES=F, etc.)
+        outputsize: Nombre de barres
+
+    Returns:
+        Dict {symbole: (DataFrame, is_fresh)}
+    """
+    global TWELVEDATA_CACHE
+
+    if not symboles_list:
+        return {}
+
+    results = {}
+    now = time.time()
+    symboles_to_fetch = []
+
+    # Vérifier le cache d'abord
+    for symbole in symboles_list:
+        cache_key = f"yf_{symbole}_{outputsize}"
+        with TWELVEDATA_CACHE_LOCK:
+            if cache_key in TWELVEDATA_CACHE:
+                cached = TWELVEDATA_CACHE[cache_key]
+                if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
+                    results[symbole] = (cached['data'], cached['is_fresh'])
+                    continue
+        symboles_to_fetch.append(symbole)
+
+    if not symboles_to_fetch:
+        return results
+
+    try:
+        # BATCH DOWNLOAD: Un seul appel pour tous les symboles!
+        period = f"{min(outputsize + 5, 60)}d"
+        data = yf.download(
+            symboles_to_fetch,
+            period=period,
+            group_by='ticker',
+            progress=False,
+            threads=True  # Téléchargement parallèle interne
+        )
+
+        if data.empty:
+            for symbole in symboles_to_fetch:
+                results[symbole] = (pd.DataFrame(), False)
+            return results
+
+        # Parser les résultats pour chaque symbole
+        for symbole in symboles_to_fetch:
+            try:
+                # Format différent si 1 seul symbole vs plusieurs
+                if len(symboles_to_fetch) == 1:
+                    hist = data.copy()
+                else:
+                    if symbole not in data.columns.get_level_values(0):
+                        results[symbole] = (pd.DataFrame(), False)
+                        continue
+                    hist = data[symbole].copy()
+
+                if hist.empty or hist.dropna(how='all').empty:
+                    results[symbole] = (pd.DataFrame(), False)
+                    continue
+
+                # Nettoyer et formater
+                hist = hist.dropna(how='all')
+                hist = hist[['Open', 'High', 'Low', 'Close', 'Volume']].tail(outputsize)
+
+                # Déterminer fraîcheur
+                is_fresh = True
+                if len(hist) > 0:
+                    last_date = hist.index[-1]
+                    if hasattr(last_date, 'date'):
+                        last_date = last_date.date()
+                    today = get_paris_time().date()
+                    is_fresh = last_date >= today - timedelta(days=3)
+
+                # Mettre en cache
+                cache_key = f"yf_{symbole}_{outputsize}"
+                with TWELVEDATA_CACHE_LOCK:
+                    TWELVEDATA_CACHE[cache_key] = {
+                        'data': hist,
+                        'timestamp': now,
+                        'is_fresh': is_fresh
+                    }
+
+                results[symbole] = (hist, is_fresh)
+
+            except Exception as e:
+                print(f"⚠️ Yahoo batch parse {symbole}: {e}")
+                results[symbole] = (pd.DataFrame(), False)
+
+    except Exception as e:
+        print(f"⚠️ Yahoo Finance batch download: {e}")
+        for symbole in symboles_to_fetch:
+            results[symbole] = (pd.DataFrame(), False)
+
+    return results
+
 def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
     """Récupère les données historiques via Twelve Data API (thread-safe)
     Utilise Yahoo Finance en fallback pour les indices et futures non supportés."""
@@ -588,14 +691,230 @@ def get_twelvedata_intraday(symbole, interval="5min", outputsize=78):
     """Récupère les données intraday (pour vérification trades)"""
     return get_twelvedata_time_series(symbole, outputsize=outputsize, interval=interval)
 
+def get_fresh_quote_for_trade(symbole):
+    """
+    Récupère un prix FRAIS (sans cache) pour l'exécution d'un trade.
+
+    IMPORTANT pour le trading:
+    - Bypasse le cache pour avoir le prix le plus récent possible
+    - Calcule le spread implicite (high-low du jour)
+    - Vérifie la liquidité via le volume
+    - Retourne des données formatées pour la prise de décision
+
+    Returns:
+        Dict avec prix frais et métriques, ou None si erreur
+    """
+    if not TWELVEDATA_API_KEY:
+        return None
+
+    # Bypass le cache - on veut des données fraîches
+    rate_limit_twelvedata()
+
+    try:
+        td_symbol, mic_code = convert_symbol_to_twelvedata(symbole)
+
+        url = "https://api.twelvedata.com/quote"
+        params = {
+            "symbol": td_symbol,
+            "apikey": TWELVEDATA_API_KEY
+        }
+        if mic_code:
+            params["mic_code"] = mic_code
+
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        if "close" not in data:
+            error_msg = data.get("message", "")
+            if "quota" in error_msg.lower():
+                activate_quota_circuit_breaker()
+            print(f"⚠️ Fresh quote {symbole}: {error_msg}")
+            return None
+
+        price = float(data.get("close", 0))
+        high = float(data.get("high", 0))
+        low = float(data.get("low", 0))
+        open_price = float(data.get("open", 0))
+        prev_close = float(data.get("previous_close", 0))
+        volume = int(data.get("volume", 0)) if data.get("volume") else 0
+
+        # Calculs pour le trading
+        spread_pct = ((high - low) / price * 100) if price > 0 else 0
+        variation_jour = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0
+        variation_open = ((price - open_price) / open_price * 100) if open_price > 0 else 0
+
+        return {
+            "symbole": symbole,
+            "prix": round(price, 4),
+            "open": round(open_price, 4),
+            "high": round(high, 4),
+            "low": round(low, 4),
+            "previous_close": round(prev_close, 4),
+            "volume": volume,
+            "spread_pct": round(spread_pct, 2),  # Volatilité intraday
+            "variation_jour": round(variation_jour, 2),  # % depuis clôture veille
+            "variation_open": round(variation_open, 2),  # % depuis open
+            "timestamp": get_paris_time().isoformat(),
+            "is_fresh": True
+        }
+
+    except Exception as e:
+        print(f"⚠️ Fresh quote error {symbole}: {e}")
+        return None
+
+def valider_setup_avant_trade(symbole, direction, prix_entree_prevu, donnees_marche=None):
+    """
+    Valide qu'un setup de trade est toujours pertinent avant exécution.
+
+    Vérifie:
+    - Le prix actuel vs prix prévu (pas trop d'écart)
+    - La direction du mouvement intraday
+    - Le volume (liquidité suffisante)
+    - La volatilité (spread raisonnable)
+
+    Args:
+        symbole: Symbole de l'actif
+        direction: 'LONG' ou 'SHORT'
+        prix_entree_prevu: Prix auquel Claude a recommandé d'entrer
+        donnees_marche: Données du cache (optionnel, pour ATR)
+
+    Returns:
+        (bool valide, str raison, dict quote_fraiche)
+    """
+    quote = get_fresh_quote_for_trade(symbole)
+
+    if not quote:
+        return False, "Impossible d'obtenir un prix frais", None
+
+    prix_actuel = quote['prix']
+    ecart_pct = abs((prix_actuel - prix_entree_prevu) / prix_entree_prevu * 100)
+
+    # Règles de validation
+    MAX_ECART_PCT = 1.0  # Max 1% d'écart avec le prix recommandé
+    MAX_SPREAD_PCT = 3.0  # Spread intraday max acceptable
+
+    # 1. Vérifier l'écart de prix
+    if ecart_pct > MAX_ECART_PCT:
+        return False, f"Prix a bougé de {ecart_pct:.1f}% (max {MAX_ECART_PCT}%)", quote
+
+    # 2. Vérifier le spread (volatilité excessive)
+    if quote['spread_pct'] > MAX_SPREAD_PCT:
+        return False, f"Spread trop large: {quote['spread_pct']:.1f}% (max {MAX_SPREAD_PCT}%)", quote
+
+    # 3. Vérifier la cohérence direction/mouvement
+    if direction == 'LONG' and quote['variation_open'] < -2.0:
+        return False, f"Momentum baissier depuis open ({quote['variation_open']:.1f}%)", quote
+    if direction == 'SHORT' and quote['variation_open'] > 2.0:
+        return False, f"Momentum haussier depuis open ({quote['variation_open']:.1f}%)", quote
+
+    # 4. Vérifier le volume (si disponible)
+    if quote['volume'] == 0:
+        return False, "Volume nul - possible problème de données", quote
+
+    return True, "Setup validé", quote
+
 # ============================================================================
 # BATCH API - OPTIMISATION CHARGEMENT
 # ============================================================================
 
+def _fetch_twelvedata_group(mic_code, symbol_pairs, interval, outputsize):
+    """Helper interne pour fetch un groupe de symboles Twelve Data (appelé en parallèle)"""
+    results = {}
+    now = time.time()
+    BATCH_SIZE = 8
+
+    for i in range(0, len(symbol_pairs), BATCH_SIZE):
+        chunk = symbol_pairs[i:i + BATCH_SIZE]
+        yahoo_symbols = [p[0] for p in chunk]
+        td_symbols = [p[1] for p in chunk]
+
+        rate_limit_twelvedata()
+
+        try:
+            url = "https://api.twelvedata.com/time_series"
+            params = {
+                "symbol": ",".join(td_symbols),
+                "interval": interval,
+                "outputsize": outputsize,
+                "apikey": TWELVEDATA_API_KEY,
+                "timezone": "Europe/Paris"
+            }
+
+            if mic_code != "NO_MIC":
+                params["mic_code"] = mic_code
+
+            response = requests.get(url, params=params, timeout=15)
+            data = response.json()
+
+            if "values" in data:
+                batch_data = {td_symbols[0]: data}
+            else:
+                batch_data = data
+
+            for yahoo_sym, td_sym in chunk:
+                sym_data = batch_data.get(td_sym, {})
+
+                if "values" not in sym_data:
+                    error_msg = sym_data.get("message", "Pas de données")
+                    if "quota" in str(error_msg).lower():
+                        activate_quota_circuit_breaker()
+                    results[yahoo_sym] = (pd.DataFrame(), False)
+                    continue
+
+                values = sym_data["values"]
+                df = pd.DataFrame(values)
+                df = df.rename(columns={
+                    "datetime": "Date", "open": "Open", "high": "High",
+                    "low": "Low", "close": "Close", "volume": "Volume"
+                })
+
+                for col in ["Open", "High", "Low", "Close"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                if "Volume" in df.columns:
+                    df["Volume"] = pd.to_numeric(df["Volume"], errors='coerce').fillna(0)
+
+                df["Date"] = pd.to_datetime(df["Date"])
+                df = df.set_index("Date")
+                df = df.sort_index()
+
+                is_fresh = False
+                if len(df) > 0:
+                    last_date = df.index[-1]
+                    if hasattr(last_date, 'date'):
+                        last_date = last_date.date()
+                    today = get_paris_time().date()
+                    weekday = today.weekday()
+                    if weekday == 0:
+                        vendredi = today - timedelta(days=3)
+                    elif weekday == 6:
+                        vendredi = today - timedelta(days=2)
+                    else:
+                        vendredi = today - timedelta(days=1) if weekday > 0 else today
+                    is_fresh = last_date >= vendredi
+
+                cache_key = f"{yahoo_sym}_{interval}_{outputsize}"
+                with TWELVEDATA_CACHE_LOCK:
+                    TWELVEDATA_CACHE[cache_key] = {
+                        'data': df, 'timestamp': now, 'is_fresh': is_fresh
+                    }
+
+                results[yahoo_sym] = (df, is_fresh)
+
+        except Exception as e:
+            for yahoo_sym, _ in chunk:
+                results[yahoo_sym] = (pd.DataFrame(), False)
+
+    return results
+
 def get_twelvedata_batch(symboles_list, outputsize=30, interval="1day"):
     """
-    Récupère les données historiques pour PLUSIEURS symboles en UN SEUL appel API.
-    Réduit drastiquement le temps de chargement (8 symboles = 1 appel au lieu de 8).
+    Récupère les données historiques pour PLUSIEURS symboles via BATCH API.
+
+    OPTIMISATIONS:
+    - Twelve Data: 8 symboles par appel API (au lieu de 1)
+    - Yahoo Finance: Tous les symboles en 1 appel
+    - PARALLÈLE: Yahoo et Twelve Data chargés simultanément
 
     Args:
         symboles_list: Liste de symboles Yahoo Finance format
@@ -614,13 +933,21 @@ def get_twelvedata_batch(symboles_list, outputsize=30, interval="1day"):
     results = {}
     now = time.time()
 
-    # Séparer les symboles: ceux en cache vs ceux à fetcher
-    symboles_to_fetch = []
+    # Séparer les symboles: cache, Yahoo Finance, Twelve Data
+    symboles_to_fetch_td = []
     symboles_yahoo_fallback = []
 
     for symbole in symboles_list:
         # Yahoo Finance fallback
         if symbole in SYMBOLES_YAHOO_FALLBACK:
+            # Vérifier cache Yahoo aussi
+            cache_key = f"yf_{symbole}_{outputsize}"
+            with TWELVEDATA_CACHE_LOCK:
+                if cache_key in TWELVEDATA_CACHE:
+                    cached = TWELVEDATA_CACHE[cache_key]
+                    if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
+                        results[symbole] = (cached['data'], cached['is_fresh'])
+                        continue
             symboles_yahoo_fallback.append(symbole)
             continue
 
@@ -632,154 +959,58 @@ def get_twelvedata_batch(symboles_list, outputsize=30, interval="1day"):
                     results[symbole] = (cached['data'], cached['is_fresh'])
                     continue
 
-        symboles_to_fetch.append(symbole)
-
-    # Fetch Yahoo Finance fallback symbols (one by one, they're few)
-    for symbole in symboles_yahoo_fallback:
-        try:
-            df, is_fresh = get_yahoo_finance_data(symbole, outputsize)
-            results[symbole] = (df, is_fresh)
-        except Exception as e:
-            print(f"⚠️ Yahoo fallback {symbole}: {e}")
-            results[symbole] = (pd.DataFrame(), False)
+        symboles_to_fetch_td.append(symbole)
 
     # Si rien à fetcher, retourner
-    if not symboles_to_fetch:
+    if not symboles_to_fetch_td and not symboles_yahoo_fallback:
         return results
 
-    # Circuit breaker check
-    if check_quota_circuit_breaker():
-        # Retourner cache périmé si disponible
-        for symbole in symboles_to_fetch:
+    # Circuit breaker check pour Twelve Data
+    td_circuit_break = check_quota_circuit_breaker()
+    if td_circuit_break and symboles_to_fetch_td:
+        for symbole in symboles_to_fetch_td:
             cache_key = f"{symbole}_{interval}_{outputsize}"
             with TWELVEDATA_CACHE_LOCK:
                 if cache_key in TWELVEDATA_CACHE:
                     results[symbole] = (TWELVEDATA_CACHE[cache_key]['data'], False)
                 else:
                     results[symbole] = (pd.DataFrame(), False)
-        return results
+        symboles_to_fetch_td = []  # Ne pas fetcher si circuit breaker
 
-    # Grouper les symboles par MIC code (les batch doivent avoir le même exchange)
-    groups = {}  # {mic_code: [(yahoo_symbol, td_symbol), ...]}
-
-    for symbole in symboles_to_fetch:
+    # Grouper les symboles Twelve Data par MIC code
+    groups = {}
+    for symbole in symboles_to_fetch_td:
         td_symbol, mic_code = convert_symbol_to_twelvedata(symbole)
         key = mic_code or "NO_MIC"
         if key not in groups:
             groups[key] = []
         groups[key].append((symbole, td_symbol))
 
-    # Faire un appel batch par groupe (max 8 symboles par appel)
-    BATCH_SIZE = 8
+    # ========================================================================
+    # CHARGEMENT PARALLÈLE: Yahoo Finance + Twelve Data simultanément
+    # ========================================================================
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
 
-    for mic_code, symbol_pairs in groups.items():
-        # Diviser en chunks de 8
-        for i in range(0, len(symbol_pairs), BATCH_SIZE):
-            chunk = symbol_pairs[i:i + BATCH_SIZE]
-            yahoo_symbols = [p[0] for p in chunk]
-            td_symbols = [p[1] for p in chunk]
+        # 1. Lancer Yahoo Finance batch (1 seul appel pour tous les symboles)
+        if symboles_yahoo_fallback:
+            futures.append(executor.submit(
+                get_yahoo_finance_batch, symboles_yahoo_fallback, outputsize
+            ))
 
-            # Rate limiting (1 appel = 1 délai, pas 8)
-            rate_limit_twelvedata()
+        # 2. Lancer Twelve Data par groupe MIC (en parallèle)
+        for mic_code, symbol_pairs in groups.items():
+            futures.append(executor.submit(
+                _fetch_twelvedata_group, mic_code, symbol_pairs, interval, outputsize
+            ))
 
+        # 3. Collecter tous les résultats
+        for future in as_completed(futures):
             try:
-                url = "https://api.twelvedata.com/time_series"
-                params = {
-                    "symbol": ",".join(td_symbols),
-                    "interval": interval,
-                    "outputsize": outputsize,
-                    "apikey": TWELVEDATA_API_KEY,
-                    "timezone": "Europe/Paris"
-                }
-
-                # Ajouter mic_code si spécifié
-                if mic_code != "NO_MIC":
-                    params["mic_code"] = mic_code
-
-                response = requests.get(url, params=params, timeout=15)
-                data = response.json()
-
-                # Réponse batch: {symbol1: {values: [...]}, symbol2: {values: [...]}, ...}
-                # Réponse single: {values: [...]}
-
-                # Détecter si réponse single ou batch
-                if "values" in data:
-                    # Réponse single symbol
-                    batch_data = {td_symbols[0]: data}
-                else:
-                    # Réponse batch
-                    batch_data = data
-
-                # Parser chaque symbole
-                for yahoo_sym, td_sym in chunk:
-                    sym_data = batch_data.get(td_sym, {})
-
-                    if "values" not in sym_data:
-                        error_msg = sym_data.get("message", "Pas de données")
-                        if "quota" in str(error_msg).lower():
-                            activate_quota_circuit_breaker()
-                        print(f"⚠️ Batch {yahoo_sym}: {error_msg}")
-                        results[yahoo_sym] = (pd.DataFrame(), False)
-                        continue
-
-                    # Convertir en DataFrame
-                    values = sym_data["values"]
-                    df = pd.DataFrame(values)
-
-                    df = df.rename(columns={
-                        "datetime": "Date",
-                        "open": "Open",
-                        "high": "High",
-                        "low": "Low",
-                        "close": "Close",
-                        "volume": "Volume"
-                    })
-
-                    for col in ["Open", "High", "Low", "Close"]:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors='coerce')
-                    if "Volume" in df.columns:
-                        df["Volume"] = pd.to_numeric(df["Volume"], errors='coerce').fillna(0)
-
-                    df["Date"] = pd.to_datetime(df["Date"])
-                    df = df.set_index("Date")
-                    df = df.sort_index()
-
-                    # Vérifier fraîcheur
-                    is_fresh = False
-                    if len(df) > 0:
-                        last_date = df.index[-1]
-                        if hasattr(last_date, 'date'):
-                            last_date = last_date.date()
-                        today = get_paris_time().date()
-                        weekday = today.weekday()
-                        if weekday == 0:
-                            vendredi = today - timedelta(days=3)
-                        elif weekday == 6:
-                            vendredi = today - timedelta(days=2)
-                        else:
-                            vendredi = today - timedelta(days=1) if weekday > 0 else today
-                        is_fresh = last_date >= vendredi
-
-                    # Mettre en cache
-                    cache_key = f"{yahoo_sym}_{interval}_{outputsize}"
-                    with TWELVEDATA_CACHE_LOCK:
-                        TWELVEDATA_CACHE[cache_key] = {
-                            'data': df,
-                            'timestamp': now,
-                            'is_fresh': is_fresh
-                        }
-
-                    results[yahoo_sym] = (df, is_fresh)
-
-            except requests.exceptions.Timeout:
-                print(f"⚠️ Timeout batch {td_symbols}")
-                for yahoo_sym, _ in chunk:
-                    results[yahoo_sym] = (pd.DataFrame(), False)
+                batch_results = future.result()
+                results.update(batch_results)
             except Exception as e:
-                print(f"⚠️ Erreur batch: {e}")
-                for yahoo_sym, _ in chunk:
-                    results[yahoo_sym] = (pd.DataFrame(), False)
+                print(f"⚠️ Erreur future batch: {e}")
 
     return results
 
