@@ -99,6 +99,37 @@
         </section>
     </div>
 
+    <!-- RÉGIME MARCHÉ + QUICK STATS -->
+    <div class="grid-2 mb-3">
+        <!-- Widget Régime Marché -->
+        <section class="section" id="section-regime" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📊</span>
+                <h2 class="section-title">Régime Marché</h2>
+                <span class="section-meta" id="regime-update-time">--:--</span>
+            </div>
+            <div class="section-content">
+                <div class="regime-widget" id="regime-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quick Stats A/B Testing -->
+        <section class="section" id="section-quick-stats" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📈</span>
+                <h2 class="section-title">Quick Stats (7j)</h2>
+                <span class="section-meta">Performance par dimension</span>
+            </div>
+            <div class="section-content">
+                <div class="quick-stats-widget" id="quick-stats-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
     <!-- ALERTE MACRO (si événement imminent) -->
     <section class="section section-alert" id="section-alerte-macro" style="display: none;">
         <div class="section-header">
@@ -680,8 +711,190 @@ async function loadAllData() {
         refreshNews(),
         loadPremarket(),
         loadMacroEvents(),
-        loadABTests()
+        loadABTests(),
+        loadRegimeMarche(),
+        loadQuickStats()
     ]);
+}
+
+// ===== RÉGIME MARCHÉ =====
+async function loadRegimeMarche() {
+    try {
+        const response = await fetch('/api/contexte-trading');
+        const data = await response.json();
+
+        const widget = document.getElementById('regime-widget');
+        const timeSpan = document.getElementById('regime-update-time');
+
+        if (data.success && data.contexte) {
+            const ctx = data.contexte;
+            const now = new Date();
+            timeSpan.textContent = now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+
+            // Déterminer la classe du régime
+            const regimeClass = {
+                'CALME': 'regime-calme',
+                'NORMAL': 'regime-normal',
+                'VOLATILE': 'regime-volatile',
+                'EXTREME': 'regime-extreme'
+            }[ctx.regime_marche] || 'regime-normal';
+
+            // Icône du régime
+            const regimeIcon = {
+                'CALME': '😌',
+                'NORMAL': '📊',
+                'VOLATILE': '⚡',
+                'EXTREME': '🔥'
+            }[ctx.regime_marche] || '📊';
+
+            // Session icon
+            const sessionIcon = {
+                'EU_OPEN': '🇪🇺',
+                'US_PREMARKET': '🌅',
+                'US_OPEN': '🇺🇸',
+                'EU_CLOSE': '🌆',
+                'US_CLOSE': '🌙',
+                'HORS_SESSION': '💤'
+            }[ctx.session_marche] || '📈';
+
+            widget.innerHTML = `
+                <div class="regime-container ${regimeClass}">
+                    <div class="regime-main">
+                        <div class="regime-vix">
+                            <span class="regime-vix-label">VIX</span>
+                            <span class="regime-vix-value">${ctx.vix_niveau?.toFixed(1) || '--'}</span>
+                        </div>
+                        <div class="regime-status">
+                            <span class="regime-icon">${regimeIcon}</span>
+                            <span class="regime-name">${ctx.regime_marche}</span>
+                        </div>
+                    </div>
+                    <div class="regime-details">
+                        <div class="regime-row">
+                            <span class="regime-label">${sessionIcon} Session</span>
+                            <span class="regime-value">${ctx.session_marche?.replace('_', ' ') || '--'}</span>
+                        </div>
+                        <div class="regime-row">
+                            <span class="regime-label">📅 Jour</span>
+                            <span class="regime-value">${ctx.jour_semaine || '--'}</span>
+                        </div>
+                    </div>
+                    <div class="regime-rules">
+                        <span class="regime-rules-icon">💡</span>
+                        <span class="regime-rules-text">${ctx.regles_adaptees || 'Règles standard'}</span>
+                    </div>
+                </div>
+            `;
+        } else {
+            widget.innerHTML = '<div class="no-data">Données indisponibles</div>';
+        }
+    } catch (error) {
+        console.error('Erreur régime marché:', error);
+        document.getElementById('regime-widget').innerHTML = '<div class="error-message">Erreur de chargement</div>';
+    }
+}
+
+// ===== QUICK STATS A/B TESTING =====
+async function loadQuickStats() {
+    try {
+        const response = await fetch('/api/stats-avancees');
+        const data = await response.json();
+
+        const widget = document.getElementById('quick-stats-widget');
+
+        if (data.success) {
+            let html = '<div class="quick-stats-container">';
+
+            // Stats par conviction
+            if (data.par_conviction && data.par_conviction.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Conviction</div>';
+                for (const stat of data.par_conviction) {
+                    const stars = '⭐'.repeat(stat.conviction_score || 0);
+                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${stars || '☆'}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            // Stats par régime
+            if (data.par_regime_marche && data.par_regime_marche.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Régime</div>';
+                for (const stat of data.par_regime_marche) {
+                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    const regimeIcon = {'CALME': '😌', 'NORMAL': '📊', 'VOLATILE': '⚡', 'EXTREME': '🔥'}[stat.regime_marche] || '📊';
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${regimeIcon} ${stat.regime_marche || 'N/A'}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            // Stats par stratégie d'entrée
+            if (data.par_strategie_entree && data.par_strategie_entree.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Stratégie</div>';
+                for (const stat of data.par_strategie_entree) {
+                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${stat.strategie_entree || 'N/A'}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            // Stats par jour de la semaine
+            if (data.par_jour_semaine && data.par_jour_semaine.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Jour</div>';
+                for (const stat of data.par_jour_semaine) {
+                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    const jourShort = (stat.jour_semaine || 'N/A').substring(0, 3);
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${jourShort}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            html += '</div>';
+
+            // Message si pas de données
+            if (!data.par_conviction?.length && !data.par_regime_marche?.length) {
+                html = '<div class="no-data">Pas encore de données (nouveaux champs)</div>';
+            }
+
+            widget.innerHTML = html;
+        } else {
+            widget.innerHTML = '<div class="no-data">Données indisponibles</div>';
+        }
+    } catch (error) {
+        console.error('Erreur quick stats:', error);
+        document.getElementById('quick-stats-widget').innerHTML = '<div class="error-message">Erreur de chargement</div>';
+    }
 }
 
 // ===== A/B TESTS =====

@@ -1618,6 +1618,383 @@ body {
 }
 
 /* ============================================================================
+   RÉGIME MARCHÉ WIDGET
+   ============================================================================ */
+
+.regime-container {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    border-left: 4px solid var(--accent-blue);
+}
+
+.regime-container.regime-calme {
+    border-left-color: var(--accent-green);
+    background: rgba(16, 185, 129, 0.05);
+}
+
+.regime-container.regime-normal {
+    border-left-color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.regime-container.regime-volatile {
+    border-left-color: var(--accent-orange);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.regime-container.regime-extreme {
+    border-left-color: var(--accent-red);
+    background: rgba(239, 68, 68, 0.08);
+    animation: pulse-border 2s infinite;
+}
+
+.regime-main {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+}
+
+.regime-vix {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    min-width: 70px;
+}
+
+.regime-vix-label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.regime-vix-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.regime-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.regime-icon {
+    font-size: 1.5rem;
+}
+
+.regime-name {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.regime-details {
+    display: flex;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.regime-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.regime-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.regime-value {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.regime-rules {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.regime-rules-icon {
+    flex-shrink: 0;
+}
+
+.regime-rules-text {
+    line-height: 1.4;
+}
+
+/* ============================================================================
+   QUICK STATS WIDGET
+   ============================================================================ */
+
+.quick-stats-container {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-3);
+}
+
+.quick-stats-section {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2);
+}
+
+.quick-stats-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: var(--space-2);
+    padding-bottom: var(--space-1);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.quick-stats-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 4px 0;
+    font-size: 0.85rem;
+}
+
+.quick-stats-label {
+    flex: 1;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.quick-stats-value {
+    font-weight: 600;
+    min-width: 40px;
+    text-align: right;
+}
+
+.quick-stats-value.win-high {
+    color: var(--accent-green);
+}
+
+.quick-stats-value.win-medium {
+    color: var(--accent-orange);
+}
+
+.quick-stats-value.win-low {
+    color: var(--accent-red);
+}
+
+.quick-stats-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    min-width: 30px;
+}
+
+/* ============================================================================
+   TRADES FILTERS & ENRICHED TABLE
+   ============================================================================ */
+
+.trades-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+    align-items: flex-end;
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.filter-group label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.filter-group select {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    min-width: 120px;
+    cursor: pointer;
+}
+
+.filter-group select:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+.btn-clear-filters {
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-clear-filters:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+/* Trades Table Enriched */
+.trades-enriched {
+    font-size: 0.85rem;
+}
+
+.trades-enriched th,
+.trades-enriched td {
+    padding: 8px 6px;
+    white-space: nowrap;
+}
+
+.trades-enriched th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.conviction-cell {
+    font-size: 0.7rem;
+    letter-spacing: -2px;
+}
+
+/* Badges Stratégie */
+.badge-strategie {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.badge-strategie.strat-immediate {
+    background: rgba(59, 130, 246, 0.15);
+    color: #3B82F6;
+}
+
+.badge-strategie.strat-pullback {
+    background: rgba(168, 85, 247, 0.15);
+    color: #A855F7;
+}
+
+.badge-strategie.strat-breakout {
+    background: rgba(245, 158, 11, 0.15);
+    color: #F59E0B;
+}
+
+.badge-strategie.strat-limit {
+    background: rgba(107, 114, 128, 0.15);
+    color: #6B7280;
+}
+
+/* Badges Régime */
+.badge-regime {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.badge-regime.regime-calme {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10B981;
+}
+
+.badge-regime.regime-normal {
+    background: rgba(59, 130, 246, 0.15);
+    color: #3B82F6;
+}
+
+.badge-regime.regime-volatile {
+    background: rgba(245, 158, 11, 0.15);
+    color: #F59E0B;
+}
+
+.badge-regime.regime-extreme {
+    background: rgba(239, 68, 68, 0.15);
+    color: #EF4444;
+}
+
+/* Badges Statut */
+.badge-statut {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+/* Badges Action */
+.badge-action {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.badge-action.action-hold {
+    background: rgba(107, 114, 128, 0.15);
+    color: #6B7280;
+}
+
+.badge-action.action-renforcer {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10B981;
+}
+
+.badge-action.action-reduire {
+    background: rgba(245, 158, 11, 0.15);
+    color: #F59E0B;
+}
+
+.badge-action.action-sortir {
+    background: rgba(239, 68, 68, 0.15);
+    color: #EF4444;
+}
+
+/* Stop ajusté (breakeven/trailing) */
+.stop-ajuste {
+    color: var(--accent-green) !important;
+    font-weight: 600;
+}
+
+.stop-ajuste::after {
+    content: ' 🛡️';
+    font-size: 0.7rem;
+}
+
+/* ============================================================================
    RESPONSIVE
    ============================================================================ */
 

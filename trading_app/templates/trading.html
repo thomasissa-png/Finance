@@ -212,8 +212,50 @@
                 <div class="card">
                     <div class="card-header">
                         <h2>&#128176; Historique Trades</h2>
+                        <button class="btn-refresh" onclick="loadBilanData()">&#8635;</button>
                     </div>
                     <div class="card-body">
+                        <!-- Filtres rapides -->
+                        <div class="trades-filters" id="trades-filters">
+                            <div class="filter-group">
+                                <label>Conviction</label>
+                                <select id="filter-conviction" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="5">⭐⭐⭐⭐⭐</option>
+                                    <option value="4">⭐⭐⭐⭐+</option>
+                                    <option value="3">⭐⭐⭐+</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Régime</label>
+                                <select id="filter-regime" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="CALME">😌 Calme</option>
+                                    <option value="NORMAL">📊 Normal</option>
+                                    <option value="VOLATILE">⚡ Volatile</option>
+                                    <option value="EXTREME">🔥 Extreme</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Stratégie</label>
+                                <select id="filter-strategie" onchange="applyTradesFilters()">
+                                    <option value="">Toutes</option>
+                                    <option value="IMMEDIATE">Immédiate</option>
+                                    <option value="PULLBACK">Pullback</option>
+                                    <option value="BREAKOUT">Breakout</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Statut</label>
+                                <select id="filter-statut" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="EN_COURS">En cours</option>
+                                    <option value="TP50_ATTEINT">TP50%</option>
+                                    <option value="termine">Terminé</option>
+                                </select>
+                            </div>
+                            <button class="btn-clear-filters" onclick="clearTradesFilters()">✕ Reset</button>
+                        </div>
                         <div id="trades-history" class="trades-table">
                             <p class="no-data">Aucun trade</p>
                         </div>
@@ -521,61 +563,11 @@ async function loadBilanData() {
         const dataTrades = await respTrades.json();
 
         const tradesContainer = document.getElementById('trades-history');
+        // Stocker les trades pour le filtrage
+        window.allTrades = dataTrades.trades || [];
+
         if (dataTrades.success && dataTrades.trades.length > 0) {
-            let html = `
-                <table class="trades-table-data">
-                    <thead>
-                        <tr>
-                            <th>Heure</th>
-                            <th>Actif</th>
-                            <th>Dir.</th>
-                            <th>Entrée</th>
-                            <th>Stop</th>
-                            <th>TP1</th>
-                            <th>RSI</th>
-                            <th>MACD</th>
-                            <th>A/B Test</th>
-                            <th>Résultat</th>
-                            <th>PnL</th>
-                        </tr>
-                    </thead>
-                    <tbody>`;
-
-            for (const trade of dataTrades.trades) {
-                const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'success' :
-                                   trade.resultat === 'STOP' ? 'fail' : '';
-                const direction = trade.direction || 'LONG';
-                const dirClass = direction === 'LONG' ? 'positive' : 'negative';
-                const rsi = trade.rsi_reco ? Math.round(trade.rsi_reco) : '-';
-                const macd = trade.macd_signal_reco || '-';
-                const macdClass = macd.includes('BULLISH') ? 'positive' : macd.includes('BEARISH') ? 'negative' : '';
-
-                // A/B Test badge
-                let abBadge = '-';
-                if (trade.ab_groupe) {
-                    const abClass = trade.ab_groupe === 'A' ? 'ab-groupe-a' : 'ab-groupe-b';
-                    const abLabel = trade.ab_variante ? trade.ab_variante.substring(0, 15) : trade.ab_groupe;
-                    abBadge = `<span class="ab-badge ${abClass}">🧪 ${trade.ab_groupe}: ${abLabel}</span>`;
-                }
-
-                html += `
-                    <tr class="${resultClass}">
-                        <td>${trade.heure_message}</td>
-                        <td>${trade.actif}</td>
-                        <td class="${dirClass}">${direction}</td>
-                        <td>${trade.prix_entree}</td>
-                        <td>${trade.prix_stop}</td>
-                        <td>${trade.prix_tp1}</td>
-                        <td>${rsi}</td>
-                        <td class="${macdClass}">${macd}</td>
-                        <td>${abBadge}</td>
-                        <td>${trade.resultat || 'En cours'}</td>
-                        <td>${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
-                    </tr>`;
-            }
-
-            html += '</tbody></table>';
-            tradesContainer.innerHTML = html;
+            renderTradesTable(dataTrades.trades);
         } else {
             tradesContainer.innerHTML = '<p class="no-data">Aucun trade aujourd\'hui</p>';
         }
@@ -694,6 +686,167 @@ async function genererCloture() {
 
 function closeModal() {
     document.getElementById('modal-analyse').style.display = 'none';
+}
+
+// ===== TRADES TABLE ENRICHIE =====
+function renderTradesTable(trades) {
+    const tradesContainer = document.getElementById('trades-history');
+
+    if (!trades || trades.length === 0) {
+        tradesContainer.innerHTML = '<p class="no-data">Aucun trade correspondant aux filtres</p>';
+        return;
+    }
+
+    let html = `
+        <table class="trades-table-data trades-enriched">
+            <thead>
+                <tr>
+                    <th>Heure</th>
+                    <th>Actif</th>
+                    <th>Dir.</th>
+                    <th>Conv.</th>
+                    <th>Stratégie</th>
+                    <th>Régime</th>
+                    <th>Entrée</th>
+                    <th>Stop</th>
+                    <th>TP1</th>
+                    <th>Statut</th>
+                    <th>Action</th>
+                    <th>Résultat</th>
+                    <th>PnL</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+    for (const trade of trades) {
+        const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' || trade.resultat === 'WIN_FORCE' ? 'success' :
+                           trade.resultat === 'STOP' || trade.resultat === 'LOSS_FORCE' ? 'fail' : '';
+        const direction = trade.direction || 'LONG';
+        const dirClass = direction === 'LONG' ? 'positive' : 'negative';
+
+        // Conviction score (étoiles)
+        const conviction = trade.conviction_score || 3;
+        const stars = '⭐'.repeat(Math.min(conviction, 5));
+
+        // Stratégie d'entrée
+        const strategie = trade.strategie_entree || '-';
+        const strategieClass = {
+            'IMMEDIATE': 'strat-immediate',
+            'PULLBACK': 'strat-pullback',
+            'BREAKOUT': 'strat-breakout',
+            'LIMIT': 'strat-limit'
+        }[strategie] || '';
+
+        // Régime marché
+        const regime = trade.regime_marche || '-';
+        const regimeIcon = {
+            'CALME': '😌',
+            'NORMAL': '📊',
+            'VOLATILE': '⚡',
+            'EXTREME': '🔥'
+        }[regime] || '📊';
+        const regimeClass = {
+            'CALME': 'regime-calme',
+            'NORMAL': 'regime-normal',
+            'VOLATILE': 'regime-volatile',
+            'EXTREME': 'regime-extreme'
+        }[regime] || '';
+
+        // Statut intraday
+        const statut = trade.statut_intraday || (trade.resultat ? 'TERMINE' : 'EN_COURS');
+        const statutIcon = {
+            'EN_COURS': '🔄',
+            'TP50_ATTEINT': '🎯',
+            'STOP_AJUSTE': '🛡️',
+            'TERMINE': '✓'
+        }[statut] || '🔄';
+
+        // Action recommandée
+        const action = trade.action_recommandee || '-';
+        const actionClass = {
+            'HOLD': 'action-hold',
+            'RENFORCER': 'action-renforcer',
+            'REDUIRE': 'action-reduire',
+            'SORTIR': 'action-sortir'
+        }[action] || '';
+        const actionIcon = {
+            'HOLD': '✋',
+            'RENFORCER': '💪',
+            'REDUIRE': '📉',
+            'SORTIR': '🚪'
+        }[action] || '';
+
+        // Stop affiché (ajusté si disponible)
+        const stopAffiche = trade.stop_ajuste || trade.prix_stop;
+        const stopModifie = trade.stop_ajuste ? 'stop-ajuste' : '';
+
+        html += `
+            <tr class="${resultClass}"
+                data-conviction="${conviction}"
+                data-regime="${regime}"
+                data-strategie="${strategie}"
+                data-statut="${statut}">
+                <td>${trade.heure_message || '-'}</td>
+                <td><strong>${trade.actif || '-'}</strong></td>
+                <td class="${dirClass}">${direction}</td>
+                <td class="conviction-cell" title="Conviction ${conviction}/5">${stars}</td>
+                <td><span class="badge-strategie ${strategieClass}">${strategie}</span></td>
+                <td><span class="badge-regime ${regimeClass}">${regimeIcon} ${regime}</span></td>
+                <td>${trade.prix_entree || '-'}</td>
+                <td class="${stopModifie}">${stopAffiche || '-'}</td>
+                <td>${trade.prix_tp1 || '-'}</td>
+                <td><span class="badge-statut">${statutIcon} ${statut.replace('_', ' ')}</span></td>
+                <td><span class="badge-action ${actionClass}">${actionIcon} ${action}</span></td>
+                <td>${trade.resultat || 'En cours'}</td>
+                <td class="${trade.pnl_pct > 0 ? 'positive' : trade.pnl_pct < 0 ? 'negative' : ''}">${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
+            </tr>`;
+    }
+
+    html += '</tbody></table>';
+    tradesContainer.innerHTML = html;
+}
+
+// ===== FILTRES =====
+function applyTradesFilters() {
+    const convictionFilter = document.getElementById('filter-conviction').value;
+    const regimeFilter = document.getElementById('filter-regime').value;
+    const strategieFilter = document.getElementById('filter-strategie').value;
+    const statutFilter = document.getElementById('filter-statut').value;
+
+    let filteredTrades = window.allTrades || [];
+
+    if (convictionFilter) {
+        const minConv = parseInt(convictionFilter);
+        filteredTrades = filteredTrades.filter(t => (t.conviction_score || 3) >= minConv);
+    }
+
+    if (regimeFilter) {
+        filteredTrades = filteredTrades.filter(t => t.regime_marche === regimeFilter);
+    }
+
+    if (strategieFilter) {
+        filteredTrades = filteredTrades.filter(t => t.strategie_entree === strategieFilter);
+    }
+
+    if (statutFilter) {
+        if (statutFilter === 'termine') {
+            filteredTrades = filteredTrades.filter(t => t.resultat !== null);
+        } else {
+            filteredTrades = filteredTrades.filter(t =>
+                t.statut_intraday === statutFilter || (!t.resultat && statutFilter === 'EN_COURS')
+            );
+        }
+    }
+
+    renderTradesTable(filteredTrades);
+}
+
+function clearTradesFilters() {
+    document.getElementById('filter-conviction').value = '';
+    document.getElementById('filter-regime').value = '';
+    document.getElementById('filter-strategie').value = '';
+    document.getElementById('filter-statut').value = '';
+    renderTradesTable(window.allTrades || []);
 }
 </script>
 {% endblock %}
