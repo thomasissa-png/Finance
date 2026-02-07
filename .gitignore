@@ -16,10 +16,11 @@ ENV/
 *.swp
 
 # Data & Cache
-data/
-*.csv
-*.xlsx
+*.db
 cache/
+
+# Archives
+*.zip
 
 # Logs
 *.log
@@ -27,3 +28,6 @@ cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# API Data (keep CSV for reference)
+# *.csv
