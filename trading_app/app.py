@@ -47,7 +47,7 @@ TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 TWELVEDATA_LAST_CALL = None
 TWELVEDATA_MIN_INTERVAL = 1.1  # 60s/55 = ~1.09s entre chaque appel
 TWELVEDATA_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
-TWELVEDATA_CACHE_TTL = 300  # Cache valide 5 minutes (données daily ne changent pas souvent)
+TWELVEDATA_CACHE_TTL = 600  # Cache valide 10 minutes (réduit consommation quota)
 TWELVEDATA_CACHE_MAX_SIZE = 500  # Limite du cache pour éviter fuite mémoire
 
 # Circuit breaker pour quota dépassé
@@ -125,13 +125,10 @@ def est_jour_trading_valide(date_check=None):
 # ACTIFS SUIVIS
 # ============================================================================
 
+# NOTE: Indices (^FCHI, ^GSPC, etc.) retirés car retournent "invalid symbol" sur Twelve Data
+# Les indices seront récupérés via Yahoo Finance en fallback (voir get_indices_fallback)
 ACTIFS_PERMANENTS = {
-    "^FCHI": "CAC 40",
-    "^GSPC": "S&P 500",
-    "^IXIC": "Nasdaq",
-    "^DJI": "Dow Jones",
-    "^GDAXI": "DAX",
-    "^VIX": "VIX",
+    # Actions Françaises (Euronext Paris) - Vérifiées OK
     "AIR.PA": "Airbus",
     "MC.PA": "LVMH",
     "OR.PA": "L'Oréal",
@@ -142,6 +139,7 @@ ACTIFS_PERMANENTS = {
     "AXA.PA": "AXA",
     "SU.PA": "Schneider Electric",
     "SAF.PA": "Safran",
+    # Actions US - Vérifiées OK
     "AAPL": "Apple",
     "MSFT": "Microsoft",
     "NVDA": "NVIDIA",
@@ -152,21 +150,24 @@ ACTIFS_PERMANENTS = {
     "JPM": "JPMorgan",
     "XOM": "ExxonMobil",
     "V": "Visa",
-    "GC=F": "Or",
-    "SI=F": "Argent",
-    "PL=F": "Platine",
-    "BZ=F": "Pétrole Brent",
-    "NG=F": "Gaz naturel",
-    "KC=F": "Café",
-    "CC=F": "Cacao",
-    "HG=F": "Cuivre",
-    "ZS=F": "Soja",
-    "SB=F": "Sucre",
-    "ZW=F": "Blé",
-    "ZC=F": "Maïs",
-    "EURUSD=X": "EUR/USD",
-    "GBPUSD=X": "GBP/USD",
-    "USDJPY=X": "USD/JPY"
+    # Commodités - Vérifiées OK (format Twelve Data)
+    "XAU/USD": "Or",
+    "XAG/USD": "Argent",
+    "CL": "Pétrole WTI",
+    # Forex - Vérifiées OK
+    "EUR/USD": "EUR/USD",
+    "GBP/USD": "GBP/USD",
+    "USD/JPY": "USD/JPY"
+}
+
+# Indices à récupérer via Yahoo Finance (fallback car Twelve Data retourne "invalid symbol")
+INDICES_FALLBACK = {
+    "^FCHI": "CAC 40",
+    "^GSPC": "S&P 500",
+    "^IXIC": "Nasdaq",
+    "^DJI": "Dow Jones",
+    "^GDAXI": "DAX",
+    "^VIX": "VIX"
 }
 
 POOL_ROTATION = {
@@ -1145,7 +1146,7 @@ def get_actifs_filtres_atr(donnees_marche, seuil_atr_min=1.0):
 
 # Cache haut niveau pour éviter le stampede (multiples appels simultanés)
 MARKET_DATA_CACHE = {'data': None, 'timestamp': 0, 'actifs_key': None}
-MARKET_DATA_CACHE_TTL = 300  # 5 minutes (identique au cache Twelve Data)
+MARKET_DATA_CACHE_TTL = 600  # 10 minutes (réduit consommation quota, cohérent avec TWELVEDATA_CACHE_TTL)
 
 def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
     """Récupère les données de marché pour les actifs donnés avec ATR et Volume relatif
@@ -2222,10 +2223,10 @@ def cloturer_trades_jour():
                     symbole, direction, entree, stop, tp1, tp2
                 )
 
-                if resultat_historique:
+                if resultat_historique and prix_historique is not None:
                     # TP ou Stop a été touché plus tôt - utiliser ce résultat
                     resultat = resultat_historique
-                    prix_sortie = prix_historique
+                    prix_sortie = float(prix_historique)
 
                     if direction == 'LONG':
                         pnl_pct = ((prix_sortie - entree) / entree) * 100
@@ -2507,11 +2508,17 @@ def get_categorie_actif(symbole):
 # ============================================================================
 
 def recuperer_donnees_premarket():
-    """Récupère les données pré-market (futures, overnight gaps)"""
+    """Récupère les données pré-market via Yahoo Finance (Twelve Data n'a pas les futures/indices)
+
+    NOTE: E-mini futures (ES, NQ, YM) n'existent pas sur Twelve Data.
+    Indices asiatiques/EU (N225, HSI, STOXX50E) nécessitent plan Pro.
+    On utilise Yahoo Finance comme source alternative.
+    """
+    # Symboles Yahoo Finance pour premarket
     premarket_symbols = {
-        "ES=F": "S&P 500 Futures",
-        "NQ=F": "Nasdaq Futures",
-        "YM=F": "Dow Futures",
+        "^GSPC": "S&P 500",
+        "^IXIC": "Nasdaq",
+        "^DJI": "Dow Jones",
         "^N225": "Nikkei 225",
         "^HSI": "Hang Seng",
         "^STOXX50E": "Euro Stoxx 50"
@@ -2520,11 +2527,12 @@ def recuperer_donnees_premarket():
     donnees = {}
     for symbole, nom in premarket_symbols.items():
         try:
-            # Récupérer les 2 derniers jours via Twelve Data
-            info, _ = get_twelvedata_time_series(symbole, outputsize=2, interval="1day")
-            if len(info) >= 2:
-                prix_hier = info['Close'].iloc[-2]
-                prix_actuel = info['Close'].iloc[-1]
+            # Utiliser Yahoo Finance pour les indices (non disponibles sur Twelve Data)
+            ticker = yf.Ticker(symbole)
+            hist = ticker.history(period="2d")
+            if len(hist) >= 2:
+                prix_hier = hist['Close'].iloc[-2]
+                prix_actuel = hist['Close'].iloc[-1]
                 variation = ((prix_actuel - prix_hier) / prix_hier) * 100
 
                 donnees[nom] = {
