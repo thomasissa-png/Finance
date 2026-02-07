@@ -178,6 +178,18 @@
         </div>
     </section>
 
+    <!-- Ajustements en attente de validation -->
+    <section class="section" id="section-ajustements">
+        <div class="section-header">
+            <span class="section-icon">⚙️</span>
+            <h2 class="section-title">Ajustements Proposés</h2>
+            <span class="section-meta" id="ajustements-count">0 en attente</span>
+        </div>
+        <div class="section-content" id="ajustements-content">
+            <div class="loading">Chargement...</div>
+        </div>
+    </section>
+
 </div>
 
 {% endblock %}
@@ -203,6 +215,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadPerformances();
     loadChartData();
     loadDetailedStats();
+    loadAjustementsEnAttente();
 });
 
 // ===== STATS DÉTAILLÉES =====
@@ -527,6 +540,128 @@ function renderRapportHebdo(rapport) {
 document.addEventListener('DOMContentLoaded', function() {
     loadRapportHebdo();
 });
+
+// ===== AJUSTEMENTS EN ATTENTE =====
+async function loadAjustementsEnAttente() {
+    try {
+        const response = await fetch('/api/ajustements-proposes');
+        const data = await response.json();
+
+        if (data.success) {
+            renderAjustements(data.ajustements);
+            document.getElementById('ajustements-count').textContent =
+                `${data.nb_en_attente} en attente`;
+        }
+    } catch (error) {
+        console.error('Erreur ajustements:', error);
+    }
+}
+
+function renderAjustements(ajustements) {
+    const container = document.getElementById('ajustements-content');
+
+    if (!ajustements || ajustements.length === 0) {
+        container.innerHTML = `
+            <div class="no-adjustments">
+                <div class="no-adj-icon">✅</div>
+                <div class="no-adj-text">Aucun ajustement en attente</div>
+                <div class="no-adj-hint">Les ajustements seront proposés lors de la génération du rapport hebdomadaire</div>
+            </div>`;
+        return;
+    }
+
+    let html = `
+        <div class="ajustements-actions">
+            <button class="btn-validate-all" onclick="validerTousAjustements(true)">
+                ✓ Tout valider
+            </button>
+            <button class="btn-reject-all" onclick="validerTousAjustements(false)">
+                ✗ Tout rejeter
+            </button>
+        </div>
+        <div class="ajustements-list">
+    `;
+
+    for (const ajust of ajustements) {
+        const typeIcon = ajust.type_ajustement === 'score_confiance' ? '📊' : '⚡';
+        const typeLabel = ajust.type_ajustement === 'score_confiance' ? 'Score' : 'Stratégie';
+
+        html += `
+            <div class="ajustement-item" data-id="${ajust.id}">
+                <div class="ajustement-header">
+                    <span class="ajustement-type ${ajust.type_ajustement}">${typeIcon} ${typeLabel}</span>
+                    <span class="ajustement-categorie">${ajust.categorie || '-'}</span>
+                </div>
+                <div class="ajustement-content">
+                    <div class="ajustement-action">${ajust.action || '-'}</div>
+                    <div class="ajustement-raison">${ajust.raison || ''}</div>
+                </div>
+                <div class="ajustement-actions">
+                    <button class="btn-validate" onclick="validerAjustement(${ajust.id}, true)">
+                        ✓ Valider
+                    </button>
+                    <button class="btn-reject" onclick="validerAjustement(${ajust.id}, false)">
+                        ✗ Rejeter
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+async function validerAjustement(id, valider) {
+    const endpoint = valider ?
+        `/api/ajustements-proposes/${id}/valider` :
+        `/api/ajustements-proposes/${id}/rejeter`;
+
+    try {
+        const response = await fetch(endpoint, {method: 'POST'});
+        const data = await response.json();
+
+        if (data.success) {
+            // Animation de suppression
+            const item = document.querySelector(`.ajustement-item[data-id="${id}"]`);
+            if (item) {
+                item.classList.add('fade-out');
+                setTimeout(() => {
+                    loadAjustementsEnAttente();
+                }, 300);
+            }
+        } else {
+            alert('Erreur: ' + data.error);
+        }
+    } catch (error) {
+        console.error('Erreur validation:', error);
+    }
+}
+
+async function validerTousAjustements(valider) {
+    const endpoint = valider ?
+        '/api/ajustements-proposes/valider-tous' :
+        '/api/ajustements-proposes/rejeter-tous';
+
+    const confirmMsg = valider ?
+        'Valider tous les ajustements proposés?' :
+        'Rejeter tous les ajustements proposés?';
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const response = await fetch(endpoint, {method: 'POST'});
+        const data = await response.json();
+
+        if (data.success) {
+            loadAjustementsEnAttente();
+        } else {
+            alert('Erreur: ' + data.error);
+        }
+    } catch (error) {
+        console.error('Erreur validation:', error);
+    }
+}
 
 // ===== GRAPHIQUE =====
 function changeGranularite(granularite, btn) {
@@ -1543,6 +1678,169 @@ function filterTrades() {
     .hourly-label {
         font-size: 0.5rem;
     }
+}
+
+/* ===== AJUSTEMENTS PROPOSÉS ===== */
+.no-adjustments {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-muted);
+}
+
+.no-adj-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+
+.no-adj-text {
+    font-size: 1rem;
+    color: var(--text-secondary);
+}
+
+.no-adj-hint {
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+    opacity: 0.7;
+}
+
+.ajustements-actions {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.btn-validate-all, .btn-reject-all {
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+}
+
+.btn-validate-all {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.1));
+    color: var(--accent-green);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.btn-validate-all:hover {
+    background: var(--accent-green);
+    color: white;
+}
+
+.btn-reject-all {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(239, 68, 68, 0.1));
+    color: var(--accent-red);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.btn-reject-all:hover {
+    background: var(--accent-red);
+    color: white;
+}
+
+.ajustements-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.ajustement-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+    transition: all 0.3s;
+}
+
+.ajustement-item.fade-out {
+    opacity: 0;
+    transform: translateX(-20px);
+}
+
+.ajustement-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.ajustement-type {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.ajustement-type.score_confiance {
+    background: rgba(99, 102, 241, 0.2);
+    color: #818cf8;
+}
+
+.ajustement-type.strategie {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fbbf24;
+}
+
+.ajustement-categorie {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ajustement-content {
+    margin-bottom: 0.75rem;
+}
+
+.ajustement-action {
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.ajustement-raison {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.ajustement-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.btn-validate, .btn-reject {
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+}
+
+.btn-validate {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-green);
+}
+
+.btn-validate:hover {
+    background: var(--accent-green);
+    color: white;
+}
+
+.btn-reject {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--accent-red);
+}
+
+.btn-reject:hover {
+    background: var(--accent-red);
+    color: white;
 }
 </style>
 {% endblock %}

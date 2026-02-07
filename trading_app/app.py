@@ -282,6 +282,24 @@ def init_database():
         )
     ''')
 
+    # Table pour les ajustements en attente de validation
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ajustements_proposes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type_ajustement TEXT,
+            categorie TEXT,
+            critere TEXT,
+            action TEXT,
+            valeur_proposee TEXT,
+            raison TEXT,
+            source TEXT,
+            statut TEXT DEFAULT 'en_attente',
+            date_proposition DATETIME,
+            date_decision DATETIME,
+            decideur TEXT
+        )
+    ''')
+
     # Ajouter colonnes à trades_recommandes si manquantes
     try:
         cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN direction TEXT DEFAULT 'LONG'")
@@ -341,9 +359,24 @@ def get_utc_time_for_paris(heure_paris):
     heure_utc = heure_cible.astimezone(pytz.UTC)
     return heure_utc.strftime('%H:%M')
 
+def is_weekend():
+    """Vérifie si c'est le weekend (samedi ou dimanche)"""
+    maintenant = get_paris_time()
+    return maintenant.weekday() >= 5  # 5=samedi, 6=dimanche
+
+def get_jour_semaine_nom():
+    """Retourne le nom du jour en français"""
+    jours = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche']
+    return jours[get_paris_time().weekday()]
+
 def get_market_context():
     """Détermine quels marchés sont ouverts"""
     maintenant = get_paris_time()
+
+    # Weekend = marchés fermés
+    if is_weekend():
+        return "WEEKEND", "Marchés fermés (weekend). Forex limité."
+
     heure_decimal = maintenant.hour + maintenant.minute / 60
 
     if 9 <= heure_decimal < 15.5:
@@ -368,9 +401,18 @@ EVENEMENTS_MACRO_RECURRENTS = {
     "BCE": {"heures": ["14:15", "14:45"], "importance": 3},
 }
 
-def get_evenements_macro_jour():
-    """Récupère les événements macro du jour (basé sur le calendrier économique)"""
+def get_evenements_macro_jour(pour_lundi=False):
+    """Récupère les événements macro du jour (basé sur le calendrier économique)
+    Si pour_lundi=True, simule le lundi suivant (pour affichage weekend)"""
     maintenant = get_paris_time()
+
+    # Si weekend et demande pour lundi, on simule le lundi
+    if pour_lundi or is_weekend():
+        jours_jusqua_lundi = (7 - maintenant.weekday()) % 7
+        if jours_jusqua_lundi == 0:
+            jours_jusqua_lundi = 7 if maintenant.weekday() == 0 else 1
+        maintenant = maintenant + timedelta(days=jours_jusqua_lundi)
+
     aujourdhui = maintenant.date()
     jour_semaine = maintenant.weekday()  # 0=Lundi, 4=Vendredi
     jour_mois = maintenant.day
@@ -476,7 +518,13 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                 prix_ouverture = info['Open'].iloc[-1]
                 prix_max = info['High'].iloc[-1]
                 prix_min = info['Low'].iloc[-1]
-                variation = ((prix_actuel - prix_ouverture) / prix_ouverture) * 100
+
+                # Variation: clôture précédente vers clôture actuelle (standard du marché)
+                if len(info) >= 2:
+                    cloture_precedente = info['Close'].iloc[-2]
+                    variation = ((prix_actuel - cloture_precedente) / cloture_precedente) * 100
+                else:
+                    variation = 0
 
                 # Variation sur 5 jours
                 if len(info) >= 5:
@@ -1782,12 +1830,15 @@ Propose des ajustements concrets pour améliorer les performances."""
             ))
             conn.commit()
 
-            # Appliquer les ajustements dynamiques
-            appliquer_ajustements_dynamiques(rapport.get('ajustements_recommandes', []),
-                                            rapport.get('scores_confiance', {}))
+            # Sauvegarder les ajustements comme propositions (attente validation)
+            sauvegarder_ajustements_proposes(
+                rapport.get('ajustements_recommandes', []),
+                rapport.get('scores_confiance', {}),
+                source='rapport_hebdo'
+            )
 
             conn.close()
-            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Rapport hebdomadaire généré")
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Rapport hebdomadaire généré (ajustements en attente de validation)")
             return rapport
 
         return None
@@ -1896,6 +1947,165 @@ def get_criteres_dynamiques():
     except Exception as e:
         print(f"⚠️ Erreur critères dynamiques: {e}")
         return {'scores_confiance': {}, 'ajustements_recents': []}
+
+def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapport_hebdo'):
+    """Sauvegarde les ajustements proposés en attente de validation"""
+    maintenant = get_paris_time()
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Sauvegarder les scores de confiance comme propositions
+        for categorie, score_data in scores_confiance.items():
+            if isinstance(score_data, dict):
+                score = score_data.get('score', 50)
+                tendance = score_data.get('tendance', 'stable')
+
+                cursor.execute('''
+                    INSERT INTO ajustements_proposes
+                    (type_ajustement, categorie, critere, action, valeur_proposee, raison, source, statut, date_proposition)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    'score_confiance',
+                    categorie,
+                    'score_confiance',
+                    f"Définir score à {score}/100",
+                    str(score),
+                    f"Tendance: {tendance}",
+                    source,
+                    'en_attente',
+                    maintenant
+                ))
+
+        # Sauvegarder les ajustements stratégiques
+        for ajust in ajustements:
+            critere = ajust.get('critere', '')
+            action = ajust.get('action', '')
+            raison = ajust.get('raison', '')
+
+            cursor.execute('''
+                INSERT INTO ajustements_proposes
+                (type_ajustement, categorie, critere, action, valeur_proposee, raison, source, statut, date_proposition)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                'strategie',
+                'trading',
+                critere,
+                action,
+                '',
+                raison,
+                source,
+                'en_attente',
+                maintenant
+            ))
+
+        conn.commit()
+        conn.close()
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📋 {len(ajustements) + len(scores_confiance)} ajustements proposés en attente de validation")
+
+    except Exception as e:
+        print(f"⚠️ Erreur sauvegarde ajustements: {e}")
+
+def get_ajustements_en_attente():
+    """Récupère les ajustements en attente de validation"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM ajustements_proposes
+            WHERE statut = 'en_attente'
+            ORDER BY date_proposition DESC
+        ''')
+
+        ajustements = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return ajustements
+    except Exception as e:
+        print(f"⚠️ Erreur récupération ajustements: {e}")
+        return []
+
+def valider_ajustement(id_ajustement, decision, decideur='utilisateur'):
+    """Valide ou rejette un ajustement proposé"""
+    maintenant = get_paris_time()
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Récupérer l'ajustement
+        cursor.execute('SELECT * FROM ajustements_proposes WHERE id = ?', (id_ajustement,))
+        ajust = cursor.fetchone()
+
+        if not ajust:
+            conn.close()
+            return False, "Ajustement non trouvé"
+
+        # Mettre à jour le statut
+        nouveau_statut = 'valide' if decision else 'rejete'
+        cursor.execute('''
+            UPDATE ajustements_proposes
+            SET statut = ?, date_decision = ?, decideur = ?
+            WHERE id = ?
+        ''', (nouveau_statut, maintenant, decideur, id_ajustement))
+
+        # Si validé, appliquer l'ajustement
+        if decision:
+            ajust_dict = dict(zip([col[0] for col in cursor.description], ajust)) if not isinstance(ajust, dict) else ajust
+
+            if ajust_dict.get('type_ajustement') == 'score_confiance':
+                # Appliquer le score de confiance
+                cursor.execute('''
+                    INSERT INTO criteres_dynamiques
+                    (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    maintenant.date(),
+                    ajust_dict.get('categorie'),
+                    'score_confiance',
+                    float(ajust_dict.get('valeur_proposee', 50)),
+                    50,
+                    f"Validé par {decideur}: {ajust_dict.get('raison', '')}",
+                    maintenant
+                ))
+            else:
+                # Appliquer l'ajustement stratégique
+                cursor.execute('''
+                    INSERT INTO criteres_dynamiques
+                    (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    maintenant.date(),
+                    'ajustement_valide',
+                    ajust_dict.get('critere', ''),
+                    1,
+                    0,
+                    f"Validé par {decideur}: {ajust_dict.get('action', '')} - {ajust_dict.get('raison', '')}",
+                    maintenant
+                ))
+
+        conn.commit()
+        conn.close()
+
+        return True, f"Ajustement {'validé et appliqué' if decision else 'rejeté'}"
+
+    except Exception as e:
+        print(f"⚠️ Erreur validation ajustement: {e}")
+        return False, str(e)
+
+def valider_tous_ajustements(decision, decideur='utilisateur'):
+    """Valide ou rejette tous les ajustements en attente"""
+    ajustements = get_ajustements_en_attente()
+    resultats = []
+
+    for ajust in ajustements:
+        succes, message = valider_ajustement(ajust['id'], decision, decideur)
+        resultats.append({'id': ajust['id'], 'succes': succes, 'message': message})
+
+    return resultats
 
 def enregistrer_journal_complet():
     """Enregistre le journal complet + bilan (22h30)"""
@@ -2113,10 +2323,13 @@ def api_donnees_marche():
     """Récupère les données de marché en temps réel"""
     try:
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+        weekend = is_weekend()
         return jsonify({
             'success': True,
             'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
-            'donnees': donnees
+            'donnees': donnees,
+            'weekend': weekend,
+            'message_weekend': "Marchés fermés - Données de vendredi" if weekend else None
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -2133,6 +2346,48 @@ def api_indicateurs(symbole):
 def api_lancer_analyse():
     """Lance une analyse de marché"""
     try:
+        weekend = is_weekend()
+
+        # Weekend: pas d'analyse active, retourner synthèse de la semaine
+        if weekend:
+            # Récupérer le résumé de la semaine dernière
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Stats de la semaine écoulée
+            cursor.execute('''
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as gagnants,
+                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as perdants,
+                       ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END), 2) as pnl_moyen
+                FROM trades_recommandes
+                WHERE date >= date('now', '-7 days')
+            ''')
+            stats = cursor.fetchone()
+            conn.close()
+
+            analyse_weekend = {
+                'weekend': True,
+                'contexte_marche': [
+                    "📅 Weekend - Marchés fermés",
+                    f"📊 Semaine écoulée: {stats['total'] or 0} trades",
+                    f"✅ Gagnants: {stats['gagnants'] or 0} | ❌ Perdants: {stats['perdants'] or 0}",
+                    f"📈 PnL moyen: {stats['pnl_moyen'] or 0}%"
+                ],
+                'news_importante': [],
+                'opportunites': [],
+                'zones_danger': ["Marchés fermés - Reprendre lundi à 9h"],
+                'message_weekend': "Marchés fermés - Synthèse de la semaine"
+            }
+
+            return jsonify({
+                'success': True,
+                'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+                'analyse': analyse_weekend,
+                'weekend': True
+            })
+
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
         analyse = analyser_marche_json(donnees)
 
@@ -2148,7 +2403,8 @@ def api_lancer_analyse():
             return jsonify({
                 'success': True,
                 'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
-                'analyse': analyse
+                'analyse': analyse,
+                'weekend': False
             })
         return jsonify({'success': False, 'error': 'Analyse échouée'})
     except Exception as e:
@@ -2325,6 +2581,7 @@ def api_top_movers():
     """Récupère les plus fortes variations du jour"""
     try:
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+        weekend = is_weekend()
 
         # Trier par variation absolue
         movers = []
@@ -2339,7 +2596,7 @@ def api_top_movers():
         # Trier par variation absolue décroissante
         movers_sorted = sorted(movers, key=lambda x: abs(x['variation']), reverse=True)
 
-        # Séparer gainers et losers
+        # Séparer gainers et losers - 5 de chaque
         gainers = [m for m in movers_sorted if m['variation'] > 0][:5]
         losers = [m for m in movers_sorted if m['variation'] < 0][:5]
 
@@ -2347,7 +2604,9 @@ def api_top_movers():
             'success': True,
             'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
             'gainers': gainers,
-            'losers': losers
+            'losers': losers,
+            'weekend': weekend,
+            'message_weekend': "Clôture de vendredi" if weekend else None
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -2538,15 +2797,24 @@ def api_cloturer_trades():
 def api_evenements_macro():
     """Récupère les événements macro du jour et vérifie la proximité"""
     try:
-        evenements = get_evenements_macro_jour()
-        evt_imminent, evt_details = verifier_proximite_evenement_macro(minutes_avant=30)
+        weekend = is_weekend()
+        evenements = get_evenements_macro_jour(pour_lundi=weekend)
+
+        # Pas d'alerte imminente le weekend
+        if weekend:
+            evt_imminent = False
+            evt_details = None
+        else:
+            evt_imminent, evt_details = verifier_proximite_evenement_macro(minutes_avant=30)
 
         return jsonify({
             'success': True,
             'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
             'evenements': evenements,
             'alerte_imminente': evt_imminent,
-            'evenement_imminent': evt_details
+            'evenement_imminent': evt_details,
+            'weekend': weekend,
+            'message_weekend': "Agenda de lundi" if weekend else None
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -2613,6 +2881,65 @@ def api_criteres_dynamiques():
     try:
         criteres = get_criteres_dynamiques()
         return jsonify({'success': True, 'criteres': criteres})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/ajustements-proposes')
+def api_ajustements_proposes():
+    """Récupère les ajustements en attente de validation"""
+    try:
+        ajustements = get_ajustements_en_attente()
+        return jsonify({
+            'success': True,
+            'ajustements': ajustements,
+            'nb_en_attente': len(ajustements)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/ajustements-proposes/<int:id_ajustement>/valider', methods=['POST'])
+def api_valider_ajustement(id_ajustement):
+    """Valide un ajustement proposé"""
+    try:
+        succes, message = valider_ajustement(id_ajustement, decision=True)
+        return jsonify({'success': succes, 'message': message})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/ajustements-proposes/<int:id_ajustement>/rejeter', methods=['POST'])
+def api_rejeter_ajustement(id_ajustement):
+    """Rejette un ajustement proposé"""
+    try:
+        succes, message = valider_ajustement(id_ajustement, decision=False)
+        return jsonify({'success': succes, 'message': message})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/ajustements-proposes/valider-tous', methods=['POST'])
+def api_valider_tous_ajustements():
+    """Valide tous les ajustements en attente"""
+    try:
+        resultats = valider_tous_ajustements(decision=True)
+        nb_valides = sum(1 for r in resultats if r['succes'])
+        return jsonify({
+            'success': True,
+            'message': f"{nb_valides} ajustements validés",
+            'details': resultats
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/ajustements-proposes/rejeter-tous', methods=['POST'])
+def api_rejeter_tous_ajustements():
+    """Rejette tous les ajustements en attente"""
+    try:
+        resultats = valider_tous_ajustements(decision=False)
+        nb_rejetes = sum(1 for r in resultats if r['succes'])
+        return jsonify({
+            'success': True,
+            'message': f"{nb_rejetes} ajustements rejetés",
+            'details': resultats
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 

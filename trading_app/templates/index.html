@@ -348,6 +348,25 @@
     align-items: center;
     gap: 8px;
 }
+
+/* Indicateur Weekend */
+.weekend-indicator {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(99, 102, 241, 0.1) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    color: var(--accent-purple, #8b5cf6);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.weekend-closed-msg {
+    background: linear-gradient(135deg, rgba(100, 116, 139, 0.1) 0%, rgba(71, 85, 105, 0.05) 100%);
+    border-radius: 8px;
+    border: 1px dashed var(--border-color);
+}
 </style>
 {% endblock %}
 
@@ -618,22 +637,29 @@ async function loadTopMovers() {
         const data = await response.json();
 
         if (data.success) {
-            renderTopMovers(data.gainers, data.losers);
+            renderTopMovers(data.gainers, data.losers, data.weekend, data.message_weekend);
         }
     } catch (error) {
         console.error('Erreur top movers:', error);
     }
 }
 
-function renderTopMovers(gainers, losers) {
+function renderTopMovers(gainers, losers, isWeekend, weekendMsg) {
     const container = document.getElementById('top-movers-widget');
 
-    let html = '<div class="movers-grid">';
+    let html = '';
 
-    // Gainers
+    // Message weekend si applicable
+    if (isWeekend && weekendMsg) {
+        html += `<div class="weekend-indicator">${weekendMsg}</div>`;
+    }
+
+    html += '<div class="movers-grid">';
+
+    // Gainers - 5 éléments
     html += '<div class="movers-column gainers">';
     html += '<div class="movers-title positive">▲ Hausse</div>';
-    for (const g of gainers.slice(0, 4)) {
+    for (const g of gainers.slice(0, 5)) {
         html += `
             <div class="mover-item">
                 <span class="mover-name">${g.nom}</span>
@@ -642,10 +668,10 @@ function renderTopMovers(gainers, losers) {
     }
     html += '</div>';
 
-    // Losers
+    // Losers - 5 éléments
     html += '<div class="movers-column losers">';
     html += '<div class="movers-title negative">▼ Baisse</div>';
-    for (const l of losers.slice(0, 4)) {
+    for (const l of losers.slice(0, 5)) {
         html += `
             <div class="mover-item">
                 <span class="mover-name">${l.nom}</span>
@@ -701,6 +727,8 @@ function closeModal() {
 }
 
 // ===== MARCHÉS =====
+let isWeekendMode = false;
+
 async function refreshMarkets() {
     try {
         const response = await fetch('/api/donnees-marche');
@@ -708,7 +736,8 @@ async function refreshMarkets() {
 
         if (data.success) {
             marketData = data.donnees;
-            renderPulseWidget();
+            isWeekendMode = data.weekend || false;
+            renderPulseWidget(data.message_weekend);
 
             // Mettre à jour l'heure
             const now = new Date();
@@ -723,7 +752,7 @@ async function refreshMarkets() {
     }
 }
 
-function renderPulseWidget() {
+function renderPulseWidget(weekendMsg) {
     const container = document.getElementById('pulse-widget');
     const indices = [
         {key: 'CAC 40', name: 'CAC 40'},
@@ -735,6 +764,12 @@ function renderPulseWidget() {
     ];
 
     let html = '';
+
+    // Indicateur weekend
+    if (isWeekendMode && weekendMsg) {
+        html += `<div class="weekend-indicator">${weekendMsg}</div>`;
+    }
+
     for (const item of indices) {
         const d = marketData[item.key];
         if (d) {
@@ -994,6 +1029,18 @@ function renderAgenda(events) {
 function renderOpportunities(opportunities) {
     const container = document.getElementById('opportunities-container');
     const countEl = document.getElementById('opp-count');
+
+    // Weekend: afficher marchés fermés
+    if (isWeekendMode) {
+        container.innerHTML = `
+            <div class="weekend-closed-msg" style="width: 100%; text-align: center; padding: 2rem;">
+                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔒</div>
+                <div style="color: var(--text-muted); font-size: 0.95rem;">Marchés fermés</div>
+                <div style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">Reprise lundi à 9h</div>
+            </div>`;
+        countEl.textContent = 'Weekend';
+        return;
+    }
 
     if (!opportunities || opportunities.length === 0) {
         container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunité en cours</div>';
