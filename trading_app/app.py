@@ -42,11 +42,11 @@ DB_PATH = 'trading.db'
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 
-# Rate limiting pour Twelve Data
+# Rate limiting pour Twelve Data (Plan Grow: 55 appels/min)
 TWELVEDATA_LAST_CALL = None
-TWELVEDATA_MIN_INTERVAL = 0.1  # 8 requêtes/minute en plan gratuit, plus rapide en payant
+TWELVEDATA_MIN_INTERVAL = 1.1  # 60s/55 = ~1.09s entre chaque appel
 TWELVEDATA_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
-TWELVEDATA_CACHE_TTL = 30  # Cache valide 30 secondes (plus frais que yfinance)
+TWELVEDATA_CACHE_TTL = 60  # Cache valide 60 secondes pour économiser les appels
 
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
