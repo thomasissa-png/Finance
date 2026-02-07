@@ -816,6 +816,165 @@ FORMAT DE RÉPONSE EN JSON:
   "conseil_demain": ""
 }"""
 
+SYSTEM_PROMPT_NEWS_ANALYSIS = """Tu es un analyste trading senior spécialisé dans l'identification des impacts marché des actualités.
+
+OBJECTIF: Analyser des headlines d'actualités et identifier celles qui ont un RÉEL impact trading.
+
+ACTIFS TRADABLES (avec symboles):
+- Indices: CAC 40 (^FCHI), S&P 500 (^GSPC), Nasdaq (^IXIC), DAX (^GDAXI)
+- Actions FR: LVMH (MC.PA), Airbus (AIR.PA), TotalEnergies (TTE.PA), BNP (BNP.PA)
+- Actions US: Apple (AAPL), Tesla (TSLA), NVIDIA (NVDA), Amazon (AMZN)
+- Commodités: Or (GC=F), Pétrole Brent (BZ=F), Café (KC=F), Cacao (CC=F), Cuivre (HG=F), Blé (ZW=F)
+- Forex: EUR/USD (EURUSD=X), GBP/USD (GBPUSD=X)
+
+CRITÈRES D'IMPACT:
+- HIGH: Événement majeur, mouvement attendu > 1%, action immédiate recommandée
+  (catastrophe naturelle affectant production, décision banque centrale surprise, guerre/conflit, données macro très éloignées des attentes)
+- MEDIUM: Impact notable, mouvement 0.3-1%, à surveiller
+  (earnings surprise, changement politique, données macro légèrement hors attentes)
+- LOW: Impact limité, < 0.3%, information de contexte
+  (rumeurs, analyses, prévisions)
+
+RÈGLES:
+- Ne retourne QUE les news avec un réel impact trading (ignore les news corporate mineures, people, etc.)
+- Maximum 6 news les plus impactantes
+- Sois PRÉCIS sur les actifs concernés avec leurs SYMBOLES
+- Indique la DIRECTION probable (LONG/SHORT)
+- Évalue le TIMING (immédiat, aujourd'hui, cette semaine)
+
+FORMAT JSON:
+{
+  "news_analysees": [
+    {
+      "headline": "Titre original de la news",
+      "impact": "HIGH/MEDIUM/LOW",
+      "analyse": "Explication courte de l'impact trading (1 phrase)",
+      "actifs": [
+        {"symbole": "KC=F", "nom": "Café", "direction": "LONG", "raison": "Supply shock"}
+      ],
+      "timing": "immédiat/aujourd'hui/cette semaine",
+      "source": "Source originale"
+    }
+  ]
+}
+
+Si aucune news n'a d'impact trading significatif, retourne un tableau vide."""
+
+def analyser_news_trading(headlines):
+    """Analyse les headlines d'actualités pour identifier les impacts trading"""
+    if not headlines:
+        return []
+
+    maintenant = get_paris_time()
+
+    # Formater les headlines pour Claude
+    headlines_text = "\n".join([
+        f"- [{h.get('source', 'Unknown')}] {h.get('titre', h.get('title', ''))}"
+        for h in headlines[:15]  # Max 15 headlines à analyser
+    ])
+
+    question = f"""Analyse ces actualités du {maintenant.strftime('%d/%m/%Y')} et identifie celles avec un impact trading:
+
+{headlines_text}
+
+Retourne UNIQUEMENT les news pertinentes pour le trading en JSON."""
+
+    try:
+        message = client_anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            system=SYSTEM_PROMPT_NEWS_ANALYSIS,
+            messages=[{"role": "user", "content": question}]
+        )
+
+        reponse = message.content[0].text
+        match = re.search(r'\{[\s\S]*\}', reponse)
+
+        if match:
+            result = json.loads(match.group())
+            return result.get('news_analysees', [])
+        return []
+    except Exception as e:
+        print(f"⚠️ Erreur analyse news: {e}")
+        return []
+
+def fetch_and_analyze_news():
+    """Récupère les news via NewsAPI et les analyse pour l'impact trading"""
+    if not NEWSAPI_KEY:
+        return [], "NEWSAPI_KEY non configurée"
+
+    try:
+        # 1. Récupérer les news brutes
+        articles = []
+
+        # News business générales
+        url = "https://newsapi.org/v2/top-headlines"
+        params = {
+            'apiKey': NEWSAPI_KEY,
+            'category': 'business',
+            'language': 'fr',
+            'pageSize': 15
+        }
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        if data.get('status') == 'ok':
+            for article in data.get('articles', []):
+                articles.append({
+                    'titre': article.get('title', ''),
+                    'source': article.get('source', {}).get('name', 'Inconnu'),
+                    'heure': article.get('publishedAt', ''),
+                    'url': article.get('url', '')
+                })
+
+        # News internationales (pour commodités, géopolitique)
+        url_world = "https://newsapi.org/v2/top-headlines"
+        params_world = {
+            'apiKey': NEWSAPI_KEY,
+            'category': 'general',
+            'language': 'en',
+            'pageSize': 10
+        }
+        response_world = requests.get(url_world, params=params_world, timeout=10)
+        data_world = response_world.json()
+
+        if data_world.get('status') == 'ok':
+            for article in data_world.get('articles', []):
+                articles.append({
+                    'titre': article.get('title', ''),
+                    'source': article.get('source', {}).get('name', 'Inconnu'),
+                    'heure': article.get('publishedAt', ''),
+                    'url': article.get('url', '')
+                })
+
+        if not articles:
+            return [], "Aucune news récupérée"
+
+        # 2. Analyser les news avec Claude
+        news_analysees = analyser_news_trading(articles)
+
+        # 3. Enrichir avec l'heure formatée
+        for news in news_analysees:
+            # Trouver l'article original pour récupérer l'heure
+            for article in articles:
+                if article['titre'] in news.get('headline', ''):
+                    if article.get('heure'):
+                        try:
+                            dt = datetime.fromisoformat(article['heure'].replace('Z', '+00:00'))
+                            dt_paris = dt.astimezone(TZ_PARIS)
+                            news['heure'] = dt_paris.strftime('%H:%M')
+                        except:
+                            news['heure'] = '--:--'
+                    break
+            if 'heure' not in news:
+                news['heure'] = '--:--'
+
+        return news_analysees, None
+
+    except Exception as e:
+        print(f"⚠️ Erreur fetch_and_analyze_news: {e}")
+        return [], str(e)
+
 def analyser_marche_json(donnees):
     """Analyse le marché et retourne un JSON structuré"""
     maintenant = get_paris_time()
@@ -2682,12 +2841,33 @@ def api_cloture():
 
 @app.route('/api/news')
 def api_news():
-    """Récupère les actualités financières via NewsAPI"""
+    """Récupère et analyse les actualités pour leur impact trading"""
     if not NEWSAPI_KEY:
         return jsonify({'success': False, 'error': 'NEWSAPI_KEY non configurée'})
 
     try:
-        # Requête NewsAPI pour les actualités business/finance
+        # Récupérer et analyser les news
+        news_analysees, error = fetch_and_analyze_news()
+
+        if error:
+            return jsonify({'success': False, 'error': error})
+
+        return jsonify({
+            'success': True,
+            'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+            'news': news_analysees,
+            'count': len(news_analysees)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/news/raw')
+def api_news_raw():
+    """Récupère les actualités brutes sans analyse (fallback)"""
+    if not NEWSAPI_KEY:
+        return jsonify({'success': False, 'error': 'NEWSAPI_KEY non configurée'})
+
+    try:
         url = "https://newsapi.org/v2/top-headlines"
         params = {
             'apiKey': NEWSAPI_KEY,
@@ -2699,28 +2879,13 @@ def api_news():
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
-        if data.get('status') != 'ok':
-            # Essayer avec "everything" et des mots-clés finance
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                'apiKey': NEWSAPI_KEY,
-                'q': 'bourse OR CAC40 OR marchés financiers OR trading',
-                'language': 'fr',
-                'sortBy': 'publishedAt',
-                'pageSize': 10
-            }
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
-
         if data.get('status') == 'ok':
             articles = []
             for article in data.get('articles', [])[:10]:
-                # Extraire l'heure de publication
                 published = article.get('publishedAt', '')
                 heure = '--:--'
                 if published:
                     try:
-                        from datetime import datetime
                         dt = datetime.fromisoformat(published.replace('Z', '+00:00'))
                         dt_paris = dt.astimezone(TZ_PARIS)
                         heure = dt_paris.strftime('%H:%M')
@@ -2729,11 +2894,9 @@ def api_news():
 
                 articles.append({
                     'titre': article.get('title', '')[:100],
-                    'description': article.get('description', '')[:200] if article.get('description') else '',
                     'source': article.get('source', {}).get('name', 'Inconnu'),
                     'heure': heure,
-                    'url': article.get('url', ''),
-                    'impact': 'medium'  # Par défaut
+                    'url': article.get('url', '')
                 })
 
             return jsonify({

@@ -43,8 +43,8 @@
     <section class="section">
         <div class="section-header">
             <span class="section-icon">⚡</span>
-            <h2 class="section-title">News Flash</h2>
-            <span class="section-meta">Actualités à fort impact</span>
+            <h2 class="section-title">News Flash Trading</h2>
+            <span class="section-meta">Actualités analysées par impact</span>
         </div>
         <div class="section-content">
             <div class="news-flash-list" id="news-flash-list">
@@ -367,6 +367,99 @@
     border-radius: 8px;
     border: 1px dashed var(--border-color);
 }
+
+/* News Flash avec Impact Trading */
+.news-flash-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.news-flash-item:last-child {
+    border-bottom: none;
+}
+
+.news-flash-item.impact-high {
+    background: linear-gradient(90deg, rgba(239, 68, 68, 0.1) 0%, transparent 100%);
+    margin: 0 -12px;
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+
+.news-flash-item.impact-medium {
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.08) 0%, transparent 100%);
+    margin: 0 -12px;
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+
+.news-impact-badge {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.news-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 500;
+    min-width: 40px;
+    flex-shrink: 0;
+}
+
+.news-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.news-text {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+
+.news-analyse {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.news-actifs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.news-actif {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-family: monospace;
+}
+
+.news-actif.long {
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--accent-green);
+}
+
+.news-actif.short {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--accent-red);
+}
+
+.news-source {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.news-flash-item.no-impact {
+    opacity: 0.6;
+}
 </style>
 {% endblock %}
 
@@ -595,12 +688,60 @@ async function refreshNews() {
         const response = await fetch('/api/news');
         const data = await response.json();
 
-        if (data.success && data.articles) {
+        if (data.success && data.news) {
+            renderNewsFlashWithImpact(data.news);
+        } else if (data.success && data.articles) {
+            // Fallback pour l'ancien format
             renderNewsFlashFromAPI(data.articles);
         }
     } catch (error) {
         console.error('Erreur news:', error);
     }
+}
+
+function renderNewsFlashWithImpact(news) {
+    const container = document.getElementById('news-flash-list');
+
+    if (!news || news.length === 0) {
+        container.innerHTML = `
+            <div class="news-flash-item no-impact">
+                <span class="news-time">--:--</span>
+                <div class="news-content">
+                    <span class="news-text">Aucune actualité à impact trading détectée</span>
+                </div>
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    for (const item of news.slice(0, 6)) {
+        const impactClass = item.impact ? item.impact.toLowerCase() : 'medium';
+        const impactIcon = item.impact === 'HIGH' ? '🔴' : item.impact === 'MEDIUM' ? '🟠' : '⚪';
+
+        // Formater les actifs concernés
+        let actifsHtml = '';
+        if (item.actifs && item.actifs.length > 0) {
+            const actifsTags = item.actifs.map(a => {
+                const dirClass = a.direction === 'LONG' ? 'long' : 'short';
+                const dirIcon = a.direction === 'LONG' ? '↗' : '↘';
+                return `<span class="news-actif ${dirClass}">${dirIcon} ${a.symbole}</span>`;
+            }).join('');
+            actifsHtml = `<div class="news-actifs">${actifsTags}</div>`;
+        }
+
+        html += `
+            <div class="news-flash-item impact-${impactClass}">
+                <div class="news-impact-badge">${impactIcon}</div>
+                <span class="news-time">${item.heure || '--:--'}</span>
+                <div class="news-content">
+                    <span class="news-text">${item.headline || ''}</span>
+                    <span class="news-analyse">${item.analyse || ''}</span>
+                    ${actifsHtml}
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
 }
 
 function renderNewsFlashFromAPI(articles) {
