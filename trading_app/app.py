@@ -190,7 +190,7 @@ POOL_ROTATION = {
 SYMBOL_MAPPING_TWELVEDATA = {
     # Indices - format Twelve Data
     # Note: CAC40 non disponible sur Twelve Data, utiliser un ETF tracker
-    "^FCHI": "CAC:EURONEXT",   # CAC 40 - essai format exchange
+    "^FCHI": "CAC:EPA",        # CAC 40 via ETF Amundi (pas d'indice direct)
     "^GSPC": "SPX",
     "^IXIC": "IXIC",
     "^DJI": "DJI",
@@ -204,7 +204,7 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "TTE.PA": "TTE:EPA",
     "SAN.PA": "SAN:EPA",
     "BNP.PA": "BNP:EPA",
-    "AXA.PA": "AXA:EPA",    # AXA sur Euronext Paris
+    "AXA.PA": "CS:EPA",     # AXA = symbole "CS" sur Twelve Data (vérifié CSV)
     "SU.PA": "SU:EPA",
     "SAF.PA": "SAF:EPA",
     "GLE.PA": "GLE:EPA",
