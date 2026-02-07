@@ -635,6 +635,9 @@ let analysisData = null;
 let pulseInterval = null;
 let newsInterval = null;
 let contextInterval = null;
+let isRefreshingContext = false;  // Flag anti-boucle infinie
+let contextRefreshAttempts = 0;   // Compteur de tentatives
+const MAX_REFRESH_ATTEMPTS = 2;   // Maximum 2 tentatives par session
 
 // Initialisation
 document.addEventListener('DOMContentLoaded', function() {
@@ -650,8 +653,14 @@ document.addEventListener('DOMContentLoaded', function() {
     contextInterval = setInterval(function() {
         const now = new Date();
         const hour = now.getHours();
+        const dayOfWeek = now.getDay();
+        // Skip weekend et si déjà en cours
+        if (dayOfWeek === 0 || dayOfWeek === 6) return;
+        if (isRefreshingContext) return;
+        // Reset le compteur de tentatives toutes les heures
+        contextRefreshAttempts = 0;
         if (hour >= 7 && hour < 23) {
-            console.log('Auto-refresh contexte...');
+            console.log('Auto-refresh contexte horaire...');
             actualiserContexte();
         }
     }, 3600000);
@@ -661,9 +670,15 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 async function checkAndRefreshContext() {
-    // Vérifier si la dernière analyse date de plus d'1h
+    // Protection anti-boucle
+    if (isRefreshingContext || contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) return;
+
     const now = new Date();
     const hour = now.getHours();
+    const dayOfWeek = now.getDay();
+
+    // Skip weekend
+    if (dayOfWeek === 0 || dayOfWeek === 6) return;
 
     if (hour >= 7 && hour < 23) {
         try {
@@ -675,7 +690,7 @@ async function checkAndRefreshContext() {
                 const diffHours = (now - analyseTime) / (1000 * 60 * 60);
 
                 if (diffHours > 1) {
-                    console.log('Contexte périmé, actualisation automatique...');
+                    console.log('Contexte périmé, tentative unique de rafraîchissement...');
                     actualiserContexte();
                 }
             } else {
@@ -689,15 +704,58 @@ async function checkAndRefreshContext() {
 }
 
 async function actualiserContexte() {
+    // Protection anti-boucle infinie
+    if (isRefreshingContext) {
+        console.log('Actualisation déjà en cours, skip');
+        return false;
+    }
+
+    // Vérifier weekend
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+        console.log('Weekend détecté, pas d\'actualisation automatique');
+        document.getElementById('context-bullets').innerHTML =
+            '<li>📅 Weekend - Marchés fermés. Contexte disponible lundi.</li>';
+        return false;
+    }
+
+    // Limiter les tentatives
+    if (contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) {
+        console.log('Maximum de tentatives atteint');
+        document.getElementById('context-bullets').innerHTML =
+            '<li style="color: var(--text-muted);">Contexte non disponible. Cliquez sur "Actualiser" pour réessayer.</li>';
+        return false;
+    }
+
+    isRefreshingContext = true;
+    contextRefreshAttempts++;
+
     try {
         const response = await fetch('/api/analyse');
         const data = await response.json();
 
-        if (data.success) {
-            loadLastAnalysis();
+        isRefreshingContext = false;
+
+        if (data.success && data.analyse) {
+            // Nouvelle analyse générée avec succès
+            analysisData = data.analyse;
+            renderAnalysis();
+            contextRefreshAttempts = 0;  // Reset le compteur
+            return true;
+        } else {
+            // Pas de nouvelle analyse (API error, pas de clé, etc.)
+            console.log('Pas de nouvelle analyse disponible:', data.error || 'raison inconnue');
+            document.getElementById('context-bullets').innerHTML =
+                '<li style="color: var(--text-muted);">Analyse non disponible. Vérifiez la clé API Claude.</li>';
+            return false;
         }
     } catch (error) {
+        isRefreshingContext = false;
         console.error('Erreur actualisation contexte:', error);
+        document.getElementById('context-bullets').innerHTML =
+            '<li class="error-message">Erreur de connexion</li>';
+        return false;
     }
 }
 
@@ -954,7 +1012,7 @@ async function loadABTests() {
 
 // ===== ÉVÉNEMENTS MACRO =====
 async function loadMacroEvents() {
-    const agendaContainer = document.getElementById('macro-agenda-list');
+    const agendaContainer = document.getElementById('agenda-list');  // Corrigé: était 'macro-agenda-list'
 
     try {
         // Afficher état de chargement si vide
@@ -977,10 +1035,12 @@ async function loadMacroEvents() {
             if (data.evenements && data.evenements.length > 0) {
                 renderMacroAgenda(data.evenements);
             } else if (data.weekend) {
-                agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">📅</span><span class="agenda-name">Marchés fermés le weekend</span></div>';
+                if (agendaContainer) agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">📅</span><span class="agenda-name">Marchés fermés le weekend</span></div>';
             } else {
-                agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">✓</span><span class="agenda-name">Aucun événement majeur prévu</span></div>';
+                if (agendaContainer) agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">✓</span><span class="agenda-name">Aucun événement majeur prévu</span></div>';
             }
+        } else {
+            console.warn('API evenements-macro retour échec:', data.error);
         }
     } catch (error) {
         console.error('Erreur événements macro:', error);
@@ -1468,40 +1528,50 @@ function renderPulseWidget(weekendMsg) {
 // ===== ANALYSE =====
 async function loadLastAnalysis() {
     try {
-        // Afficher immédiatement un état de chargement
         const container = document.getElementById('context-bullets');
         container.innerHTML = '<li class="loading">⏳ Chargement du contexte...</li>';
 
         const response = await fetch('/api/derniere-analyse');
         const data = await response.json();
 
+        const now = new Date();
+        const hour = now.getHours();
+        const dayOfWeek = now.getDay();
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+
         if (data.success && data.analyse) {
             analysisData = data.analyse;
 
-            // Vérifier fraîcheur et mettre à jour si périmé (>1h)
-            const now = new Date();
-            if (data.analyse.heure) {
+            // Vérifier fraîcheur (>1h) mais NE PAS boucler
+            if (data.analyse.heure && !isWeekend && !isRefreshingContext) {
                 const [h, m] = data.analyse.heure.split(':').map(Number);
                 const analyseTime = new Date();
                 analyseTime.setHours(h, m, 0, 0);
                 const diffHours = (now - analyseTime) / (1000 * 60 * 60);
 
-                if (diffHours > 1 && now.getHours() >= 7 && now.getHours() < 23) {
-                    container.innerHTML = '<li style="color: var(--accent-orange);">⚠️ Contexte périmé, mise à jour automatique...</li>';
-                    await actualiserContexte();
-                    return; // actualiserContexte appellera loadLastAnalysis à nouveau
+                if (diffHours > 1 && hour >= 7 && hour < 23 && contextRefreshAttempts < MAX_REFRESH_ATTEMPTS) {
+                    container.innerHTML = '<li style="color: var(--accent-orange);">⚠️ Contexte de ' + data.analyse.heure + ' (périmé)</li>';
+                    // Lancer actualisation en arrière-plan SANS rappeler loadLastAnalysis
+                    actualiserContexte();  // Ne pas await, ne pas return
                 }
             }
 
+            // Toujours afficher les données existantes
             renderAnalysis();
         } else {
-            // Pas d'analyse existante - en lancer une automatiquement (heures de marché)
-            const hour = new Date().getHours();
-            if (hour >= 7 && hour < 23) {
-                container.innerHTML = '<li style="color: var(--accent-orange);">⏳ Première analyse en cours...</li>';
-                await actualiserContexte();
+            // Pas d'analyse existante
+            if (isWeekend) {
+                container.innerHTML = '<li>📅 Weekend - Marchés fermés. Reprise lundi.</li>';
+            } else if (hour >= 7 && hour < 23) {
+                // Tenter UNE SEULE FOIS de générer une analyse
+                if (contextRefreshAttempts < MAX_REFRESH_ATTEMPTS) {
+                    container.innerHTML = '<li style="color: var(--accent-orange);">⏳ Génération du contexte...</li>';
+                    actualiserContexte();  // Pas de await pour éviter blocage
+                } else {
+                    container.innerHTML = '<li>Contexte non disponible. Cliquez sur "Actualiser".</li>';
+                }
             } else {
-                container.innerHTML = '<li>Marchés fermés. Analyse disponible demain à partir de 7h.</li>';
+                container.innerHTML = '<li>Marchés fermés. Analyse disponible entre 7h et 23h.</li>';
             }
         }
     } catch (error) {
@@ -1512,19 +1582,22 @@ async function loadLastAnalysis() {
 }
 
 function checkContextFreshness() {
-    // Vérifier si besoin de rafraîchir automatiquement
+    // Vérifier si besoin de rafraîchir (avec protection anti-boucle)
+    if (isRefreshingContext || contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) return;
+
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) return;  // Weekend
+
     if (analysisData && analysisData.heure) {
         const [h, m] = analysisData.heure.split(':').map(Number);
         const analyseTime = new Date();
         analyseTime.setHours(h, m, 0, 0);
 
-        const now = new Date();
         const diffHours = (now - analyseTime) / (1000 * 60 * 60);
 
-        if (diffHours > 1) {
-            // Le contexte est périmé - afficher message et lancer mise à jour auto
-            document.getElementById('context-bullets').innerHTML =
-                '<li style="color: var(--accent-orange);">⚠️ Contexte périmé, mise à jour automatique en cours...</li>';
+        if (diffHours > 1 && now.getHours() >= 7 && now.getHours() < 23) {
+            console.log('Contexte périmé, tentative de rafraîchissement...');
             actualiserContexte();
         }
     }

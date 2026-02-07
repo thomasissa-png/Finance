@@ -6178,27 +6178,47 @@ def get_analyses_du_jour():
 @app.route('/')
 def index():
     """Page d'accueil - Dashboard principal"""
-    return render_template('index.html')
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Erreur page index: {e}")
+        return f"Erreur de chargement: {e}", 500
 
 @app.route('/trading')
 def trading():
     """Page d'aide au trading"""
-    return render_template('trading.html')
+    try:
+        return render_template('trading.html')
+    except Exception as e:
+        logger.error(f"Erreur page trading: {e}")
+        return f"Erreur de chargement: {e}", 500
 
 @app.route('/memoire')
 def memoire():
     """Page mémoire - Journal et performances"""
-    return render_template('memoire.html')
+    try:
+        return render_template('memoire.html')
+    except Exception as e:
+        logger.error(f"Erreur page memoire: {e}")
+        return f"Erreur de chargement: {e}", 500
 
 @app.route('/journal')
 def journal():
     """Page journal automatique"""
-    return render_template('journal.html')
+    try:
+        return render_template('journal.html')
+    except Exception as e:
+        logger.error(f"Erreur page journal: {e}")
+        return f"Erreur de chargement: {e}", 500
 
 @app.route('/journal/<symbole>')
 def journal_actif(symbole):
     """Page journal d'un actif spécifique"""
-    return render_template('journal_actif.html', symbole=symbole)
+    try:
+        return render_template('journal_actif.html', symbole=symbole)
+    except Exception as e:
+        logger.error(f"Erreur page journal_actif {symbole}: {e}")
+        return f"Erreur de chargement: {e}", 500
 
 # ============================================================================
 # ROUTES API
@@ -6207,19 +6227,23 @@ def journal_actif(symbole):
 @app.route('/api/status')
 def api_status():
     """Statut de l'application"""
-    maintenant = get_paris_time()
-    marche_type, marche_info = get_market_context()
+    try:
+        maintenant = get_paris_time()
+        marche_type, marche_info = get_market_context()
 
-    return jsonify({
-        'status': 'online',
-        'datetime': maintenant.strftime('%d/%m/%Y %H:%M:%S'),
-        'timezone': 'Europe/Paris',
-        'marche': marche_type,
-        'marche_info': marche_info,
-        'news_envoyees': NEWS_ENVOYEES_AUJOURDHUI,
-        'max_news': MAX_NEWS_PAR_JOUR,
-        'twelvedata_configured': bool(TWELVEDATA_API_KEY)
-    })
+        return jsonify({
+            'status': 'online',
+            'datetime': maintenant.strftime('%d/%m/%Y %H:%M:%S'),
+            'timezone': 'Europe/Paris',
+            'marche': marche_type,
+            'marche_info': marche_info,
+            'news_envoyees': NEWS_ENVOYEES_AUJOURDHUI,
+            'max_news': MAX_NEWS_PAR_JOUR,
+            'twelvedata_configured': bool(TWELVEDATA_API_KEY)
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_status: {e}")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 @app.route('/api/twelvedata/test')
 def api_twelvedata_test():
