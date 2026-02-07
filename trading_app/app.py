@@ -61,6 +61,11 @@ TWELVEDATA_QUOTA_COOLDOWN = 60  # Cooldown en secondes après quota exceeded
 NEWS_CACHE = {'data': None, 'timestamp': 0}
 NEWS_CACHE_TTL = 300  # 5 minutes
 
+# Cache VIX persistant avec fallback
+VIX_CACHE = {'value': 20.0, 'timestamp': 0, 'source': 'default'}
+VIX_CACHE_TTL = 300  # 5 minutes - VIX change lentement
+VIX_CACHE_FILE = 'vix_cache.json'  # Persistance entre redémarrages
+
 # Locks pour thread-safety (bugs critiques #1 et #2)
 TWELVEDATA_RATE_LOCK = Lock()  # Protège TWELVEDATA_LAST_CALL
 TWELVEDATA_CACHE_LOCK = Lock()  # Protège TWELVEDATA_CACHE
@@ -1547,6 +1552,129 @@ def init_database():
     conn.close()
     print("✅ Base de données initialisée")
 
+    # Créer les index pour optimiser les requêtes fréquentes
+    create_database_indexes()
+
+def create_database_indexes():
+    """Crée les index SQL pour optimiser les performances des requêtes fréquentes"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    indexes = [
+        # Index trades_recommandes - colonnes les plus utilisées
+        ("idx_trades_date", "trades_recommandes", "date"),
+        ("idx_trades_symbole", "trades_recommandes", "symbole"),
+        ("idx_trades_resultat", "trades_recommandes", "resultat"),
+        ("idx_trades_date_resultat", "trades_recommandes", "date, resultat"),
+        ("idx_trades_date_symbole", "trades_recommandes", "date, symbole"),
+        ("idx_trades_conviction", "trades_recommandes", "conviction_score"),
+        ("idx_trades_regime", "trades_recommandes", "regime_marche"),
+        ("idx_trades_strategie", "trades_recommandes", "strategie_entree"),
+        ("idx_trades_statut", "trades_recommandes", "statut_intraday"),
+        ("idx_trades_ab_test", "trades_recommandes", "ab_test_id"),
+        # Index analyses
+        ("idx_analyses_date", "analyses", "date"),
+        ("idx_analyses_type", "analyses", "type"),
+        # Index journal_quotidien
+        ("idx_journal_date", "journal_quotidien", "date"),
+        ("idx_journal_symbole", "journal_quotidien", "symbole"),
+        # Index bilan_quotidien
+        ("idx_bilan_date", "bilan_quotidien", "date"),
+        # Index alertes_news
+        ("idx_news_date", "alertes_news", "date"),
+        # Index criteres_dynamiques
+        ("idx_criteres_date", "criteres_dynamiques", "date_maj"),
+        # Index ajustements_proposes
+        ("idx_ajustements_statut", "ajustements_proposes", "statut"),
+        ("idx_ajustements_date", "ajustements_proposes", "date_proposition"),
+        # Index ab_tests
+        ("idx_ab_tests_statut", "ab_tests", "statut"),
+    ]
+
+    for idx_name, table, columns in indexes:
+        try:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({columns})")
+        except sqlite3.OperationalError as e:
+            pass  # Index existe déjà ou table n'existe pas encore
+
+    conn.commit()
+    conn.close()
+    print("✅ Index SQL créés/vérifiés")
+
+def backup_database():
+    """Crée une sauvegarde horodatée de la base de données"""
+    import shutil
+
+    if not os.path.exists(DB_PATH):
+        print("⚠️ Base de données non trouvée, backup ignoré")
+        return None
+
+    # Créer le dossier backups si nécessaire
+    backup_dir = os.path.join(os.path.dirname(DB_PATH) or '.', 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
+
+    # Nom du backup avec date
+    maintenant = datetime.now()
+    backup_name = f"trading_backup_{maintenant.strftime('%Y%m%d_%H%M%S')}.db"
+    backup_path = os.path.join(backup_dir, backup_name)
+
+    try:
+        # Copie sécurisée (avec flush SQLite)
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # Flush WAL si utilisé
+        conn.close()
+
+        shutil.copy2(DB_PATH, backup_path)
+
+        # Nettoyer les anciens backups (garder les 7 derniers)
+        cleanup_old_backups(backup_dir, keep=7)
+
+        print(f"✅ Backup créé: {backup_name}")
+        return backup_path
+    except Exception as e:
+        print(f"❌ Erreur backup: {e}")
+        return None
+
+def cleanup_old_backups(backup_dir, keep=7):
+    """Supprime les backups anciens, garde les N plus récents"""
+    try:
+        backups = sorted([
+            os.path.join(backup_dir, f)
+            for f in os.listdir(backup_dir)
+            if f.startswith('trading_backup_') and f.endswith('.db')
+        ], key=os.path.getmtime, reverse=True)
+
+        # Supprimer les plus vieux
+        for old_backup in backups[keep:]:
+            os.remove(old_backup)
+            print(f"🗑️ Ancien backup supprimé: {os.path.basename(old_backup)}")
+    except Exception as e:
+        print(f"⚠️ Erreur nettoyage backups: {e}")
+
+def load_vix_cache():
+    """Charge le cache VIX depuis le fichier persistant"""
+    global VIX_CACHE
+    try:
+        cache_path = os.path.join(os.path.dirname(DB_PATH) or '.', VIX_CACHE_FILE)
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                cached = json.load(f)
+                # Vérifier si le cache n'est pas trop vieux (max 1h)
+                if time.time() - cached.get('timestamp', 0) < 3600:
+                    VIX_CACHE = cached
+                    print(f"✅ Cache VIX chargé: {VIX_CACHE['value']:.1f} ({VIX_CACHE['source']})")
+    except Exception as e:
+        print(f"⚠️ Erreur chargement cache VIX: {e}")
+
+def save_vix_cache():
+    """Sauvegarde le cache VIX dans un fichier persistant"""
+    try:
+        cache_path = os.path.join(os.path.dirname(DB_PATH) or '.', VIX_CACHE_FILE)
+        with open(cache_path, 'w') as f:
+            json.dump(VIX_CACHE, f)
+    except Exception as e:
+        print(f"⚠️ Erreur sauvegarde cache VIX: {e}")
+
 # ============================================================================
 # FONCTIONS UTILITAIRES
 # ============================================================================
@@ -1597,26 +1725,43 @@ def get_market_context():
         return "FERME", "Marchés principaux fermés. Forex/Commodités 24h."
 
 def get_vix_level():
-    """Récupère le niveau actuel du VIX pour déterminer le régime de marché"""
+    """Récupère le niveau actuel du VIX avec cache persistant et fallback robuste"""
+    global VIX_CACHE
+
+    # Vérifier si le cache est encore valide
+    if time.time() - VIX_CACHE.get('timestamp', 0) < VIX_CACHE_TTL:
+        return VIX_CACHE['value']
+
+    # Essayer Yahoo Finance d'abord (plus fiable pour VIX)
     try:
-        # Essayer Yahoo Finance d'abord (plus fiable pour VIX)
         vix = yf.Ticker("^VIX")
         hist = vix.history(period="1d")
         if not hist.empty:
             vix_value = float(hist['Close'].iloc[-1])
+            VIX_CACHE = {'value': vix_value, 'timestamp': time.time(), 'source': 'yahoo'}
+            save_vix_cache()
             return vix_value
     except Exception as e:
         print(f"⚠️ Erreur récup VIX Yahoo: {e}")
 
-    # Fallback: utiliser le cache si disponible
+    # Fallback: utiliser Twelve Data si disponible
     try:
         donnees = recuperer_donnees_marche({"^VIX": "VIX"})
         if donnees and 'VIX' in donnees:
-            return donnees['VIX'].get('prix', 20)
-    except:
-        pass
+            vix_value = donnees['VIX'].get('prix', None)
+            if vix_value:
+                VIX_CACHE = {'value': vix_value, 'timestamp': time.time(), 'source': 'twelvedata'}
+                save_vix_cache()
+                return vix_value
+    except Exception as e:
+        print(f"⚠️ Erreur récup VIX Twelve Data: {e}")
 
-    return 20  # Valeur par défaut (normal)
+    # Fallback ultime: utiliser le cache même périmé (mieux que rien)
+    if VIX_CACHE.get('value'):
+        print(f"⚠️ Utilisation cache VIX périmé: {VIX_CACHE['value']:.1f}")
+        return VIX_CACHE['value']
+
+    return 20.0  # Valeur par défaut (normal)
 
 def get_regime_marche(vix_niveau=None):
     """Détermine le régime de marché basé sur le VIX
@@ -7152,6 +7297,11 @@ def configurer_schedule():
     heure_ab_eval_utc = get_utc_time_for_paris("18:00")
     schedule.every().sunday.at(heure_ab_eval_utc).do(evaluer_tous_ab_tests)
 
+    # Backup quotidien de la base de données: tous les jours à 23h00
+    heure_backup_utc = get_utc_time_for_paris("23:00")
+    schedule.every().day.at(heure_backup_utc).do(backup_database)
+    print(f"  ⏰ Backup DB: 23h00 CET ({heure_backup_utc} UTC)")
+
 def run_scheduler():
     """Thread robuste pour le scheduler avec gestion d'erreurs"""
     consecutive_errors = 0
@@ -7243,6 +7393,7 @@ def precharger_donnees_marche():
 init_database()
 init_ab_test_table()
 charger_ab_tests_actifs()
+load_vix_cache()  # Charger le cache VIX persistant
 configurer_schedule()
 scheduler_thread = Thread(target=run_scheduler, daemon=True)
 scheduler_thread.start()
