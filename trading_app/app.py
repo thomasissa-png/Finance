@@ -116,6 +116,7 @@ POOL_ROTATION = {
 # ============================================================================
 
 # Mapping Yahoo Finance -> Twelve Data
+# Twelve Data exchange codes: EPA=Euronext Paris, XETRA=Frankfurt, etc.
 SYMBOL_MAPPING_TWELVEDATA = {
     # Indices
     "^FCHI": "CAC40",
@@ -124,51 +125,53 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "^DJI": "DJI",
     "^GDAXI": "DAX",
     "^VIX": "VIX",
-    # Actions Européennes (format: SYMBOLE:EXCHANGE)
-    "AIR.PA": "AIR:XPAR",
-    "MC.PA": "MC:XPAR",
-    "OR.PA": "OR:XPAR",
-    "RMS.PA": "RMS:XPAR",
-    "TTE.PA": "TTE:XPAR",
-    "SAN.PA": "SAN:XPAR",
-    "BNP.PA": "BNP:XPAR",
-    "AXA.PA": "CS:XPAR",  # AXA sur Euronext
-    "SU.PA": "SU:XPAR",
-    "SAF.PA": "SAF:XPAR",
-    "GLE.PA": "GLE:XPAR",
-    "ACA.PA": "ACA:XPAR",
-    "KER.PA": "KER:XPAR",
-    "ENGI.PA": "ENGI:XPAR",
-    "AM.PA": "AM:XPAR",
-    "HO.PA": "HO:XPAR",
-    "RNO.PA": "RNO:XPAR",
-    "ML.PA": "ML:XPAR",
-    # Actions Allemandes
-    "MBG.DE": "MBG:XETR",
-    "BMW.DE": "BMW:XETR",
-    "VOW3.DE": "VOW3:XETR",
-    "BOSS.DE": "BOSS:XETR",
-    "DBK.DE": "DBK:XETR",
+    # Actions Françaises (Euronext Paris = EPA)
+    "AIR.PA": "AIR:EPA",
+    "MC.PA": "MC:EPA",
+    "OR.PA": "OR:EPA",
+    "RMS.PA": "RMS:EPA",
+    "TTE.PA": "TTE:EPA",
+    "SAN.PA": "SAN:EPA",
+    "BNP.PA": "BNP:EPA",
+    "AXA.PA": "CS:EPA",     # AXA = ticker CS sur Euronext
+    "SU.PA": "SU:EPA",
+    "SAF.PA": "SAF:EPA",
+    "GLE.PA": "GLE:EPA",
+    "ACA.PA": "ACA:EPA",
+    "KER.PA": "KER:EPA",
+    "ENGI.PA": "ENGI:EPA",
+    "AM.PA": "AM:EPA",
+    "HO.PA": "HO:EPA",
+    "RNO.PA": "RNO:EPA",
+    "ML.PA": "MONC:EPA",    # Moncler
+    # Actions Allemandes (XETRA)
+    "MBG.DE": "MBG:XETRA",
+    "BMW.DE": "BMW:XETRA",
+    "VOW3.DE": "VOW3:XETRA",
+    "BOSS.DE": "BOSS:XETRA",
+    "DBK.DE": "DBK:XETRA",
     # Actions autres EU
-    "ASML.AS": "ASML:XAMS",
-    "INGA.AS": "INGA:XAMS",
-    "UCG.MI": "UCG:XMIL",
-    "SAN.MC": "SAN:XMAD",
-    "CFR.SW": "CFR:XSWX",
-    # Futures/Commodités
-    "GC=F": "XAU/USD",  # Or en forex sur Twelve Data
-    "SI=F": "XAG/USD",  # Argent
-    "PL=F": "XPT/USD",  # Platine
-    "BZ=F": "BZ",       # Brent
-    "CL=F": "CL",       # WTI
-    "NG=F": "NG",       # Gaz naturel
-    "KC=F": "KC",       # Café
-    "CC=F": "CC",       # Cacao
-    "HG=F": "HG",       # Cuivre
-    "ZS=F": "ZS",       # Soja
-    "SB=F": "SB",       # Sucre
-    "ZW=F": "ZW",       # Blé
-    "ZC=F": "ZC",       # Maïs
+    "ASML.AS": "ASML:AMS",
+    "INGA.AS": "INGA:AMS",
+    "UCG.MI": "UCG:MIL",
+    "SAN.MC": "SAN:BME",    # Santander = Bolsa Madrid
+    "CFR.SW": "CFR:SWX",
+    # Métaux précieux (format forex sur Twelve Data)
+    "GC=F": "XAU/USD",
+    "SI=F": "XAG/USD",
+    "PL=F": "XPT/USD",
+    # Énergie - format commodity
+    "BZ=F": "BZ",
+    "CL=F": "CL",
+    "NG=F": "NG",
+    # Commodités agricoles
+    "KC=F": "KC",
+    "CC=F": "CC",
+    "HG=F": "HG",
+    "ZS=F": "ZS",
+    "SB=F": "SB",
+    "ZW=F": "ZW",
+    "ZC=F": "ZC",
     # Forex
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
@@ -2786,8 +2789,81 @@ def api_status():
         'marche': marche_type,
         'marche_info': marche_info,
         'news_envoyees': NEWS_ENVOYEES_AUJOURDHUI,
-        'max_news': MAX_NEWS_PAR_JOUR
+        'max_news': MAX_NEWS_PAR_JOUR,
+        'twelvedata_configured': bool(TWELVEDATA_API_KEY)
     })
+
+@app.route('/api/twelvedata/test')
+def api_twelvedata_test():
+    """Teste la connexion Twelve Data et liste les symboles fonctionnels"""
+    if not TWELVEDATA_API_KEY:
+        return jsonify({'success': False, 'error': 'TWELVEDATA_API_KEY non configurée'})
+
+    # Tester quelques symboles clés
+    test_symbols = {
+        "EUR/USD": "EURUSD=X",
+        "SPX": "^GSPC",
+        "CAC40": "^FCHI",
+        "AAPL": "AAPL",
+        "MC (LVMH)": "MC.PA",
+        "Or (XAU/USD)": "GC=F"
+    }
+
+    results = {}
+    for name, yahoo_sym in test_symbols.items():
+        td_sym = convert_symbol_to_twelvedata(yahoo_sym)
+        try:
+            rate_limit_twelvedata()
+            url = "https://api.twelvedata.com/quote"
+            params = {"symbol": td_sym, "apikey": TWELVEDATA_API_KEY}
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+
+            if "close" in data:
+                results[name] = {
+                    "status": "OK",
+                    "symbol_td": td_sym,
+                    "price": data.get("close"),
+                    "change": data.get("percent_change")
+                }
+            else:
+                results[name] = {
+                    "status": "ERREUR",
+                    "symbol_td": td_sym,
+                    "error": data.get("message", "Symbole non trouvé")
+                }
+        except Exception as e:
+            results[name] = {"status": "ERREUR", "symbol_td": td_sym, "error": str(e)}
+
+    return jsonify({
+        'success': True,
+        'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+        'results': results
+    })
+
+@app.route('/api/twelvedata/symbol/<path:symbole>')
+def api_twelvedata_symbol(symbole):
+    """Teste un symbole spécifique sur Twelve Data"""
+    if not TWELVEDATA_API_KEY:
+        return jsonify({'success': False, 'error': 'TWELVEDATA_API_KEY non configurée'})
+
+    td_sym = convert_symbol_to_twelvedata(symbole)
+
+    try:
+        rate_limit_twelvedata()
+        url = "https://api.twelvedata.com/quote"
+        params = {"symbol": td_sym, "apikey": TWELVEDATA_API_KEY}
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        return jsonify({
+            'success': "close" in data,
+            'yahoo_symbol': symbole,
+            'twelvedata_symbol': td_sym,
+            'response': data
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/donnees-marche')
 def api_donnees_marche():
