@@ -47,12 +47,18 @@ TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 TWELVEDATA_LAST_CALL = None
 TWELVEDATA_MIN_INTERVAL = 1.1  # 60s/55 = ~1.09s entre chaque appel
 TWELVEDATA_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
-TWELVEDATA_CACHE_TTL = 60  # Cache valide 60 secondes pour économiser les appels
+TWELVEDATA_CACHE_TTL = 300  # Cache valide 5 minutes (données daily ne changent pas souvent)
 TWELVEDATA_CACHE_MAX_SIZE = 500  # Limite du cache pour éviter fuite mémoire
+
+# Circuit breaker pour quota dépassé
+TWELVEDATA_QUOTA_EXCEEDED = False  # Flag pour stopper tous les appels
+TWELVEDATA_QUOTA_RESET_TIME = None  # Timestamp de reset du quota
+TWELVEDATA_QUOTA_COOLDOWN = 60  # Cooldown en secondes après quota exceeded
 
 # Locks pour thread-safety (bugs critiques #1 et #2)
 TWELVEDATA_RATE_LOCK = Lock()  # Protège TWELVEDATA_LAST_CALL
 TWELVEDATA_CACHE_LOCK = Lock()  # Protège TWELVEDATA_CACHE
+TWELVEDATA_FETCH_LOCK = Lock()  # Protège contre le stampede (multiples appels simultanés)
 
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
@@ -197,7 +203,7 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "TTE.PA": "TTE:EPA",
     "SAN.PA": "SAN:EPA",
     "BNP.PA": "BNP:EPA",
-    "AXA.PA": "CS:EPA",     # AXA = ticker CS sur Euronext
+    "AXA.PA": "AXA:EPA",    # AXA sur Euronext Paris
     "SU.PA": "SU:EPA",
     "SAF.PA": "SAF:EPA",
     "GLE.PA": "GLE:EPA",
@@ -240,6 +246,14 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "EURUSD=X": "EUR/USD",
     "GBPUSD=X": "GBP/USD",
     "USDJPY=X": "USD/JPY",
+    # Futures premarket (indices US)
+    "ES=F": "ES",           # E-mini S&P 500
+    "NQ=F": "NQ",           # E-mini Nasdaq 100
+    "YM=F": "YM",           # E-mini Dow
+    # Indices asiatiques/européens
+    "^N225": "NI225",       # Nikkei 225
+    "^HSI": "HSI",          # Hang Seng
+    "^STOXX50E": "STOXX50", # Euro Stoxx 50
 }
 
 def convert_symbol_to_twelvedata(yahoo_symbol):
@@ -252,6 +266,29 @@ def convert_symbol_to_twelvedata(yahoo_symbol):
         return yahoo_symbol
     # Par défaut, retourner tel quel
     return yahoo_symbol
+
+def check_quota_circuit_breaker():
+    """Vérifie si le circuit breaker quota est actif. Retourne True si bloqué."""
+    global TWELVEDATA_QUOTA_EXCEEDED, TWELVEDATA_QUOTA_RESET_TIME
+
+    if not TWELVEDATA_QUOTA_EXCEEDED:
+        return False
+
+    # Vérifier si le cooldown est passé
+    if TWELVEDATA_QUOTA_RESET_TIME and time.time() > TWELVEDATA_QUOTA_RESET_TIME:
+        TWELVEDATA_QUOTA_EXCEEDED = False
+        TWELVEDATA_QUOTA_RESET_TIME = None
+        print("🔄 Circuit breaker quota réinitialisé")
+        return False
+
+    return True
+
+def activate_quota_circuit_breaker():
+    """Active le circuit breaker après un quota exceeded"""
+    global TWELVEDATA_QUOTA_EXCEEDED, TWELVEDATA_QUOTA_RESET_TIME
+    TWELVEDATA_QUOTA_EXCEEDED = True
+    TWELVEDATA_QUOTA_RESET_TIME = time.time() + TWELVEDATA_QUOTA_COOLDOWN
+    print(f"🛑 Circuit breaker QUOTA activé - pause {TWELVEDATA_QUOTA_COOLDOWN}s")
 
 def rate_limit_twelvedata():
     """Applique un rate limiting thread-safe sur les appels Twelve Data"""
@@ -295,6 +332,13 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
             if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
                 return cached['data'], cached['is_fresh']
 
+    # Circuit breaker quota - retourner cache périmé si disponible
+    if check_quota_circuit_breaker():
+        with TWELVEDATA_CACHE_LOCK:
+            if cache_key in TWELVEDATA_CACHE:
+                return TWELVEDATA_CACHE[cache_key]['data'], False
+        return pd.DataFrame(), False
+
     # Rate limiting
     rate_limit_twelvedata()
 
@@ -315,6 +359,12 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
 
         if "values" not in data:
             error_msg = data.get("message", "Erreur inconnue")
+            error_code = data.get("code", 0)
+
+            # Détecter quota exceeded et activer circuit breaker
+            if "quota" in error_msg.lower() or "limit" in error_msg.lower() or error_code == 429:
+                activate_quota_circuit_breaker()
+
             print(f"⚠️ Twelve Data {symbole}: {error_msg}")
             return pd.DataFrame(), False
 
@@ -382,8 +432,27 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
         return pd.DataFrame(), False
 
 def get_twelvedata_quote(symbole):
-    """Récupère le prix en temps réel via Twelve Data"""
+    """Récupère le prix en temps réel via Twelve Data (avec cache)"""
+    global TWELVEDATA_CACHE
+
     if not TWELVEDATA_API_KEY:
+        return None
+
+    cache_key = f"quote_{symbole}"
+    now = time.time()
+
+    # Vérifier le cache
+    with TWELVEDATA_CACHE_LOCK:
+        if cache_key in TWELVEDATA_CACHE:
+            cached = TWELVEDATA_CACHE[cache_key]
+            if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
+                return cached['data']
+
+    # Circuit breaker quota
+    if check_quota_circuit_breaker():
+        with TWELVEDATA_CACHE_LOCK:
+            if cache_key in TWELVEDATA_CACHE:
+                return TWELVEDATA_CACHE[cache_key]['data']
         return None
 
     rate_limit_twelvedata()
@@ -401,9 +470,12 @@ def get_twelvedata_quote(symbole):
         data = response.json()
 
         if "close" not in data:
+            error_msg = data.get("message", "")
+            if "quota" in error_msg.lower() or "limit" in error_msg.lower():
+                activate_quota_circuit_breaker()
             return None
 
-        return {
+        result = {
             "price": float(data.get("close", 0)),
             "open": float(data.get("open", 0)),
             "high": float(data.get("high", 0)),
@@ -413,6 +485,15 @@ def get_twelvedata_quote(symbole):
             "percent_change": float(data.get("percent_change", 0)),
             "volume": int(data.get("volume", 0)) if data.get("volume") else 0
         }
+
+        # Mettre en cache
+        with TWELVEDATA_CACHE_LOCK:
+            TWELVEDATA_CACHE[cache_key] = {
+                'data': result,
+                'timestamp': now
+            }
+
+        return result
 
     except Exception as e:
         print(f"⚠️ Erreur quote {symbole}: {e}")
@@ -1045,9 +1126,27 @@ def get_actifs_filtres_atr(donnees_marche, seuil_atr_min=1.0):
 # RÉCUPÉRATION DONNÉES MARCHÉ
 # ============================================================================
 
+# Cache haut niveau pour éviter le stampede (multiples appels simultanés)
+MARKET_DATA_CACHE = {'data': None, 'timestamp': 0, 'actifs_key': None}
+MARKET_DATA_CACHE_TTL = 300  # 5 minutes (identique au cache Twelve Data)
+
 def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
     """Récupère les données de marché pour les actifs donnés avec ATR et Volume relatif
-    Utilise Twelve Data API avec cache et rate limiting"""
+    Utilise Twelve Data API avec cache et rate limiting.
+    Cache haut-niveau pour éviter le stampede quand plusieurs endpoints appellent simultanément."""
+    global MARKET_DATA_CACHE
+
+    # Clé unique pour ce set d'actifs
+    actifs_key = hash(frozenset(actifs.keys()))
+    now = time.time()
+
+    # Vérifier cache haut-niveau (évite le stampede)
+    with TWELVEDATA_FETCH_LOCK:
+        if (MARKET_DATA_CACHE['data'] is not None and
+            MARKET_DATA_CACHE['actifs_key'] == actifs_key and
+            now - MARKET_DATA_CACHE['timestamp'] < MARKET_DATA_CACHE_TTL):
+            return MARKET_DATA_CACHE['data']
+
     donnees = {}
     donnees_non_fraiches = []
 
@@ -1139,6 +1238,12 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
 
     if donnees_non_fraiches:
         print(f"⚠️ Données potentiellement obsolètes pour: {', '.join(donnees_non_fraiches[:5])}")
+
+    # Sauvegarder dans le cache haut-niveau
+    with TWELVEDATA_FETCH_LOCK:
+        MARKET_DATA_CACHE['data'] = donnees
+        MARKET_DATA_CACHE['timestamp'] = time.time()
+        MARKET_DATA_CACHE['actifs_key'] = hash(frozenset(actifs.keys()))
 
     return donnees
 
