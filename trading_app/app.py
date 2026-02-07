@@ -8,7 +8,7 @@ import json
 import re
 import sqlite3
 from datetime import datetime, timedelta
-from threading import Thread
+from threading import Thread, Lock
 import time
 
 import numpy as np
@@ -19,6 +19,7 @@ from anthropic import Anthropic
 from flask import Flask, render_template, jsonify, request
 from twilio.rest import Client
 import requests
+import holidays
 
 # ============================================================================
 # CONFIGURATION
@@ -47,9 +48,72 @@ TWELVEDATA_LAST_CALL = None
 TWELVEDATA_MIN_INTERVAL = 1.1  # 60s/55 = ~1.09s entre chaque appel
 TWELVEDATA_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
 TWELVEDATA_CACHE_TTL = 60  # Cache valide 60 secondes pour économiser les appels
+TWELVEDATA_CACHE_MAX_SIZE = 500  # Limite du cache pour éviter fuite mémoire
+
+# Locks pour thread-safety (bugs critiques #1 et #2)
+TWELVEDATA_RATE_LOCK = Lock()  # Protège TWELVEDATA_LAST_CALL
+TWELVEDATA_CACHE_LOCK = Lock()  # Protège TWELVEDATA_CACHE
 
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
+
+# Calendriers des jours fériés (marchés fermés)
+HOLIDAYS_FR = holidays.France()  # Euronext Paris
+HOLIDAYS_US = holidays.NYSE()     # NYSE et NASDAQ
+HOLIDAYS_DE = holidays.Germany(prov='HE')  # Francfort (Hesse)
+
+def est_jour_ferie(date_check=None, marche='ALL'):
+    """
+    Vérifie si une date est un jour férié où les marchés sont fermés.
+    marche: 'FR' (Euronext), 'US' (NYSE/NASDAQ), 'DE' (Francfort), 'ALL' (tous)
+    Retourne: (bool is_ferie, str raison)
+    """
+    if date_check is None:
+        date_check = get_paris_time().date()
+
+    if isinstance(date_check, datetime):
+        date_check = date_check.date()
+
+    raisons = []
+
+    if marche in ['FR', 'ALL'] and date_check in HOLIDAYS_FR:
+        raisons.append(f"FR: {HOLIDAYS_FR.get(date_check)}")
+
+    if marche in ['US', 'ALL'] and date_check in HOLIDAYS_US:
+        raisons.append(f"US: {HOLIDAYS_US.get(date_check)}")
+
+    if marche in ['DE', 'ALL'] and date_check in HOLIDAYS_DE:
+        raisons.append(f"DE: {HOLIDAYS_DE.get(date_check)}")
+
+    if raisons:
+        return True, " | ".join(raisons)
+    return False, ""
+
+def est_jour_trading_valide(date_check=None):
+    """
+    Vérifie si c'est un jour de trading valide (pas weekend, pas férié).
+    Retourne: (bool is_valide, str raison_si_invalide)
+    """
+    if date_check is None:
+        date_check = get_paris_time()
+
+    if isinstance(date_check, datetime):
+        date_obj = date_check.date()
+        weekday = date_check.weekday()
+    else:
+        date_obj = date_check
+        weekday = date_check.weekday()
+
+    # Weekend
+    if weekday >= 5:
+        return False, "Weekend"
+
+    # Jours fériés
+    is_ferie, raison = est_jour_ferie(date_obj)
+    if is_ferie:
+        return False, f"Jour férié: {raison}"
+
+    return True, ""
 
 # ============================================================================
 # ACTIFS SUIVIS
@@ -190,16 +254,31 @@ def convert_symbol_to_twelvedata(yahoo_symbol):
     return yahoo_symbol
 
 def rate_limit_twelvedata():
-    """Applique un rate limiting sur les appels Twelve Data"""
+    """Applique un rate limiting thread-safe sur les appels Twelve Data"""
     global TWELVEDATA_LAST_CALL
-    if TWELVEDATA_LAST_CALL is not None:
-        elapsed = time.time() - TWELVEDATA_LAST_CALL
-        if elapsed < TWELVEDATA_MIN_INTERVAL:
-            time.sleep(TWELVEDATA_MIN_INTERVAL - elapsed)
-    TWELVEDATA_LAST_CALL = time.time()
+    with TWELVEDATA_RATE_LOCK:
+        if TWELVEDATA_LAST_CALL is not None:
+            elapsed = time.time() - TWELVEDATA_LAST_CALL
+            if elapsed < TWELVEDATA_MIN_INTERVAL:
+                time.sleep(TWELVEDATA_MIN_INTERVAL - elapsed)
+        TWELVEDATA_LAST_CALL = time.time()
+
+def cleanup_twelvedata_cache():
+    """Nettoie le cache si trop volumineux (bug #8)"""
+    global TWELVEDATA_CACHE
+    with TWELVEDATA_CACHE_LOCK:
+        if len(TWELVEDATA_CACHE) > TWELVEDATA_CACHE_MAX_SIZE:
+            # Garder les 400 entrées les plus récentes
+            sorted_items = sorted(
+                TWELVEDATA_CACHE.items(),
+                key=lambda x: x[1]['timestamp'],
+                reverse=True
+            )
+            TWELVEDATA_CACHE = dict(sorted_items[:400])
+            print(f"🧹 Cache nettoyé: {len(sorted_items)} → 400 entrées")
 
 def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
-    """Récupère les données historiques via Twelve Data API"""
+    """Récupère les données historiques via Twelve Data API (thread-safe)"""
     global TWELVEDATA_CACHE
 
     if not TWELVEDATA_API_KEY:
@@ -209,11 +288,12 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
     cache_key = f"{symbole}_{interval}_{outputsize}"
     now = time.time()
 
-    # Vérifier le cache
-    if cache_key in TWELVEDATA_CACHE:
-        cached = TWELVEDATA_CACHE[cache_key]
-        if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
-            return cached['data'], cached['is_fresh']
+    # Vérifier le cache (thread-safe)
+    with TWELVEDATA_CACHE_LOCK:
+        if cache_key in TWELVEDATA_CACHE:
+            cached = TWELVEDATA_CACHE[cache_key]
+            if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
+                return cached['data'], cached['is_fresh']
 
     # Rate limiting
     rate_limit_twelvedata()
@@ -277,17 +357,25 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
                 vendredi = today - timedelta(days=weekday - 4)
                 is_fresh = last_date >= vendredi
 
-        # Mettre en cache
-        TWELVEDATA_CACHE[cache_key] = {
-            'data': df,
-            'timestamp': now,
-            'is_fresh': is_fresh
-        }
+        # Mettre en cache (thread-safe)
+        with TWELVEDATA_CACHE_LOCK:
+            TWELVEDATA_CACHE[cache_key] = {
+                'data': df,
+                'timestamp': now,
+                'is_fresh': is_fresh
+            }
+
+        # Nettoyage périodique du cache
+        cleanup_twelvedata_cache()
 
         return df, is_fresh
 
     except requests.exceptions.Timeout:
         print(f"⚠️ Timeout Twelve Data {symbole}")
+        # Fallback sur cache périmé si disponible
+        with TWELVEDATA_CACHE_LOCK:
+            if cache_key in TWELVEDATA_CACHE:
+                return TWELVEDATA_CACHE[cache_key]['data'], False
         return pd.DataFrame(), False
     except Exception as e:
         print(f"⚠️ Erreur Twelve Data {symbole}: {e}")
@@ -333,6 +421,181 @@ def get_twelvedata_quote(symbole):
 def get_twelvedata_intraday(symbole, interval="5min", outputsize=78):
     """Récupère les données intraday (pour vérification trades)"""
     return get_twelvedata_time_series(symbole, outputsize=outputsize, interval=interval)
+
+# ============================================================================
+# INDICATEURS TECHNIQUES (RSI, MACD, ATR)
+# ============================================================================
+
+def calculer_rsi(df, periode=14):
+    """
+    Calcule le RSI (Relative Strength Index) sur un DataFrame
+    RSI < 30 = survente (potentiel achat)
+    RSI > 70 = surachat (potentiel vente)
+    """
+    if df.empty or len(df) < periode + 1:
+        return None
+
+    # Calcul des variations
+    delta = df['Close'].diff()
+
+    # Gains et pertes
+    gains = delta.where(delta > 0, 0)
+    losses = (-delta).where(delta < 0, 0)
+
+    # Moyenne mobile exponentielle des gains/pertes
+    avg_gain = gains.ewm(span=periode, adjust=False).mean()
+    avg_loss = losses.ewm(span=periode, adjust=False).mean()
+
+    # Éviter division par zéro
+    avg_loss = avg_loss.replace(0, 0.0001)
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+
+    return round(rsi.iloc[-1], 1)
+
+def calculer_macd(df, fast=12, slow=26, signal=9):
+    """
+    Calcule le MACD (Moving Average Convergence Divergence)
+    Retourne: (macd_line, signal_line, histogram, signal_type)
+    signal_type: 'BULLISH' si MACD > Signal, 'BEARISH' sinon
+    """
+    if df.empty or len(df) < slow + signal:
+        return None, None, None, None
+
+    # EMA rapide et lente
+    ema_fast = df['Close'].ewm(span=fast, adjust=False).mean()
+    ema_slow = df['Close'].ewm(span=slow, adjust=False).mean()
+
+    # Ligne MACD
+    macd_line = ema_fast - ema_slow
+
+    # Ligne de signal
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+
+    # Histogramme
+    histogram = macd_line - signal_line
+
+    # Valeurs actuelles
+    macd_val = round(macd_line.iloc[-1], 4)
+    signal_val = round(signal_line.iloc[-1], 4)
+    hist_val = round(histogram.iloc[-1], 4)
+
+    # Signal
+    signal_type = 'BULLISH' if macd_val > signal_val else 'BEARISH'
+
+    # Croisement récent?
+    if len(histogram) >= 2:
+        prev_hist = histogram.iloc[-2]
+        if prev_hist < 0 and hist_val > 0:
+            signal_type = 'BULLISH_CROSS'  # Croisement haussier
+        elif prev_hist > 0 and hist_val < 0:
+            signal_type = 'BEARISH_CROSS'  # Croisement baissier
+
+    return macd_val, signal_val, hist_val, signal_type
+
+def calculer_atr(df, periode=14):
+    """
+    Calcule l'ATR (Average True Range) et l'ATR en pourcentage
+    Retourne: (atr_valeur, atr_pct)
+    """
+    if df.empty or len(df) < periode + 1:
+        return None, None
+
+    # True Range
+    high_low = df['High'] - df['Low']
+    high_close = abs(df['High'] - df['Close'].shift())
+    low_close = abs(df['Low'] - df['Close'].shift())
+
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+
+    # ATR = moyenne du True Range
+    atr = tr.rolling(window=periode).mean().iloc[-1]
+
+    # ATR en pourcentage du prix actuel
+    prix_actuel = df['Close'].iloc[-1]
+    atr_pct = (atr / prix_actuel) * 100 if prix_actuel > 0 else 0
+
+    return round(atr, 4), round(atr_pct, 2)
+
+def calculer_indicateurs_complets(symbole):
+    """
+    Calcule tous les indicateurs techniques pour un symbole
+    Retourne un dictionnaire avec RSI, MACD, ATR
+    """
+    # Récupérer les données daily pour les indicateurs
+    df, is_fresh = get_twelvedata_time_series(symbole, outputsize=50, interval="1day")
+
+    if df.empty:
+        return {
+            'rsi': None,
+            'macd': None,
+            'macd_signal': None,
+            'macd_histogram': None,
+            'macd_interpretation': None,
+            'atr': None,
+            'atr_pct': None,
+            'is_fresh': False
+        }
+
+    rsi = calculer_rsi(df)
+    macd_val, signal_val, hist_val, macd_type = calculer_macd(df)
+    atr_val, atr_pct = calculer_atr(df)
+
+    # Interprétations
+    rsi_interpretation = None
+    if rsi is not None:
+        if rsi < 30:
+            rsi_interpretation = 'SURVENTE'
+        elif rsi > 70:
+            rsi_interpretation = 'SURACHAT'
+        else:
+            rsi_interpretation = 'NEUTRE'
+
+    return {
+        'rsi': rsi,
+        'rsi_interpretation': rsi_interpretation,
+        'macd': macd_val,
+        'macd_signal': signal_val,
+        'macd_histogram': hist_val,
+        'macd_interpretation': macd_type,
+        'atr': atr_val,
+        'atr_pct': atr_pct,
+        'is_fresh': is_fresh
+    }
+
+def enrichir_donnees_avec_indicateurs(donnees_marche):
+    """
+    Enrichit les données de marché avec les indicateurs techniques calculés
+    """
+    donnees_enrichies = donnees_marche.copy() if isinstance(donnees_marche, dict) else {}
+
+    # Ajouter une section indicateurs
+    donnees_enrichies['indicateurs_calcules'] = {}
+
+    # Liste des symboles prioritaires pour les indicateurs (pour limiter les appels API)
+    symboles_prioritaires = [
+        "^FCHI", "^GSPC",  # Indices majeurs
+        "EURUSD=X", "GBPUSD=X",  # Forex
+        "GC=F", "BZ=F",  # Commodities
+        "AAPL", "NVDA", "MSFT"  # Tech US
+    ]
+
+    for symbole in symboles_prioritaires:
+        try:
+            indicateurs = calculer_indicateurs_complets(symbole)
+            nom_actif = ACTIFS_PERMANENTS.get(symbole, symbole)
+            donnees_enrichies['indicateurs_calcules'][nom_actif] = {
+                'symbole': symbole,
+                'RSI': indicateurs.get('rsi'),
+                'RSI_signal': indicateurs.get('rsi_interpretation'),
+                'MACD': indicateurs.get('macd_interpretation'),
+                'ATR_pct': indicateurs.get('atr_pct')
+            }
+        except Exception as e:
+            print(f"⚠️ Erreur indicateurs {symbole}: {e}")
+
+    return donnees_enrichies
 
 # ============================================================================
 # BASE DE DONNÉES
@@ -922,9 +1185,10 @@ SYSTEM_PROMPT = """Tu es un agent de trading intraday TRÈS COURT TERME pour Tho
 
 CONTRAINTES CRITIQUES:
 - Thomas trade avec LEVIER - positions le MOINS LONGTEMPS possible
-- Objectif: +0.7% à +1% en quelques minutes à 2-3h max
+- Objectif: +0.8% à +1.5% en quelques minutes à 2-3h max
 - Stop serré: -0.5% à -0.8%
 - Pas de positions overnight
+- RATIO RISK/REWARD MINIMUM: 1:1.5 (risquer 1 pour espérer 1.5)
 
 RÈGLES DE FILTRAGE:
 - UNIQUEMENT des actifs dont le marché est OUVERT ou s'ouvre dans 2h
@@ -933,10 +1197,19 @@ RÈGLES DE FILTRAGE:
 - AU MINIMUM 1 opportunité NEWS TRADING dans tes recommandations
 - TOUTES les heures en CET (heure française)
 - PRÉCISE TOUJOURS si c'est un LONG ou un SHORT
+- UTILISE les indicateurs techniques fournis (RSI, MACD) pour confirmer tes trades
 
-INDICATEURS CLÉS:
-- ATR%: Average True Range en % du prix - mesure la volatilité moyenne. ATR < 1% = éviter
+INDICATEURS TECHNIQUES (fournis dans les données):
+- ATR%: Average True Range en % du prix - mesure la volatilité. ATR < 1% = ÉVITER
 - Volume Relatif: Volume actuel vs moyenne 20j. > 150% = intérêt institutionnel
+- RSI (0-100): < 30 = survente (potentiel LONG), > 70 = surachat (potentiel SHORT)
+- MACD: BULLISH_CROSS = signal d'achat, BEARISH_CROSS = signal de vente
+
+RÈGLES RISK/REWARD DYNAMIQUE:
+- Ratio MINIMUM 1:1.5 (risque 1% → objectif 1.5%)
+- Si conviction forte (RSI extrême + MACD confirme): ratio 1:2 à 1:3
+- Si conviction moyenne: ratio 1:1.5 à 1:2
+- TOUJOURS justifier ton ratio dans le champ "ratio_rr_justification"
 
 ÉVÉNEMENTS MACRO À SURVEILLER:
 - NFP (1er vendredi du mois 14h30): ÉVITER 30min avant, forte volatilité USD
@@ -960,6 +1233,8 @@ FORMAT DE RÉPONSE EN JSON:
       "prix_actuel": 0,
       "atr_pct": 0,
       "volume_relatif": 0,
+      "rsi": 0,
+      "macd_signal": "BULLISH/BEARISH/BULLISH_CROSS/BEARISH_CROSS",
       "catalyseur": "",
       "is_news_trading": true/false,
       "timing": "",
@@ -967,7 +1242,8 @@ FORMAT DE RÉPONSE EN JSON:
       "stop": 0,
       "tp1": 0,
       "tp2": 0,
-      "ratio_rr": "",
+      "ratio_rr": "1:1.5 ou 1:2 ou 1:3",
+      "ratio_rr_justification": "Pourquoi ce ratio (conviction, indicateurs)",
       "duree": "",
       "invalidation": ""
     }
@@ -1181,8 +1457,11 @@ def analyser_marche_json(donnees):
     actifs_faible_atr = get_actifs_filtres_atr(donnees, seuil_atr_min=1.0)
     liste_exclus = [a['nom'] for a in actifs_faible_atr]
 
+    # Enrichir les données avec les indicateurs RSI/MACD calculés
+    donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
+
     # Formater les données pour le prompt
-    donnees_texte = json.dumps(donnees, ensure_ascii=False, indent=2)
+    donnees_texte = json.dumps(donnees_enrichies, ensure_ascii=False, indent=2)
 
     # Construire le contexte enrichi
     contexte_macro = ""
@@ -1213,7 +1492,7 @@ def analyser_marche_json(donnees):
         for aj in criteres['ajustements_recents'][:3]:
             contexte_criteres += f"- {aj.get('critere', '')}: {aj.get('raison', '')}\n"
 
-    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR% et Volume Relatif):
+    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR%, Volume Relatif, RSI, MACD):
 {donnees_texte}
 
 Heure: {maintenant.strftime('%d/%m/%Y %H:%M')} CET
@@ -1223,13 +1502,16 @@ Contexte: {marche_type} - {marche_info}
 {contexte_criteres}
 
 Analyse le marché et fournis une réponse JSON structurée selon le format demandé.
+RÈGLES IMPÉRATIVES:
 - EXCLUS les actifs listés avec ATR < 1%
 - Si événement macro imminent, mentionne-le dans alerte_macro
 - PRIVILÉGIE les catégories avec score de confiance élevé (>60)
 - ÉVITE les catégories avec score faible (<40)
-- Assure-toi d'inclure AU MOINS 1 opportunité NEWS TRADING (si conditions favorables)
+- AU MOINS 1 opportunité NEWS TRADING (si conditions favorables)
 - Liste UNIQUEMENT les événements APRÈS {heure_str}
-- Pour chaque opportunité, inclus le symbole, atr_pct et volume_relatif"""
+- UTILISE les indicateurs RSI et MACD fournis pour confirmer tes trades
+- RATIO R/R MINIMUM 1:1.5 - justifie ton choix dans ratio_rr_justification
+- Pour chaque opportunité: symbole, atr_pct, volume_relatif, rsi, macd_signal, ratio_rr, ratio_rr_justification"""
 
     try:
         message = client_anthropic.messages.create(
@@ -1291,7 +1573,8 @@ Génère un résumé de clôture complet en JSON selon le format demandé."""
 # ============================================================================
 
 def enregistrer_recommandation(trade_data):
-    """Enregistre une recommandation de trade"""
+    """Enregistre une recommandation de trade (avec fermeture DB garantie)"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -1370,11 +1653,14 @@ def enregistrer_recommandation(trade_data):
         ))
 
         conn.commit()
-        conn.close()
-        return cursor.lastrowid
+        trade_id = cursor.lastrowid
+        return trade_id
     except Exception as e:
         print(f"⚠️ Erreur enregistrement: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
 
 def verifier_resultats_trades():
     """Vérifie et met à jour les résultats des trades ouverts (ordre chronologique)
@@ -1382,6 +1668,7 @@ def verifier_resultats_trades():
     maintenant = get_paris_time()
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔍 Vérification résultats trades...")
 
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -1396,7 +1683,6 @@ def verifier_resultats_trades():
 
         if not trades_ouverts:
             print(f"[{maintenant.strftime('%H:%M:%S')} CET] ℹ️ Aucun trade à vérifier")
-            conn.close()
             return 0
 
         nb_mis_a_jour = 0
@@ -1538,7 +1824,6 @@ def verifier_resultats_trades():
                 continue
 
         conn.commit()
-        conn.close()
 
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_mis_a_jour} terminé(s), {nb_tracking} en suivi")
         return nb_mis_a_jour
@@ -1546,10 +1831,13 @@ def verifier_resultats_trades():
     except Exception as e:
         print(f"❌ Erreur vérification trades: {e}")
         return 0
+    finally:
+        if conn:
+            conn.close()
 
 def cloturer_trades_jour():
     """
-    Clôture FORCÉE des trades 5 minutes avant fermeture du marché.
+    Clôture FORCÉE des trades 15 minutes avant fermeture du marché.
     - Pas de NON_CONCLU: on prend le PnL réel et on détermine WIN ou LOSS
     - Règle: PnL > 0 = WIN_FORCE, PnL <= 0 = LOSS_FORCE
     - Ceci évite de laisser des trades overnight (interdit en day trading levier)
@@ -1557,8 +1845,9 @@ def cloturer_trades_jour():
     maintenant = get_paris_time()
     aujourdhui = maintenant.date()
 
-    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔔 Clôture forcée trades (5min avant fermeture)...")
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔔 Clôture forcée trades (15min avant fermeture)...")
 
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -1638,7 +1927,7 @@ def cloturer_trades_jour():
                 ''', (
                     resultat, round(prix_sortie, 4), round(pnl_pct, 2), maintenant,
                     duree_minutes, round(prix_sortie, 4), maintenant,
-                    f" | Clôture forcée 5min avant fermeture",
+                    f" | Clôture forcée 15min avant fermeture",
                     trade['id']
                 ))
 
@@ -1655,7 +1944,6 @@ def cloturer_trades_jour():
                 continue
 
         conn.commit()
-        conn.close()
 
         if nb_clotures > 0:
             print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Bilan clôture: {nb_clotures} trade(s), PnL total: {total_pnl:+.2f}%")
@@ -1667,6 +1955,9 @@ def cloturer_trades_jour():
     except Exception as e:
         print(f"❌ Erreur clôture trades: {e}")
         return 0
+    finally:
+        if conn:
+            conn.close()
 
 def get_trades_du_jour():
     """Récupère les trades du jour"""
@@ -4297,7 +4588,11 @@ def envoyer_whatsapp(message):
 def executer_analyse_planifiee():
     """Exécute une analyse planifiée"""
     maintenant = get_paris_time()
-    if maintenant.weekday() >= 5:
+
+    # Vérifier si c'est un jour de trading valide
+    is_valide, raison = est_jour_trading_valide(maintenant)
+    if not is_valide:
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ⏭️ Analyse ignorée: {raison}")
         return
 
     print(f"\n[{maintenant.strftime('%H:%M:%S')} CET] 🚀 Analyse planifiée...")
@@ -4320,7 +4615,8 @@ def executer_analyse_planifiee():
 def executer_cloture_planifiee():
     """Exécute la clôture planifiée"""
     maintenant = get_paris_time()
-    if maintenant.weekday() >= 5:
+    is_valide, raison = est_jour_trading_valide(maintenant)
+    if not is_valide:
         return
 
     print(f"\n[{maintenant.strftime('%H:%M:%S')} CET] 🌙 Clôture planifiée...")
@@ -4338,28 +4634,32 @@ def executer_cloture_planifiee():
 def executer_journal_fr():
     """Exécute l'enregistrement du journal FR à 18h00"""
     maintenant = get_paris_time()
-    if maintenant.weekday() >= 5:
+    is_valide, _ = est_jour_trading_valide(maintenant)
+    if not is_valide:
         return
     enregistrer_journal_fr()
 
 def executer_journal_complet():
     """Exécute l'enregistrement du journal complet + bilan à 22h30"""
     maintenant = get_paris_time()
-    if maintenant.weekday() >= 5:
+    is_valide, _ = est_jour_trading_valide(maintenant)
+    if not is_valide:
         return
     enregistrer_journal_complet()
 
 def executer_verification_trades():
     """Exécute la vérification des trades"""
     maintenant = get_paris_time()
-    if maintenant.weekday() >= 5:
+    is_valide, _ = est_jour_trading_valide(maintenant)
+    if not is_valide:
         return
     verifier_resultats_trades()
 
 def executer_cloture_trades():
     """Exécute la clôture des trades du jour"""
     maintenant = get_paris_time()
-    if maintenant.weekday() >= 5:
+    is_valide, _ = est_jour_trading_valide(maintenant)
+    if not is_valide:
         return
     # D'abord vérifier une dernière fois
     verifier_resultats_trades()
@@ -4399,13 +4699,13 @@ def configurer_schedule():
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_cloture_utc).do(executer_cloture_planifiee)
 
-    # Clôture forcée trades EU: 17:25 (5min avant fermeture EU 17:30)
-    heure_cloture_eu_trades_utc = get_utc_time_for_paris("17:25")
+    # Clôture forcée trades EU: 17:15 (15min avant fermeture EU 17:30)
+    heure_cloture_eu_trades_utc = get_utc_time_for_paris("17:15")
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_cloture_eu_trades_utc).do(executer_cloture_trades)
 
-    # Clôture forcée trades US: 21:55 (5min avant fermeture US 22:00)
-    heure_cloture_us_trades_utc = get_utc_time_for_paris("21:55")
+    # Clôture forcée trades US: 21:45 (15min avant fermeture US 22:00)
+    heure_cloture_us_trades_utc = get_utc_time_for_paris("21:45")
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_cloture_us_trades_utc).do(executer_cloture_trades)
 
@@ -4432,9 +4732,41 @@ def configurer_schedule():
     schedule.every().sunday.at(heure_feedback_utc).do(evaluer_tous_ajustements_valides)
 
 def run_scheduler():
-    """Thread pour le scheduler"""
+    """Thread robuste pour le scheduler avec gestion d'erreurs"""
+    consecutive_errors = 0
+    max_consecutive_errors = 3
+
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+            consecutive_errors = 0  # Reset si succès
+        except Exception as e:
+            consecutive_errors += 1
+            print(f"❌ Erreur scheduler (#{consecutive_errors}): {e}")
+
+            # Alerte après plusieurs erreurs consécutives
+            if consecutive_errors >= max_consecutive_errors:
+                print(f"🚨 ALERTE CRITIQUE: Scheduler a échoué {consecutive_errors} fois!")
+                # Envoyer notification WhatsApp si configuré
+                try:
+                    if client_twilio:
+                        client_twilio.messages.create(
+                            body=f"🚨 ALERTE TRADING: Scheduler en erreur ({consecutive_errors}x): {str(e)[:100]}",
+                            from_="whatsapp:+14155238886",
+                            to=f"whatsapp:{os.environ.get('TWILIO_TO', '')}"
+                        )
+                except Exception as twilio_err:
+                    print(f"⚠️ Impossible d'envoyer l'alerte: {twilio_err}")
+
+                # Cooldown prolongé après alertes
+                time.sleep(120)
+                consecutive_errors = 0  # Reset après cooldown
+                continue
+
+            # Petit délai avant retry en cas d'erreur
+            time.sleep(60)
+            continue
+
         time.sleep(30)
 
 # ============================================================================
