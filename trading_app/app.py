@@ -1475,7 +1475,44 @@ def init_database():
         # A/B Testing - traçabilité des tests
         ("ab_test_id", "INTEGER"),          # ID du test A/B (FK vers ab_tests)
         ("ab_groupe", "TEXT"),              # 'A' ou 'B'
-        ("ab_variante", "TEXT")             # Description de la variante testée
+        ("ab_variante", "TEXT"),            # Description de la variante testée
+        # === NOUVELLES COLONNES A/B TESTING AVANCÉ ===
+        # 1. Timing Entry/Exit
+        ("strategie_entree", "TEXT"),       # IMMEDIATE / PULLBACK / BREAKOUT / LIMIT
+        ("trailing_stop", "INTEGER DEFAULT 0"),  # 0=non, 1=oui
+        ("trailing_stop_pct", "REAL"),      # % de trailing (ex: 0.3 = 0.3%)
+        ("prix_limite_entree", "REAL"),     # Prix limite si strategie=LIMIT
+        # 2. Contexte Marché Dynamique
+        ("vix_niveau", "REAL"),             # VIX au moment de la reco
+        ("regime_marche", "TEXT"),          # CALME (<15) / NORMAL (15-20) / VOLATILE (20-30) / EXTREME (>30)
+        ("regles_adaptees", "TEXT"),        # Description des règles adaptées au régime
+        # 3. Time Decay / Urgence
+        ("validite_minutes", "INTEGER"),    # Fenêtre de validité en minutes
+        ("heure_expiration", "TEXT"),       # Heure d'expiration CET (ex: "10:30")
+        ("urgence", "TEXT"),                # HAUTE / MOYENNE / BASSE
+        ("est_expire", "INTEGER DEFAULT 0"), # 0=valide, 1=expiré sans entrée
+        # 4. Multi Timeframe
+        ("trend_daily", "TEXT"),            # UP / DOWN / RANGE
+        ("trend_h4", "TEXT"),               # UP / DOWN / RANGE
+        ("trend_h1", "TEXT"),               # UP / DOWN / RANGE (timeframe principal)
+        ("alignement_tf", "INTEGER"),       # 0-3 (nb de TF alignés)
+        ("confluence_score", "INTEGER"),    # 0-10 score de confluence technique
+        # 5. Analyse Sentiment
+        ("sentiment_score", "REAL"),        # -5 (très bearish) à +5 (très bullish)
+        ("sentiment_source", "TEXT"),       # NEWS / TECHNIQUE / FLOW / MIXTE
+        ("sentiment_detail", "TEXT"),       # Explication du sentiment
+        # 6. Suivi Intraday Actif
+        ("statut_intraday", "TEXT DEFAULT 'EN_COURS'"),  # EN_COURS / TP50_ATTEINT / STOP_AJUSTE / CLOTURE
+        ("stop_ajuste", "REAL"),            # Nouveau stop après ajustement (breakeven, trailing)
+        ("reevaluations", "TEXT"),          # JSON des réévaluations intraday
+        ("nb_reevaluations", "INTEGER DEFAULT 0"),  # Nombre de réévaluations
+        ("action_recommandee", "TEXT"),     # HOLD / RENFORCER / REDUIRE / SORTIR
+        # 7. Saisonnalité
+        ("jour_semaine", "TEXT"),           # LUNDI / MARDI / MERCREDI / JEUDI / VENDREDI
+        ("session_marche", "TEXT"),         # EU_OPEN / US_PREMARKET / US_OPEN / EU_CLOSE / US_CLOSE
+        ("pattern_jour", "TEXT"),           # Pattern historique du jour (ex: "Lundi souvent haussier")
+        # Score de conviction global
+        ("conviction_score", "INTEGER")     # 1-5 (5 = très haute conviction)
     ]
     for col_nom, col_type in colonnes_trades:
         try:
@@ -1558,6 +1595,134 @@ def get_market_context():
         return "US", "Marchés EU fermés. US ouverts."
     else:
         return "FERME", "Marchés principaux fermés. Forex/Commodités 24h."
+
+def get_vix_level():
+    """Récupère le niveau actuel du VIX pour déterminer le régime de marché"""
+    try:
+        # Essayer Yahoo Finance d'abord (plus fiable pour VIX)
+        vix = yf.Ticker("^VIX")
+        hist = vix.history(period="1d")
+        if not hist.empty:
+            vix_value = float(hist['Close'].iloc[-1])
+            return vix_value
+    except Exception as e:
+        print(f"⚠️ Erreur récup VIX Yahoo: {e}")
+
+    # Fallback: utiliser le cache si disponible
+    try:
+        donnees = recuperer_donnees_marche({"^VIX": "VIX"})
+        if donnees and 'VIX' in donnees:
+            return donnees['VIX'].get('prix', 20)
+    except:
+        pass
+
+    return 20  # Valeur par défaut (normal)
+
+def get_regime_marche(vix_niveau=None):
+    """Détermine le régime de marché basé sur le VIX
+    Returns: (regime, description, regles_adaptees)
+    """
+    if vix_niveau is None:
+        vix_niveau = get_vix_level()
+
+    if vix_niveau < 15:
+        return "CALME", f"VIX à {vix_niveau:.1f} - Marché calme", \
+            "Stops serrés (-0.4%), TP ambitieux (+1.2%), ratio 1:3 possible"
+    elif vix_niveau < 20:
+        return "NORMAL", f"VIX à {vix_niveau:.1f} - Conditions normales", \
+            "Paramètres standard: stops -0.5% à -0.8%, TP +0.8% à +1.5%"
+    elif vix_niveau < 30:
+        return "VOLATILE", f"VIX à {vix_niveau:.1f} - Volatilité élevée", \
+            "Stops élargis (-1%), TP conservateur (+1%), moins de trades"
+    else:
+        return "EXTREME", f"VIX à {vix_niveau:.1f} - Volatilité extrême", \
+            "TRÈS SÉLECTIF: uniquement conviction 5, stops -1.5%, éviter les indices"
+
+def get_session_marche():
+    """Détermine la session de marché actuelle"""
+    maintenant = get_paris_time()
+    heure = maintenant.hour
+    minute = maintenant.minute
+    heure_decimal = heure + minute / 60
+
+    if 9 <= heure_decimal < 11:
+        return "EU_OPEN", "Ouverture européenne - Forte activité"
+    elif 11 <= heure_decimal < 13:
+        return "EU_MID", "Milieu de session EU - Consolidation"
+    elif 13 <= heure_decimal < 15.5:
+        return "US_PREMARKET", "Pré-marché US - Attente données"
+    elif 15.5 <= heure_decimal < 17:
+        return "US_OPEN", "Ouverture US - Chevauchement EU/US"
+    elif 17 <= heure_decimal < 17.5:
+        return "EU_CLOSE", "Clôture EU - Prise de profits"
+    elif 17.5 <= heure_decimal < 21:
+        return "US_ONLY", "Session US seule - Momentum US"
+    elif 21 <= heure_decimal < 22:
+        return "US_CLOSE", "Clôture US - Volatilité de fin"
+    else:
+        return "HORS_SESSION", "Hors heures principales"
+
+def get_pattern_jour_semaine(jour=None):
+    """Retourne le pattern historique typique pour un jour de la semaine"""
+    if jour is None:
+        jour = get_paris_time().weekday()
+
+    patterns = {
+        0: {  # Lundi
+            "nom": "LUNDI",
+            "pattern": "Gaps fréquents à l'open, volatilité matinale, consolidation PM",
+            "conseil": "Attendre 30min après l'open, éviter les gaps extrêmes"
+        },
+        1: {  # Mardi
+            "nom": "MARDI",
+            "pattern": "Jour le plus actif de la semaine, bon volume",
+            "conseil": "Journée idéale pour le day trading, momentum fiable"
+        },
+        2: {  # Mercredi
+            "nom": "MERCREDI",
+            "pattern": "Continuation de tendance, attention FOMC (si prévu)",
+            "conseil": "Suivre la tendance du mardi, prudence si FOMC"
+        },
+        3: {  # Jeudi
+            "nom": "JEUDI",
+            "pattern": "Données emploi US, décisions BCE potentielles",
+            "conseil": "Attention aux annonces 14h30, éviter positions avant"
+        },
+        4: {  # Vendredi
+            "nom": "VENDREDI",
+            "pattern": "Prises de profits PM, volume décroissant après 16h",
+            "conseil": "Clôturer positions avant 16h, éviter overnight"
+        }
+    }
+
+    return patterns.get(jour, {"nom": "WEEKEND", "pattern": "Marchés fermés", "conseil": "Pas de trading"})
+
+def get_contexte_trading_complet():
+    """Retourne le contexte complet pour Claude (VIX, session, jour, etc.)"""
+    maintenant = get_paris_time()
+
+    # VIX et régime
+    vix_niveau = get_vix_level()
+    regime, regime_desc, regles_adaptees = get_regime_marche(vix_niveau)
+
+    # Session
+    session, session_desc = get_session_marche()
+
+    # Jour
+    pattern_jour = get_pattern_jour_semaine()
+
+    return {
+        "datetime": maintenant.strftime("%Y-%m-%d %H:%M:%S CET"),
+        "vix_niveau": vix_niveau,
+        "regime_marche": regime,
+        "regime_description": regime_desc,
+        "regles_adaptees": regles_adaptees,
+        "session_marche": session,
+        "session_description": session_desc,
+        "jour_semaine": pattern_jour["nom"],
+        "pattern_jour": pattern_jour["pattern"],
+        "conseil_jour": pattern_jour["conseil"]
+    }
 
 # ============================================================================
 # CALENDRIER MACRO & ÉVÉNEMENTS
@@ -1910,11 +2075,64 @@ INDICATEURS TECHNIQUES (fournis dans les données):
   - UTILISE support1/resistance1 pour placer tes stops et TP intelligemment
   - Entrée proche du pivot = setup neutre, entrée proche support1 = meilleur R/R
 
-RÈGLES RISK/REWARD DYNAMIQUE:
-- Ratio MINIMUM 1:1.5 (risque 1% → objectif 1.5%)
-- Si conviction forte (RSI extrême + MACD confirme): ratio 1:2 à 1:3
-- Si conviction moyenne: ratio 1:1.5 à 1:2
-- TOUJOURS justifier ton ratio dans le champ "ratio_rr_justification"
+=== RÈGLES AVANCÉES A/B TESTING ===
+
+1. TIMING D'ENTRÉE (strategie_entree):
+- IMMEDIATE: Entrer maintenant au marché (signal fort, momentum clair)
+- PULLBACK: Attendre un repli de 0.2-0.3% avant d'entrer (meilleur R/R)
+- BREAKOUT: Attendre cassure d'un niveau (résistance/support) avec volume
+- LIMIT: Placer un ordre limite à un prix précis (prix_limite_entree)
+RÈGLE: PULLBACK si RSI neutre, IMMEDIATE si RSI extrême, BREAKOUT sur range
+
+2. TRAILING STOP (trailing_stop, trailing_stop_pct):
+- Active le trailing stop (trailing_stop=1) si conviction >= 4
+- trailing_stop_pct: % de trailing (0.3 = stop suit le prix à 0.3%)
+- RÈGLE: Trailing si trend_daily aligné avec la position
+
+3. RÉGIME DE MARCHÉ (basé sur VIX fourni):
+- CALME (VIX < 15): Stops serrés (-0.4%), TP ambitieux (+1.2%), ratio 1:3
+- NORMAL (15-20): Paramètres standard (-0.5% à -0.8%, +0.8% à +1.5%)
+- VOLATILE (20-30): Stops élargis (-1%), TP réduit (+1%), moins de trades
+- EXTREME (VIX > 30): TRÈS SÉLECTIF, uniquement conviction 5, stops -1.5%
+Indique dans "regles_adaptees" comment tu adaptes au régime actuel.
+
+4. TIME DECAY / URGENCE:
+- validite_minutes: Fenêtre de validité de l'opportunité (30, 60, 120 min)
+- heure_expiration: Heure CET après laquelle le setup n'est plus valide
+- urgence: HAUTE (entrer dans 15min), MOYENNE (30min), BASSE (flexible)
+RÈGLE: News trading = urgence HAUTE, technique pure = BASSE
+
+5. MULTI-TIMEFRAME (trend_daily, trend_h4, trend_h1):
+- UP: Tendance haussière (prix > EMA20, higher highs)
+- DOWN: Tendance baissière (prix < EMA20, lower lows)
+- RANGE: Pas de tendance claire
+- alignement_tf: Compte combien de TF sont alignés (0-3)
+- confluence_score: Score global 0-10 (TF alignés + indicateurs + volume)
+RÈGLE: Privilégier trades avec alignement_tf >= 2
+
+6. SENTIMENT (sentiment_score, sentiment_source):
+- sentiment_score: -5 (très bearish) à +5 (très bullish)
+- sentiment_source: NEWS (actualités), TECHNIQUE (graphique), FLOW (volumes), MIXTE
+- sentiment_detail: Explication du sentiment
+RÈGLE: Ne pas aller contre un sentiment extrême (< -3 ou > +3)
+
+7. SAISONNALITÉ (jour_semaine, session_marche):
+- jour_semaine: LUNDI/MARDI/MERCREDI/JEUDI/VENDREDI
+- session_marche: EU_OPEN (9h-11h), US_PREMARKET (13h-15h30), US_OPEN (15h30-17h), EU_CLOSE (17h-17h30), US_CLOSE (21h-22h)
+- pattern_jour: Observation historique (ex: "Lundi souvent gap puis consolidation")
+PATTERNS CONNUS:
+- LUNDI: Gaps fréquents, volatilité matinale, consolidation PM
+- MARDI/MERCREDI: Jours les plus actifs, bon pour day trading
+- JEUDI: Attention aux annonces BCE
+- VENDREDI: Prises de profits PM, éviter après 16h
+
+8. SCORE DE CONVICTION (conviction_score 1-5):
+- 1: Setup faible, seulement si rien d'autre
+- 2: Setup acceptable, petit sizing
+- 3: Setup standard, sizing normal
+- 4: Bonne opportunité, sizing +50%, trailing stop activé
+- 5: Setup exceptionnel (multi-TF aligné + indicateurs + news), sizing max
+RÈGLE: Ne recommande QUE des trades avec conviction >= 3
 
 ÉVÉNEMENTS MACRO À SURVEILLER:
 - NFP (1er vendredi du mois 14h30): ÉVITER 30min avant, forte volatilité USD
@@ -1925,6 +2143,10 @@ RÈGLES RISK/REWARD DYNAMIQUE:
 FORMAT DE RÉPONSE EN JSON:
 {
   "contexte_marche": "Paragraphe narratif sur le contexte actuel",
+  "regime_marche_global": "CALME/NORMAL/VOLATILE/EXTREME",
+  "vix_actuel": 0,
+  "jour_semaine": "LUNDI/MARDI/MERCREDI/JEUDI/VENDREDI",
+  "session_actuelle": "EU_OPEN/US_PREMARKET/US_OPEN/EU_CLOSE/US_CLOSE",
   "alerte_macro": "Message d'alerte si événement imminent, sinon null",
   "snapshot": {
     "indices": {"CAC": {"prix": 0, "var": 0}, ...},
@@ -1936,19 +2158,39 @@ FORMAT DE RÉPONSE EN JSON:
       "symbole": "",
       "direction": "LONG ou SHORT",
       "prix_actuel": 0,
+      "conviction_score": 1-5,
       "atr_pct": 0,
       "volume_relatif": 0,
       "rsi": 0,
       "macd_signal": "BULLISH/BEARISH/BULLISH_CROSS/BEARISH_CROSS",
       "catalyseur": "",
       "is_news_trading": true/false,
+      "strategie_entree": "IMMEDIATE/PULLBACK/BREAKOUT/LIMIT",
+      "prix_limite_entree": null,
       "timing": "",
       "entree": 0,
       "stop": 0,
+      "trailing_stop": 0,
+      "trailing_stop_pct": 0,
       "tp1": 0,
       "tp2": 0,
       "ratio_rr": "1:1.5 ou 1:2 ou 1:3",
-      "ratio_rr_justification": "Pourquoi ce ratio (conviction, indicateurs)",
+      "ratio_rr_justification": "Pourquoi ce ratio",
+      "trend_daily": "UP/DOWN/RANGE",
+      "trend_h4": "UP/DOWN/RANGE",
+      "trend_h1": "UP/DOWN/RANGE",
+      "alignement_tf": 0-3,
+      "confluence_score": 0-10,
+      "sentiment_score": -5 à +5,
+      "sentiment_source": "NEWS/TECHNIQUE/FLOW/MIXTE",
+      "sentiment_detail": "",
+      "validite_minutes": 30/60/120,
+      "heure_expiration": "HH:MM",
+      "urgence": "HAUTE/MOYENNE/BASSE",
+      "regime_marche": "CALME/NORMAL/VOLATILE/EXTREME",
+      "regles_adaptees": "Comment les règles sont adaptées au régime",
+      "session_marche": "EU_OPEN/US_PREMARKET/US_OPEN/EU_CLOSE/US_CLOSE",
+      "pattern_jour": "Observation saisonnière",
       "duree": "",
       "invalidation": ""
     }
@@ -2262,11 +2504,27 @@ def analyser_marche_json(donnees):
         for aj in criteres['ajustements_recents'][:3]:
             contexte_criteres += f"- {aj.get('critere', '')}: {aj.get('raison', '')}\n"
 
+    # === NOUVEAU: Contexte trading avancé (VIX, session, saisonnalité) ===
+    contexte_avance = get_contexte_trading_complet()
+    contexte_regime = f"""
+=== CONTEXTE TRADING AVANCÉ ===
+📊 VIX: {contexte_avance['vix_niveau']:.1f} → Régime: {contexte_avance['regime_marche']}
+   {contexte_avance['regime_description']}
+   Règles adaptées: {contexte_avance['regles_adaptees']}
+
+⏰ Session: {contexte_avance['session_marche']} - {contexte_avance['session_description']}
+
+📅 Jour: {contexte_avance['jour_semaine']}
+   Pattern: {contexte_avance['pattern_jour']}
+   Conseil: {contexte_avance['conseil_jour']}
+"""
+
     question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR%, Volume Relatif, RSI, MACD, Pivot/Support/Résistance):
 {donnees_texte}
 
 Heure: {maintenant.strftime('%d/%m/%Y %H:%M')} CET
 Contexte: {marche_type} - {marche_info}
+{contexte_regime}
 {contexte_macro}
 {exclusions_atr}
 {contexte_criteres}
@@ -2282,6 +2540,9 @@ RÈGLES IMPÉRATIVES:
 - UTILISE les indicateurs RSI et MACD fournis pour confirmer tes trades
 - UTILISE les niveaux support1/resistance1 pour placer stop/TP intelligemment
 - RATIO R/R MINIMUM 1:1.5 - justifie ton choix dans ratio_rr_justification
+- ADAPTE tes règles au RÉGIME DE MARCHÉ indiqué (VIX)
+- INDIQUE pour chaque opportunité: conviction_score (1-5), strategie_entree, validite_minutes, sentiment_score
+- REMPLIS tous les champs multi-timeframe: trend_daily, trend_h4, trend_h1, alignement_tf
 - Pour chaque opportunité: symbole, atr_pct, volume_relatif, rsi, macd_signal, ratio_rr, ratio_rr_justification"""
 
     try:
@@ -2469,6 +2730,60 @@ def enregistrer_recommandation(trade_data):
                     ab_test_id = tid
                     break
 
+        # === NOUVEAUX CHAMPS A/B TESTING AVANCÉ ===
+        # 1. Timing Entry/Exit
+        strategie_entree = trade_data.get('strategie_entree', 'IMMEDIATE')
+        trailing_stop = 1 if trade_data.get('trailing_stop') else 0
+        trailing_stop_pct = trade_data.get('trailing_stop_pct')
+        prix_limite_entree = trade_data.get('prix_limite_entree')
+
+        # 2. Contexte Marché Dynamique
+        vix_niveau = trade_data.get('vix_niveau')
+        regime_marche = trade_data.get('regime_marche', 'NORMAL')
+        regles_adaptees = trade_data.get('regles_adaptees', '')
+
+        # 3. Time Decay / Urgence
+        validite_minutes = trade_data.get('validite_minutes', 60)
+        heure_expiration = trade_data.get('heure_expiration', '')
+        urgence = trade_data.get('urgence', 'MOYENNE')
+
+        # 4. Multi Timeframe
+        trend_daily = trade_data.get('trend_daily')
+        trend_h4 = trade_data.get('trend_h4')
+        trend_h1 = trade_data.get('trend_h1')
+        alignement_tf = trade_data.get('alignement_tf', 0)
+        confluence_score = trade_data.get('confluence_score', 0)
+
+        # 5. Analyse Sentiment
+        sentiment_score = trade_data.get('sentiment_score', 0)
+        sentiment_source = trade_data.get('sentiment_source', 'TECHNIQUE')
+        sentiment_detail = trade_data.get('sentiment_detail', '')
+
+        # 6. Saisonnalité
+        jours_fr = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI', 'SAMEDI', 'DIMANCHE']
+        jour_semaine = trade_data.get('jour_semaine') or jours_fr[maintenant.weekday()]
+        session_marche = trade_data.get('session_marche', '')
+        pattern_jour = trade_data.get('pattern_jour', '')
+
+        # Déterminer la session si non fournie
+        if not session_marche:
+            heure = maintenant.hour
+            if 9 <= heure < 11:
+                session_marche = 'EU_OPEN'
+            elif 13 <= heure < 15:
+                session_marche = 'US_PREMARKET'
+            elif 15 <= heure < 17:
+                session_marche = 'US_OPEN'
+            elif 17 <= heure < 18:
+                session_marche = 'EU_CLOSE'
+            elif 21 <= heure < 22:
+                session_marche = 'US_CLOSE'
+            else:
+                session_marche = 'HORS_SESSION'
+
+        # Score de conviction global
+        conviction_score = trade_data.get('conviction_score', 3)
+
         cursor.execute('''
             INSERT INTO trades_recommandes
             (date, heure_message, actif, symbole, type_setup, prix_entree, prix_stop,
@@ -2476,8 +2791,15 @@ def enregistrer_recommandation(trade_data):
              direction, categorie_actif, heure_entree,
              rsi_reco, rsi_signal_reco, macd_signal_reco, atr_pct_reco, volume_relatif_reco,
              pivot_reco, support1_reco, resistance1_reco, ratio_rr, ratio_rr_justification,
-             ab_test_id, ab_groupe, ab_variante)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ab_test_id, ab_groupe, ab_variante,
+             strategie_entree, trailing_stop, trailing_stop_pct, prix_limite_entree,
+             vix_niveau, regime_marche, regles_adaptees,
+             validite_minutes, heure_expiration, urgence,
+             trend_daily, trend_h4, trend_h1, alignement_tf, confluence_score,
+             sentiment_score, sentiment_source, sentiment_detail,
+             jour_semaine, session_marche, pattern_jour, conviction_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             maintenant.date(),
             maintenant.strftime('%H:%M'),
@@ -2494,7 +2816,7 @@ def enregistrer_recommandation(trade_data):
             maintenant,
             direction,
             categorie,
-            maintenant.hour,  # Heure d'entrée pour stats par heure
+            maintenant.hour,
             rsi_reco,
             rsi_signal_reco,
             macd_signal_reco,
@@ -2507,7 +2829,30 @@ def enregistrer_recommandation(trade_data):
             ratio_rr_justification,
             ab_test_id,
             ab_groupe,
-            ab_variante
+            ab_variante,
+            # Nouveaux champs
+            strategie_entree,
+            trailing_stop,
+            trailing_stop_pct,
+            prix_limite_entree,
+            vix_niveau,
+            regime_marche,
+            regles_adaptees,
+            validite_minutes,
+            heure_expiration,
+            urgence,
+            trend_daily,
+            trend_h4,
+            trend_h1,
+            alignement_tf,
+            confluence_score,
+            sentiment_score,
+            sentiment_source,
+            sentiment_detail,
+            jour_semaine,
+            session_marche,
+            pattern_jour,
+            conviction_score
         ))
 
         conn.commit()
@@ -2735,6 +3080,193 @@ def analyser_historique_intraday_pour_tp_stop(symbole, direction, entree, stop, 
                 return 'TP1', tp1, f"TP1 touché à {idx}"
 
     return None, None, None
+
+def reevaluer_trades_intraday():
+    """
+    Réévaluation active des trades en cours.
+    Analyse chaque trade et propose des ajustements:
+    - Move stop to breakeven si TP50% atteint
+    - Trailing stop activation si conviction >= 4
+    - Alerte si le trade approche du stop
+    - Recommandation: HOLD / RENFORCER / REDUIRE / SORTIR
+    """
+    maintenant = get_paris_time()
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔄 Réévaluation intraday des trades...")
+
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        aujourdhui = maintenant.strftime('%Y-%m-%d')
+        cursor.execute('''
+            SELECT * FROM trades_recommandes
+            WHERE resultat IS NULL
+            AND symbole IS NOT NULL AND symbole != ''
+            AND date = ?
+        ''', (aujourdhui,))
+        trades_ouverts = [dict(row) for row in cursor.fetchall()]
+
+        if not trades_ouverts:
+            print(f"   Aucun trade ouvert à réévaluer")
+            return []
+
+        print(f"   {len(trades_ouverts)} trade(s) à réévaluer")
+
+        reevaluations = []
+
+        for trade in trades_ouverts:
+            try:
+                symbole = trade.get('symbole')
+                if not symbole:
+                    continue
+
+                # Récupérer le prix actuel
+                quote, _ = get_fresh_quote_for_trade(symbole)
+                if not quote:
+                    continue
+
+                prix_actuel = quote.get('prix', 0)
+                if prix_actuel <= 0:
+                    continue
+
+                entree = trade.get('prix_entree', 0)
+                stop = trade.get('prix_stop', 0)
+                tp1 = trade.get('prix_tp1', 0)
+                direction = trade.get('direction', 'LONG')
+                conviction = trade.get('conviction_score', 3)
+                trailing_stop_actif = trade.get('trailing_stop', 0)
+                trailing_stop_pct = trade.get('trailing_stop_pct', 0.3)
+
+                if entree <= 0:
+                    continue
+
+                # Calcul PnL actuel
+                if direction == 'LONG':
+                    pnl_pct = ((prix_actuel - entree) / entree) * 100
+                else:
+                    pnl_pct = ((entree - prix_actuel) / entree) * 100
+
+                # Calcul distance au TP et au Stop
+                if direction == 'LONG':
+                    distance_tp_pct = ((tp1 - prix_actuel) / prix_actuel) * 100 if tp1 > 0 else 0
+                    distance_stop_pct = ((prix_actuel - stop) / prix_actuel) * 100 if stop > 0 else 0
+                else:
+                    distance_tp_pct = ((prix_actuel - tp1) / prix_actuel) * 100 if tp1 > 0 else 0
+                    distance_stop_pct = ((stop - prix_actuel) / prix_actuel) * 100 if stop > 0 else 0
+
+                # Déterminer le statut et l'action recommandée
+                statut_intraday = trade.get('statut_intraday', 'EN_COURS')
+                action_recommandee = 'HOLD'
+                stop_ajuste = None
+                detail_reevaluation = []
+
+                # 1. Vérifier si TP50% atteint → Breakeven
+                tp_pct = ((tp1 - entree) / entree) * 100 if direction == 'LONG' and tp1 > 0 else \
+                         ((entree - tp1) / entree) * 100 if direction == 'SHORT' and tp1 > 0 else 0
+
+                if tp_pct > 0 and pnl_pct >= tp_pct * 0.5 and statut_intraday == 'EN_COURS':
+                    statut_intraday = 'TP50_ATTEINT'
+                    stop_ajuste = entree  # Breakeven
+                    detail_reevaluation.append(f"TP50% atteint ({pnl_pct:+.2f}%), stop → breakeven")
+                    action_recommandee = 'HOLD'
+
+                # 2. Trailing stop si activé et conviction élevée
+                if trailing_stop_actif and conviction >= 4:
+                    if direction == 'LONG':
+                        nouveau_stop = prix_actuel * (1 - trailing_stop_pct / 100)
+                        if nouveau_stop > (stop_ajuste or stop):
+                            stop_ajuste = nouveau_stop
+                            detail_reevaluation.append(f"Trailing stop → {nouveau_stop:.2f}")
+                    else:
+                        nouveau_stop = prix_actuel * (1 + trailing_stop_pct / 100)
+                        if nouveau_stop < (stop_ajuste or stop):
+                            stop_ajuste = nouveau_stop
+                            detail_reevaluation.append(f"Trailing stop → {nouveau_stop:.2f}")
+
+                # 3. Alerte si proche du stop (< 30% du chemin restant)
+                if distance_stop_pct > 0 and distance_stop_pct < 0.2:
+                    detail_reevaluation.append(f"⚠️ PROCHE DU STOP ({distance_stop_pct:.2f}%)")
+                    if pnl_pct < -0.3:
+                        action_recommandee = 'REDUIRE'
+
+                # 4. Renforcer si très positif et haute conviction
+                if pnl_pct > 0.5 and conviction >= 4 and statut_intraday != 'TP50_ATTEINT':
+                    action_recommandee = 'RENFORCER'
+                    detail_reevaluation.append(f"Position en profit ({pnl_pct:+.2f}%), renforcement possible")
+
+                # 5. Sortir si momentum inversé (à implémenter avec indicateurs)
+                pnl_max = trade.get('pnl_max', 0) or 0
+                if pnl_max > 0.5 and pnl_pct < pnl_max * 0.3:
+                    action_recommandee = 'SORTIR'
+                    detail_reevaluation.append(f"Momentum perdu: max {pnl_max:+.2f}% → actuel {pnl_pct:+.2f}%")
+
+                # Construire la réévaluation
+                reevaluation = {
+                    'trade_id': trade['id'],
+                    'actif': trade.get('actif'),
+                    'symbole': symbole,
+                    'direction': direction,
+                    'pnl_actuel': round(pnl_pct, 2),
+                    'distance_tp_pct': round(distance_tp_pct, 2),
+                    'distance_stop_pct': round(distance_stop_pct, 2),
+                    'statut_intraday': statut_intraday,
+                    'action_recommandee': action_recommandee,
+                    'stop_ajuste': round(stop_ajuste, 4) if stop_ajuste else None,
+                    'detail': ' | '.join(detail_reevaluation) if detail_reevaluation else 'RAS',
+                    'timestamp': maintenant.isoformat()
+                }
+                reevaluations.append(reevaluation)
+
+                # Mettre à jour le trade dans la base
+                nb_reevaluations = (trade.get('nb_reevaluations') or 0) + 1
+                anciennes_reeval = trade.get('reevaluations')
+                if anciennes_reeval:
+                    try:
+                        liste_reeval = json.loads(anciennes_reeval)
+                    except:
+                        liste_reeval = []
+                else:
+                    liste_reeval = []
+                liste_reeval.append(reevaluation)
+                # Garder les 10 dernières
+                liste_reeval = liste_reeval[-10:]
+
+                cursor.execute('''
+                    UPDATE trades_recommandes
+                    SET statut_intraday = ?,
+                        action_recommandee = ?,
+                        stop_ajuste = ?,
+                        nb_reevaluations = ?,
+                        reevaluations = ?
+                    WHERE id = ?
+                ''', (
+                    statut_intraday,
+                    action_recommandee,
+                    stop_ajuste,
+                    nb_reevaluations,
+                    json.dumps(liste_reeval, ensure_ascii=False),
+                    trade['id']
+                ))
+
+                emoji = {'HOLD': '✋', 'RENFORCER': '💪', 'REDUIRE': '📉', 'SORTIR': '🚪'}.get(action_recommandee, '❓')
+                print(f"   {emoji} {trade.get('actif')}: {pnl_pct:+.2f}% → {action_recommandee}")
+
+            except Exception as e:
+                print(f"   ⚠️ Erreur rééval {trade.get('actif', 'inconnu')}: {e}")
+                continue
+
+        conn.commit()
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {len(reevaluations)} trade(s) réévalué(s)")
+        return reevaluations
+
+    except Exception as e:
+        print(f"❌ Erreur réévaluation intraday: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
 
 def cloturer_trades_jour():
     """
@@ -3613,6 +4145,122 @@ def generer_rapport_hebdo():
         ''', (date_debut, date_fin))
         stats_par_atr = [dict(row) for row in cursor.fetchall()]
 
+        # === NOUVELLES STATS A/B TESTING AVANCÉ ===
+
+        # Stats par jour de la semaine (saisonnalité)
+        cursor.execute('''
+            SELECT jour_semaine,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND jour_semaine IS NOT NULL
+            GROUP BY jour_semaine
+            ORDER BY CASE jour_semaine
+                WHEN 'LUNDI' THEN 1
+                WHEN 'MARDI' THEN 2
+                WHEN 'MERCREDI' THEN 3
+                WHEN 'JEUDI' THEN 4
+                WHEN 'VENDREDI' THEN 5
+                ELSE 6 END
+        ''', (date_debut, date_fin))
+        stats_par_jour_semaine = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par session de marché
+        cursor.execute('''
+            SELECT session_marche,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND session_marche IS NOT NULL
+            GROUP BY session_marche
+        ''', (date_debut, date_fin))
+        stats_par_session = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par score de conviction
+        cursor.execute('''
+            SELECT conviction_score,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND conviction_score IS NOT NULL
+            GROUP BY conviction_score
+            ORDER BY conviction_score
+        ''', (date_debut, date_fin))
+        stats_par_conviction = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par stratégie d'entrée
+        cursor.execute('''
+            SELECT strategie_entree,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND strategie_entree IS NOT NULL
+            GROUP BY strategie_entree
+        ''', (date_debut, date_fin))
+        stats_par_strategie_entree = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par régime de marché (VIX)
+        cursor.execute('''
+            SELECT regime_marche,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl,
+                AVG(vix_niveau) as vix_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND regime_marche IS NOT NULL
+            GROUP BY regime_marche
+        ''', (date_debut, date_fin))
+        stats_par_regime = [dict(row) for row in cursor.fetchall()]
+
+        # Stats trailing stop vs stop fixe
+        cursor.execute('''
+            SELECT
+                CASE WHEN trailing_stop = 1 THEN 'TRAILING' ELSE 'FIXE' END as type_stop,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ?
+            GROUP BY type_stop
+        ''', (date_debut, date_fin))
+        stats_par_type_stop = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par alignement multi-timeframe
+        cursor.execute('''
+            SELECT alignement_tf,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND alignement_tf IS NOT NULL
+            GROUP BY alignement_tf
+            ORDER BY alignement_tf
+        ''', (date_debut, date_fin))
+        stats_par_alignement = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par sentiment
+        cursor.execute('''
+            SELECT
+                CASE
+                    WHEN sentiment_score < -2 THEN 'TRES_BEARISH'
+                    WHEN sentiment_score < 0 THEN 'BEARISH'
+                    WHEN sentiment_score = 0 THEN 'NEUTRE'
+                    WHEN sentiment_score <= 2 THEN 'BULLISH'
+                    ELSE 'TRES_BULLISH'
+                END as sentiment_bucket,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND sentiment_score IS NOT NULL
+            GROUP BY sentiment_bucket
+        ''', (date_debut, date_fin))
+        stats_par_sentiment = [dict(row) for row in cursor.fetchall()]
+
         # Stats A/B Testing - performances par groupe pour chaque test actif
         stats_ab_tests = []
         cursor.execute("SELECT * FROM ab_tests WHERE statut = 'actif'")
@@ -3666,11 +4314,20 @@ def generer_rapport_hebdo():
             'stats_par_categorie': stats_par_categorie,
             'stats_par_type': stats_par_type,
             'stats_par_heure': stats_par_heure,
-            # Nouvelles stats pour analyse des indicateurs
+            # Stats indicateurs
             'stats_par_rsi': stats_par_rsi,
             'stats_par_macd': stats_par_macd,
             'stats_par_ratio_rr': stats_par_ratio_rr,
             'stats_par_atr': stats_par_atr,
+            # === NOUVELLES STATS A/B TESTING AVANCÉ ===
+            'stats_par_jour_semaine': stats_par_jour_semaine,  # Saisonnalité
+            'stats_par_session': stats_par_session,            # Sessions marché
+            'stats_par_conviction': stats_par_conviction,      # Score conviction
+            'stats_par_strategie_entree': stats_par_strategie_entree,  # IMMEDIATE/PULLBACK/etc
+            'stats_par_regime': stats_par_regime,              # VIX regime
+            'stats_par_type_stop': stats_par_type_stop,        # Trailing vs Fixe
+            'stats_par_alignement': stats_par_alignement,      # Multi-timeframe
+            'stats_par_sentiment': stats_par_sentiment,        # Sentiment score
             # Tests A/B en cours
             'tests_ab': stats_ab_tests,
             'nb_trades_total': len(trades_semaine)
@@ -3683,16 +4340,28 @@ def generer_rapport_hebdo():
 {donnees_texte}
 
 Analyse ces performances et génère un rapport hebdomadaire complet.
-ANALYSE EN PRIORITÉ:
-1. Quel signal RSI a le mieux performé? (stats_par_rsi)
-2. Quel signal MACD a le mieux performé? (stats_par_macd)
-3. Quel ratio R/R a le mieux performé? (stats_par_ratio_rr)
-4. Quel niveau ATR a le mieux performé? (stats_par_atr)
-5. TESTS A/B: Compare les performances des groupes A vs B pour chaque test (tests_ab)
 
-Utilise ces données pour proposer des AJUSTEMENTS PRÉCIS basés sur les indicateurs.
-Identifie les patterns (heures, types de setup, catégories d'actifs, indicateurs).
-Pour les tests A/B, indique quel groupe performe mieux et si l'échantillon est suffisant pour conclure."""
+ANALYSE EN PRIORITÉ:
+1. INDICATEURS: RSI, MACD, ratio R/R, niveau ATR - lesquels performent le mieux?
+2. SAISONNALITÉ: Quel jour de la semaine a le meilleur win rate? (stats_par_jour_semaine)
+3. SESSIONS: EU_OPEN, US_OPEN, etc. - quelle session est la plus rentable? (stats_par_session)
+4. CONVICTION: Les trades haute conviction (4-5) performent-ils mieux? (stats_par_conviction)
+5. STRATÉGIE ENTRÉE: IMMEDIATE vs PULLBACK vs BREAKOUT - laquelle gagne? (stats_par_strategie_entree)
+6. RÉGIME VIX: Performance en marché CALME vs VOLATILE vs EXTREME (stats_par_regime)
+7. TRAILING STOP: Les trailing stops améliorent-ils les résultats? (stats_par_type_stop)
+8. MULTI-TF: L'alignement des timeframes prédit-il le succès? (stats_par_alignement)
+9. SENTIMENT: Le sentiment score prédit-il correctement la direction? (stats_par_sentiment)
+10. TESTS A/B: Compare les performances des groupes A vs B
+
+RECOMMANDATIONS ATTENDUES:
+- Quels jours/sessions privilégier ou éviter?
+- Quel score de conviction minimum exiger?
+- Quelle stratégie d'entrée favoriser?
+- Dans quel régime de marché ajuster les règles?
+- Le trailing stop doit-il être systématique?
+- Quel alignement multi-TF minimum?
+
+Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
 
         message = client_anthropic.messages.create(
             model="claude-sonnet-4-20250514",
@@ -5830,6 +6499,118 @@ def api_generer_rapport_hebdo():
         return jsonify({'success': True, 'rapport': rapport})
     return jsonify({'success': False, 'error': 'Erreur génération'})
 
+@app.route('/api/reevaluation-intraday')
+def api_reevaluation_intraday():
+    """Lance une réévaluation intraday des trades en cours"""
+    try:
+        reevaluations = reevaluer_trades_intraday()
+        return jsonify({
+            'success': True,
+            'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+            'reevaluations': reevaluations,
+            'nb_trades': len(reevaluations)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/contexte-trading')
+def api_contexte_trading():
+    """Récupère le contexte de trading complet (VIX, session, jour, etc.)"""
+    try:
+        contexte = get_contexte_trading_complet()
+        return jsonify({'success': True, 'contexte': contexte})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/regime-marche')
+def api_regime_marche():
+    """Récupère le régime de marché actuel basé sur le VIX"""
+    try:
+        vix = get_vix_level()
+        regime, description, regles = get_regime_marche(vix)
+        return jsonify({
+            'success': True,
+            'vix': round(vix, 2),
+            'regime': regime,
+            'description': description,
+            'regles_adaptees': regles
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/stats-avancees')
+def api_stats_avancees():
+    """Récupère les stats avancées pour A/B testing (jour, session, conviction, etc.)"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Stats des 7 derniers jours
+        date_debut = (get_paris_time() - timedelta(days=7)).strftime('%Y-%m-%d')
+
+        # Stats par jour de la semaine
+        cursor.execute('''
+            SELECT jour_semaine,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END), 2) as pnl_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND jour_semaine IS NOT NULL
+            GROUP BY jour_semaine
+        ''', (date_debut,))
+        par_jour = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par conviction
+        cursor.execute('''
+            SELECT conviction_score,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END), 2) as pnl_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND conviction_score IS NOT NULL
+            GROUP BY conviction_score
+            ORDER BY conviction_score
+        ''', (date_debut,))
+        par_conviction = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par stratégie d'entrée
+        cursor.execute('''
+            SELECT strategie_entree,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END), 2) as pnl_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND strategie_entree IS NOT NULL
+            GROUP BY strategie_entree
+        ''', (date_debut,))
+        par_strategie = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par régime
+        cursor.execute('''
+            SELECT regime_marche,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                ROUND(AVG(vix_niveau), 1) as vix_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND regime_marche IS NOT NULL
+            GROUP BY regime_marche
+        ''', (date_debut,))
+        par_regime = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'periode': f"7 derniers jours (depuis {date_debut})",
+            'par_jour_semaine': par_jour,
+            'par_conviction': par_conviction,
+            'par_strategie_entree': par_strategie,
+            'par_regime_marche': par_regime
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/api/criteres-dynamiques')
 def api_criteres_dynamiques():
     """Récupère les critères dynamiques actuels"""
@@ -6273,6 +7054,14 @@ def executer_verification_trades():
         return
     verifier_resultats_trades()
 
+def executer_reevaluation_intraday():
+    """Exécute la réévaluation intraday des trades en cours"""
+    maintenant = get_paris_time()
+    is_valide, _ = est_jour_trading_valide(maintenant)
+    if not is_valide:
+        return
+    reevaluer_trades_intraday()
+
 def executer_cloture_trades():
     """Exécute la clôture des trades du jour"""
     maintenant = get_paris_time()
@@ -6285,9 +7074,9 @@ def executer_cloture_trades():
     cloturer_trades_jour()
 
 def executer_rapport_hebdo():
-    """Exécute la génération du rapport hebdomadaire (dimanche soir)"""
+    """Exécute la génération du rapport hebdomadaire (samedi matin)"""
     maintenant = get_paris_time()
-    if maintenant.weekday() != 6:  # 6 = Dimanche
+    if maintenant.weekday() != 5:  # 5 = Samedi
         return
     generer_rapport_hebdo()
 
@@ -6306,6 +7095,13 @@ def configurer_schedule():
         heure_utc = get_utc_time_for_paris(heure)
         for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
             getattr(schedule.every(), jour).at(heure_utc).do(executer_verification_trades)
+
+    # Réévaluation intraday: toutes les heures pendant les sessions actives
+    # (plus fréquent pendant US_OPEN car plus de volatilité)
+    for heure in ["09:15", "10:15", "11:15", "14:15", "15:45", "16:30", "17:15"]:
+        heure_utc = get_utc_time_for_paris(heure)
+        for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+            getattr(schedule.every(), jour).at(heure_utc).do(executer_reevaluation_intraday)
 
     # Clôture trades EU: 17h45 (après clôture EU)
     heure_cloture_eu_utc = get_utc_time_for_paris("17:45")
