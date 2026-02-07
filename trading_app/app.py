@@ -213,7 +213,7 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "AM.PA": "AM:EPA",
     "HO.PA": "HO:EPA",
     "RNO.PA": "RNO:EPA",
-    "ML.PA": "MONC:EPA",    # Moncler
+    "MONC.MI": "MONC:MIL",  # Moncler (Milan)
     # Actions Allemandes (XETRA)
     "MBG.DE": "MBG:XETRA",
     "BMW.DE": "BMW:XETRA",
@@ -604,8 +604,8 @@ def calculer_indicateurs_complets(symbole):
     Calcule tous les indicateurs techniques pour un symbole
     Retourne un dictionnaire avec RSI, MACD, ATR
     """
-    # Récupérer les données daily pour les indicateurs
-    df, is_fresh = get_twelvedata_time_series(symbole, outputsize=50, interval="1day")
+    # Récupérer les données daily pour les indicateurs (30 jours = même cache que recuperer_donnees_marche)
+    df, is_fresh = get_twelvedata_time_series(symbole, outputsize=30, interval="1day")
 
     if df.empty:
         return {
@@ -649,40 +649,43 @@ def enrichir_donnees_avec_indicateurs(donnees_marche):
     """
     Enrichit les données de marché avec les indicateurs techniques calculés.
     Calcule RSI/MACD pour TOUS les actifs présents dans donnees_marche.
-    Utilise les données déjà récupérées pour limiter les appels API.
+    Structure attendue: {"CAC 40": {"symbole": "^FCHI", ...}, "Apple": {...}}
     """
     donnees_enrichies = donnees_marche.copy() if isinstance(donnees_marche, dict) else {}
 
     # Ajouter une section indicateurs
     donnees_enrichies['indicateurs_calcules'] = {}
 
-    # Calculer les indicateurs pour TOUS les actifs présents dans les données
-    # On utilise les données déjà en cache (récupérées par recuperer_donnees_marche)
-    for categorie, actifs in donnees_marche.items():
-        if not isinstance(actifs, dict):
+    # Calculer les indicateurs pour TOUS les actifs (structure plate)
+    for nom_actif, data in donnees_marche.items():
+        # Ignorer les entrées qui ne sont pas des données d'actif
+        if not isinstance(data, dict) or 'symbole' not in data:
             continue
 
-        for nom_actif, data in actifs.items():
-            if not isinstance(data, dict) or 'symbole' not in data:
-                continue
+        symbole = data.get('symbole')
+        if not symbole:
+            continue
 
-            symbole = data.get('symbole')
-            if not symbole:
-                continue
+        try:
+            # Calculer les indicateurs (utilise le cache si disponible)
+            indicateurs = calculer_indicateurs_complets(symbole)
 
-            try:
-                # Récupérer les données déjà en cache (ne fait pas de nouvel appel API grâce au cache)
-                indicateurs = calculer_indicateurs_complets(symbole)
+            donnees_enrichies['indicateurs_calcules'][nom_actif] = {
+                'symbole': symbole,
+                'RSI': indicateurs.get('rsi'),
+                'RSI_signal': indicateurs.get('rsi_interpretation'),
+                'MACD': indicateurs.get('macd_interpretation'),
+                'ATR_pct': indicateurs.get('atr_pct')
+            }
 
-                donnees_enrichies['indicateurs_calcules'][nom_actif] = {
-                    'symbole': symbole,
-                    'RSI': indicateurs.get('rsi'),
-                    'RSI_signal': indicateurs.get('rsi_interpretation'),
-                    'MACD': indicateurs.get('macd_interpretation'),
-                    'ATR_pct': indicateurs.get('atr_pct')
-                }
-            except Exception as e:
-                print(f"⚠️ Erreur indicateurs {symbole}: {e}")
+            # Enrichir aussi directement les données de l'actif
+            if nom_actif in donnees_enrichies and isinstance(donnees_enrichies[nom_actif], dict):
+                donnees_enrichies[nom_actif]['rsi'] = indicateurs.get('rsi')
+                donnees_enrichies[nom_actif]['rsi_signal'] = indicateurs.get('rsi_interpretation')
+                donnees_enrichies[nom_actif]['macd_signal'] = indicateurs.get('macd_interpretation')
+
+        except Exception as e:
+            print(f"⚠️ Erreur indicateurs {symbole}: {e}")
 
     return donnees_enrichies
 
@@ -1890,11 +1893,15 @@ def verifier_resultats_trades():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # Récupérer les trades sans résultat
+        # Récupérer les trades sans résultat DU JOUR uniquement
+        # (évite de vérifier des trades anciens avec des données intraday d'aujourd'hui)
+        aujourdhui = maintenant.strftime('%Y-%m-%d')
         cursor.execute('''
             SELECT * FROM trades_recommandes
-            WHERE resultat IS NULL AND symbole IS NOT NULL AND symbole != ''
-        ''')
+            WHERE resultat IS NULL
+            AND symbole IS NOT NULL AND symbole != ''
+            AND date = ?
+        ''', (aujourdhui,))
         trades_ouverts = [dict(row) for row in cursor.fetchall()]
 
         if not trades_ouverts:
