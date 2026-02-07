@@ -11,6 +11,30 @@
         <span class="page-top-info">Mise à jour: 18h (FR) • 22h30 (Complet)</span>
     </div>
 
+    <!-- Barre de recherche et filtres -->
+    <div class="journal-filters-bar">
+        <div class="filters-left">
+            <div class="search-box">
+                <input type="text" id="journal-search" placeholder="🔍 Rechercher (actif, catalyst, commentaire...)" onkeyup="debounceSearch()">
+            </div>
+            <div class="date-filters">
+                <input type="date" id="date-from" onchange="applyFilters()">
+                <span class="date-separator">→</span>
+                <input type="date" id="date-to" onchange="applyFilters()">
+            </div>
+        </div>
+        <div class="filters-right">
+            <button class="btn-filter" onclick="showStatsModal()">📊 Stats période</button>
+            <button class="btn-filter" onclick="clearFilters()">🔄 Réinitialiser</button>
+        </div>
+    </div>
+
+    <!-- Indicateur de résultats -->
+    <div class="search-results-info" id="search-results-info" style="display: none;">
+        <span id="results-count">0 résultats</span>
+        <span id="results-pages" class="results-pages"></span>
+    </div>
+
     <!-- Layout principal -->
     <div class="journal-grid">
         <!-- Sidebar: Liste des actifs -->
@@ -99,10 +123,285 @@ let selectedSymbole = null;
 let journalData = [];
 let opportunitesData = [];
 let isGeneralSelected = false;
+let searchTimeout = null;
+let currentPage = 0;
+let totalPages = 0;
+let statsData = null;
 
 document.addEventListener('DOMContentLoaded', function() {
     loadActifs();
+    // Set default date range (last 30 days)
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    document.getElementById('date-to').value = today.toISOString().split('T')[0];
+    document.getElementById('date-from').value = thirtyDaysAgo.toISOString().split('T')[0];
 });
+
+function debounceSearch() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        currentPage = 0;
+        applyFilters();
+    }, 300);
+}
+
+async function applyFilters() {
+    const search = document.getElementById('journal-search').value.trim();
+    const dateFrom = document.getElementById('date-from').value;
+    const dateTo = document.getElementById('date-to').value;
+    const symbole = selectedSymbole || '';
+
+    // Show loading
+    const timeline = document.getElementById('journal-timeline');
+    if (timeline) timeline.innerHTML = '<div class="loading">Recherche en cours...</div>';
+
+    try {
+        const params = new URLSearchParams({
+            q: search,
+            date_from: dateFrom,
+            date_to: dateTo,
+            page: currentPage,
+            limit: 50
+        });
+        if (symbole) params.append('symbole', symbole);
+
+        const response = await fetch(`/api/journal-quotidien/search?${params}`);
+        const data = await response.json();
+
+        if (data.success) {
+            journalData = data.entries;
+            totalPages = data.pagination.total_pages;
+
+            // Update results info
+            const infoBar = document.getElementById('search-results-info');
+            const resultsCount = document.getElementById('results-count');
+            const resultsPages = document.getElementById('results-pages');
+
+            if (search || dateFrom || dateTo) {
+                infoBar.style.display = 'flex';
+                resultsCount.textContent = `${data.pagination.total_count} résultat(s)`;
+                if (totalPages > 1) {
+                    resultsPages.innerHTML = `
+                        <button onclick="prevPage()" ${currentPage === 0 ? 'disabled' : ''}>◀</button>
+                        Page ${currentPage + 1}/${totalPages}
+                        <button onclick="nextPage()" ${currentPage >= totalPages - 1 ? 'disabled' : ''}>▶</button>
+                    `;
+                } else {
+                    resultsPages.innerHTML = '';
+                }
+            } else {
+                infoBar.style.display = 'none';
+            }
+
+            // Render results
+            if (isGeneralSelected) {
+                renderGeneralSearch();
+            } else if (selectedSymbole) {
+                await loadOpportunitesActif(selectedSymbole);
+                renderTimeline();
+                timeline.style.display = 'block';
+            } else {
+                renderGeneralSearch();
+            }
+        }
+    } catch (error) {
+        console.error('Erreur recherche:', error);
+    }
+}
+
+function prevPage() {
+    if (currentPage > 0) {
+        currentPage--;
+        applyFilters();
+    }
+}
+
+function nextPage() {
+    if (currentPage < totalPages - 1) {
+        currentPage++;
+        applyFilters();
+    }
+}
+
+function clearFilters() {
+    document.getElementById('journal-search').value = '';
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    document.getElementById('date-to').value = today.toISOString().split('T')[0];
+    document.getElementById('date-from').value = thirtyDaysAgo.toISOString().split('T')[0];
+    currentPage = 0;
+    document.getElementById('search-results-info').style.display = 'none';
+
+    if (selectedSymbole) {
+        loadJournalActif(selectedSymbole);
+    }
+}
+
+function renderGeneralSearch() {
+    const container = document.getElementById('journal-timeline');
+    document.getElementById('journal-placeholder').style.display = 'none';
+    document.getElementById('general-section').style.display = 'none';
+    document.getElementById('selected-asset-header').style.display = 'none';
+    container.style.display = 'block';
+
+    if (journalData.length === 0) {
+        container.innerHTML = '<div class="no-data">Aucun résultat trouvé</div>';
+        return;
+    }
+
+    // Group by date for general view
+    const byDate = {};
+    for (const entry of journalData) {
+        if (!byDate[entry.date]) byDate[entry.date] = [];
+        byDate[entry.date].push(entry);
+    }
+
+    let html = '';
+    for (const date of Object.keys(byDate).sort().reverse()) {
+        const entries = byDate[date];
+        html += `
+            <div class="timeline-day">
+                <div class="timeline-date">
+                    <span class="date-day">${formatDateFr(date)}</span>
+                    <span class="date-count">${entries.length} actif(s)</span>
+                </div>
+                <div class="timeline-content">
+                    ${entries.map(entry => `
+                        <div class="search-result-item" onclick="selectActif('${entry.symbole}')">
+                            <div class="result-header">
+                                <span class="result-name">${entry.nom_actif}</span>
+                                <span class="result-symbol">${entry.symbole}</span>
+                                <span class="result-var ${entry.variation_jour >= 0 ? 'positive' : 'negative'}">
+                                    ${entry.variation_jour >= 0 ? '+' : ''}${(entry.variation_jour || 0).toFixed(2)}%
+                                </span>
+                            </div>
+                            ${entry.commentaire_ia ? `<div class="result-comment">${entry.commentaire_ia.substring(0, 150)}...</div>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+async function showStatsModal() {
+    // Créer le modal s'il n'existe pas
+    let modal = document.getElementById('stats-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'stats-modal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal-content stats-modal-content">
+                <div class="modal-header">
+                    <h2>📊 Statistiques Périodiques</h2>
+                    <button class="modal-close" onclick="closeStatsModal()">✕</button>
+                </div>
+                <div class="modal-tabs">
+                    <button class="tab-btn active" onclick="loadStats('semaine')">Hebdo</button>
+                    <button class="tab-btn" onclick="loadStats('mois')">Mensuel</button>
+                </div>
+                <div class="modal-body" id="stats-modal-body">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    modal.style.display = 'flex';
+    await loadStats('semaine');
+}
+
+function closeStatsModal() {
+    const modal = document.getElementById('stats-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function loadStats(granularite) {
+    // Update tabs
+    document.querySelectorAll('.modal-tabs .tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.toLowerCase().includes(granularite === 'semaine' ? 'hebdo' : 'mens'));
+    });
+
+    const container = document.getElementById('stats-modal-body');
+    container.innerHTML = '<div class="loading">Chargement...</div>';
+
+    try {
+        const response = await fetch(`/api/journal-stats?granularite=${granularite}&limite=12`);
+        const data = await response.json();
+
+        if (data.success) {
+            statsData = data;
+            renderStats(data, granularite);
+        } else {
+            container.innerHTML = '<div class="no-data">Erreur de chargement</div>';
+        }
+    } catch (error) {
+        console.error('Erreur stats:', error);
+        container.innerHTML = '<div class="no-data">Erreur de chargement</div>';
+    }
+}
+
+function renderStats(data, granularite) {
+    const container = document.getElementById('stats-modal-body');
+    const periodeLabel = granularite === 'semaine' ? 'Semaine' : 'Mois';
+
+    let html = '<div class="stats-grid">';
+
+    // Stats principales par période
+    html += '<div class="stats-section"><h3>Performance par ' + periodeLabel + '</h3>';
+    html += '<div class="stats-table-container"><table class="stats-table"><thead><tr>';
+    html += '<th>Période</th><th>Trades</th><th>Win Rate</th><th>PnL</th><th>Durée Moy.</th><th>Conviction</th>';
+    html += '</tr></thead><tbody>';
+
+    for (const stat of data.stats_periodes) {
+        const pnlClass = stat.pnl_total >= 0 ? 'positive' : 'negative';
+        const wrClass = stat.win_rate >= 60 ? 'positive' : stat.win_rate < 40 ? 'negative' : '';
+        html += `<tr>
+            <td><strong>${stat.periode}</strong></td>
+            <td>${stat.nb_trades}</td>
+            <td class="${wrClass}">${stat.win_rate}%</td>
+            <td class="${pnlClass}">${stat.pnl_total >= 0 ? '+' : ''}${stat.pnl_total}%</td>
+            <td>${stat.duree_moyenne} min</td>
+            <td>${stat.conviction_moyenne}/5</td>
+        </tr>`;
+    }
+
+    html += '</tbody></table></div></div>';
+
+    // Top/Bottom actifs (dernière période)
+    const lastPeriode = data.stats_periodes[data.stats_periodes.length - 1]?.periode;
+    if (lastPeriode && data.top_bottom_actifs[lastPeriode]) {
+        const topBottom = data.top_bottom_actifs[lastPeriode];
+
+        html += '<div class="stats-section stats-half"><h3>🏆 Top Actifs (' + lastPeriode + ')</h3>';
+        html += '<div class="top-bottom-list">';
+        for (const item of topBottom.top || []) {
+            html += `<div class="top-item">
+                <span class="item-name">${item.actif || item.symbole}</span>
+                <span class="item-trades">${item.nb_trades} trades</span>
+                <span class="item-pnl positive">+${item.pnl_total}%</span>
+            </div>`;
+        }
+        html += '</div></div>';
+
+        html += '<div class="stats-section stats-half"><h3>📉 Pires Actifs (' + lastPeriode + ')</h3>';
+        html += '<div class="top-bottom-list">';
+        for (const item of topBottom.bottom || []) {
+            html += `<div class="bottom-item">
+                <span class="item-name">${item.actif || item.symbole}</span>
+                <span class="item-trades">${item.nb_trades} trades</span>
+                <span class="item-pnl negative">${item.pnl_total}%</span>
+            </div>`;
+        }
+        html += '</div></div>';
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
 
 async function selectGeneral() {
     isGeneralSelected = true;
@@ -1127,6 +1426,388 @@ function formatDateFr(dateStr) {
 
     .perf-prices {
         flex-wrap: wrap;
+    }
+}
+
+/* ============================================
+   SEARCH & FILTERS BAR
+   ============================================ */
+.journal-filters-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.filters-left {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.filters-right {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.search-box {
+    flex: 1;
+    min-width: 200px;
+    max-width: 400px;
+}
+
+.search-box input {
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.search-box input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.date-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.date-filters input[type="date"] {
+    padding: var(--space-2);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.date-separator {
+    color: var(--text-muted);
+}
+
+.btn-filter {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+}
+
+.btn-filter:hover {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: white;
+}
+
+.search-results-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-3);
+    font-size: 0.85rem;
+}
+
+.results-pages {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.results-pages button {
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.results-pages button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ============================================
+   SEARCH RESULTS
+   ============================================ */
+.search-result-item {
+    padding: var(--space-3);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-2);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+}
+
+.search-result-item:hover {
+    border-color: var(--accent-primary);
+    transform: translateX(4px);
+}
+
+.result-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+}
+
+.result-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.result-symbol {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.result-var {
+    margin-left: auto;
+    font-weight: 600;
+}
+
+.result-comment {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.date-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: var(--space-2);
+}
+
+/* ============================================
+   STATS MODAL
+   ============================================ */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+    padding: var(--space-4);
+}
+
+.modal-content {
+    background: var(--bg-primary);
+    border-radius: var(--radius-lg);
+    max-width: 900px;
+    width: 100%;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.stats-modal-content {
+    min-width: 700px;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: var(--space-1);
+}
+
+.modal-close:hover {
+    color: var(--text-primary);
+}
+
+.modal-tabs {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.tab-btn {
+    padding: var(--space-2) var(--space-4);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.tab-btn.active {
+    background: var(--accent-primary);
+    color: white;
+}
+
+.tab-btn:hover:not(.active) {
+    background: var(--bg-tertiary);
+}
+
+.modal-body {
+    padding: var(--space-4);
+    overflow-y: auto;
+    flex: 1;
+}
+
+.stats-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.stats-section {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+}
+
+.stats-section h3 {
+    margin: 0 0 var(--space-3) 0;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.stats-half {
+    display: inline-block;
+    width: calc(50% - var(--space-2));
+    vertical-align: top;
+    margin-right: var(--space-2);
+}
+
+.stats-table-container {
+    overflow-x: auto;
+}
+
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.stats-table th,
+.stats-table td {
+    padding: var(--space-2);
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.stats-table th {
+    color: var(--text-muted);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.stats-table td {
+    color: var(--text-primary);
+}
+
+.top-bottom-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.top-item,
+.bottom-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+}
+
+.top-item {
+    border-left: 3px solid var(--success-color);
+}
+
+.bottom-item {
+    border-left: 3px solid var(--danger-color);
+}
+
+.item-name {
+    flex: 1;
+    font-weight: 500;
+}
+
+.item-trades {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.item-pnl {
+    font-weight: 600;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .journal-filters-bar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .filters-left,
+    .filters-right {
+        width: 100%;
+    }
+
+    .search-box {
+        max-width: none;
+    }
+
+    .date-filters {
+        flex-wrap: wrap;
+    }
+
+    .stats-modal-content {
+        min-width: auto;
+        width: 95vw;
+    }
+
+    .stats-half {
+        width: 100%;
+        margin-right: 0;
+        margin-bottom: var(--space-3);
     }
 }
 </style>

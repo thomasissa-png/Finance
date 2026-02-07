@@ -4114,6 +4114,11 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
             if categorie in ['action_eu', 'action_us']:
                 recos = recuperer_recommandations_analystes(symbole)
 
+            # Récupérer volume_relatif depuis les données (si disponible)
+            volume_rel = data.get('volume_relatif', data.get('volume_relatif_pct', 0))
+            if not volume_rel and 'indicateurs' in data:
+                volume_rel = data['indicateurs'].get('volume_relatif_pct', 0)
+
             cursor.execute('''
                 INSERT OR REPLACE INTO journal_quotidien
                 (date, symbole, nom_actif, categorie, prix_ouverture, prix_cloture,
@@ -4130,9 +4135,9 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
                 data.get('haut', 0),
                 data.get('bas', 0),
                 data['variation'],
-                0,  # volume_relatif à calculer
+                volume_rel or 0,  # Volume relatif (% vs moyenne 20j)
                 commentaires.get(symbole, ''),
-                '',  # evenements_jour
+                '',  # evenements_jour - TODO: intégrer calendrier économique
                 json.dumps(opps, ensure_ascii=False) if opps else '',
                 json.dumps(recos, ensure_ascii=False) if recos else '',
                 maintenant
@@ -5525,45 +5530,85 @@ def enregistrer_journal_complet():
     # Puis générer le bilan général
     generer_bilan_quotidien()
 
-def get_journal_quotidien(symbole=None, limite=30):
-    """Récupère le journal quotidien"""
+def get_journal_quotidien(symbole=None, limite=30, date_from=None, date_to=None, offset=0):
+    """Récupère le journal quotidien avec navigation par date et pagination"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        if symbole:
-            cursor.execute('''
-                SELECT * FROM journal_quotidien
-                WHERE symbole = ?
-                ORDER BY date DESC LIMIT ?
-            ''', (symbole, limite))
-        else:
-            cursor.execute('''
-                SELECT * FROM journal_quotidien
-                ORDER BY date DESC, nom_actif ASC LIMIT ?
-            ''', (limite * len(ACTIFS_PERMANENTS),))
+        # Construction de la requête avec filtres
+        where_clauses = []
+        params = []
 
-        entries = [dict(row) for row in cursor.fetchall()]
+        if symbole:
+            where_clauses.append('symbole = ?')
+            params.append(symbole)
+
+        if date_from:
+            where_clauses.append('date >= ?')
+            params.append(date_from)
+
+        if date_to:
+            where_clauses.append('date <= ?')
+            params.append(date_to)
+
+        where_sql = ' AND '.join(where_clauses) if where_clauses else '1=1'
+
+        # Compter le total
+        count_query = f'SELECT COUNT(*) FROM journal_quotidien WHERE {where_sql}'
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()[0]
+
+        # Récupérer les entrées
+        query = f'''
+            SELECT * FROM journal_quotidien
+            WHERE {where_sql}
+            ORDER BY date DESC, nom_actif ASC
+            LIMIT ? OFFSET ?
+        '''
+        params.extend([limite, offset])
+        cursor.execute(query, params)
+
+        entries = []
+        json_errors = []
+
+        for row in cursor.fetchall():
+            entry = dict(row)
+
+            # Parser les champs JSON avec logging des erreurs
+            for json_field in ['opportunites_jour', 'recommandations_analystes']:
+                if entry.get(json_field):
+                    try:
+                        entry[json_field] = json.loads(entry[json_field])
+                    except json.JSONDecodeError as e:
+                        error_msg = f"JSON PARSE ERROR - journal_quotidien.{json_field} @ {entry.get('date')}/{entry.get('symbole')}: {str(e)[:100]}"
+                        print(f"⚠️ {error_msg}")
+                        json_errors.append({
+                            'date': entry.get('date'),
+                            'symbole': entry.get('symbole'),
+                            'field': json_field,
+                            'error': str(e)[:100]
+                        })
+                        entry[json_field] = []
+                        entry[f'{json_field}_corrupted'] = True
+
+            entries.append(entry)
+
         conn.close()
 
-        # Parser les champs JSON
-        for entry in entries:
-            if entry.get('opportunites_jour'):
-                try:
-                    entry['opportunites_jour'] = json.loads(entry['opportunites_jour'])
-                except json.JSONDecodeError:
-                    entry['opportunites_jour'] = []
-            if entry.get('recommandations_analystes'):
-                try:
-                    entry['recommandations_analystes'] = json.loads(entry['recommandations_analystes'])
-                except json.JSONDecodeError:
-                    entry['recommandations_analystes'] = []
+        # Log groupé si plusieurs erreurs
+        if json_errors:
+            print(f"🔴 JOURNAL JSON CORRUPTION: {len(json_errors)} erreurs détectées")
 
-        return entries
+        return {
+            'entries': entries,
+            'total_count': total_count,
+            'json_errors': json_errors
+        }
     except Exception as e:
         print(f"⚠️ Erreur récup journal quotidien: {e}")
-        return []
+        return {'entries': [], 'total_count': 0, 'json_errors': []}
 
 def get_historique_opportunites(symbole):
     """Récupère l'historique des opportunités pour un actif"""
@@ -6395,14 +6440,42 @@ def api_premarket():
 
 @app.route('/api/journal-quotidien')
 def api_journal_quotidien():
-    """Récupère le journal quotidien"""
-    symbole = request.args.get('symbole')
-    limite = int(request.args.get('limite', 30))
-    entries = get_journal_quotidien(symbole, limite)
-    return jsonify({
-        'success': True,
-        'entries': entries
-    })
+    """Récupère le journal quotidien avec navigation par date et pagination"""
+    try:
+        symbole = request.args.get('symbole')
+        limite = int(request.args.get('limite', 50))
+        limite = min(limite, 200)  # Max 200 entrées
+        page = int(request.args.get('page', 0))
+        offset = page * limite
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+
+        result = get_journal_quotidien(
+            symbole=symbole,
+            limite=limite,
+            date_from=date_from,
+            date_to=date_to,
+            offset=offset
+        )
+
+        total_pages = (result['total_count'] + limite - 1) // limite if result['total_count'] > 0 else 0
+
+        return jsonify({
+            'success': True,
+            'entries': result['entries'],
+            'pagination': {
+                'page': page,
+                'limit': limite,
+                'total_count': result['total_count'],
+                'total_pages': total_pages,
+                'has_next': page < total_pages - 1,
+                'has_prev': page > 0
+            },
+            'json_errors_count': len(result['json_errors'])
+        })
+    except Exception as e:
+        print(f"❌ Erreur api_journal_quotidien: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/journal-quotidien/generer', methods=['POST'])
 def api_generer_journal_quotidien():
@@ -7043,14 +7116,24 @@ def api_stats_detaillees():
 
 @app.route('/api/trades-historique')
 def api_trades_historique():
-    """Récupère l'historique des trades avec filtres"""
+    """Récupère l'historique des trades avec filtres et pagination"""
     try:
+        # Paramètres de pagination
+        page = int(request.args.get('page', 0))
+        limit = int(request.args.get('limit', 100))
+        limit = min(limit, 500)  # Max 500 par page pour éviter surcharge
+        offset = page * limit
+
+        # Paramètres de filtrage
         periode = request.args.get('periode', 'semaine')
         categorie = request.args.get('categorie', '')
         direction = request.args.get('direction', '')
         recherche = request.args.get('recherche', '')
+        resultat = request.args.get('resultat', '')  # TP1, TP2, STOP, etc.
+        conviction_min = request.args.get('conviction_min', '')
+        regime = request.args.get('regime', '')
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -7061,36 +7144,482 @@ def api_trades_historique():
             date_debut = (maintenant - timedelta(days=7)).date()
         elif periode == 'mois':
             date_debut = (maintenant - timedelta(days=30)).date()
+        elif periode == 'trimestre':
+            date_debut = (maintenant - timedelta(days=90)).date()
+        elif periode == 'annee':
+            date_debut = (maintenant - timedelta(days=365)).date()
         else:
             date_debut = (maintenant - timedelta(days=365)).date()
 
-        query = 'SELECT * FROM trades_recommandes WHERE date >= ?'
+        # Construction requête avec filtres
+        where_clauses = ['date >= ?']
         params = [date_debut]
 
         if categorie:
-            query += ' AND categorie_actif = ?'
+            where_clauses.append('categorie_actif = ?')
             params.append(categorie)
 
         if direction:
-            query += ' AND direction = ?'
+            where_clauses.append('direction = ?')
             params.append(direction)
 
-        if recherche:
-            query += ' AND (actif LIKE ? OR symbole LIKE ?)'
-            params.extend([f'%{recherche}%', f'%{recherche}%'])
+        if resultat:
+            where_clauses.append('resultat = ?')
+            params.append(resultat)
 
-        query += ' ORDER BY timestamp_reco DESC'
+        if conviction_min:
+            where_clauses.append('conviction_score >= ?')
+            params.append(int(conviction_min))
+
+        if regime:
+            where_clauses.append('regime_marche = ?')
+            params.append(regime)
+
+        if recherche:
+            where_clauses.append('(actif LIKE ? OR symbole LIKE ? OR justification LIKE ?)')
+            params.extend([f'%{recherche}%', f'%{recherche}%', f'%{recherche}%'])
+
+        where_sql = ' AND '.join(where_clauses)
+
+        # Compter le total pour pagination
+        count_query = f'SELECT COUNT(*) FROM trades_recommandes WHERE {where_sql}'
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()[0]
+
+        # Requête avec projection de colonnes (évite SELECT *)
+        select_cols = '''id, date, timestamp_reco, actif, symbole, direction,
+                         prix_entree, stop_loss, take_profit_1, take_profit_2,
+                         resultat, pnl_pct, duree_minutes, categorie_actif,
+                         conviction_score, regime_marche, strategie_entree,
+                         statut_intraday, action_recommandee, justification'''
+
+        query = f'''SELECT {select_cols} FROM trades_recommandes
+                    WHERE {where_sql}
+                    ORDER BY timestamp_reco DESC
+                    LIMIT ? OFFSET ?'''
+        params.extend([limit, offset])
 
         cursor.execute(query, params)
         trades = [dict(row) for row in cursor.fetchall()]
         conn.close()
 
+        # Calcul des pages
+        total_pages = (total_count + limit - 1) // limit
+
         return jsonify({
             'success': True,
             'trades': trades,
-            'count': len(trades)
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': page < total_pages - 1,
+                'has_prev': page > 0
+            }
         })
     except Exception as e:
+        print(f"❌ Erreur api_trades_historique: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/equity-curve')
+def api_equity_curve():
+    """Calcule la courbe d'equity (PnL cumulé) avec métriques avancées"""
+    try:
+        periode = request.args.get('periode', 'annee')
+        granularite = request.args.get('granularite', 'jour')  # jour, semaine, mois
+
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        maintenant = get_paris_time()
+        if periode == 'mois':
+            date_debut = (maintenant - timedelta(days=30)).date()
+        elif periode == 'trimestre':
+            date_debut = (maintenant - timedelta(days=90)).date()
+        elif periode == 'semestre':
+            date_debut = (maintenant - timedelta(days=180)).date()
+        else:  # annee
+            date_debut = (maintenant - timedelta(days=365)).date()
+
+        # Requête selon granularité
+        if granularite == 'jour':
+            group_by = 'date'
+            periode_col = 'date'
+        elif granularite == 'semaine':
+            group_by = "strftime('%Y-W%W', date)"
+            periode_col = f"{group_by} as periode, MIN(date) as date"
+        else:  # mois
+            group_by = "strftime('%Y-%m', date)"
+            periode_col = f"{group_by} as periode, MIN(date) as date"
+
+        cursor.execute(f'''
+            SELECT {periode_col},
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL AND resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN pnl_pct ELSE 0 END) as gains_total,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL AND resultat IN ('STOP', 'LOSS_FORCE') THEN ABS(pnl_pct) ELSE 0 END) as pertes_total,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_periode,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL AND resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN pnl_pct END) as avg_win,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL AND resultat IN ('STOP', 'LOSS_FORCE') THEN pnl_pct END) as avg_loss
+            FROM trades_recommandes
+            WHERE date >= ? AND resultat IS NOT NULL
+            GROUP BY {group_by}
+            ORDER BY date ASC
+        ''', (date_debut,))
+
+        # Construire la courbe avec métriques cumulées
+        curve_data = []
+        equity = 0
+        peak = 0
+        max_drawdown = 0
+        max_drawdown_pct = 0
+        total_wins = 0
+        total_losses = 0
+        total_gains = 0
+        total_pertes = 0
+        consecutive_wins = 0
+        consecutive_losses = 0
+        max_consecutive_wins = 0
+        max_consecutive_losses = 0
+        last_was_win = None
+
+        for row in cursor.fetchall():
+            data = dict(row)
+            pnl = data['pnl_periode'] or 0
+            equity += pnl
+            total_wins += data['wins'] or 0
+            total_losses += data['losses'] or 0
+            total_gains += data['gains_total'] or 0
+            total_pertes += data['pertes_total'] or 0
+
+            # Peak et drawdown
+            if equity > peak:
+                peak = equity
+            drawdown = peak - equity
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+                max_drawdown_pct = (drawdown / peak * 100) if peak > 0 else 0
+
+            # Séries consécutives
+            period_was_win = (data['wins'] or 0) > (data['losses'] or 0)
+            if last_was_win is not None:
+                if period_was_win and last_was_win:
+                    consecutive_wins += 1
+                    consecutive_losses = 0
+                elif not period_was_win and not last_was_win:
+                    consecutive_losses += 1
+                    consecutive_wins = 0
+                else:
+                    if period_was_win:
+                        consecutive_wins = 1
+                        consecutive_losses = 0
+                    else:
+                        consecutive_losses = 1
+                        consecutive_wins = 0
+            else:
+                consecutive_wins = 1 if period_was_win else 0
+                consecutive_losses = 0 if period_was_win else 1
+
+            max_consecutive_wins = max(max_consecutive_wins, consecutive_wins)
+            max_consecutive_losses = max(max_consecutive_losses, consecutive_losses)
+            last_was_win = period_was_win
+
+            curve_data.append({
+                'date': data['date'],
+                'periode': data.get('periode', data['date']),
+                'nb_trades': data['nb_trades'],
+                'wins': data['wins'],
+                'losses': data['losses'],
+                'pnl_periode': round(pnl, 2),
+                'equity': round(equity, 2),
+                'peak': round(peak, 2),
+                'drawdown': round(drawdown, 2),
+                'win_rate': round((data['wins'] / data['nb_trades'] * 100) if data['nb_trades'] > 0 else 0, 1),
+                'avg_win': round(data['avg_win'], 2) if data['avg_win'] else 0,
+                'avg_loss': round(data['avg_loss'], 2) if data['avg_loss'] else 0
+            })
+
+        conn.close()
+
+        # Calcul métriques globales
+        total_trades = total_wins + total_losses
+        win_rate = (total_wins / total_trades * 100) if total_trades > 0 else 0
+        profit_factor = (total_gains / total_pertes) if total_pertes > 0 else float('inf') if total_gains > 0 else 0
+        avg_win_global = (total_gains / total_wins) if total_wins > 0 else 0
+        avg_loss_global = (total_pertes / total_losses) if total_losses > 0 else 0
+        expectancy = (win_rate/100 * avg_win_global) - ((1 - win_rate/100) * avg_loss_global)
+
+        # Recovery factor = equity finale / max drawdown
+        recovery_factor = (equity / max_drawdown) if max_drawdown > 0 else float('inf') if equity > 0 else 0
+
+        return jsonify({
+            'success': True,
+            'periode': periode,
+            'granularite': granularite,
+            'curve': curve_data,
+            'metrics': {
+                'equity_finale': round(equity, 2),
+                'peak': round(peak, 2),
+                'max_drawdown': round(max_drawdown, 2),
+                'max_drawdown_pct': round(max_drawdown_pct, 2),
+                'total_trades': total_trades,
+                'total_wins': total_wins,
+                'total_losses': total_losses,
+                'win_rate': round(win_rate, 2),
+                'profit_factor': round(profit_factor, 2) if profit_factor != float('inf') else 'inf',
+                'avg_win': round(avg_win_global, 2),
+                'avg_loss': round(avg_loss_global, 2),
+                'expectancy': round(expectancy, 2),
+                'recovery_factor': round(recovery_factor, 2) if recovery_factor != float('inf') else 'inf',
+                'max_consecutive_wins': max_consecutive_wins,
+                'max_consecutive_losses': max_consecutive_losses
+            }
+        })
+    except Exception as e:
+        print(f"❌ Erreur api_equity_curve: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/journal-quotidien/search')
+def api_journal_search():
+    """Recherche dans le journal quotidien avec filtres avancés"""
+    try:
+        # Paramètres de recherche
+        recherche = request.args.get('q', '')
+        date_from = request.args.get('date_from', '')
+        date_to = request.args.get('date_to', '')
+        symbole = request.args.get('symbole', '')
+        categorie = request.args.get('categorie', '')
+        page = int(request.args.get('page', 0))
+        limit = int(request.args.get('limit', 50))
+        limit = min(limit, 200)
+        offset = page * limit
+
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Construction de la requête
+        where_clauses = ['1=1']
+        params = []
+
+        if date_from:
+            where_clauses.append('date >= ?')
+            params.append(date_from)
+
+        if date_to:
+            where_clauses.append('date <= ?')
+            params.append(date_to)
+
+        if symbole:
+            where_clauses.append('symbole = ?')
+            params.append(symbole)
+
+        if categorie:
+            where_clauses.append('categorie = ?')
+            params.append(categorie)
+
+        if recherche:
+            where_clauses.append('''(
+                nom_actif LIKE ? OR
+                symbole LIKE ? OR
+                commentaire LIKE ? OR
+                opportunites_jour LIKE ? OR
+                mouvements_notables LIKE ?
+            )''')
+            search_term = f'%{recherche}%'
+            params.extend([search_term] * 5)
+
+        where_sql = ' AND '.join(where_clauses)
+
+        # Compter le total
+        count_query = f'SELECT COUNT(*) FROM journal_quotidien WHERE {where_sql}'
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()[0]
+
+        # Récupérer les entrées paginées
+        query = f'''
+            SELECT * FROM journal_quotidien
+            WHERE {where_sql}
+            ORDER BY date DESC, nom_actif ASC
+            LIMIT ? OFFSET ?
+        '''
+        params.extend([limit, offset])
+        cursor.execute(query, params)
+
+        entries = []
+        for row in cursor.fetchall():
+            entry = dict(row)
+            # Parser JSON avec logging des erreurs
+            for json_field in ['opportunites_jour', 'recommandations_analystes']:
+                if entry.get(json_field):
+                    try:
+                        entry[json_field] = json.loads(entry[json_field])
+                    except json.JSONDecodeError as e:
+                        print(f"⚠️ JSON PARSE ERROR - journal_quotidien.{json_field} @ {entry.get('date')}/{entry.get('symbole')}: {e}")
+                        entry[json_field] = []
+                        entry[f'{json_field}_error'] = True
+            entries.append(entry)
+
+        conn.close()
+
+        total_pages = (total_count + limit - 1) // limit
+
+        return jsonify({
+            'success': True,
+            'entries': entries,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_next': page < total_pages - 1,
+                'has_prev': page > 0
+            },
+            'filters': {
+                'recherche': recherche,
+                'date_from': date_from,
+                'date_to': date_to,
+                'symbole': symbole,
+                'categorie': categorie
+            }
+        })
+    except Exception as e:
+        print(f"❌ Erreur api_journal_search: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/journal-stats')
+def api_journal_stats():
+    """Statistiques hebdomadaires et mensuelles du journal"""
+    try:
+        granularite = request.args.get('granularite', 'semaine')  # semaine, mois
+        limite = int(request.args.get('limite', 12))
+
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if granularite == 'semaine':
+            periode_sql = "strftime('%Y-W%W', date)"
+        else:  # mois
+            periode_sql = "strftime('%Y-%m', date)"
+
+        # Stats des trades par période
+        cursor.execute(f'''
+            SELECT {periode_sql} as periode,
+                   MIN(date) as date_debut,
+                   MAX(date) as date_fin,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
+                   AVG(duree_minutes) as duree_moyenne,
+                   COUNT(DISTINCT symbole) as nb_actifs_trades,
+                   SUM(CASE WHEN conviction_score >= 4 THEN 1 ELSE 0 END) as trades_haute_conviction,
+                   AVG(conviction_score) as conviction_moyenne
+            FROM trades_recommandes
+            WHERE resultat IS NOT NULL
+            GROUP BY {periode_sql}
+            ORDER BY periode DESC
+            LIMIT ?
+        ''', (limite,))
+
+        stats_periodes = []
+        for row in cursor.fetchall():
+            data = dict(row)
+            conclus = (data['wins'] or 0) + (data['losses'] or 0)
+            data['win_rate'] = round((data['wins'] / conclus * 100) if conclus > 0 else 0, 1)
+            data['pnl_total'] = round(data['pnl_total'] or 0, 2)
+            data['pnl_moyen'] = round(data['pnl_moyen'] or 0, 2)
+            data['duree_moyenne'] = round(data['duree_moyenne'] or 0, 0)
+            data['conviction_moyenne'] = round(data['conviction_moyenne'] or 0, 1)
+            stats_periodes.append(data)
+
+        # Stats par catégorie d'actif par période
+        cursor.execute(f'''
+            SELECT {periode_sql} as periode,
+                   categorie_actif,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total
+            FROM trades_recommandes
+            WHERE resultat IS NOT NULL AND categorie_actif IS NOT NULL
+            GROUP BY {periode_sql}, categorie_actif
+            ORDER BY periode DESC, nb_trades DESC
+            LIMIT ?
+        ''', (limite * 10,))
+
+        stats_categories = {}
+        for row in cursor.fetchall():
+            data = dict(row)
+            periode = data['periode']
+            if periode not in stats_categories:
+                stats_categories[periode] = []
+            stats_categories[periode].append({
+                'categorie': data['categorie_actif'],
+                'nb_trades': data['nb_trades'],
+                'wins': data['wins'],
+                'pnl_total': round(data['pnl_total'] or 0, 2)
+            })
+
+        # Meilleurs et pires actifs par période
+        cursor.execute(f'''
+            SELECT {periode_sql} as periode,
+                   symbole,
+                   actif,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total
+            FROM trades_recommandes
+            WHERE resultat IS NOT NULL
+            GROUP BY {periode_sql}, symbole
+            HAVING nb_trades >= 2
+            ORDER BY periode DESC, pnl_total DESC
+        ''')
+
+        top_bottom_actifs = {}
+        for row in cursor.fetchall():
+            data = dict(row)
+            periode = data['periode']
+            if periode not in top_bottom_actifs:
+                top_bottom_actifs[periode] = {'top': [], 'bottom': []}
+
+            item = {
+                'symbole': data['symbole'],
+                'actif': data['actif'],
+                'nb_trades': data['nb_trades'],
+                'pnl_total': round(data['pnl_total'] or 0, 2)
+            }
+
+            # Garder top 3 et bottom 3
+            if len(top_bottom_actifs[periode]['top']) < 3:
+                top_bottom_actifs[periode]['top'].append(item)
+            elif item['pnl_total'] < 0 and len(top_bottom_actifs[periode]['bottom']) < 3:
+                top_bottom_actifs[periode]['bottom'].insert(0, item)
+
+        # Réorganiser bottom (les pires en premier)
+        for periode in top_bottom_actifs:
+            top_bottom_actifs[periode]['bottom'] = sorted(
+                top_bottom_actifs[periode]['bottom'],
+                key=lambda x: x['pnl_total']
+            )[:3]
+
+        conn.close()
+
+        # Inverser pour ordre chronologique
+        stats_periodes.reverse()
+
+        return jsonify({
+            'success': True,
+            'granularite': granularite,
+            'stats_periodes': stats_periodes,
+            'stats_categories': stats_categories,
+            'top_bottom_actifs': top_bottom_actifs
+        })
+    except Exception as e:
+        print(f"❌ Erreur api_journal_stats: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 # ============================================================================
