@@ -1550,7 +1550,7 @@ EVENEMENTS_MACRO_RECURRENTS = {
     "BCE": {"heures": ["14:15", "14:45"], "importance": 3},
 }
 
-def get_evenements_macro_jour(pour_lundi=False):
+def get_evenements_macro_jour():
     """Récupère les événements macro du jour (basé sur le calendrier économique)
     IMPORTANT: Retourne une liste VIDE le weekend (pas de marchés ouverts)"""
     maintenant = get_paris_time()
@@ -3029,7 +3029,8 @@ def get_categorie_actif(symbole):
 # ============================================================================
 
 def recuperer_donnees_premarket():
-    """Récupère les données pré-market (futures, overnight gaps)"""
+    """Récupère les données pré-market (futures, overnight gaps)
+    OPTIMISÉ: Utilise BATCH API au lieu d'appels individuels"""
     premarket_symbols = {
         "ES=F": "S&P 500 Futures",
         "NQ=F": "Nasdaq Futures",
@@ -3040,21 +3041,25 @@ def recuperer_donnees_premarket():
     }
 
     donnees = {}
+
+    # BATCH API: un seul appel pour tous les symboles
+    symboles_list = list(premarket_symbols.keys())
+    batch_results = get_twelvedata_batch(symboles_list, outputsize=2, interval="1day")
+
     for symbole, nom in premarket_symbols.items():
         try:
-            # Récupérer les 2 derniers jours via Twelve Data
-            info, _ = get_twelvedata_time_series(symbole, outputsize=2, interval="1day")
-            if len(info) >= 2:
+            info, _ = batch_results.get(symbole, (pd.DataFrame(), False))
+            if not info.empty and len(info) >= 2:
                 prix_hier = info['Close'].iloc[-2]
                 prix_actuel = info['Close'].iloc[-1]
-                variation = ((prix_actuel - prix_hier) / prix_hier) * 100
-
-                donnees[nom] = {
-                    "symbole": symbole,
-                    "prix": round(prix_actuel, 2),
-                    "prix_hier": round(prix_hier, 2),
-                    "variation_overnight": round(variation, 2)
-                }
+                if prix_hier > 0:  # Évite division par zéro
+                    variation = ((prix_actuel - prix_hier) / prix_hier) * 100
+                    donnees[nom] = {
+                        "symbole": symbole,
+                        "prix": round(prix_actuel, 2),
+                        "prix_hier": round(prix_hier, 2),
+                        "variation_overnight": round(variation, 2)
+                    }
         except Exception as e:
             print(f"⚠️ Erreur premarket {symbole}: {e}")
 
@@ -5324,14 +5329,19 @@ def api_top_movers():
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
         weekend = is_weekend()
 
-        # Trier par variation absolue
+        # Trier par variation absolue - FILTRE les données invalides
         movers = []
         for nom, data in donnees.items():
+            variation = data.get('variation')
+            prix = data.get('prix')
+            # Skip si données manquantes ou invalides
+            if variation is None or prix is None:
+                continue
             movers.append({
                 'nom': nom,
-                'symbole': data['symbole'],
-                'prix': data['prix'],
-                'variation': data['variation']
+                'symbole': data.get('symbole', ''),
+                'prix': prix,
+                'variation': variation
             })
 
         # Trier par variation absolue décroissante
@@ -5539,7 +5549,7 @@ def api_evenements_macro():
     """Récupère les événements macro du jour et vérifie la proximité"""
     try:
         weekend = is_weekend()
-        evenements = get_evenements_macro_jour(pour_lundi=weekend)
+        evenements = get_evenements_macro_jour()  # Retourne [] le weekend
 
         # Pas d'alerte imminente le weekend
         if weekend:
@@ -5555,7 +5565,7 @@ def api_evenements_macro():
             'alerte_imminente': evt_imminent,
             'evenement_imminent': evt_details,
             'weekend': weekend,
-            'message_weekend': "Agenda de lundi" if weekend else None
+            'message_weekend': "Marchés fermés le weekend" if weekend else None
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
