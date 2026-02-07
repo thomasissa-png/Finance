@@ -42,6 +42,12 @@ DERNIERE_VERIFICATION_DATE = None
 DB_PATH = 'trading.db'
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 
+# Rate limiting pour yfinance
+YFINANCE_LAST_CALL = None
+YFINANCE_MIN_INTERVAL = 0.5  # Minimum 0.5 seconde entre les appels
+YFINANCE_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
+YFINANCE_CACHE_TTL = 60  # Cache valide 60 secondes
+
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
 
@@ -330,6 +336,12 @@ def init_database():
     except sqlite3.OperationalError:
         pass  # Colonne existe déjà
 
+    # Ajouter colonne audit trail pour lier critères à leur source
+    try:
+        cursor.execute("ALTER TABLE criteres_dynamiques ADD COLUMN ajustement_source_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Colonne existe déjà
+
     conn.commit()
     conn.close()
     print("✅ Base de données initialisée")
@@ -341,6 +353,69 @@ def init_database():
 def get_paris_time():
     """Retourne l'heure actuelle à Paris"""
     return datetime.now(TZ_PARIS)
+
+def rate_limit_yfinance():
+    """Applique un rate limiting sur les appels yfinance"""
+    global YFINANCE_LAST_CALL
+    if YFINANCE_LAST_CALL is not None:
+        elapsed = time.time() - YFINANCE_LAST_CALL
+        if elapsed < YFINANCE_MIN_INTERVAL:
+            time.sleep(YFINANCE_MIN_INTERVAL - elapsed)
+    YFINANCE_LAST_CALL = time.time()
+
+def get_cached_yfinance(symbole, period="1mo"):
+    """Récupère les données yfinance avec cache et rate limiting"""
+    global YFINANCE_CACHE
+    cache_key = f"{symbole}_{period}"
+    now = time.time()
+
+    # Vérifier le cache
+    if cache_key in YFINANCE_CACHE:
+        cached = YFINANCE_CACHE[cache_key]
+        if now - cached['timestamp'] < YFINANCE_CACHE_TTL:
+            return cached['data'], cached['is_fresh']
+
+    # Rate limiting
+    rate_limit_yfinance()
+
+    try:
+        ticker = yf.Ticker(symbole)
+        info = ticker.history(period=period)
+
+        # Vérifier fraîcheur des données
+        is_fresh = False
+        if not info.empty:
+            last_date = info.index[-1]
+            # Convertir en datetime aware si nécessaire
+            if last_date.tzinfo is None:
+                last_date = last_date.tz_localize('UTC')
+            last_date_paris = last_date.tz_convert(TZ_PARIS).date()
+            today = get_paris_time().date()
+            weekday = today.weekday()
+
+            # Données fraîches si:
+            # - Jour de semaine: données d'aujourd'hui ou hier (si marché pas encore ouvert)
+            # - Weekend: données de vendredi
+            if weekday < 5:  # Lundi-Vendredi
+                days_diff = (today - last_date_paris).days
+                is_fresh = days_diff <= 1
+            else:  # Weekend
+                # Vendredi = today - (weekday - 4) jours
+                vendredi = today - timedelta(days=weekday - 4)
+                is_fresh = last_date_paris >= vendredi
+
+        # Mettre en cache
+        YFINANCE_CACHE[cache_key] = {
+            'data': info,
+            'timestamp': now,
+            'is_fresh': is_fresh
+        }
+
+        return info, is_fresh
+
+    except Exception as e:
+        print(f"⚠️ Erreur yfinance {symbole}: {e}")
+        return pd.DataFrame(), False
 
 def get_utc_time_for_paris(heure_paris):
     """Convertit une heure française en heure UTC"""
@@ -502,13 +577,16 @@ def get_actifs_filtres_atr(donnees_marche, seuil_atr_min=1.0):
 # ============================================================================
 
 def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
-    """Récupère les données de marché pour les actifs donnés avec ATR et Volume relatif"""
+    """Récupère les données de marché pour les actifs donnés avec ATR et Volume relatif
+    Utilise le cache et rate limiting pour éviter de surcharger yfinance"""
     donnees = {}
+    donnees_non_fraiches = []
+
     for symbole, nom in actifs.items():
         try:
-            ticker = yf.Ticker(symbole)
-            # Récupérer plus de données pour calculer ATR et volume moyen
-            info = ticker.history(period="1mo")
+            # Utiliser le cache avec rate limiting
+            info, is_fresh = get_cached_yfinance(symbole, period="1mo")
+
             if not info.empty:
                 prix_actuel = info['Close'].iloc[-1]
                 prix_ouverture = info['Open'].iloc[-1]
@@ -549,6 +627,13 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                     if volume_moyen > 0:
                         volume_relatif = (volume_actuel / volume_moyen) * 100
 
+                # Date des dernières données
+                last_date = info.index[-1]
+                if hasattr(last_date, 'strftime'):
+                    last_date_str = last_date.strftime('%Y-%m-%d')
+                else:
+                    last_date_str = str(last_date)[:10]
+
                 donnees[nom] = {
                     "symbole": symbole,
                     "prix": round(prix_actuel, 2),
@@ -559,10 +644,19 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                     "variation_5j": round(var_5j, 2),
                     "atr": round(atr, 4) if atr else 0,
                     "atr_pct": round(atr_pct, 2) if atr_pct else 0,
-                    "volume_relatif": round(volume_relatif, 1)
+                    "volume_relatif": round(volume_relatif, 1),
+                    "data_date": last_date_str,
+                    "is_fresh": is_fresh
                 }
+
+                if not is_fresh:
+                    donnees_non_fraiches.append(nom)
         except Exception as e:
             print(f"⚠️ Erreur {symbole}: {e}")
+
+    if donnees_non_fraiches:
+        print(f"⚠️ Données potentiellement obsolètes pour: {', '.join(donnees_non_fraiches[:5])}")
+
     return donnees
 
 def calculer_indicateurs_techniques(symbole):
@@ -2046,20 +2140,23 @@ def get_ajustements_en_attente():
         return []
 
 def valider_ajustement(id_ajustement, decision, decideur='utilisateur'):
-    """Valide ou rejette un ajustement proposé"""
+    """Valide ou rejette un ajustement proposé avec audit trail"""
     maintenant = get_paris_time()
 
     try:
         conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row  # Pour accéder aux colonnes par nom
         cursor = conn.cursor()
 
         # Récupérer l'ajustement
         cursor.execute('SELECT * FROM ajustements_proposes WHERE id = ?', (id_ajustement,))
-        ajust = cursor.fetchone()
+        row = cursor.fetchone()
 
-        if not ajust:
+        if not row:
             conn.close()
             return False, "Ajustement non trouvé"
+
+        ajust_dict = dict(row)
 
         # Mettre à jour le statut
         nouveau_statut = 'valide' if decision else 'rejete'
@@ -2069,16 +2166,14 @@ def valider_ajustement(id_ajustement, decision, decideur='utilisateur'):
             WHERE id = ?
         ''', (nouveau_statut, maintenant, decideur, id_ajustement))
 
-        # Si validé, appliquer l'ajustement
+        # Si validé, appliquer l'ajustement avec audit trail
         if decision:
-            ajust_dict = dict(zip([col[0] for col in cursor.description], ajust)) if not isinstance(ajust, dict) else ajust
-
             if ajust_dict.get('type_ajustement') == 'score_confiance':
                 # Appliquer le score de confiance
                 cursor.execute('''
                     INSERT INTO criteres_dynamiques
-                    (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp, ajustement_source_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     maintenant.date(),
                     ajust_dict.get('categorie'),
@@ -2086,14 +2181,15 @@ def valider_ajustement(id_ajustement, decision, decideur='utilisateur'):
                     float(ajust_dict.get('valeur_proposee', 50)),
                     50,
                     f"Validé par {decideur}: {ajust_dict.get('raison', '')}",
-                    maintenant
+                    maintenant,
+                    id_ajustement  # Audit trail: lien vers l'ajustement source
                 ))
             else:
                 # Appliquer l'ajustement stratégique
                 cursor.execute('''
                     INSERT INTO criteres_dynamiques
-                    (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp, ajustement_source_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     maintenant.date(),
                     'ajustement_valide',
@@ -2101,8 +2197,11 @@ def valider_ajustement(id_ajustement, decision, decideur='utilisateur'):
                     1,
                     0,
                     f"Validé par {decideur}: {ajust_dict.get('action', '')} - {ajust_dict.get('raison', '')}",
-                    maintenant
+                    maintenant,
+                    id_ajustement  # Audit trail: lien vers l'ajustement source
                 ))
+
+            print(f"✅ Ajustement #{id_ajustement} validé par {decideur} et appliqué")
 
         conn.commit()
         conn.close()
@@ -2123,6 +2222,60 @@ def valider_tous_ajustements(decision, decideur='utilisateur'):
         resultats.append({'id': ajust['id'], 'succes': succes, 'message': message})
 
     return resultats
+
+def expirer_ajustements_anciens(jours_max=7):
+    """Expire automatiquement les ajustements non traités après X jours"""
+    maintenant = get_paris_time()
+    date_limite = maintenant - timedelta(days=jours_max)
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Marquer comme expirés les ajustements trop anciens
+        cursor.execute('''
+            UPDATE ajustements_proposes
+            SET statut = 'expire',
+                date_decision = ?,
+                decideur = 'systeme_auto'
+            WHERE statut = 'en_attente'
+            AND date_proposition < ?
+        ''', (maintenant, date_limite))
+
+        nb_expires = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if nb_expires > 0:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🕐 {nb_expires} ajustements expirés (> {jours_max} jours)")
+
+        return nb_expires
+
+    except Exception as e:
+        print(f"⚠️ Erreur expiration ajustements: {e}")
+        return 0
+
+def get_historique_ajustements(limite=50):
+    """Récupère l'historique complet des ajustements (validés, rejetés, expirés)"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM ajustements_proposes
+            WHERE statut != 'en_attente'
+            ORDER BY date_decision DESC
+            LIMIT ?
+        ''', (limite,))
+
+        historique = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        return historique
+    except Exception as e:
+        print(f"⚠️ Erreur historique ajustements: {e}")
+        return []
 
 def enregistrer_journal_complet():
     """Enregistre le journal complet + bilan (22h30)"""
@@ -2960,6 +3113,38 @@ def api_rejeter_tous_ajustements():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
+@app.route('/api/ajustements-historique')
+def api_ajustements_historique():
+    """Récupère l'historique des ajustements avec audit trail"""
+    try:
+        limite = int(request.args.get('limite', 50))
+        historique = get_historique_ajustements(limite)
+
+        # Enrichir avec les critères appliqués (audit trail)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        for ajust in historique:
+            if ajust.get('statut') == 'valide':
+                cursor.execute('''
+                    SELECT * FROM criteres_dynamiques
+                    WHERE ajustement_source_id = ?
+                ''', (ajust['id'],))
+                critere_applique = cursor.fetchone()
+                if critere_applique:
+                    ajust['critere_applique'] = dict(critere_applique)
+
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'historique': historique,
+            'total': len(historique)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/api/historique-rapports')
 def api_historique_rapports():
     """Récupère l'historique des rapports hebdomadaires"""
@@ -3345,6 +3530,10 @@ def configurer_schedule():
     # Rapport hebdomadaire: Dimanche 20h00
     heure_rapport_hebdo_utc = get_utc_time_for_paris("20:00")
     schedule.every().sunday.at(heure_rapport_hebdo_utc).do(executer_rapport_hebdo)
+
+    # Expiration des ajustements non traités: tous les jours à 23h00
+    heure_expiration_utc = get_utc_time_for_paris("23:00")
+    schedule.every().day.at(heure_expiration_utc).do(expirer_ajustements_anciens)
 
 def run_scheduler():
     """Thread pour le scheduler"""
