@@ -5581,9 +5581,9 @@ def configurer_schedule():
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_journal_complet_utc).do(executer_journal_complet)
 
-    # Rapport hebdomadaire: Dimanche 20h00
-    heure_rapport_hebdo_utc = get_utc_time_for_paris("20:00")
-    schedule.every().sunday.at(heure_rapport_hebdo_utc).do(executer_rapport_hebdo)
+    # Rapport hebdomadaire: Vendredi 23h00 (fin de semaine de trading)
+    heure_rapport_hebdo_utc = get_utc_time_for_paris("23:00")
+    schedule.every().friday.at(heure_rapport_hebdo_utc).do(executer_rapport_hebdo)
 
     # Expiration des ajustements non traités: tous les jours à 23h00
     heure_expiration_utc = get_utc_time_for_paris("23:00")
