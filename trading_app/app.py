@@ -140,12 +140,13 @@ def est_jour_trading_valide(date_check=None):
 # ACTIFS SUIVIS
 # ============================================================================
 
-# Symboles qui nécessitent Yahoo Finance (non disponibles sur Twelve Data plan Grow)
-# Note: ^FCHI et ^GDAXI fonctionnent sur Twelve Data (FCHI, GDAXI)
+# Symboles qui utilisent Yahoo Finance (plus fiable que Twelve Data pour les indices)
+# Raison: Circuit breaker Twelve Data se déclenche souvent sur les indices
 SYMBOLES_YAHOO_FALLBACK = {
-    "^GSPC", "^IXIC", "^DJI", "^VIX",  # Indices US (API retourne vide)
-    "^N225", "^HSI", "^STOXX50E",  # Indices internationaux (besoin Pro)
-    "ES=F", "NQ=F", "YM=F"  # E-mini futures (n'existent pas sur Twelve Data)
+    "^FCHI", "^GDAXI",  # Indices EU - souvent en échec sur Twelve Data
+    "^GSPC", "^IXIC", "^DJI", "^VIX",  # Indices US
+    "^N225", "^HSI", "^STOXX50E",  # Indices internationaux
+    "ES=F", "NQ=F", "YM=F"  # E-mini futures
 }
 
 ACTIFS_PERMANENTS = {
