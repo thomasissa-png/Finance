@@ -249,6 +249,39 @@ def init_database():
         )
     ''')
 
+    # Table pour les rapports hebdomadaires
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS rapports_hebdo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            semaine TEXT UNIQUE,
+            date_debut DATE,
+            date_fin DATE,
+            resume_executif TEXT,
+            chiffres_cles TEXT,
+            forces TEXT,
+            faiblesses TEXT,
+            patterns TEXT,
+            ajustements TEXT,
+            scores_confiance TEXT,
+            focus_semaine TEXT,
+            timestamp DATETIME
+        )
+    ''')
+
+    # Table pour les critères dynamiques
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS criteres_dynamiques (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date_maj DATE,
+            categorie TEXT,
+            critere TEXT,
+            valeur_actuelle REAL,
+            valeur_precedente REAL,
+            raison TEXT,
+            timestamp DATETIME
+        )
+    ''')
+
     # Ajouter colonnes à trades_recommandes si manquantes
     try:
         cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN direction TEXT DEFAULT 'LONG'")
@@ -256,6 +289,14 @@ def init_database():
         pass
     try:
         cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN categorie_actif TEXT")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN duree_minutes INTEGER")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN heure_entree INTEGER")
     except:
         pass
     # Ajouter colonnes au journal_quotidien si manquantes
@@ -315,16 +356,121 @@ def get_market_context():
         return "FERME", "Marchés principaux fermés. Forex/Commodités 24h."
 
 # ============================================================================
+# CALENDRIER MACRO & ÉVÉNEMENTS
+# ============================================================================
+
+# Événements macro récurrents majeurs (heure CET)
+EVENEMENTS_MACRO_RECURRENTS = {
+    # Chaque mois, jour approximatif
+    "NFP": {"jour_semaine": 4, "semaine": 1, "heure": "14:30", "importance": 3},  # 1er vendredi
+    "CPI_US": {"jour_mois": [10, 11, 12, 13], "heure": "14:30", "importance": 3},
+    "FOMC": {"heures": ["20:00"], "importance": 3},  # Vérifié via API
+    "BCE": {"heures": ["14:15", "14:45"], "importance": 3},
+}
+
+def get_evenements_macro_jour():
+    """Récupère les événements macro du jour (basé sur le calendrier économique)"""
+    maintenant = get_paris_time()
+    aujourdhui = maintenant.date()
+    jour_semaine = maintenant.weekday()  # 0=Lundi, 4=Vendredi
+    jour_mois = maintenant.day
+
+    evenements = []
+
+    # Vérifier NFP (1er vendredi du mois)
+    if jour_semaine == 4:  # Vendredi
+        premier_jour = maintenant.replace(day=1)
+        premier_vendredi = 1 + (4 - premier_jour.weekday()) % 7
+        if jour_mois == premier_vendredi:
+            evenements.append({
+                "nom": "NFP (Non-Farm Payrolls)",
+                "heure": "14:30",
+                "importance": 3,
+                "impact": "MAJEUR - Très forte volatilité USD et indices"
+            })
+
+    # Vérifier CPI US (généralement entre le 10 et 15 du mois)
+    if 10 <= jour_mois <= 15 and jour_semaine < 5:
+        # CPI US souvent publié ces jours
+        evenements.append({
+            "nom": "CPI US (potentiel)",
+            "heure": "14:30",
+            "importance": 2,
+            "impact": "FORT - Volatilité sur USD, Or, Indices"
+        })
+
+    # Événements fixes récurrents
+    heures_fixes = [
+        {"heure": "16:00", "nom": "ISM/PMI Services (si 1er jour ouvré)", "importance": 2},
+        {"heure": "16:30", "nom": "Stocks pétrole EIA", "importance": 2, "jour": 2},  # Mercredi
+    ]
+
+    for evt in heures_fixes:
+        if evt.get("jour") is None or evt.get("jour") == jour_semaine:
+            if evt.get("importance", 1) >= 2:
+                evenements.append({
+                    "nom": evt["nom"],
+                    "heure": evt["heure"],
+                    "importance": evt.get("importance", 2),
+                    "impact": "Volatilité modérée à forte"
+                })
+
+    return evenements
+
+def verifier_proximite_evenement_macro(minutes_avant=30):
+    """
+    Vérifie si un événement macro majeur est imminent.
+    Retourne (True, evenement) si on est à moins de X minutes d'un événement important.
+    """
+    maintenant = get_paris_time()
+    evenements = get_evenements_macro_jour()
+
+    for evt in evenements:
+        if evt.get("importance", 1) >= 2:  # Événement important
+            try:
+                heure_evt = evt["heure"]
+                h, m = map(int, heure_evt.split(":"))
+                heure_evenement = maintenant.replace(hour=h, minute=m, second=0, microsecond=0)
+
+                # Calculer la différence en minutes
+                diff = (heure_evenement - maintenant).total_seconds() / 60
+
+                # Si l'événement est dans les X prochaines minutes
+                if 0 <= diff <= minutes_avant:
+                    return True, evt
+            except:
+                continue
+
+    return False, None
+
+def get_actifs_filtres_atr(donnees_marche, seuil_atr_min=1.0):
+    """
+    Filtre les actifs avec un ATR trop faible pour le day trading.
+    Retourne la liste des actifs à éviter.
+    """
+    actifs_faible_atr = []
+    for nom, data in donnees_marche.items():
+        atr_pct = data.get("atr_pct", 0)
+        if atr_pct > 0 and atr_pct < seuil_atr_min:
+            actifs_faible_atr.append({
+                "nom": nom,
+                "symbole": data.get("symbole"),
+                "atr_pct": atr_pct
+            })
+    return actifs_faible_atr
+
+# ============================================================================
 # RÉCUPÉRATION DONNÉES MARCHÉ
 # ============================================================================
 
-def recuperer_donnees_marche(actifs):
-    """Récupère les données de marché pour les actifs donnés"""
+def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
+    """Récupère les données de marché pour les actifs donnés avec ATR et Volume relatif"""
     donnees = {}
     for symbole, nom in actifs.items():
         try:
             ticker = yf.Ticker(symbole)
-            info = ticker.history(period="5d")
+            # Récupérer plus de données pour calculer ATR et volume moyen
+            info = ticker.history(period="1mo")
             if not info.empty:
                 prix_actuel = info['Close'].iloc[-1]
                 prix_ouverture = info['Open'].iloc[-1]
@@ -334,10 +480,30 @@ def recuperer_donnees_marche(actifs):
 
                 # Variation sur 5 jours
                 if len(info) >= 5:
-                    prix_5j = info['Close'].iloc[0]
+                    prix_5j = info['Close'].iloc[-5]
                     var_5j = ((prix_actuel - prix_5j) / prix_5j) * 100
                 else:
                     var_5j = 0
+
+                # ATR (Average True Range) sur 14 périodes
+                atr = 0
+                atr_pct = 0
+                if len(info) >= 15 and inclure_indicateurs:
+                    high_low = info['High'] - info['Low']
+                    high_close = np.abs(info['High'] - info['Close'].shift())
+                    low_close = np.abs(info['Low'] - info['Close'].shift())
+                    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+                    true_range = np.max(ranges, axis=1)
+                    atr = true_range.rolling(14).mean().iloc[-1]
+                    atr_pct = (atr / prix_actuel) * 100
+
+                # Volume relatif (vs moyenne 20 jours)
+                volume_relatif = 100
+                if len(info) >= 20 and inclure_indicateurs and 'Volume' in info.columns:
+                    volume_actuel = info['Volume'].iloc[-1]
+                    volume_moyen = info['Volume'].iloc[-20:].mean()
+                    if volume_moyen > 0:
+                        volume_relatif = (volume_actuel / volume_moyen) * 100
 
                 donnees[nom] = {
                     "symbole": symbole,
@@ -346,7 +512,10 @@ def recuperer_donnees_marche(actifs):
                     "haut": round(prix_max, 2),
                     "bas": round(prix_min, 2),
                     "variation": round(variation, 2),
-                    "variation_5j": round(var_5j, 2)
+                    "variation_5j": round(var_5j, 2),
+                    "atr": round(atr, 4) if atr else 0,
+                    "atr_pct": round(atr_pct, 2) if atr_pct else 0,
+                    "volume_relatif": round(volume_relatif, 1)
                 }
         except Exception as e:
             print(f"⚠️ Erreur {symbole}: {e}")
@@ -425,19 +594,32 @@ SYSTEM_PROMPT = """Tu es un agent de trading intraday TRÈS COURT TERME pour Tho
 
 CONTRAINTES CRITIQUES:
 - Thomas trade avec LEVIER - positions le MOINS LONGTEMPS possible
-- Objectif: +1% minimum en quelques minutes à 2-3h max
+- Objectif: +0.7% à +1% en quelques minutes à 2-3h max
 - Stop serré: -0.5% à -0.8%
 - Pas de positions overnight
 
-RÈGLES:
+RÈGLES DE FILTRAGE:
 - UNIQUEMENT des actifs dont le marché est OUVERT ou s'ouvre dans 2h
+- EXCLUS les actifs avec ATR < 1% (trop peu de volatilité pour du day trading)
+- NE RECOMMANDE PAS de trades 30 minutes AVANT un événement macro majeur (NFP, CPI, FOMC, BCE)
 - AU MINIMUM 1 opportunité NEWS TRADING dans tes recommandations
 - TOUTES les heures en CET (heure française)
 - PRÉCISE TOUJOURS si c'est un LONG ou un SHORT
 
+INDICATEURS CLÉS:
+- ATR%: Average True Range en % du prix - mesure la volatilité moyenne. ATR < 1% = éviter
+- Volume Relatif: Volume actuel vs moyenne 20j. > 150% = intérêt institutionnel
+
+ÉVÉNEMENTS MACRO À SURVEILLER:
+- NFP (1er vendredi du mois 14h30): ÉVITER 30min avant, forte volatilité USD
+- CPI US (entre 10-15 du mois 14h30): ÉVITER 30min avant
+- FOMC (décisions Fed 20h): ÉVITER positions, très forte volatilité
+- BCE (décisions 14h15-14h45): ÉVITER positions sur EUR
+
 FORMAT DE RÉPONSE EN JSON:
 {
   "contexte_marche": "Paragraphe narratif sur le contexte actuel",
+  "alerte_macro": "Message d'alerte si événement imminent, sinon null",
   "snapshot": {
     "indices": {"CAC": {"prix": 0, "var": 0}, ...},
     "mouvements_actifs": [{"actif": "", "var": 0, "raison": ""}]
@@ -445,8 +627,11 @@ FORMAT DE RÉPONSE EN JSON:
   "opportunites": [
     {
       "actif": "",
+      "symbole": "",
       "direction": "LONG ou SHORT",
       "prix_actuel": 0,
+      "atr_pct": 0,
+      "volume_relatif": 0,
       "catalyseur": "",
       "is_news_trading": true/false,
       "timing": "",
@@ -459,8 +644,9 @@ FORMAT DE RÉPONSE EN JSON:
       "invalidation": ""
     }
   ],
+  "actifs_exclus_atr": ["Liste des actifs exclus car ATR trop faible"],
   "evenements_a_venir": [
-    {"heure": "", "evenement": "", "importance": 1-3}
+    {"heure": "", "evenement": "", "importance": 1-3, "impact_recommande": "ÉVITER/PRUDENCE/OK"}
   ],
   "zones_dangereuses": [""],
   "tactical_tip": ""
@@ -495,18 +681,68 @@ def analyser_marche_json(donnees):
 
     marche_type, marche_info = get_market_context()
 
+    # Vérifier les événements macro imminents
+    evt_imminent, evt_details = verifier_proximite_evenement_macro(minutes_avant=30)
+    alerte_macro = None
+    if evt_imminent:
+        alerte_macro = f"⚠️ ATTENTION: {evt_details['nom']} dans moins de 30 min ({evt_details['heure']}). {evt_details.get('impact', '')}"
+
+    # Récupérer les événements macro du jour
+    evenements_macro = get_evenements_macro_jour()
+
+    # Identifier les actifs à faible ATR
+    actifs_faible_atr = get_actifs_filtres_atr(donnees, seuil_atr_min=1.0)
+    liste_exclus = [a['nom'] for a in actifs_faible_atr]
+
     # Formater les données pour le prompt
     donnees_texte = json.dumps(donnees, ensure_ascii=False, indent=2)
 
-    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL:
+    # Construire le contexte enrichi
+    contexte_macro = ""
+    if alerte_macro:
+        contexte_macro = f"\n\n🚨 ALERTE MACRO: {alerte_macro}"
+    if evenements_macro:
+        contexte_macro += f"\n\nÉVÉNEMENTS MACRO DU JOUR:\n"
+        for evt in evenements_macro:
+            contexte_macro += f"- {evt['heure']}: {evt['nom']} (importance {evt['importance']}/3)\n"
+
+    exclusions_atr = ""
+    if liste_exclus:
+        exclusions_atr = f"\n\nACTIFS À EXCLURE (ATR < 1%):\n{', '.join(liste_exclus)}"
+
+    # Récupérer les critères dynamiques
+    criteres = get_criteres_dynamiques()
+    contexte_criteres = ""
+    if criteres.get('scores_confiance'):
+        contexte_criteres = "\n\nSCORES DE CONFIANCE (basés sur performances passées):\n"
+        for cat, data in criteres['scores_confiance'].items():
+            if isinstance(data, dict):
+                score = data.get('score', 50)
+                emoji = "🟢" if score >= 60 else "🟡" if score >= 40 else "🔴"
+                contexte_criteres += f"- {cat}: {emoji} {score}/100\n"
+
+    if criteres.get('ajustements_recents'):
+        contexte_criteres += "\nAJUSTEMENTS RÉCENTS:\n"
+        for aj in criteres['ajustements_recents'][:3]:
+            contexte_criteres += f"- {aj.get('critere', '')}: {aj.get('raison', '')}\n"
+
+    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR% et Volume Relatif):
 {donnees_texte}
 
 Heure: {maintenant.strftime('%d/%m/%Y %H:%M')} CET
 Contexte: {marche_type} - {marche_info}
+{contexte_macro}
+{exclusions_atr}
+{contexte_criteres}
 
 Analyse le marché et fournis une réponse JSON structurée selon le format demandé.
-Assure-toi d'inclure AU MOINS 1 opportunité NEWS TRADING.
-Liste UNIQUEMENT les événements APRÈS {heure_str}."""
+- EXCLUS les actifs listés avec ATR < 1%
+- Si événement macro imminent, mentionne-le dans alerte_macro
+- PRIVILÉGIE les catégories avec score de confiance élevé (>60)
+- ÉVITE les catégories avec score faible (<40)
+- Assure-toi d'inclure AU MOINS 1 opportunité NEWS TRADING (si conditions favorables)
+- Liste UNIQUEMENT les événements APRÈS {heure_str}
+- Pour chaque opportunité, inclus le symbole, atr_pct et volume_relatif"""
 
     try:
         message = client_anthropic.messages.create(
@@ -521,7 +757,11 @@ Liste UNIQUEMENT les événements APRÈS {heure_str}."""
         # Extraire le JSON
         match = re.search(r'\{[\s\S]*\}', reponse)
         if match:
-            return json.loads(match.group())
+            result = json.loads(match.group())
+            # Ajouter l'alerte macro si présente
+            if alerte_macro and not result.get('alerte_macro'):
+                result['alerte_macro'] = alerte_macro
+            return result
         return None
     except Exception as e:
         print(f"❌ Erreur analyse: {e}")
@@ -606,8 +846,8 @@ def enregistrer_recommandation(trade_data):
             INSERT INTO trades_recommandes
             (date, heure_message, actif, symbole, type_setup, prix_entree, prix_stop,
              prix_tp1, prix_tp2, prix_actuel, catalyseur, duree_estimee, timestamp_reco,
-             direction, categorie_actif)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             direction, categorie_actif, heure_entree)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             maintenant.date(),
             maintenant.strftime('%H:%M'),
@@ -623,7 +863,8 @@ def enregistrer_recommandation(trade_data):
             trade_data.get('duree', ''),
             maintenant,
             direction,
-            categorie
+            categorie,
+            maintenant.hour  # Heure d'entrée pour stats par heure
         ))
 
         conn.commit()
@@ -723,13 +964,24 @@ def verifier_resultats_trades():
 
                 # Mettre à jour si résultat trouvé
                 if resultat:
+                    # Calculer la durée du trade en minutes
+                    duree_minutes = None
+                    if trade.get('timestamp_reco'):
+                        try:
+                            from datetime import datetime
+                            ts_reco = datetime.fromisoformat(trade['timestamp_reco'].replace('Z', '+00:00'))
+                            duree_minutes = int((maintenant.replace(tzinfo=None) - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
+                        except:
+                            pass
+
                     cursor.execute('''
                         UPDATE trades_recommandes
-                        SET resultat = ?, prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?
+                        SET resultat = ?, prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?, duree_minutes = ?
                         WHERE id = ?
-                    ''', (resultat, prix_sortie, round(pnl_pct, 2), maintenant, trade['id']))
+                    ''', (resultat, prix_sortie, round(pnl_pct, 2), maintenant, duree_minutes, trade['id']))
                     nb_mis_a_jour += 1
-                    print(f"   ✅ {trade['actif']}: {resultat} ({pnl_pct:+.2f}%)")
+                    duree_str = f" ({duree_minutes}min)" if duree_minutes else ""
+                    print(f"   ✅ {trade['actif']}: {resultat} ({pnl_pct:+.2f}%){duree_str}")
 
             except Exception as e:
                 print(f"   ⚠️ Erreur trade {trade.get('actif', 'inconnu')}: {e}")
@@ -1070,6 +1322,47 @@ FORMAT DE RÉPONSE EN JSON:
   "lecons_apprises": ["Leçon 1", "Leçon 2"]
 }"""
 
+SYSTEM_PROMPT_RAPPORT_HEBDO = """Tu es un spéculateur expérimenté qui analyse la performance hebdomadaire de ton système de trading.
+
+Analyse les données de la semaine et génère un rapport complet incluant:
+1. Un résumé exécutif de la semaine (performance globale, contexte marché)
+2. Analyse des forces et faiblesses identifiées
+3. Les patterns observés (heures rentables, types de setups qui marchent)
+4. Recommandations d'ajustement pour la semaine prochaine
+5. Score de confiance pour chaque catégorie d'actifs et type de setup
+
+Sois analytique, data-driven et autocritique.
+
+FORMAT DE RÉPONSE EN JSON:
+{
+  "resume_executif": "Paragraphe résumant la semaine...",
+  "chiffres_cles": {
+    "nb_trades": 0,
+    "taux_reussite": 0,
+    "pnl_total": 0,
+    "meilleur_jour": "",
+    "pire_jour": ""
+  },
+  "forces": ["Force 1", "Force 2"],
+  "faiblesses": ["Faiblesse 1", "Faiblesse 2"],
+  "patterns_identifies": [
+    {"pattern": "Description", "recommandation": "Action à prendre"}
+  ],
+  "ajustements_recommandes": [
+    {"critere": "Nom du critère", "action": "Augmenter/Réduire/Modifier", "raison": "Justification"}
+  ],
+  "scores_confiance": {
+    "indices": {"score": 0, "tendance": "hausse/baisse/stable"},
+    "actions_eu": {"score": 0, "tendance": ""},
+    "actions_us": {"score": 0, "tendance": ""},
+    "commodites": {"score": 0, "tendance": ""},
+    "forex": {"score": 0, "tendance": ""},
+    "news_trading": {"score": 0, "tendance": ""},
+    "technique": {"score": 0, "tendance": ""}
+  },
+  "focus_semaine_prochaine": ["Point 1", "Point 2"]
+}"""
+
 def generer_commentaires_journal(donnees_actifs):
     """Génère des commentaires AI pour les actifs du journal (style carnet de bord)"""
     if not donnees_actifs:
@@ -1343,6 +1636,266 @@ def enregistrer_journal_fr():
     actifs_fr = {k: v for k, v in ACTIFS_PERMANENTS.items()
                  if k.endswith('.PA') or k.startswith('^FCHI') or k == '^GDAXI'}
     return enregistrer_journal_quotidien(actifs_fr)
+
+def generer_rapport_hebdo():
+    """Génère le rapport hebdomadaire avec analyse et ajustements"""
+    maintenant = get_paris_time()
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Génération rapport hebdomadaire...")
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Calculer les dates de la semaine
+        date_fin = maintenant.date()
+        date_debut = date_fin - timedelta(days=7)
+        semaine = f"{date_debut.year}-W{date_debut.isocalendar()[1]:02d}"
+
+        # Récupérer les trades de la semaine
+        cursor.execute('''
+            SELECT * FROM trades_recommandes
+            WHERE date >= ? AND date <= ?
+            ORDER BY timestamp_reco
+        ''', (date_debut, date_fin))
+        trades_semaine = [dict(row) for row in cursor.fetchall()]
+
+        # Récupérer les stats détaillées
+        cursor.execute('''
+            SELECT
+                COUNT(*) as nb_trades,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total,
+                AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ?
+        ''', (date_debut, date_fin))
+        stats_globales = dict(cursor.fetchone())
+
+        # Stats par jour
+        cursor.execute('''
+            SELECT date,
+                   COUNT(*) as nb,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ?
+            GROUP BY date
+            ORDER BY pnl DESC
+        ''', (date_debut, date_fin))
+        stats_par_jour = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par catégorie
+        cursor.execute('''
+            SELECT categorie_actif,
+                   COUNT(*) as nb,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND categorie_actif IS NOT NULL
+            GROUP BY categorie_actif
+        ''', (date_debut, date_fin))
+        stats_par_categorie = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par type
+        cursor.execute('''
+            SELECT type_setup,
+                   COUNT(*) as nb,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND type_setup IS NOT NULL
+            GROUP BY type_setup
+        ''', (date_debut, date_fin))
+        stats_par_type = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par heure
+        cursor.execute('''
+            SELECT heure_entree,
+                   COUNT(*) as nb,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND heure_entree IS NOT NULL
+            GROUP BY heure_entree
+            ORDER BY heure_entree
+        ''', (date_debut, date_fin))
+        stats_par_heure = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        # Préparer les données pour Claude
+        donnees_rapport = {
+            'periode': f"{date_debut} au {date_fin}",
+            'stats_globales': stats_globales,
+            'stats_par_jour': stats_par_jour,
+            'stats_par_categorie': stats_par_categorie,
+            'stats_par_type': stats_par_type,
+            'stats_par_heure': stats_par_heure,
+            'nb_trades_total': len(trades_semaine)
+        }
+
+        donnees_texte = json.dumps(donnees_rapport, ensure_ascii=False, indent=2, default=str)
+
+        question = f"""Voici les données de trading de la semaine du {date_debut} au {date_fin}:
+
+{donnees_texte}
+
+Analyse ces performances et génère un rapport hebdomadaire complet.
+Identifie les patterns (heures rentables, types de setup efficaces, catégories d'actifs).
+Propose des ajustements concrets pour améliorer les performances."""
+
+        message = client_anthropic.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=3000,
+            system=SYSTEM_PROMPT_RAPPORT_HEBDO,
+            messages=[{"role": "user", "content": question}]
+        )
+
+        reponse = message.content[0].text
+        match = re.search(r'\{[\s\S]*\}', reponse)
+
+        if match:
+            rapport = json.loads(match.group())
+
+            # Sauvegarder le rapport
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO rapports_hebdo
+                (semaine, date_debut, date_fin, resume_executif, chiffres_cles,
+                 forces, faiblesses, patterns, ajustements, scores_confiance, focus_semaine, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                semaine,
+                date_debut,
+                date_fin,
+                rapport.get('resume_executif', ''),
+                json.dumps(rapport.get('chiffres_cles', {}), ensure_ascii=False),
+                json.dumps(rapport.get('forces', []), ensure_ascii=False),
+                json.dumps(rapport.get('faiblesses', []), ensure_ascii=False),
+                json.dumps(rapport.get('patterns_identifies', []), ensure_ascii=False),
+                json.dumps(rapport.get('ajustements_recommandes', []), ensure_ascii=False),
+                json.dumps(rapport.get('scores_confiance', {}), ensure_ascii=False),
+                json.dumps(rapport.get('focus_semaine_prochaine', []), ensure_ascii=False),
+                maintenant
+            ))
+            conn.commit()
+
+            # Appliquer les ajustements dynamiques
+            appliquer_ajustements_dynamiques(rapport.get('ajustements_recommandes', []),
+                                            rapport.get('scores_confiance', {}))
+
+            conn.close()
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Rapport hebdomadaire généré")
+            return rapport
+
+        return None
+    except Exception as e:
+        print(f"❌ Erreur rapport hebdo: {e}")
+        return None
+
+def appliquer_ajustements_dynamiques(ajustements, scores_confiance):
+    """Applique les ajustements dynamiques basés sur le rapport hebdo"""
+    maintenant = get_paris_time()
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Sauvegarder les scores de confiance comme critères
+        for categorie, score_data in scores_confiance.items():
+            if isinstance(score_data, dict):
+                score = score_data.get('score', 50)
+                tendance = score_data.get('tendance', 'stable')
+
+                # Récupérer la valeur précédente
+                cursor.execute('''
+                    SELECT valeur_actuelle FROM criteres_dynamiques
+                    WHERE categorie = ? AND critere = 'score_confiance'
+                    ORDER BY date_maj DESC LIMIT 1
+                ''', (categorie,))
+                row = cursor.fetchone()
+                valeur_precedente = row[0] if row else 50
+
+                cursor.execute('''
+                    INSERT INTO criteres_dynamiques
+                    (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    maintenant.date(),
+                    categorie,
+                    'score_confiance',
+                    score,
+                    valeur_precedente,
+                    f"Tendance: {tendance}",
+                    maintenant
+                ))
+
+        # Sauvegarder les ajustements recommandés
+        for ajust in ajustements:
+            critere = ajust.get('critere', '')
+            action = ajust.get('action', '')
+            raison = ajust.get('raison', '')
+
+            cursor.execute('''
+                INSERT INTO criteres_dynamiques
+                (date_maj, categorie, critere, valeur_actuelle, valeur_precedente, raison, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                maintenant.date(),
+                'ajustement',
+                critere,
+                1 if 'augmenter' in action.lower() else -1 if 'reduire' in action.lower() else 0,
+                0,
+                f"{action}: {raison}",
+                maintenant
+            ))
+
+        conn.commit()
+        conn.close()
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Critères dynamiques mis à jour")
+
+    except Exception as e:
+        print(f"⚠️ Erreur ajustements dynamiques: {e}")
+
+def get_criteres_dynamiques():
+    """Récupère les critères dynamiques actuels pour le SYSTEM_PROMPT"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer les derniers scores de confiance
+        cursor.execute('''
+            SELECT categorie, valeur_actuelle as score, raison as tendance
+            FROM criteres_dynamiques
+            WHERE critere = 'score_confiance'
+            AND date_maj = (SELECT MAX(date_maj) FROM criteres_dynamiques WHERE critere = 'score_confiance')
+        ''')
+        scores = {row['categorie']: {'score': row['score'], 'tendance': row['tendance']}
+                  for row in cursor.fetchall()}
+
+        # Récupérer les derniers ajustements
+        cursor.execute('''
+            SELECT critere, raison
+            FROM criteres_dynamiques
+            WHERE categorie = 'ajustement'
+            AND date_maj >= date('now', '-7 days')
+            ORDER BY date_maj DESC
+        ''')
+        ajustements = [{'critere': row['critere'], 'raison': row['raison']}
+                      for row in cursor.fetchall()]
+
+        conn.close()
+
+        return {
+            'scores_confiance': scores,
+            'ajustements_recents': ajustements
+        }
+    except Exception as e:
+        print(f"⚠️ Erreur critères dynamiques: {e}")
+        return {'scores_confiance': {}, 'ajustements_recents': []}
 
 def enregistrer_journal_complet():
     """Enregistre le journal complet + bilan (22h30)"""
@@ -1981,6 +2534,273 @@ def api_cloturer_trades():
     nb = cloturer_trades_jour()
     return jsonify({'success': True, 'trades_clotures': nb})
 
+@app.route('/api/evenements-macro')
+def api_evenements_macro():
+    """Récupère les événements macro du jour et vérifie la proximité"""
+    try:
+        evenements = get_evenements_macro_jour()
+        evt_imminent, evt_details = verifier_proximite_evenement_macro(minutes_avant=30)
+
+        return jsonify({
+            'success': True,
+            'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+            'evenements': evenements,
+            'alerte_imminente': evt_imminent,
+            'evenement_imminent': evt_details
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/actifs-faible-atr')
+def api_actifs_faible_atr():
+    """Récupère les actifs avec ATR trop faible pour le day trading"""
+    try:
+        donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+        actifs_exclus = get_actifs_filtres_atr(donnees, seuil_atr_min=1.0)
+
+        return jsonify({
+            'success': True,
+            'seuil_atr': 1.0,
+            'actifs_exclus': actifs_exclus,
+            'nb_exclus': len(actifs_exclus)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/rapport-hebdo')
+def api_rapport_hebdo():
+    """Récupère le dernier rapport hebdomadaire"""
+    try:
+        semaine = request.args.get('semaine')
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if semaine:
+            cursor.execute('SELECT * FROM rapports_hebdo WHERE semaine = ?', (semaine,))
+        else:
+            cursor.execute('SELECT * FROM rapports_hebdo ORDER BY date_fin DESC LIMIT 1')
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            rapport = dict(row)
+            # Parser les champs JSON
+            for field in ['chiffres_cles', 'forces', 'faiblesses', 'patterns', 'ajustements', 'scores_confiance', 'focus_semaine']:
+                try:
+                    rapport[field] = json.loads(rapport[field] or '[]')
+                except:
+                    rapport[field] = [] if field not in ['chiffres_cles', 'scores_confiance'] else {}
+
+            return jsonify({'success': True, 'rapport': rapport})
+
+        return jsonify({'success': False, 'error': 'Aucun rapport trouvé'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/rapport-hebdo/generer', methods=['POST'])
+def api_generer_rapport_hebdo():
+    """Force la génération du rapport hebdomadaire"""
+    rapport = generer_rapport_hebdo()
+    if rapport:
+        return jsonify({'success': True, 'rapport': rapport})
+    return jsonify({'success': False, 'error': 'Erreur génération'})
+
+@app.route('/api/criteres-dynamiques')
+def api_criteres_dynamiques():
+    """Récupère les critères dynamiques actuels"""
+    try:
+        criteres = get_criteres_dynamiques()
+        return jsonify({'success': True, 'criteres': criteres})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/historique-rapports')
+def api_historique_rapports():
+    """Récupère l'historique des rapports hebdomadaires"""
+    try:
+        limite = int(request.args.get('limite', 10))
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT semaine, date_debut, date_fin, resume_executif, chiffres_cles, timestamp
+            FROM rapports_hebdo
+            ORDER BY date_fin DESC
+            LIMIT ?
+        ''', (limite,))
+
+        rapports = []
+        for row in cursor.fetchall():
+            r = dict(row)
+            try:
+                r['chiffres_cles'] = json.loads(r['chiffres_cles'] or '{}')
+            except:
+                r['chiffres_cles'] = {}
+            rapports.append(r)
+
+        conn.close()
+        return jsonify({'success': True, 'rapports': rapports})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/stats-detaillees')
+def api_stats_detaillees():
+    """Récupère les statistiques détaillées par heure, actif et type"""
+    try:
+        periode = request.args.get('periode', 'mois')
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        maintenant = get_paris_time()
+        if periode == 'jour':
+            date_debut = maintenant.date()
+        elif periode == 'semaine':
+            date_debut = (maintenant - timedelta(days=7)).date()
+        elif periode == 'mois':
+            date_debut = (maintenant - timedelta(days=30)).date()
+        else:
+            date_debut = (maintenant - timedelta(days=365)).date()
+
+        # Stats par heure d'entrée
+        cursor.execute('''
+            SELECT heure_entree as heure,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
+                   AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
+            FROM trades_recommandes
+            WHERE date >= ? AND heure_entree IS NOT NULL
+            GROUP BY heure_entree
+            ORDER BY heure_entree
+        ''', (date_debut,))
+        stats_par_heure = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par catégorie d'actif
+        cursor.execute('''
+            SELECT categorie_actif as categorie,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
+                   AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
+            FROM trades_recommandes
+            WHERE date >= ? AND categorie_actif IS NOT NULL AND categorie_actif != ''
+            GROUP BY categorie_actif
+            ORDER BY nb_trades DESC
+        ''', (date_debut,))
+        stats_par_categorie = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par type de setup (NEWS vs TECHNIQUE)
+        cursor.execute('''
+            SELECT type_setup as type,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
+                   AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
+            FROM trades_recommandes
+            WHERE date >= ? AND type_setup IS NOT NULL
+            GROUP BY type_setup
+        ''', (date_debut,))
+        stats_par_type = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par direction (LONG vs SHORT)
+        cursor.execute('''
+            SELECT direction,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND direction IS NOT NULL
+            GROUP BY direction
+        ''', (date_debut,))
+        stats_par_direction = [dict(row) for row in cursor.fetchall()]
+
+        # Top 5 actifs les plus performants
+        cursor.execute('''
+            SELECT actif, symbole,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND resultat IS NOT NULL
+            GROUP BY symbole
+            HAVING nb_trades >= 2
+            ORDER BY (CAST(reussis AS FLOAT) / nb_trades) DESC, pnl_moyen DESC
+            LIMIT 5
+        ''', (date_debut,))
+        top_actifs = [dict(row) for row in cursor.fetchall()]
+
+        # Bottom 5 actifs les moins performants
+        cursor.execute('''
+            SELECT actif, symbole,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
+            FROM trades_recommandes
+            WHERE date >= ? AND resultat IS NOT NULL
+            GROUP BY symbole
+            HAVING nb_trades >= 2
+            ORDER BY (CAST(reussis AS FLOAT) / nb_trades) ASC, pnl_moyen ASC
+            LIMIT 5
+        ''', (date_debut,))
+        bottom_actifs = [dict(row) for row in cursor.fetchall()]
+
+        # Statistiques de durée des trades
+        cursor.execute('''
+            SELECT
+                AVG(duree_minutes) as duree_moyenne,
+                MIN(duree_minutes) as duree_min,
+                MAX(duree_minutes) as duree_max,
+                AVG(CASE WHEN resultat IN ('TP1', 'TP2') THEN duree_minutes END) as duree_moyenne_gagnants,
+                AVG(CASE WHEN resultat = 'STOP' THEN duree_minutes END) as duree_moyenne_perdants
+            FROM trades_recommandes
+            WHERE date >= ? AND duree_minutes IS NOT NULL
+        ''', (date_debut,))
+        row = cursor.fetchone()
+        stats_duree = dict(row) if row else {}
+
+        conn.close()
+
+        # Calculer les taux de réussite
+        for stat_list in [stats_par_heure, stats_par_categorie, stats_par_type, stats_par_direction]:
+            for s in stat_list:
+                conclus = (s.get('reussis') or 0) + (s.get('stops') or 0)
+                s['taux_reussite'] = round((s.get('reussis', 0) / conclus * 100) if conclus > 0 else 0, 1)
+                s['pnl_moyen'] = round(s.get('pnl_moyen') or 0, 2)
+                s['duree_moyenne'] = round(s.get('duree_moyenne') or 0, 0)
+
+        for s in top_actifs + bottom_actifs:
+            conclus = (s.get('reussis') or 0) + (s.get('nb_trades') or 0) - (s.get('reussis') or 0)
+            s['taux_reussite'] = round((s.get('reussis', 0) / s.get('nb_trades', 1) * 100) if s.get('nb_trades') else 0, 1)
+            s['pnl_moyen'] = round(s.get('pnl_moyen') or 0, 2)
+
+        return jsonify({
+            'success': True,
+            'periode': periode,
+            'stats_par_heure': stats_par_heure,
+            'stats_par_categorie': stats_par_categorie,
+            'stats_par_type': stats_par_type,
+            'stats_par_direction': stats_par_direction,
+            'top_actifs': top_actifs,
+            'bottom_actifs': bottom_actifs,
+            'stats_duree': {
+                'moyenne': round(stats_duree.get('duree_moyenne') or 0, 0),
+                'min': stats_duree.get('duree_min') or 0,
+                'max': stats_duree.get('duree_max') or 0,
+                'moyenne_gagnants': round(stats_duree.get('duree_moyenne_gagnants') or 0, 0),
+                'moyenne_perdants': round(stats_duree.get('duree_moyenne_perdants') or 0, 0)
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
 @app.route('/api/trades-historique')
 def api_trades_historique():
     """Récupère l'historique des trades avec filtres"""
@@ -2130,6 +2950,13 @@ def executer_cloture_trades():
     # Puis clôturer les trades restants
     cloturer_trades_jour()
 
+def executer_rapport_hebdo():
+    """Exécute la génération du rapport hebdomadaire (dimanche soir)"""
+    maintenant = get_paris_time()
+    if maintenant.weekday() != 6:  # 6 = Dimanche
+        return
+    generer_rapport_hebdo()
+
 def configurer_schedule():
     """Configure les tâches planifiées"""
     # Analyses: 8h, 14h30, 17h
@@ -2170,6 +2997,10 @@ def configurer_schedule():
     heure_journal_complet_utc = get_utc_time_for_paris("22:30")
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_journal_complet_utc).do(executer_journal_complet)
+
+    # Rapport hebdomadaire: Dimanche 20h00
+    heure_rapport_hebdo_utc = get_utc_time_for_paris("20:00")
+    schedule.every().sunday.at(heure_rapport_hebdo_utc).do(executer_rapport_hebdo)
 
 def run_scheduler():
     """Thread pour le scheduler"""

@@ -89,12 +89,24 @@
         </section>
     </div>
 
+    <!-- ALERTE MACRO (si événement imminent) -->
+    <section class="section section-alert" id="section-alerte-macro" style="display: none;">
+        <div class="section-header">
+            <span class="section-icon">🚨</span>
+            <h2 class="section-title">Alerte Macro</h2>
+        </div>
+        <div class="section-content">
+            <div class="alerte-macro-content" id="alerte-macro-content">
+            </div>
+        </div>
+    </section>
+
     <!-- 3bis. AGENDA -->
     <section class="section">
         <div class="section-header">
             <span class="section-icon">📅</span>
-            <h2 class="section-title">Agenda</h2>
-            <span class="section-meta">Événements du jour</span>
+            <h2 class="section-title">Agenda Macro</h2>
+            <span class="section-meta">Événements économiques du jour</span>
         </div>
         <div class="section-content">
             <div class="agenda-list" id="agenda-list">
@@ -155,6 +167,186 @@
 <style>
 @keyframes spin {
     to { transform: rotate(360deg); }
+}
+
+/* Alerte Macro */
+.section-alert {
+    border: 2px solid var(--accent-red);
+    animation: pulse-border 2s infinite;
+}
+
+@keyframes pulse-border {
+    0%, 100% { border-color: var(--accent-red); }
+    50% { border-color: rgba(239, 68, 68, 0.3); }
+}
+
+.macro-alert-box {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+    border-radius: 8px;
+}
+
+.macro-alert-icon {
+    font-size: 32px;
+}
+
+.macro-alert-info {
+    flex: 1;
+}
+
+.macro-alert-title {
+    font-weight: 600;
+    color: var(--accent-red);
+    margin-bottom: 4px;
+}
+
+.macro-alert-time {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.macro-alert-impact {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+}
+
+.macro-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.macro-badge.danger {
+    background: var(--accent-red);
+    color: white;
+}
+
+.macro-badge.warning {
+    background: var(--accent-orange);
+    color: white;
+}
+
+.macro-badge.ok {
+    background: var(--accent-green);
+    color: white;
+}
+
+/* Indicateurs ATR & Volume sur les opportunités */
+.opp-indicators {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0;
+}
+
+.indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 6px;
+    min-width: 60px;
+}
+
+.indicator-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    letter-spacing: 0.5px;
+}
+
+.indicator-value {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* ATR Indicator colors */
+.atr-indicator.high {
+    background: rgba(34, 197, 94, 0.15);
+}
+.atr-indicator.high .indicator-value {
+    color: var(--accent-green);
+}
+
+.atr-indicator.medium {
+    background: rgba(251, 191, 36, 0.15);
+}
+.atr-indicator.medium .indicator-value {
+    color: var(--accent-orange);
+}
+
+.atr-indicator.low {
+    background: rgba(239, 68, 68, 0.15);
+}
+.atr-indicator.low .indicator-value {
+    color: var(--accent-red);
+}
+
+/* Volume Indicator colors */
+.vol-indicator.high {
+    background: rgba(34, 197, 94, 0.15);
+}
+.vol-indicator.high .indicator-value {
+    color: var(--accent-green);
+}
+
+.vol-indicator.medium {
+    background: rgba(100, 116, 139, 0.15);
+}
+.vol-indicator.medium .indicator-value {
+    color: var(--text-secondary);
+}
+
+.vol-indicator.low {
+    background: rgba(239, 68, 68, 0.15);
+}
+.vol-indicator.low .indicator-value {
+    color: var(--accent-red);
+}
+
+/* Direction tags */
+.opp-tags {
+    display: flex;
+    gap: 6px;
+}
+
+.opp-tag.direction-long {
+    background: var(--accent-green);
+    color: white;
+}
+
+.opp-tag.direction-short {
+    background: var(--accent-red);
+    color: white;
+}
+
+/* Agenda improvements */
+.agenda-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.agenda-content {
+    flex: 1;
+}
+
+.agenda-impact {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}
+
+.agenda-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 </style>
 {% endblock %}
@@ -239,8 +431,98 @@ async function loadAllData() {
         loadLastAnalysis(),
         refreshNews(),
         loadTopMovers(),
-        loadPremarket()
+        loadPremarket(),
+        loadMacroEvents()
     ]);
+}
+
+// ===== ÉVÉNEMENTS MACRO =====
+async function loadMacroEvents() {
+    try {
+        const response = await fetch('/api/evenements-macro');
+        const data = await response.json();
+
+        if (data.success) {
+            // Afficher alerte si événement imminent
+            if (data.alerte_imminente && data.evenement_imminent) {
+                showMacroAlert(data.evenement_imminent);
+            } else {
+                hideMacroAlert();
+            }
+
+            // Mettre à jour l'agenda avec les événements macro
+            if (data.evenements && data.evenements.length > 0) {
+                renderMacroAgenda(data.evenements);
+            }
+        }
+    } catch (error) {
+        console.error('Erreur événements macro:', error);
+    }
+}
+
+function showMacroAlert(evt) {
+    const section = document.getElementById('section-alerte-macro');
+    const content = document.getElementById('alerte-macro-content');
+
+    section.style.display = 'block';
+    content.innerHTML = `
+        <div class="macro-alert-box">
+            <div class="macro-alert-icon">⚠️</div>
+            <div class="macro-alert-info">
+                <div class="macro-alert-title">${evt.nom}</div>
+                <div class="macro-alert-time">Dans moins de 30 minutes (${evt.heure})</div>
+                <div class="macro-alert-impact">${evt.impact || 'Forte volatilité attendue'}</div>
+            </div>
+            <div class="macro-alert-action">
+                <span class="macro-badge danger">ÉVITER LES POSITIONS</span>
+            </div>
+        </div>
+    `;
+}
+
+function hideMacroAlert() {
+    document.getElementById('section-alerte-macro').style.display = 'none';
+}
+
+function renderMacroAgenda(events) {
+    const container = document.getElementById('agenda-list');
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    let html = '';
+    for (const evt of events) {
+        const stars = '⭐'.repeat(evt.importance || 1);
+        const impactReco = evt.impact_recommande || 'PRUDENCE';
+        const badgeClass = impactReco === 'ÉVITER' ? 'danger' : impactReco === 'PRUDENCE' ? 'warning' : 'ok';
+
+        // Déterminer si passé, actif ou à venir
+        let statusClass = '';
+        if (evt.heure) {
+            const [evtHour, evtMin] = evt.heure.split(':').map(Number);
+            if (evtHour < currentHour || (evtHour === currentHour && evtMin < currentMinute)) {
+                statusClass = 'past';
+            } else if (Math.abs(evtHour - currentHour) === 0 && Math.abs(evtMin - currentMinute) <= 30) {
+                statusClass = 'active';
+            }
+        }
+
+        html += `
+            <div class="agenda-item ${statusClass}">
+                <span class="agenda-time">${evt.heure || '--:--'}</span>
+                <div class="agenda-content">
+                    <div class="agenda-name">${evt.nom || '-'}</div>
+                    <div class="agenda-impact">${evt.impact || ''}</div>
+                </div>
+                <div class="agenda-meta">
+                    <span class="agenda-stars">${stars}</span>
+                    <span class="macro-badge ${badgeClass}">${impactReco}</span>
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html || '<div class="no-data">Aucun événement macro prévu</div>';
 }
 
 // ===== PRÉ-MARKET =====
@@ -540,6 +822,24 @@ function renderAnalysis() {
 
     const contenu = analysisData.contenu;
 
+    // Alerte macro si présente
+    if (contenu.alerte_macro) {
+        const alertSection = document.getElementById('section-alerte-macro');
+        const alertContent = document.getElementById('alerte-macro-content');
+        alertSection.style.display = 'block';
+        alertContent.innerHTML = `
+            <div class="macro-alert-box">
+                <div class="macro-alert-icon">🚨</div>
+                <div class="macro-alert-info">
+                    <div class="macro-alert-title">${contenu.alerte_macro}</div>
+                </div>
+                <div class="macro-alert-action">
+                    <span class="macro-badge danger">ÉVITER LES POSITIONS</span>
+                </div>
+            </div>
+        `;
+    }
+
     // Contexte - format bullet points
     document.getElementById('context-time').textContent = analysisData.heure || '--:--';
     renderContextBullets(contenu.contexte_marche);
@@ -556,8 +856,12 @@ function renderAnalysis() {
     // Opportunités
     renderOpportunities(contenu.opportunites || []);
 
-    // Zones danger
-    renderDangerZones(contenu.zones_dangereuses || []);
+    // Zones danger (inclure les actifs exclus ATR)
+    let zones = contenu.zones_dangereuses || [];
+    if (contenu.actifs_exclus_atr && contenu.actifs_exclus_atr.length > 0) {
+        zones = zones.concat([`Actifs exclus (ATR < 1%): ${contenu.actifs_exclus_atr.join(', ')}`]);
+    }
+    renderDangerZones(zones);
 }
 
 function renderContextBullets(contexte) {
@@ -705,6 +1009,14 @@ function renderOpportunities(opportunities) {
         const tagClass = isNews ? 'news' : 'tech';
         const tagText = isNews ? 'NEWS' : 'TECH';
         const cardClass = isNews ? 'news-trading' : '';
+        const direction = opp.direction || 'LONG';
+        const dirClass = direction === 'SHORT' ? 'short' : 'long';
+
+        // Indicateurs ATR et Volume
+        const atrPct = opp.atr_pct || 0;
+        const volRel = opp.volume_relatif || 100;
+        const atrClass = atrPct >= 2 ? 'high' : atrPct >= 1 ? 'medium' : 'low';
+        const volClass = volRel >= 150 ? 'high' : volRel >= 100 ? 'medium' : 'low';
 
         const gaugePosition = calculateGaugePosition(opp);
 
@@ -712,10 +1024,25 @@ function renderOpportunities(opportunities) {
             <div class="opp-card ${cardClass}">
                 <div class="opp-header">
                     <span class="opp-asset">${opp.actif || 'N/A'}</span>
-                    <span class="opp-tag ${tagClass}">${tagText}</span>
+                    <div class="opp-tags">
+                        <span class="opp-tag direction-${dirClass}">${direction}</span>
+                        <span class="opp-tag ${tagClass}">${tagText}</span>
+                    </div>
                 </div>
 
                 <div class="opp-price">${opp.prix_actuel || '-'}</div>
+
+                <!-- Indicateurs ATR & Volume -->
+                <div class="opp-indicators">
+                    <div class="indicator atr-indicator ${atrClass}" title="Average True Range - Volatilité moyenne">
+                        <span class="indicator-label">ATR</span>
+                        <span class="indicator-value">${atrPct.toFixed(1)}%</span>
+                    </div>
+                    <div class="indicator vol-indicator ${volClass}" title="Volume relatif vs moyenne 20j">
+                        <span class="indicator-label">Vol</span>
+                        <span class="indicator-value">${volRel.toFixed(0)}%</span>
+                    </div>
+                </div>
 
                 <div class="opp-catalyst">${opp.catalyseur || 'Catalyseur non spécifié'}</div>
 

@@ -68,6 +68,67 @@
         </div>
     </section>
 
+    <!-- Stats Détaillées -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">🔬</span>
+            <h2 class="section-title">Analyse Détaillée</h2>
+            <span class="section-meta">Par heure, type, direction</span>
+        </div>
+        <div class="section-content">
+            <!-- Grid 3 colonnes pour les stats -->
+            <div class="detailed-stats-grid">
+                <!-- Stats par Type -->
+                <div class="stat-block">
+                    <h3 class="stat-block-title">Par Type de Setup</h3>
+                    <div id="stats-type" class="stat-block-content">
+                        <div class="loading">Chargement...</div>
+                    </div>
+                </div>
+
+                <!-- Stats par Direction -->
+                <div class="stat-block">
+                    <h3 class="stat-block-title">Par Direction</h3>
+                    <div id="stats-direction" class="stat-block-content">
+                        <div class="loading">Chargement...</div>
+                    </div>
+                </div>
+
+                <!-- Stats Durée -->
+                <div class="stat-block">
+                    <h3 class="stat-block-title">Durée des Trades</h3>
+                    <div id="stats-duree" class="stat-block-content">
+                        <div class="loading">Chargement...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats par Heure (graphique en barres) -->
+            <div class="hourly-stats-container mt-3">
+                <h3 class="stat-block-title">Performance par Heure d'Entrée</h3>
+                <div id="stats-heure" class="hourly-chart">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+
+            <!-- Top / Bottom Actifs -->
+            <div class="grid-2 mt-3">
+                <div class="stat-block">
+                    <h3 class="stat-block-title success">🏆 Top Actifs</h3>
+                    <div id="top-actifs" class="stat-block-content">
+                        <div class="loading">Chargement...</div>
+                    </div>
+                </div>
+                <div class="stat-block">
+                    <h3 class="stat-block-title danger">⚠️ Actifs à Éviter</h3>
+                    <div id="bottom-actifs" class="stat-block-content">
+                        <div class="loading">Chargement...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <!-- Historique Trades -->
     <section class="section">
         <div class="section-header">
@@ -105,6 +166,18 @@
         </div>
     </section>
 
+    <!-- Rapport Hebdomadaire -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📋</span>
+            <h2 class="section-title">Rapport Hebdomadaire</h2>
+            <button class="btn-small" onclick="genererRapportHebdo()">Générer</button>
+        </div>
+        <div class="section-content" id="rapport-hebdo-content">
+            <div class="loading">Chargement...</div>
+        </div>
+    </section>
+
 </div>
 
 {% endblock %}
@@ -129,6 +202,330 @@ const periodLabels = {
 document.addEventListener('DOMContentLoaded', function() {
     loadPerformances();
     loadChartData();
+    loadDetailedStats();
+});
+
+// ===== STATS DÉTAILLÉES =====
+async function loadDetailedStats() {
+    try {
+        const response = await fetch(`/api/stats-detaillees?periode=${currentPeriode}`);
+        const data = await response.json();
+
+        if (data.success) {
+            renderStatsType(data.stats_par_type);
+            renderStatsDirection(data.stats_par_direction);
+            renderStatsDuree(data.stats_duree);
+            renderStatsHeure(data.stats_par_heure);
+            renderTopActifs(data.top_actifs);
+            renderBottomActifs(data.bottom_actifs);
+        }
+    } catch (error) {
+        console.error('Erreur stats détaillées:', error);
+    }
+}
+
+function renderStatsType(stats) {
+    const container = document.getElementById('stats-type');
+    if (!stats || stats.length === 0) {
+        container.innerHTML = '<div class="no-data">Pas de données</div>';
+        return;
+    }
+
+    let html = '';
+    for (const s of stats) {
+        const typeLabel = s.type === 'NEWS' ? '⚡ NEWS Trading' : '📊 Technique';
+        const tauxClass = s.taux_reussite >= 60 ? 'positive' : s.taux_reussite >= 40 ? '' : 'negative';
+
+        html += `
+            <div class="stat-row">
+                <div class="stat-row-label">${typeLabel}</div>
+                <div class="stat-row-data">
+                    <span class="stat-trades">${s.nb_trades} trades</span>
+                    <span class="stat-taux ${tauxClass}">${s.taux_reussite}%</span>
+                    <span class="stat-pnl ${s.pnl_moyen >= 0 ? 'positive' : 'negative'}">${s.pnl_moyen >= 0 ? '+' : ''}${s.pnl_moyen}%</span>
+                </div>
+            </div>`;
+    }
+    container.innerHTML = html;
+}
+
+function renderStatsDirection(stats) {
+    const container = document.getElementById('stats-direction');
+    if (!stats || stats.length === 0) {
+        container.innerHTML = '<div class="no-data">Pas de données</div>';
+        return;
+    }
+
+    let html = '';
+    for (const s of stats) {
+        const dirLabel = s.direction === 'LONG' ? '📈 LONG' : '📉 SHORT';
+        const tauxClass = s.taux_reussite >= 60 ? 'positive' : s.taux_reussite >= 40 ? '' : 'negative';
+
+        html += `
+            <div class="stat-row">
+                <div class="stat-row-label">${dirLabel}</div>
+                <div class="stat-row-data">
+                    <span class="stat-trades">${s.nb_trades} trades</span>
+                    <span class="stat-taux ${tauxClass}">${s.taux_reussite}%</span>
+                    <span class="stat-pnl ${s.pnl_moyen >= 0 ? 'positive' : 'negative'}">${s.pnl_moyen >= 0 ? '+' : ''}${s.pnl_moyen}%</span>
+                </div>
+            </div>`;
+    }
+    container.innerHTML = html;
+}
+
+function renderStatsDuree(stats) {
+    const container = document.getElementById('stats-duree');
+    if (!stats || stats.moyenne === 0) {
+        container.innerHTML = '<div class="no-data">Pas de données de durée</div>';
+        return;
+    }
+
+    const formatDuree = (min) => {
+        if (min < 60) return `${min}min`;
+        const h = Math.floor(min / 60);
+        const m = min % 60;
+        return `${h}h${m > 0 ? m + 'min' : ''}`;
+    };
+
+    container.innerHTML = `
+        <div class="duree-stats">
+            <div class="duree-stat main">
+                <span class="duree-value">${formatDuree(stats.moyenne)}</span>
+                <span class="duree-label">Durée moyenne</span>
+            </div>
+            <div class="duree-row">
+                <div class="duree-stat small positive">
+                    <span class="duree-value">${formatDuree(stats.moyenne_gagnants)}</span>
+                    <span class="duree-label">Gagnants</span>
+                </div>
+                <div class="duree-stat small negative">
+                    <span class="duree-value">${formatDuree(stats.moyenne_perdants)}</span>
+                    <span class="duree-label">Perdants</span>
+                </div>
+            </div>
+            <div class="duree-minmax">
+                <span>Min: ${formatDuree(stats.min)}</span>
+                <span>Max: ${formatDuree(stats.max)}</span>
+            </div>
+        </div>
+    `;
+}
+
+function renderStatsHeure(stats) {
+    const container = document.getElementById('stats-heure');
+    if (!stats || stats.length === 0) {
+        container.innerHTML = '<div class="no-data">Pas de données par heure</div>';
+        return;
+    }
+
+    // Créer un graphique en barres simple
+    let html = '<div class="hourly-bars">';
+
+    // Trouver le max pour normaliser les barres
+    const maxTrades = Math.max(...stats.map(s => s.nb_trades));
+
+    for (const s of stats) {
+        const barHeight = (s.nb_trades / maxTrades) * 100;
+        const tauxClass = s.taux_reussite >= 60 ? 'success' : s.taux_reussite >= 40 ? 'warning' : 'danger';
+
+        html += `
+            <div class="hourly-bar-wrapper" title="${s.heure}h: ${s.nb_trades} trades, ${s.taux_reussite}% réussite">
+                <div class="hourly-bar ${tauxClass}" style="height: ${barHeight}%">
+                    <span class="bar-value">${s.nb_trades}</span>
+                </div>
+                <span class="hourly-label">${s.heure}h</span>
+            </div>`;
+    }
+
+    html += '</div>';
+    html += '<div class="hourly-legend">';
+    html += '<span class="legend-item"><span class="legend-dot success"></span> >60%</span>';
+    html += '<span class="legend-item"><span class="legend-dot warning"></span> 40-60%</span>';
+    html += '<span class="legend-item"><span class="legend-dot danger"></span> <40%</span>';
+    html += '</div>';
+
+    container.innerHTML = html;
+}
+
+function renderTopActifs(actifs) {
+    const container = document.getElementById('top-actifs');
+    if (!actifs || actifs.length === 0) {
+        container.innerHTML = '<div class="no-data">Pas assez de données</div>';
+        return;
+    }
+
+    let html = '';
+    for (const a of actifs) {
+        html += `
+            <div class="actif-row positive">
+                <div class="actif-name">${a.actif || a.symbole}</div>
+                <div class="actif-stats">
+                    <span>${a.nb_trades} trades</span>
+                    <span class="taux">${a.taux_reussite}%</span>
+                    <span class="pnl">${a.pnl_moyen >= 0 ? '+' : ''}${a.pnl_moyen}%</span>
+                </div>
+            </div>`;
+    }
+    container.innerHTML = html;
+}
+
+function renderBottomActifs(actifs) {
+    const container = document.getElementById('bottom-actifs');
+    if (!actifs || actifs.length === 0) {
+        container.innerHTML = '<div class="no-data">Pas assez de données</div>';
+        return;
+    }
+
+    let html = '';
+    for (const a of actifs) {
+        html += `
+            <div class="actif-row negative">
+                <div class="actif-name">${a.actif || a.symbole}</div>
+                <div class="actif-stats">
+                    <span>${a.nb_trades} trades</span>
+                    <span class="taux">${a.taux_reussite}%</span>
+                    <span class="pnl">${a.pnl_moyen >= 0 ? '+' : ''}${a.pnl_moyen}%</span>
+                </div>
+            </div>`;
+    }
+    container.innerHTML = html;
+}
+
+// ===== RAPPORT HEBDOMADAIRE =====
+async function loadRapportHebdo() {
+    try {
+        const response = await fetch('/api/rapport-hebdo');
+        const data = await response.json();
+
+        if (data.success && data.rapport) {
+            renderRapportHebdo(data.rapport);
+        } else {
+            document.getElementById('rapport-hebdo-content').innerHTML =
+                '<div class="no-data">Aucun rapport disponible. Cliquez sur "Générer" pour créer un rapport.</div>';
+        }
+    } catch (error) {
+        console.error('Erreur rapport hebdo:', error);
+    }
+}
+
+async function genererRapportHebdo() {
+    const container = document.getElementById('rapport-hebdo-content');
+    container.innerHTML = '<div class="loading">Génération du rapport en cours...</div>';
+
+    try {
+        const response = await fetch('/api/rapport-hebdo/generer', {method: 'POST'});
+        const data = await response.json();
+
+        if (data.success) {
+            renderRapportHebdo(data.rapport);
+        } else {
+            container.innerHTML = `<div class="error">Erreur: ${data.error}</div>`;
+        }
+    } catch (error) {
+        container.innerHTML = '<div class="error">Erreur de génération</div>';
+    }
+}
+
+function renderRapportHebdo(rapport) {
+    const container = document.getElementById('rapport-hebdo-content');
+
+    const chiffres = rapport.chiffres_cles || {};
+    const forces = rapport.forces || [];
+    const faiblesses = rapport.faiblesses || [];
+    const patterns = rapport.patterns || [];
+    const ajustements = rapport.ajustements || [];
+    const scores = rapport.scores_confiance || {};
+    const focus = rapport.focus_semaine || [];
+
+    let html = `
+        <div class="rapport-hebdo">
+            <div class="rapport-header">
+                <span class="rapport-periode">${rapport.semaine || ''}</span>
+                <span class="rapport-date">${rapport.date_debut || ''} → ${rapport.date_fin || ''}</span>
+            </div>
+
+            <div class="rapport-resume">${rapport.resume_executif || 'Aucun résumé disponible'}</div>
+
+            <div class="rapport-grid">
+                <!-- Chiffres Clés -->
+                <div class="rapport-block">
+                    <h4>Chiffres Clés</h4>
+                    <div class="chiffres-grid">
+                        <div class="chiffre-item">
+                            <span class="chiffre-value">${chiffres.nb_trades || 0}</span>
+                            <span class="chiffre-label">Trades</span>
+                        </div>
+                        <div class="chiffre-item">
+                            <span class="chiffre-value">${chiffres.taux_reussite || 0}%</span>
+                            <span class="chiffre-label">Réussite</span>
+                        </div>
+                        <div class="chiffre-item ${(chiffres.pnl_total || 0) >= 0 ? 'positive' : 'negative'}">
+                            <span class="chiffre-value">${(chiffres.pnl_total || 0) >= 0 ? '+' : ''}${chiffres.pnl_total || 0}%</span>
+                            <span class="chiffre-label">PnL Total</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Forces -->
+                <div class="rapport-block success-block">
+                    <h4>💪 Forces</h4>
+                    <ul>${forces.map(f => `<li>${f}</li>`).join('') || '<li>Aucune force identifiée</li>'}</ul>
+                </div>
+
+                <!-- Faiblesses -->
+                <div class="rapport-block danger-block">
+                    <h4>⚠️ Faiblesses</h4>
+                    <ul>${faiblesses.map(f => `<li>${f}</li>`).join('') || '<li>Aucune faiblesse identifiée</li>'}</ul>
+                </div>
+            </div>
+
+            <!-- Scores de Confiance -->
+            <div class="rapport-scores">
+                <h4>📊 Scores de Confiance</h4>
+                <div class="scores-grid">
+                    ${Object.entries(scores).map(([cat, data]) => {
+                        const score = typeof data === 'object' ? data.score : data;
+                        const tendance = typeof data === 'object' ? data.tendance : '';
+                        const scoreClass = score >= 60 ? 'high' : score >= 40 ? 'medium' : 'low';
+                        return `<div class="score-item ${scoreClass}">
+                            <span class="score-cat">${cat.replace('_', ' ')}</span>
+                            <span class="score-value">${score}</span>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>
+
+            <!-- Ajustements Recommandés -->
+            ${ajustements.length > 0 ? `
+            <div class="rapport-ajustements">
+                <h4>🔧 Ajustements Recommandés</h4>
+                <div class="ajustements-list">
+                    ${ajustements.map(a => `
+                        <div class="ajustement-item">
+                            <span class="ajustement-critere">${a.critere || ''}</span>
+                            <span class="ajustement-action">${a.action || ''}</span>
+                            <span class="ajustement-raison">${a.raison || ''}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>` : ''}
+
+            <!-- Focus Semaine Prochaine -->
+            ${focus.length > 0 ? `
+            <div class="rapport-focus">
+                <h4>🎯 Focus Semaine Prochaine</h4>
+                <ul>${focus.map(f => `<li>${f}</li>`).join('')}</ul>
+            </div>` : ''}
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+// Charger le rapport hebdo au démarrage
+document.addEventListener('DOMContentLoaded', function() {
+    loadRapportHebdo();
 });
 
 // ===== GRAPHIQUE =====
@@ -276,6 +673,7 @@ function changePeriode(periode, btn) {
     btn.classList.add('active');
     document.getElementById('perf-period').textContent = periodLabels[periode];
     loadPerformances();
+    loadDetailedStats();
 }
 
 async function loadPerformances() {
@@ -625,7 +1023,483 @@ function filterTrades() {
 .legend-dot.green { background: #10B981; }
 .legend-dot.blue { background: #3B82F6; }
 
+/* Detailed Stats Grid */
+.detailed-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-3);
+}
+
+.stat-block {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+}
+
+.stat-block-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-2);
+    padding-bottom: var(--space-1);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.stat-block-title.success { color: var(--accent-green); }
+.stat-block-title.danger { color: var(--accent-red); }
+
+.stat-block-content {
+    min-height: 80px;
+}
+
+/* Stat Rows */
+.stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.stat-row:last-child { border-bottom: none; }
+
+.stat-row-label {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.stat-row-data {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+.stat-trades {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+.stat-taux {
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+}
+
+.stat-taux.positive { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
+.stat-taux.negative { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+
+.stat-pnl {
+    font-family: 'SF Mono', monospace;
+    font-size: 0.875rem;
+}
+
+/* Durée Stats */
+.duree-stats {
+    text-align: center;
+}
+
+.duree-stat {
+    padding: var(--space-2);
+}
+
+.duree-stat.main {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+}
+
+.duree-value {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.duree-stat.main .duree-value { font-size: 2rem; }
+
+.duree-label {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+.duree-row {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.duree-stat.small {
+    flex: 1;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+}
+
+.duree-stat.small.positive { background: rgba(16, 185, 129, 0.1); }
+.duree-stat.small.positive .duree-value { color: var(--accent-green); }
+.duree-stat.small.negative { background: rgba(239, 68, 68, 0.1); }
+.duree-stat.small.negative .duree-value { color: var(--accent-red); }
+
+.duree-minmax {
+    display: flex;
+    justify-content: space-between;
+    margin-top: var(--space-2);
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+/* Hourly Chart */
+.hourly-stats-container {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+}
+
+.hourly-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+    height: 120px;
+    padding: var(--space-2) 0;
+}
+
+.hourly-bar-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+}
+
+.hourly-bar {
+    width: 100%;
+    min-height: 4px;
+    border-radius: 4px 4px 0 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    transition: var(--transition);
+}
+
+.hourly-bar.success { background: var(--accent-green); }
+.hourly-bar.warning { background: var(--accent-orange); }
+.hourly-bar.danger { background: var(--accent-red); }
+
+.hourly-bar:hover { opacity: 0.8; }
+
+.bar-value {
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: white;
+    padding-top: 2px;
+}
+
+.hourly-label {
+    font-size: 0.625rem;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+}
+
+.hourly-legend {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    font-size: 0.75rem;
+}
+
+.hourly-legend .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-tertiary);
+}
+
+.hourly-legend .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+.hourly-legend .legend-dot.success { background: var(--accent-green); }
+.hourly-legend .legend-dot.warning { background: var(--accent-orange); }
+.hourly-legend .legend-dot.danger { background: var(--accent-red); }
+
+/* Actifs Rows */
+.actif-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    margin-bottom: 4px;
+}
+
+.actif-row.positive { background: rgba(16, 185, 129, 0.08); }
+.actif-row.negative { background: rgba(239, 68, 68, 0.08); }
+
+.actif-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.actif-stats {
+    display: flex;
+    gap: var(--space-2);
+    font-size: 0.8125rem;
+}
+
+.actif-stats span:first-child {
+    color: var(--text-tertiary);
+}
+
+.actif-stats .taux {
+    font-weight: 600;
+}
+
+.actif-row.positive .taux { color: var(--accent-green); }
+.actif-row.negative .taux { color: var(--accent-red); }
+
+.actif-stats .pnl {
+    font-family: 'SF Mono', monospace;
+}
+
+.actif-row.positive .pnl { color: var(--accent-green); }
+.actif-row.negative .pnl { color: var(--accent-red); }
+
+.mt-3 { margin-top: var(--space-3); }
+
+/* Rapport Hebdomadaire */
+.btn-small {
+    padding: 6px 12px;
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-small:hover {
+    opacity: 0.9;
+}
+
+.rapport-hebdo {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+}
+
+.rapport-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.rapport-periode {
+    font-weight: 700;
+    font-size: 1.125rem;
+    color: var(--text-primary);
+}
+
+.rapport-date {
+    font-size: 0.875rem;
+    color: var(--text-tertiary);
+}
+
+.rapport-resume {
+    background: var(--bg-tertiary);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-3);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.rapport-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+.rapport-block {
+    background: var(--bg-tertiary);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+}
+
+.rapport-block h4 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-1);
+}
+
+.rapport-block.success-block { border-left: 3px solid var(--accent-green); }
+.rapport-block.danger-block { border-left: 3px solid var(--accent-red); }
+
+.rapport-block ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.rapport-block li {
+    font-size: 0.8125rem;
+    color: var(--text-primary);
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.rapport-block li:last-child { border-bottom: none; }
+
+.chiffres-grid {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.chiffre-item {
+    flex: 1;
+    text-align: center;
+    padding: var(--space-1);
+    background: var(--bg-primary);
+    border-radius: var(--radius-sm);
+}
+
+.chiffre-value {
+    display: block;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.chiffre-item.positive .chiffre-value { color: var(--accent-green); }
+.chiffre-item.negative .chiffre-value { color: var(--accent-red); }
+
+.chiffre-label {
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+}
+
+.rapport-scores {
+    margin-bottom: var(--space-3);
+}
+
+.rapport-scores h4 {
+    font-size: 0.875rem;
+    margin-bottom: var(--space-2);
+    color: var(--text-secondary);
+}
+
+.scores-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.score-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    min-width: 80px;
+}
+
+.score-item.high { background: rgba(16, 185, 129, 0.15); }
+.score-item.medium { background: rgba(251, 191, 36, 0.15); }
+.score-item.low { background: rgba(239, 68, 68, 0.15); }
+
+.score-cat {
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    text-transform: capitalize;
+}
+
+.score-value {
+    font-size: 1.125rem;
+    font-weight: 700;
+}
+
+.score-item.high .score-value { color: var(--accent-green); }
+.score-item.medium .score-value { color: var(--accent-orange); }
+.score-item.low .score-value { color: var(--accent-red); }
+
+.rapport-ajustements, .rapport-focus {
+    background: var(--bg-tertiary);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-2);
+}
+
+.rapport-ajustements h4, .rapport-focus h4 {
+    font-size: 0.875rem;
+    margin-bottom: var(--space-1);
+    color: var(--text-secondary);
+}
+
+.ajustements-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.ajustement-item {
+    display: grid;
+    grid-template-columns: 1fr 1fr 2fr;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    background: var(--bg-primary);
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+}
+
+.ajustement-critere {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.ajustement-action {
+    color: var(--accent-orange);
+    font-weight: 500;
+}
+
+.ajustement-raison {
+    color: var(--text-tertiary);
+}
+
+.rapport-focus ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.rapport-focus li {
+    padding: 6px 0;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    padding-left: 20px;
+    position: relative;
+}
+
+.rapport-focus li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--accent-primary);
+}
+
 @media (max-width: 768px) {
+    .detailed-stats-grid {
+        grid-template-columns: 1fr;
+    }
+
     .chart-container {
         height: 250px;
     }
@@ -660,6 +1534,14 @@ function filterTrades() {
         color: var(--text-muted);
         padding: var(--space-1) 0;
         opacity: 0.6;
+    }
+
+    .hourly-bars {
+        height: 80px;
+    }
+
+    .hourly-label {
+        font-size: 0.5rem;
     }
 }
 </style>
