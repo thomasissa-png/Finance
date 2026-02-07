@@ -3946,7 +3946,12 @@ def valider_tous_ajustements(decision, decideur='utilisateur'):
     return resultats
 
 def expirer_ajustements_anciens(jours_max=21):
-    """Expire automatiquement les ajustements non traités après X jours (21 jours car auto-validation active)"""
+    """DÉSACTIVÉ - Les ajustements sont conservés pour historique dans les rapports hebdo.
+    Cette fonction n'est plus appelée par le scheduler."""
+    return 0  # Ne rien faire - garder tout l'historique
+
+def _expirer_ajustements_anciens_legacy(jours_max=21):
+    """[LEGACY] Expire automatiquement les ajustements non traités après X jours"""
     maintenant = get_paris_time()
     date_limite = maintenant - timedelta(days=jours_max)
 
@@ -6151,9 +6156,8 @@ def configurer_schedule():
     heure_rapport_hebdo_utc = get_utc_time_for_paris("09:00")
     schedule.every().saturday.at(heure_rapport_hebdo_utc).do(executer_rapport_hebdo)
 
-    # Expiration des ajustements non traités: tous les jours à 23h00
-    heure_expiration_utc = get_utc_time_for_paris("23:00")
-    schedule.every().day.at(heure_expiration_utc).do(expirer_ajustements_anciens)
+    # NOTE: Expiration des ajustements DÉSACTIVÉE - on garde tout l'historique
+    # Les ajustements sont conservés pour analyse dans les rapports hebdo
 
     # Évaluation feedback des ajustements validés: dimanche 19h00
     heure_feedback_utc = get_utc_time_for_paris("19:00")
