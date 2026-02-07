@@ -445,11 +445,13 @@ async function actualiserContexte() {
 }
 
 async function loadAllData() {
+    // D'abord charger les données marché pour détecter le weekend
+    await refreshMarkets();
+
+    // Ensuite charger le reste en parallèle
     await Promise.all([
-        refreshMarkets(),
         loadLastAnalysis(),
         refreshNews(),
-        loadTopMovers(),
         loadPremarket(),
         loadMacroEvents()
     ]);
