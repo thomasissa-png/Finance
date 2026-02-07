@@ -1552,16 +1552,12 @@ EVENEMENTS_MACRO_RECURRENTS = {
 
 def get_evenements_macro_jour(pour_lundi=False):
     """Récupère les événements macro du jour (basé sur le calendrier économique)
-    Si pour_lundi=True et weekend, simule le lundi suivant (pour affichage weekend)"""
+    IMPORTANT: Retourne une liste VIDE le weekend (pas de marchés ouverts)"""
     maintenant = get_paris_time()
 
-    # Si weekend, on affiche les événements du lundi suivant
+    # Weekend: pas d'événements économiques (marchés fermés)
     if is_weekend():
-        # Samedi (5) → +2 jours, Dimanche (6) → +1 jour
-        jours_jusqua_lundi = (7 - maintenant.weekday()) % 7
-        if jours_jusqua_lundi == 0:
-            jours_jusqua_lundi = 1  # Dimanche: +1 jour vers lundi
-        maintenant = maintenant + timedelta(days=jours_jusqua_lundi)
+        return []
 
     aujourdhui = maintenant.date()
     jour_semaine = maintenant.weekday()  # 0=Lundi, 4=Vendredi
@@ -1581,9 +1577,8 @@ def get_evenements_macro_jour(pour_lundi=False):
                 "impact": "MAJEUR - Très forte volatilité USD et indices"
             })
 
-    # Vérifier CPI US (généralement entre le 10 et 15 du mois)
-    if 10 <= jour_mois <= 15 and jour_semaine < 5:
-        # CPI US souvent publié ces jours
+    # Vérifier CPI US (généralement entre le 10 et 15 du mois, jours ouvrés)
+    if 10 <= jour_mois <= 15:
         evenements.append({
             "nom": "CPI US (potentiel)",
             "heure": "14:30",
@@ -1591,21 +1586,29 @@ def get_evenements_macro_jour(pour_lundi=False):
             "impact": "FORT - Volatilité sur USD, Or, Indices"
         })
 
-    # Événements fixes récurrents
-    heures_fixes = [
-        {"heure": "16:00", "nom": "ISM/PMI Services (si 1er jour ouvré)", "importance": 2},
-        {"heure": "16:30", "nom": "Stocks pétrole EIA", "importance": 2, "jour": 2},  # Mercredi
-    ]
+    # ISM/PMI Services: 1er jour ouvré du mois uniquement
+    if jour_mois <= 3:  # Dans les 3 premiers jours du mois
+        # Calculer le 1er jour ouvré du mois
+        premier_jour = maintenant.replace(day=1)
+        premier_jour_ouvre = premier_jour
+        while premier_jour_ouvre.weekday() >= 5:  # Skip weekend
+            premier_jour_ouvre += timedelta(days=1)
+        if maintenant.date() == premier_jour_ouvre.date():
+            evenements.append({
+                "nom": "ISM/PMI Services",
+                "heure": "16:00",
+                "importance": 2,
+                "impact": "Volatilité modérée - indicateur économique clé"
+            })
 
-    for evt in heures_fixes:
-        if evt.get("jour") is None or evt.get("jour") == jour_semaine:
-            if evt.get("importance", 1) >= 2:
-                evenements.append({
-                    "nom": evt["nom"],
-                    "heure": evt["heure"],
-                    "importance": evt.get("importance", 2),
-                    "impact": "Volatilité modérée à forte"
-                })
+    # Stocks pétrole EIA: Mercredi uniquement
+    if jour_semaine == 2:  # Mercredi
+        evenements.append({
+            "nom": "Stocks pétrole EIA",
+            "heure": "16:30",
+            "importance": 2,
+            "impact": "Volatilité sur WTI/Brent"
+        })
 
     return evenements
 
