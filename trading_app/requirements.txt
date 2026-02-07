@@ -1,6 +1,5 @@
 flask>=2.3.0
 anthropic>=0.18.0
-yfinance>=0.2.36
 twilio>=8.10.0
 schedule>=1.2.0
 pytz>=2024.1

@@ -15,7 +15,6 @@ import numpy as np
 import pandas as pd
 import pytz
 import schedule
-import yfinance as yf
 from anthropic import Anthropic
 from flask import Flask, render_template, jsonify, request
 from twilio.rest import Client
@@ -41,12 +40,13 @@ MAX_NEWS_PAR_JOUR = 3
 DERNIERE_VERIFICATION_DATE = None
 DB_PATH = 'trading.db'
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
+TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 
-# Rate limiting pour yfinance
-YFINANCE_LAST_CALL = None
-YFINANCE_MIN_INTERVAL = 0.5  # Minimum 0.5 seconde entre les appels
-YFINANCE_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
-YFINANCE_CACHE_TTL = 60  # Cache valide 60 secondes
+# Rate limiting pour Twelve Data
+TWELVEDATA_LAST_CALL = None
+TWELVEDATA_MIN_INTERVAL = 0.1  # 8 requêtes/minute en plan gratuit, plus rapide en payant
+TWELVEDATA_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
+TWELVEDATA_CACHE_TTL = 30  # Cache valide 30 secondes (plus frais que yfinance)
 
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
@@ -110,6 +110,226 @@ POOL_ROTATION = {
     "aero_defense": {"BA": "Boeing", "LMT": "Lockheed Martin", "NOC": "Northrop Grumman", "RTX": "Raytheon", "AM.PA": "Dassault Aviation", "HO.PA": "Thales"},
     "semi_conducteurs": {"ASML.AS": "ASML", "TSM": "TSMC", "AVGO": "Broadcom", "MU": "Micron"}
 }
+
+# ============================================================================
+# TWELVE DATA - MAPPING SYMBOLES ET API
+# ============================================================================
+
+# Mapping Yahoo Finance -> Twelve Data
+SYMBOL_MAPPING_TWELVEDATA = {
+    # Indices
+    "^FCHI": "CAC40",
+    "^GSPC": "SPX",
+    "^IXIC": "IXIC",
+    "^DJI": "DJI",
+    "^GDAXI": "DAX",
+    "^VIX": "VIX",
+    # Actions Européennes (format: SYMBOLE:EXCHANGE)
+    "AIR.PA": "AIR:XPAR",
+    "MC.PA": "MC:XPAR",
+    "OR.PA": "OR:XPAR",
+    "RMS.PA": "RMS:XPAR",
+    "TTE.PA": "TTE:XPAR",
+    "SAN.PA": "SAN:XPAR",
+    "BNP.PA": "BNP:XPAR",
+    "AXA.PA": "CS:XPAR",  # AXA sur Euronext
+    "SU.PA": "SU:XPAR",
+    "SAF.PA": "SAF:XPAR",
+    "GLE.PA": "GLE:XPAR",
+    "ACA.PA": "ACA:XPAR",
+    "KER.PA": "KER:XPAR",
+    "ENGI.PA": "ENGI:XPAR",
+    "AM.PA": "AM:XPAR",
+    "HO.PA": "HO:XPAR",
+    "RNO.PA": "RNO:XPAR",
+    "ML.PA": "ML:XPAR",
+    # Actions Allemandes
+    "MBG.DE": "MBG:XETR",
+    "BMW.DE": "BMW:XETR",
+    "VOW3.DE": "VOW3:XETR",
+    "BOSS.DE": "BOSS:XETR",
+    "DBK.DE": "DBK:XETR",
+    # Actions autres EU
+    "ASML.AS": "ASML:XAMS",
+    "INGA.AS": "INGA:XAMS",
+    "UCG.MI": "UCG:XMIL",
+    "SAN.MC": "SAN:XMAD",
+    "CFR.SW": "CFR:XSWX",
+    # Futures/Commodités
+    "GC=F": "XAU/USD",  # Or en forex sur Twelve Data
+    "SI=F": "XAG/USD",  # Argent
+    "PL=F": "XPT/USD",  # Platine
+    "BZ=F": "BZ",       # Brent
+    "CL=F": "CL",       # WTI
+    "NG=F": "NG",       # Gaz naturel
+    "KC=F": "KC",       # Café
+    "CC=F": "CC",       # Cacao
+    "HG=F": "HG",       # Cuivre
+    "ZS=F": "ZS",       # Soja
+    "SB=F": "SB",       # Sucre
+    "ZW=F": "ZW",       # Blé
+    "ZC=F": "ZC",       # Maïs
+    # Forex
+    "EURUSD=X": "EUR/USD",
+    "GBPUSD=X": "GBP/USD",
+    "USDJPY=X": "USD/JPY",
+}
+
+def convert_symbol_to_twelvedata(yahoo_symbol):
+    """Convertit un symbole Yahoo Finance vers Twelve Data"""
+    # Si déjà mappé
+    if yahoo_symbol in SYMBOL_MAPPING_TWELVEDATA:
+        return SYMBOL_MAPPING_TWELVEDATA[yahoo_symbol]
+    # Actions US restent identiques
+    if not any(x in yahoo_symbol for x in ['.', '=', '^']):
+        return yahoo_symbol
+    # Par défaut, retourner tel quel
+    return yahoo_symbol
+
+def rate_limit_twelvedata():
+    """Applique un rate limiting sur les appels Twelve Data"""
+    global TWELVEDATA_LAST_CALL
+    if TWELVEDATA_LAST_CALL is not None:
+        elapsed = time.time() - TWELVEDATA_LAST_CALL
+        if elapsed < TWELVEDATA_MIN_INTERVAL:
+            time.sleep(TWELVEDATA_MIN_INTERVAL - elapsed)
+    TWELVEDATA_LAST_CALL = time.time()
+
+def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
+    """Récupère les données historiques via Twelve Data API"""
+    global TWELVEDATA_CACHE
+
+    if not TWELVEDATA_API_KEY:
+        print("⚠️ TWELVEDATA_API_KEY non configurée")
+        return pd.DataFrame(), False
+
+    cache_key = f"{symbole}_{interval}_{outputsize}"
+    now = time.time()
+
+    # Vérifier le cache
+    if cache_key in TWELVEDATA_CACHE:
+        cached = TWELVEDATA_CACHE[cache_key]
+        if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
+            return cached['data'], cached['is_fresh']
+
+    # Rate limiting
+    rate_limit_twelvedata()
+
+    try:
+        td_symbol = convert_symbol_to_twelvedata(symbole)
+
+        url = "https://api.twelvedata.com/time_series"
+        params = {
+            "symbol": td_symbol,
+            "interval": interval,
+            "outputsize": outputsize,
+            "apikey": TWELVEDATA_API_KEY,
+            "timezone": "Europe/Paris"
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        if "values" not in data:
+            error_msg = data.get("message", "Erreur inconnue")
+            print(f"⚠️ Twelve Data {symbole}: {error_msg}")
+            return pd.DataFrame(), False
+
+        # Convertir en DataFrame similaire à yfinance
+        values = data["values"]
+        df = pd.DataFrame(values)
+
+        # Renommer et convertir les colonnes
+        df = df.rename(columns={
+            "datetime": "Date",
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume"
+        })
+
+        # Convertir les types
+        for col in ["Open", "High", "Low", "Close"]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        if "Volume" in df.columns:
+            df["Volume"] = pd.to_numeric(df["Volume"], errors='coerce').fillna(0)
+
+        # Parser les dates et mettre en index
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.set_index("Date")
+        df = df.sort_index()  # Ordre chronologique
+
+        # Vérifier fraîcheur des données
+        is_fresh = False
+        if not df.empty:
+            last_date = df.index[-1].date()
+            today = get_paris_time().date()
+            weekday = today.weekday()
+
+            if weekday < 5:  # Lundi-Vendredi
+                days_diff = (today - last_date).days
+                is_fresh = days_diff <= 1
+            else:  # Weekend
+                vendredi = today - timedelta(days=weekday - 4)
+                is_fresh = last_date >= vendredi
+
+        # Mettre en cache
+        TWELVEDATA_CACHE[cache_key] = {
+            'data': df,
+            'timestamp': now,
+            'is_fresh': is_fresh
+        }
+
+        return df, is_fresh
+
+    except requests.exceptions.Timeout:
+        print(f"⚠️ Timeout Twelve Data {symbole}")
+        return pd.DataFrame(), False
+    except Exception as e:
+        print(f"⚠️ Erreur Twelve Data {symbole}: {e}")
+        return pd.DataFrame(), False
+
+def get_twelvedata_quote(symbole):
+    """Récupère le prix en temps réel via Twelve Data"""
+    if not TWELVEDATA_API_KEY:
+        return None
+
+    rate_limit_twelvedata()
+
+    try:
+        td_symbol = convert_symbol_to_twelvedata(symbole)
+
+        url = "https://api.twelvedata.com/quote"
+        params = {
+            "symbol": td_symbol,
+            "apikey": TWELVEDATA_API_KEY
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+
+        if "close" not in data:
+            return None
+
+        return {
+            "price": float(data.get("close", 0)),
+            "open": float(data.get("open", 0)),
+            "high": float(data.get("high", 0)),
+            "low": float(data.get("low", 0)),
+            "previous_close": float(data.get("previous_close", 0)),
+            "change": float(data.get("change", 0)),
+            "percent_change": float(data.get("percent_change", 0)),
+            "volume": int(data.get("volume", 0)) if data.get("volume") else 0
+        }
+
+    except Exception as e:
+        print(f"⚠️ Erreur quote {symbole}: {e}")
+        return None
+
+def get_twelvedata_intraday(symbole, interval="5min", outputsize=78):
+    """Récupère les données intraday (pour vérification trades)"""
+    return get_twelvedata_time_series(symbole, outputsize=outputsize, interval=interval)
 
 # ============================================================================
 # BASE DE DONNÉES
@@ -354,69 +574,6 @@ def get_paris_time():
     """Retourne l'heure actuelle à Paris"""
     return datetime.now(TZ_PARIS)
 
-def rate_limit_yfinance():
-    """Applique un rate limiting sur les appels yfinance"""
-    global YFINANCE_LAST_CALL
-    if YFINANCE_LAST_CALL is not None:
-        elapsed = time.time() - YFINANCE_LAST_CALL
-        if elapsed < YFINANCE_MIN_INTERVAL:
-            time.sleep(YFINANCE_MIN_INTERVAL - elapsed)
-    YFINANCE_LAST_CALL = time.time()
-
-def get_cached_yfinance(symbole, period="1mo"):
-    """Récupère les données yfinance avec cache et rate limiting"""
-    global YFINANCE_CACHE
-    cache_key = f"{symbole}_{period}"
-    now = time.time()
-
-    # Vérifier le cache
-    if cache_key in YFINANCE_CACHE:
-        cached = YFINANCE_CACHE[cache_key]
-        if now - cached['timestamp'] < YFINANCE_CACHE_TTL:
-            return cached['data'], cached['is_fresh']
-
-    # Rate limiting
-    rate_limit_yfinance()
-
-    try:
-        ticker = yf.Ticker(symbole)
-        info = ticker.history(period=period)
-
-        # Vérifier fraîcheur des données
-        is_fresh = False
-        if not info.empty:
-            last_date = info.index[-1]
-            # Convertir en datetime aware si nécessaire
-            if last_date.tzinfo is None:
-                last_date = last_date.tz_localize('UTC')
-            last_date_paris = last_date.tz_convert(TZ_PARIS).date()
-            today = get_paris_time().date()
-            weekday = today.weekday()
-
-            # Données fraîches si:
-            # - Jour de semaine: données d'aujourd'hui ou hier (si marché pas encore ouvert)
-            # - Weekend: données de vendredi
-            if weekday < 5:  # Lundi-Vendredi
-                days_diff = (today - last_date_paris).days
-                is_fresh = days_diff <= 1
-            else:  # Weekend
-                # Vendredi = today - (weekday - 4) jours
-                vendredi = today - timedelta(days=weekday - 4)
-                is_fresh = last_date_paris >= vendredi
-
-        # Mettre en cache
-        YFINANCE_CACHE[cache_key] = {
-            'data': info,
-            'timestamp': now,
-            'is_fresh': is_fresh
-        }
-
-        return info, is_fresh
-
-    except Exception as e:
-        print(f"⚠️ Erreur yfinance {symbole}: {e}")
-        return pd.DataFrame(), False
-
 def get_utc_time_for_paris(heure_paris):
     """Convertit une heure française en heure UTC"""
     maintenant = get_paris_time()
@@ -578,14 +735,14 @@ def get_actifs_filtres_atr(donnees_marche, seuil_atr_min=1.0):
 
 def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
     """Récupère les données de marché pour les actifs donnés avec ATR et Volume relatif
-    Utilise le cache et rate limiting pour éviter de surcharger yfinance"""
+    Utilise Twelve Data API avec cache et rate limiting"""
     donnees = {}
     donnees_non_fraiches = []
 
     for symbole, nom in actifs.items():
         try:
-            # Utiliser le cache avec rate limiting
-            info, is_fresh = get_cached_yfinance(symbole, period="1mo")
+            # Utiliser Twelve Data avec cache
+            info, is_fresh = get_twelvedata_time_series(symbole, outputsize=30, interval="1day")
 
             if not info.empty:
                 prix_actuel = info['Close'].iloc[-1]
@@ -660,19 +817,20 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
     return donnees
 
 def calculer_indicateurs_techniques(symbole):
-    """Calcule les indicateurs techniques pour un actif"""
+    """Calcule les indicateurs techniques pour un actif via Twelve Data"""
     try:
-        ticker = yf.Ticker(symbole)
-        df_intraday = ticker.history(period="1d", interval="5m")
-        df_daily = ticker.history(period="30d", interval="1d")
+        # Données intraday 5min (environ 78 bougies pour 6.5h de trading)
+        df_intraday, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=78)
+        # Données daily pour 30 jours
+        df_daily, _ = get_twelvedata_time_series(symbole, outputsize=30, interval="1day")
 
-        if df_intraday.empty or df_daily.empty:
+        if df_daily.empty:
             return None
 
         indicateurs = {}
 
-        # VWAP
-        if len(df_intraday) > 0 and 'Volume' in df_intraday.columns:
+        # VWAP (si données intraday disponibles)
+        if not df_intraday.empty and len(df_intraday) > 0 and 'Volume' in df_intraday.columns:
             df_intraday['TP'] = (df_intraday['High'] + df_intraday['Low'] + df_intraday['Close']) / 3
             df_intraday['TP_Volume'] = df_intraday['TP'] * df_intraday['Volume']
             total_volume = df_intraday['Volume'].sum()
@@ -707,7 +865,7 @@ def calculer_indicateurs_techniques(symbole):
             indicateurs['atr_pct'] = round((atr / df_daily['Close'].iloc[-1]) * 100, 2)
 
         # Volume relatif
-        if len(df_daily) >= 20:
+        if len(df_daily) >= 20 and 'Volume' in df_daily.columns:
             volume_actuel = df_daily['Volume'].iloc[-1]
             volume_moyen = df_daily['Volume'].iloc[-20:].mean()
             if volume_moyen > 0:
@@ -1226,9 +1384,8 @@ def verifier_resultats_trades():
                 if entree == 0:
                     continue
 
-                # Récupérer les données intraday (5min pour avoir l'ordre chronologique)
-                ticker = yf.Ticker(symbole)
-                hist = ticker.history(period="1d", interval="5m")
+                # Récupérer les données intraday via Twelve Data (5min pour avoir l'ordre chronologique)
+                hist, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=78)
 
                 if hist.empty:
                     continue
@@ -1343,9 +1500,8 @@ def cloturer_trades_jour():
                 if entree == 0:
                     continue
 
-                # Récupérer le prix de clôture
-                ticker = yf.Ticker(symbole)
-                hist = ticker.history(period="1d")
+                # Récupérer le prix de clôture via Twelve Data
+                hist, _ = get_twelvedata_time_series(symbole, outputsize=1, interval="1day")
 
                 if hist.empty:
                     continue
@@ -1568,8 +1724,8 @@ def recuperer_donnees_premarket():
     donnees = {}
     for symbole, nom in premarket_symbols.items():
         try:
-            ticker = yf.Ticker(symbole)
-            info = ticker.history(period="2d")
+            # Récupérer les 2 derniers jours via Twelve Data
+            info, _ = get_twelvedata_time_series(symbole, outputsize=2, interval="1day")
             if len(info) >= 2:
                 prix_hier = info['Close'].iloc[-2]
                 prix_actuel = info['Close'].iloc[-1]
@@ -1718,26 +1874,12 @@ Sois direct et factuel, comme un trader pro."""
         return {}, []
 
 def recuperer_recommandations_analystes(symbole):
-    """Récupère les recommandations des analystes via yfinance"""
-    try:
-        ticker = yf.Ticker(symbole)
-        recos = ticker.recommendations
-        if recos is not None and not recos.empty:
-            # Prendre les recommandations récentes (30 derniers jours)
-            recent = recos.tail(5)
-            reco_list = []
-            for idx, row in recent.iterrows():
-                reco_list.append({
-                    'date': str(idx.date()) if hasattr(idx, 'date') else str(idx),
-                    'firm': row.get('Firm', 'N/A'),
-                    'grade': row.get('To Grade', row.get('toGrade', 'N/A')),
-                    'action': row.get('Action', 'N/A')
-                })
-            return reco_list
-        return []
-    except Exception as e:
-        print(f"⚠️ Erreur recommandations {symbole}: {e}")
-        return []
+    """Récupère les recommandations des analystes
+    Note: Twelve Data ne fournit pas les recommandations analystes,
+    cette fonctionnalité nécessiterait une autre source de données."""
+    # Twelve Data ne propose pas cette fonctionnalité
+    # Retourne une liste vide pour l'instant
+    return []
 
 def generer_bilan_quotidien():
     """Génère le bilan général de la journée"""
