@@ -300,40 +300,35 @@ def init_database():
         )
     ''')
 
-    # Ajouter colonnes à trades_recommandes si manquantes
-    try:
-        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN direction TEXT DEFAULT 'LONG'")
-    except:
-        pass
-    try:
-        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN categorie_actif TEXT")
-    except:
-        pass
-    try:
-        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN duree_minutes INTEGER")
-    except:
-        pass
-    try:
-        cursor.execute("ALTER TABLE trades_recommandes ADD COLUMN heure_entree INTEGER")
-    except:
-        pass
+    # Ajouter colonnes à trades_recommandes si manquantes (ignore si déjà existantes)
+    colonnes_trades = [
+        ("direction", "TEXT DEFAULT 'LONG'"),
+        ("categorie_actif", "TEXT"),
+        ("duree_minutes", "INTEGER"),
+        ("heure_entree", "INTEGER")
+    ]
+    for col_nom, col_type in colonnes_trades:
+        try:
+            cursor.execute(f"ALTER TABLE trades_recommandes ADD COLUMN {col_nom} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+
     # Ajouter colonnes au journal_quotidien si manquantes
-    try:
-        cursor.execute("ALTER TABLE journal_quotidien ADD COLUMN prix_max REAL")
-    except:
-        pass
-    try:
-        cursor.execute("ALTER TABLE journal_quotidien ADD COLUMN prix_min REAL")
-    except:
-        pass
-    try:
-        cursor.execute("ALTER TABLE journal_quotidien ADD COLUMN recommandations_analystes TEXT")
-    except:
-        pass
+    colonnes_journal = [
+        ("prix_max", "REAL"),
+        ("prix_min", "REAL"),
+        ("recommandations_analystes", "TEXT")
+    ]
+    for col_nom, col_type in colonnes_journal:
+        try:
+            cursor.execute(f"ALTER TABLE journal_quotidien ADD COLUMN {col_nom} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Colonne existe déjà
+
     try:
         cursor.execute("ALTER TABLE bilan_quotidien ADD COLUMN faits_marquants TEXT")
-    except:
-        pass
+    except sqlite3.OperationalError:
+        pass  # Colonne existe déjà
 
     conn.commit()
     conn.close()
@@ -403,14 +398,15 @@ EVENEMENTS_MACRO_RECURRENTS = {
 
 def get_evenements_macro_jour(pour_lundi=False):
     """Récupère les événements macro du jour (basé sur le calendrier économique)
-    Si pour_lundi=True, simule le lundi suivant (pour affichage weekend)"""
+    Si pour_lundi=True et weekend, simule le lundi suivant (pour affichage weekend)"""
     maintenant = get_paris_time()
 
-    # Si weekend et demande pour lundi, on simule le lundi
-    if pour_lundi or is_weekend():
+    # Si weekend, on affiche les événements du lundi suivant
+    if is_weekend():
+        # Samedi (5) → +2 jours, Dimanche (6) → +1 jour
         jours_jusqua_lundi = (7 - maintenant.weekday()) % 7
         if jours_jusqua_lundi == 0:
-            jours_jusqua_lundi = 7 if maintenant.weekday() == 0 else 1
+            jours_jusqua_lundi = 1  # Dimanche: +1 jour vers lundi
         maintenant = maintenant + timedelta(days=jours_jusqua_lundi)
 
     aujourdhui = maintenant.date()
@@ -623,11 +619,15 @@ def calculer_indicateurs_techniques(symbole):
             if volume_moyen > 0:
                 indicateurs['volume_relatif_pct'] = round((volume_actuel / volume_moyen) * 100, 1)
 
-        # Prix actuel
+        # Prix actuel et variation (cohérent avec recuperer_donnees_marche: close-to-close)
         indicateurs['prix_actuel'] = round(df_daily['Close'].iloc[-1], 2)
-        indicateurs['variation_jour'] = round(
-            ((df_daily['Close'].iloc[-1] - df_daily['Open'].iloc[-1]) / df_daily['Open'].iloc[-1]) * 100, 2
-        )
+        if len(df_daily) >= 2:
+            cloture_precedente = df_daily['Close'].iloc[-2]
+            indicateurs['variation_jour'] = round(
+                ((df_daily['Close'].iloc[-1] - cloture_precedente) / cloture_precedente) * 100, 2
+            )
+        else:
+            indicateurs['variation_jour'] = 0
 
         return indicateurs
     except Exception as e:
@@ -858,11 +858,10 @@ def enregistrer_recommandation(trade_data):
         cursor = conn.cursor()
         maintenant = get_paris_time()
 
-        # Déterminer la direction
-        # 1. Utiliser la direction fournie par Claude si disponible
-        # 2. Sinon déduire: SHORT si stop > entrée, LONG sinon
+        # Déterminer la direction et valider la cohérence stop/entry
         entree = float(trade_data.get('entree', 0) or 0)
         stop = float(trade_data.get('stop', 0) or 0)
+        tp1 = float(trade_data.get('tp1', 0) or 0)
 
         if trade_data.get('direction'):
             direction = trade_data.get('direction').upper()
@@ -870,6 +869,22 @@ def enregistrer_recommandation(trade_data):
             direction = 'SHORT'
         else:
             direction = 'LONG'
+
+        # Validation cohérence direction/stop/entry
+        if entree > 0 and stop > 0:
+            if direction == 'LONG' and stop >= entree:
+                print(f"⚠️ Trade LONG incohérent: stop ({stop}) >= entrée ({entree}), corrigé en SHORT")
+                direction = 'SHORT'
+            elif direction == 'SHORT' and stop <= entree:
+                print(f"⚠️ Trade SHORT incohérent: stop ({stop}) <= entrée ({entree}), corrigé en LONG")
+                direction = 'LONG'
+
+        # Validation cohérence TP
+        if entree > 0 and tp1 > 0:
+            if direction == 'LONG' and tp1 < entree:
+                print(f"⚠️ Trade LONG: TP1 ({tp1}) < entrée ({entree}), incohérent")
+            elif direction == 'SHORT' and tp1 > entree:
+                print(f"⚠️ Trade SHORT: TP1 ({tp1}) > entrée ({entree}), incohérent")
 
         # Trouver le symbole et la catégorie
         symbole = trade_data.get('symbole', '')
@@ -1169,13 +1184,15 @@ def get_performances(periode='semaine'):
         reussis = row[1] or 0
         stops = row[2] or 0
         non_conclus = row[3] or 0
-        conclus = total - non_conclus
+        # Conclus = uniquement les trades avec résultat définitif (pas NULL, vide, ou en_cours)
+        conclus = reussis + stops
 
         return {
             'total': total,
             'reussis': reussis,
             'stops': stops,
             'non_conclus': non_conclus,
+            'en_cours': total - conclus - non_conclus,  # Trades sans résultat encore
             'taux_reussite': round((reussis / conclus * 100) if conclus > 0 else 0, 1),
             'pnl_moyen': round(row[4] or 0, 2),
             'pnl_total': round(row[5] or 0, 2)
