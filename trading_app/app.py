@@ -1553,10 +1553,15 @@ RÈGLES IMPÉRATIVES:
 - Pour chaque opportunité: symbole, atr_pct, volume_relatif, rsi, macd_signal, ratio_rr, ratio_rr_justification"""
 
     try:
+        # Générer le prompt système avec les instructions dynamiques et A/B testing
+        instructions_dynamiques = generer_instructions_dynamiques()
+        instructions_ab = get_instructions_ab_testing()
+        system_prompt_complet = SYSTEM_PROMPT + instructions_dynamiques + instructions_ab
+
         message = client_anthropic.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4000,
-            system=SYSTEM_PROMPT,
+            system=system_prompt_complet,
             messages=[{"role": "user", "content": question}]
         )
 
@@ -3038,6 +3043,9 @@ def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapp
         conn.close()
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📋 {len(ajustements) + len(scores_confiance)} ajustements proposés en attente de validation")
 
+        # Traitement automatique basé sur l'historique des feedbacks
+        traiter_ajustements_automatiquement()
+
     except Exception as e:
         print(f"⚠️ Erreur sauvegarde ajustements: {e}")
 
@@ -3359,6 +3367,396 @@ def evaluer_tous_ajustements_valides():
     except Exception as e:
         print(f"⚠️ Erreur évaluation ajustements: {e}")
         return []
+
+def get_historique_feedback_categorie(categorie, type_ajustement='strategie'):
+    """
+    Analyse l'historique des feedbacks pour une catégorie donnée.
+    Retourne: {'nb_positifs': int, 'nb_negatifs': int, 'nb_neutres': int, 'recommandation': str}
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer les feedbacks des 30 derniers jours pour cette catégorie
+        date_limite = get_paris_time() - timedelta(days=30)
+        cursor.execute('''
+            SELECT feedback_conclusion
+            FROM ajustements_proposes
+            WHERE (categorie = ? OR type_ajustement = ?)
+            AND statut = 'valide'
+            AND feedback_conclusion IS NOT NULL
+            AND date_decision > ?
+        ''', (categorie, type_ajustement, date_limite))
+
+        resultats = [row['feedback_conclusion'] for row in cursor.fetchall()]
+        conn.close()
+
+        nb_positifs = sum(1 for r in resultats if r and 'POSITIF' in r)
+        nb_negatifs = sum(1 for r in resultats if r and 'NEGATIF' in r)
+        nb_neutres = sum(1 for r in resultats if r and ('NEUTRE' in r or 'INSUFFISANT' in r))
+
+        total_conclus = nb_positifs + nb_negatifs
+        if total_conclus == 0:
+            recommandation = 'MANUEL'  # Pas assez de données
+        elif nb_positifs >= 2 and nb_negatifs == 0:
+            recommandation = 'AUTO_VALIDER'  # Pattern positif fort
+        elif nb_negatifs >= 2 and nb_positifs == 0:
+            recommandation = 'BLOQUER'  # Circuit breaker
+        elif nb_positifs > nb_negatifs * 2:
+            recommandation = 'AUTO_VALIDER'  # Plus de positifs
+        elif nb_negatifs > nb_positifs * 2:
+            recommandation = 'BLOQUER'  # Plus de négatifs
+        else:
+            recommandation = 'MANUEL'  # Résultats mitigés
+
+        return {
+            'nb_positifs': nb_positifs,
+            'nb_negatifs': nb_negatifs,
+            'nb_neutres': nb_neutres,
+            'recommandation': recommandation
+        }
+
+    except Exception as e:
+        print(f"⚠️ Erreur historique feedback: {e}")
+        return {'nb_positifs': 0, 'nb_negatifs': 0, 'nb_neutres': 0, 'recommandation': 'MANUEL'}
+
+def auto_valider_ajustement_si_positif(id_ajustement, categorie, type_ajustement):
+    """
+    Auto-valide un ajustement si l'historique est positif.
+    Retourne: (bool auto_valide, str raison)
+    """
+    historique = get_historique_feedback_categorie(categorie, type_ajustement)
+
+    if historique['recommandation'] == 'AUTO_VALIDER':
+        # Auto-validation basée sur les performances passées
+        succes, message = valider_ajustement(id_ajustement, decision=True, decideur='auto_feedback')
+        if succes:
+            print(f"✅ Auto-validation #{id_ajustement}: {historique['nb_positifs']} feedbacks positifs historiques")
+            return True, f"Auto-validé (historique: {historique['nb_positifs']} positifs, {historique['nb_negatifs']} négatifs)"
+        return False, message
+
+    elif historique['recommandation'] == 'BLOQUER':
+        # Circuit breaker - rejeter automatiquement
+        succes, message = valider_ajustement(id_ajustement, decision=False, decideur='circuit_breaker')
+        if succes:
+            print(f"🛑 Circuit breaker #{id_ajustement}: {historique['nb_negatifs']} feedbacks négatifs historiques")
+            return False, f"Bloqué (circuit breaker: {historique['nb_negatifs']} négatifs, {historique['nb_positifs']} positifs)"
+        return False, message
+
+    return False, "En attente validation manuelle"
+
+def traiter_ajustements_automatiquement():
+    """
+    Traite automatiquement les ajustements en attente basé sur l'historique des feedbacks.
+    Appelé régulièrement pour auto-valider ou bloquer selon le pattern.
+    """
+    maintenant = get_paris_time()
+    ajustements = get_ajustements_en_attente()
+
+    resultats = {'auto_valides': 0, 'bloques': 0, 'manuels': 0}
+
+    for ajust in ajustements:
+        categorie = ajust.get('categorie', '')
+        type_ajust = ajust.get('type_ajustement', 'strategie')
+        id_ajust = ajust.get('id')
+
+        auto_valide, raison = auto_valider_ajustement_si_positif(id_ajust, categorie, type_ajust)
+
+        if 'Auto-validé' in raison:
+            resultats['auto_valides'] += 1
+        elif 'Bloqué' in raison:
+            resultats['bloques'] += 1
+        else:
+            resultats['manuels'] += 1
+
+    if resultats['auto_valides'] > 0 or resultats['bloques'] > 0:
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🤖 Traitement auto: {resultats['auto_valides']} validés, {resultats['bloques']} bloqués, {resultats['manuels']} manuels")
+
+    return resultats
+
+# ============================================================================
+# A/B TESTING - EXPÉRIMENTATION STRATÉGIQUE
+# ============================================================================
+
+# Configuration A/B Testing actif
+AB_TESTS_ACTIFS = {}
+
+def init_ab_test_table():
+    """Initialise la table pour les tests A/B"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ab_tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nom TEXT NOT NULL,
+                description TEXT,
+                variante_a TEXT,
+                variante_b TEXT,
+                actifs_groupe_a TEXT,
+                actifs_groupe_b TEXT,
+                date_debut TIMESTAMP,
+                date_fin TIMESTAMP,
+                statut TEXT DEFAULT 'actif',
+                resultats_a TEXT,
+                resultats_b TEXT,
+                gagnant TEXT,
+                conclusion TEXT
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Erreur init table A/B tests: {e}")
+
+def creer_ab_test(nom, description, variante_a, variante_b, actifs_test=None):
+    """
+    Crée un nouveau test A/B pour comparer deux stratégies.
+    - nom: Nom du test (ex: "RSI_threshold_test")
+    - variante_a: Description de la stratégie A (ex: "RSI seuil 30/70")
+    - variante_b: Description de la stratégie B (ex: "RSI seuil 25/75")
+    - actifs_test: Liste d'actifs à utiliser (par défaut: répartition auto)
+    """
+    maintenant = get_paris_time()
+
+    try:
+        # Répartir les actifs en deux groupes
+        if actifs_test is None:
+            actifs_test = list(ACTIFS_PERMANENTS.keys())
+
+        import random
+        random.shuffle(actifs_test)
+        milieu = len(actifs_test) // 2
+        groupe_a = actifs_test[:milieu]
+        groupe_b = actifs_test[milieu:]
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO ab_tests
+            (nom, description, variante_a, variante_b, actifs_groupe_a, actifs_groupe_b, date_debut, statut)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            nom,
+            description,
+            variante_a,
+            variante_b,
+            json.dumps(groupe_a),
+            json.dumps(groupe_b),
+            maintenant,
+            'actif'
+        ))
+
+        test_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        # Activer le test
+        AB_TESTS_ACTIFS[test_id] = {
+            'nom': nom,
+            'variante_a': variante_a,
+            'variante_b': variante_b,
+            'groupe_a': groupe_a,
+            'groupe_b': groupe_b
+        }
+
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🧪 Test A/B #{test_id} créé: {nom}")
+        print(f"   Groupe A ({len(groupe_a)} actifs): {variante_a}")
+        print(f"   Groupe B ({len(groupe_b)} actifs): {variante_b}")
+
+        return test_id
+
+    except Exception as e:
+        print(f"⚠️ Erreur création A/B test: {e}")
+        return None
+
+def get_variante_ab_pour_actif(symbole):
+    """
+    Retourne la variante A/B active pour un actif donné.
+    Retourne: ('A', variante_a) ou ('B', variante_b) ou (None, None)
+    """
+    for test_id, test in AB_TESTS_ACTIFS.items():
+        if symbole in test.get('groupe_a', []):
+            return 'A', test.get('variante_a', '')
+        elif symbole in test.get('groupe_b', []):
+            return 'B', test.get('variante_b', '')
+    return None, None
+
+def evaluer_ab_test(test_id, jours_minimum=7):
+    """
+    Évalue les résultats d'un test A/B après une période minimale.
+    Compare les performances des deux groupes.
+    """
+    maintenant = get_paris_time()
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer le test
+        cursor.execute('SELECT * FROM ab_tests WHERE id = ?', (test_id,))
+        row = cursor.fetchone()
+
+        if not row or row['statut'] != 'actif':
+            conn.close()
+            return None, "Test non trouvé ou non actif"
+
+        test = dict(row)
+        date_debut = test.get('date_debut')
+        if isinstance(date_debut, str):
+            date_debut = datetime.fromisoformat(date_debut.replace('Z', '+00:00'))
+
+        # Vérifier durée minimale
+        if (maintenant - date_debut).days < jours_minimum:
+            conn.close()
+            return None, f"Test trop récent ({(maintenant - date_debut).days}/{jours_minimum} jours)"
+
+        groupe_a = json.loads(test.get('actifs_groupe_a', '[]'))
+        groupe_b = json.loads(test.get('actifs_groupe_b', '[]'))
+
+        # Stats groupe A
+        placeholders_a = ','.join(['?' for _ in groupe_a])
+        cursor.execute(f'''
+            SELECT
+                COUNT(*) as nb_trades,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+            FROM trades_recommandes
+            WHERE symbole IN ({placeholders_a})
+            AND timestamp_reco >= ?
+        ''', (*groupe_a, date_debut))
+        stats_a = cursor.fetchone()
+
+        # Stats groupe B
+        placeholders_b = ','.join(['?' for _ in groupe_b])
+        cursor.execute(f'''
+            SELECT
+                COUNT(*) as nb_trades,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+            FROM trades_recommandes
+            WHERE symbole IN ({placeholders_b})
+            AND timestamp_reco >= ?
+        ''', (*groupe_b, date_debut))
+        stats_b = cursor.fetchone()
+
+        # Calculer les taux
+        taux_a = round((stats_a['reussis'] / stats_a['nb_trades'] * 100) if stats_a['nb_trades'] > 0 else 0, 1)
+        taux_b = round((stats_b['reussis'] / stats_b['nb_trades'] * 100) if stats_b['nb_trades'] > 0 else 0, 1)
+        pnl_a = round(stats_a['pnl_total'] or 0, 2)
+        pnl_b = round(stats_b['pnl_total'] or 0, 2)
+
+        # Déterminer le gagnant
+        if taux_a > taux_b + 5 and pnl_a > pnl_b:
+            gagnant = 'A'
+            conclusion = f"Variante A gagne: taux {taux_a}% vs {taux_b}%, PnL {pnl_a}% vs {pnl_b}%"
+        elif taux_b > taux_a + 5 and pnl_b > pnl_a:
+            gagnant = 'B'
+            conclusion = f"Variante B gagne: taux {taux_b}% vs {taux_a}%, PnL {pnl_b}% vs {pnl_a}%"
+        else:
+            gagnant = 'EGALITE'
+            conclusion = f"Pas de différence significative: A={taux_a}%/{pnl_a}% vs B={taux_b}%/{pnl_b}%"
+
+        # Sauvegarder les résultats
+        cursor.execute('''
+            UPDATE ab_tests SET
+                resultats_a = ?,
+                resultats_b = ?,
+                gagnant = ?,
+                conclusion = ?,
+                date_fin = ?,
+                statut = 'termine'
+            WHERE id = ?
+        ''', (
+            json.dumps({'nb_trades': stats_a['nb_trades'], 'taux': taux_a, 'pnl': pnl_a}),
+            json.dumps({'nb_trades': stats_b['nb_trades'], 'taux': taux_b, 'pnl': pnl_b}),
+            gagnant,
+            conclusion,
+            maintenant,
+            test_id
+        ))
+
+        conn.commit()
+        conn.close()
+
+        # Désactiver le test
+        if test_id in AB_TESTS_ACTIFS:
+            del AB_TESTS_ACTIFS[test_id]
+
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🧪 Test A/B #{test_id} terminé: {gagnant}")
+        print(f"   {conclusion}")
+
+        return {
+            'test_id': test_id,
+            'nom': test.get('nom'),
+            'gagnant': gagnant,
+            'conclusion': conclusion,
+            'stats_a': {'nb_trades': stats_a['nb_trades'], 'taux': taux_a, 'pnl': pnl_a},
+            'stats_b': {'nb_trades': stats_b['nb_trades'], 'taux': taux_b, 'pnl': pnl_b}
+        }, None
+
+    except Exception as e:
+        print(f"⚠️ Erreur évaluation A/B test: {e}")
+        return None, str(e)
+
+def charger_ab_tests_actifs():
+    """Charge les tests A/B actifs au démarrage"""
+    global AB_TESTS_ACTIFS
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM ab_tests WHERE statut = 'actif'")
+        tests = cursor.fetchall()
+        conn.close()
+
+        for row in tests:
+            test = dict(row)
+            AB_TESTS_ACTIFS[test['id']] = {
+                'nom': test['nom'],
+                'variante_a': test['variante_a'],
+                'variante_b': test['variante_b'],
+                'groupe_a': json.loads(test.get('actifs_groupe_a', '[]')),
+                'groupe_b': json.loads(test.get('actifs_groupe_b', '[]'))
+            }
+
+        if AB_TESTS_ACTIFS:
+            print(f"🧪 {len(AB_TESTS_ACTIFS)} test(s) A/B actif(s) chargé(s)")
+
+    except Exception as e:
+        print(f"⚠️ Erreur chargement A/B tests: {e}")
+
+def get_instructions_ab_testing():
+    """
+    Génère les instructions A/B testing à injecter dans le prompt.
+    Indique à Claude quelle variante utiliser pour chaque actif.
+    """
+    if not AB_TESTS_ACTIFS:
+        return ""
+
+    instructions = ["\n\n🧪 TESTS A/B EN COURS:"]
+
+    for test_id, test in AB_TESTS_ACTIFS.items():
+        instructions.append(f"\nTest '{test['nom']}':")
+        instructions.append(f"  Groupe A ({test['variante_a']}): {', '.join(test['groupe_a'][:5])}...")
+        instructions.append(f"  Groupe B ({test['variante_b']}): {', '.join(test['groupe_b'][:5])}...")
+
+    return "\n".join(instructions)
+
+def evaluer_tous_ab_tests():
+    """Évalue tous les tests A/B actifs depuis plus de 7 jours"""
+    resultats = []
+    for test_id in list(AB_TESTS_ACTIFS.keys()):
+        result, error = evaluer_ab_test(test_id, jours_minimum=7)
+        if result:
+            resultats.append(result)
+    return resultats
 
 # ============================================================================
 # CRITÈRES DYNAMIQUES ACTIFS
@@ -4925,6 +5323,14 @@ def configurer_schedule():
     heure_feedback_utc = get_utc_time_for_paris("19:00")
     schedule.every().sunday.at(heure_feedback_utc).do(evaluer_tous_ajustements_valides)
 
+    # Traitement automatique des ajustements en attente: tous les jours à 08h00
+    heure_auto_ajust_utc = get_utc_time_for_paris("08:00")
+    schedule.every().day.at(heure_auto_ajust_utc).do(traiter_ajustements_automatiquement)
+
+    # Évaluation des tests A/B: dimanche 18h00
+    heure_ab_eval_utc = get_utc_time_for_paris("18:00")
+    schedule.every().sunday.at(heure_ab_eval_utc).do(evaluer_tous_ab_tests)
+
 def run_scheduler():
     """Thread robuste pour le scheduler avec gestion d'erreurs"""
     consecutive_errors = 0
@@ -4992,6 +5398,8 @@ def start_app():
 
 # Initialisation au niveau module (requis pour Replit)
 init_database()
+init_ab_test_table()
+charger_ab_tests_actifs()
 configurer_schedule()
 scheduler_thread = Thread(target=run_scheduler, daemon=True)
 scheduler_thread.start()
