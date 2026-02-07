@@ -20,6 +20,7 @@ from flask import Flask, render_template, jsonify, request
 from twilio.rest import Client
 import requests
 import holidays
+import yfinance as yf
 
 # ============================================================================
 # CONFIGURATION
@@ -125,10 +126,11 @@ def est_jour_trading_valide(date_check=None):
 # ACTIFS SUIVIS
 # ============================================================================
 
-# Symboles qui nécessitent Yahoo Finance (Twelve Data retourne "invalid symbol")
+# Symboles qui nécessitent Yahoo Finance (non disponibles sur Twelve Data plan Grow)
+# Note: ^FCHI et ^GDAXI fonctionnent sur Twelve Data (FCHI, GDAXI)
 SYMBOLES_YAHOO_FALLBACK = {
-    "^FCHI", "^GSPC", "^IXIC", "^DJI", "^GDAXI", "^VIX",  # Indices
-    "^N225", "^HSI", "^STOXX50E",  # Indices internationaux
+    "^GSPC", "^IXIC", "^DJI", "^VIX",  # Indices US (API retourne vide)
+    "^N225", "^HSI", "^STOXX50E",  # Indices internationaux (besoin Pro)
     "ES=F", "NQ=F", "YM=F"  # E-mini futures (n'existent pas sur Twelve Data)
 }
 
@@ -239,10 +241,10 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "GC=F": "XAU/USD",
     "SI=F": "XAG/USD",
     "PL=F": "XPT/USD",
-    # Énergie (format Twelve Data - CL vérifié OK dans diagnostic)
-    "BZ=F": "BZ",           # Brent Crude (à tester)
-    "CL=F": "CL",           # Crude Oil WTI (vérifié OK)
-    "NG=F": "NG",           # Natural Gas (à tester)
+    # Énergie (format Twelve Data officiel - vérifié API /commodities)
+    "BZ=F": "XBR/USD",      # Brent Crude Spot
+    "CL=F": "WTI/USD",      # Crude Oil WTI Spot (ou CL1 pour futures)
+    "NG=F": "NG/USD",       # Natural Gas
     # Commodités agricoles (format Twelve Data vérifié)
     "KC=F": "KC1",          # Coffee
     "CC=F": "CC1",          # Cocoa
