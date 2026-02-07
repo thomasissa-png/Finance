@@ -195,37 +195,37 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "^DJI": "DJI",             # Dow Jones
     "^GDAXI": "GDAXI",         # DAX
     "^VIX": "VIX",             # Volatility Index
-    # Actions Françaises (Euronext Paris = EPA)
-    "AIR.PA": "AIR:EPA",
-    "MC.PA": "MC:EPA",
-    "OR.PA": "OR:EPA",
-    "RMS.PA": "RMS:EPA",
-    "TTE.PA": "TTE:EPA",
-    "SAN.PA": "SAN:EPA",
-    "BNP.PA": "BNP:EPA",
-    "AXA.PA": "CS:EPA",     # AXA = symbole "CS" sur Twelve Data (vérifié CSV)
-    "SU.PA": "SU:EPA",
-    "SAF.PA": "SAF:EPA",
-    "GLE.PA": "GLE:EPA",
-    "ACA.PA": "ACA:EPA",
-    "KER.PA": "KER:EPA",
-    "ENGI.PA": "ENGI:EPA",
-    "AM.PA": "AM:EPA",
-    "HO.PA": "HO:EPA",
-    "RNO.PA": "RNO:EPA",
-    "MONC.MI": "MONC:MIL",  # Moncler (Milan)
-    # Actions Allemandes (XETRA)
-    "MBG.DE": "MBG:XETRA",
-    "BMW.DE": "BMW:XETRA",
-    "VOW3.DE": "VOW3:XETRA",
-    "BOSS.DE": "BOSS:XETRA",
-    "DBK.DE": "DBK:XETRA",
+    # Actions Françaises (Euronext Paris = XPAR)
+    "AIR.PA": "AIR:XPAR",
+    "MC.PA": "MC:XPAR",
+    "OR.PA": "OR:XPAR",
+    "RMS.PA": "RMS:XPAR",
+    "TTE.PA": "TTE:XPAR",
+    "SAN.PA": "SAN:XPAR",
+    "BNP.PA": "BNP:XPAR",
+    "AXA.PA": "CS:XPAR",    # AXA = symbole "CS" sur Twelve Data
+    "SU.PA": "SU:XPAR",
+    "SAF.PA": "SAF:XPAR",
+    "GLE.PA": "GLE:XPAR",
+    "ACA.PA": "ACA:XPAR",
+    "KER.PA": "KER:XPAR",
+    "ENGI.PA": "ENGI:XPAR",
+    "AM.PA": "AM:XPAR",
+    "HO.PA": "HO:XPAR",
+    "RNO.PA": "RNO:XPAR",
+    "MONC.MI": "MONC:XMIL", # Moncler (Milan)
+    # Actions Allemandes (XETR = Frankfurt XETRA)
+    "MBG.DE": "MBG:XETR",
+    "BMW.DE": "BMW:XETR",
+    "VOW3.DE": "VOW3:XETR",
+    "BOSS.DE": "BOSS:XETR",
+    "DBK.DE": "DBK:XETR",
     # Actions autres EU
-    "ASML.AS": "ASML:AMS",
-    "INGA.AS": "INGA:AMS",
-    "UCG.MI": "UCG:MIL",
-    "SAN.MC": "SAN:BME",    # Santander = Bolsa Madrid
-    "CFR.SW": "CFR:SWX",
+    "ASML.AS": "ASML:XAMS",
+    "INGA.AS": "INGA:XAMS",
+    "UCG.MI": "UCG:XMIL",
+    "SAN.MC": "SAN:XMAD",   # Santander = Bolsa Madrid
+    "CFR.SW": "CFR:XSWX",
     # Métaux précieux (format forex sur Twelve Data)
     "GC=F": "XAU/USD",
     "SI=F": "XAG/USD",
@@ -257,15 +257,23 @@ SYMBOL_MAPPING_TWELVEDATA = {
 }
 
 def convert_symbol_to_twelvedata(yahoo_symbol):
-    """Convertit un symbole Yahoo Finance vers Twelve Data"""
+    """Convertit un symbole Yahoo Finance vers Twelve Data.
+    Retourne (symbol, mic_code) tuple pour utiliser les paramètres séparés de l'API.
+    """
     # Si déjà mappé
     if yahoo_symbol in SYMBOL_MAPPING_TWELVEDATA:
-        return SYMBOL_MAPPING_TWELVEDATA[yahoo_symbol]
-    # Actions US restent identiques
+        mapped = SYMBOL_MAPPING_TWELVEDATA[yahoo_symbol]
+        # Format "SYMBOL:MIC" -> (symbol, mic_code)
+        if ":" in mapped:
+            parts = mapped.split(":", 1)
+            return (parts[0], parts[1])
+        # Format sans exchange (forex, commodities, US stocks)
+        return (mapped, None)
+    # Actions US restent identiques (pas de MIC nécessaire)
     if not any(x in yahoo_symbol for x in ['.', '=', '^']):
-        return yahoo_symbol
+        return (yahoo_symbol, None)
     # Par défaut, retourner tel quel
-    return yahoo_symbol
+    return (yahoo_symbol, None)
 
 def check_quota_circuit_breaker():
     """Vérifie si le circuit breaker quota est actif. Retourne True si bloqué."""
@@ -343,7 +351,7 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
     rate_limit_twelvedata()
 
     try:
-        td_symbol = convert_symbol_to_twelvedata(symbole)
+        td_symbol, mic_code = convert_symbol_to_twelvedata(symbole)
 
         url = "https://api.twelvedata.com/time_series"
         params = {
@@ -353,6 +361,9 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
             "apikey": TWELVEDATA_API_KEY,
             "timezone": "Europe/Paris"
         }
+        # Ajouter mic_code si spécifié (actions européennes)
+        if mic_code:
+            params["mic_code"] = mic_code
 
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
@@ -458,13 +469,16 @@ def get_twelvedata_quote(symbole):
     rate_limit_twelvedata()
 
     try:
-        td_symbol = convert_symbol_to_twelvedata(symbole)
+        td_symbol, mic_code = convert_symbol_to_twelvedata(symbole)
 
         url = "https://api.twelvedata.com/quote"
         params = {
             "symbol": td_symbol,
             "apikey": TWELVEDATA_API_KEY
         }
+        # Ajouter mic_code si spécifié (actions européennes)
+        if mic_code:
+            params["mic_code"] = mic_code
 
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
