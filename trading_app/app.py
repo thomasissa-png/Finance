@@ -47,7 +47,7 @@ TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 TWELVEDATA_LAST_CALL = None
 TWELVEDATA_MIN_INTERVAL = 1.1  # 60s/55 = ~1.09s entre chaque appel
 TWELVEDATA_CACHE = {}  # Cache simple {symbole: {'data': ..., 'timestamp': ...}}
-TWELVEDATA_CACHE_TTL = 300  # Cache valide 5 minutes (données daily ne changent pas souvent)
+TWELVEDATA_CACHE_TTL = 600  # Cache valide 10 minutes (réduit consommation quota de 50%)
 TWELVEDATA_CACHE_MAX_SIZE = 500  # Limite du cache pour éviter fuite mémoire
 
 # Circuit breaker pour quota dépassé
@@ -125,6 +125,13 @@ def est_jour_trading_valide(date_check=None):
 # ACTIFS SUIVIS
 # ============================================================================
 
+# Symboles qui nécessitent Yahoo Finance (Twelve Data retourne "invalid symbol")
+SYMBOLES_YAHOO_FALLBACK = {
+    "^FCHI", "^GSPC", "^IXIC", "^DJI", "^GDAXI", "^VIX",  # Indices
+    "^N225", "^HSI", "^STOXX50E",  # Indices internationaux
+    "ES=F", "NQ=F", "YM=F"  # E-mini futures (n'existent pas sur Twelve Data)
+}
+
 ACTIFS_PERMANENTS = {
     "^FCHI": "CAC 40",
     "^GSPC": "S&P 500",
@@ -172,8 +179,10 @@ ACTIFS_PERMANENTS = {
 POOL_ROTATION = {
     "tech": {"AMD": "AMD", "INTC": "Intel", "ORCL": "Oracle", "CRM": "Salesforce", "ADBE": "Adobe", "CSCO": "Cisco", "NFLX": "Netflix", "PYPL": "PayPal", "QCOM": "Qualcomm"},
     "auto": {"GM": "General Motors", "F": "Ford", "STLA": "Stellantis", "RNO.PA": "Renault", "MBG.DE": "Mercedes", "BMW.DE": "BMW", "VOW3.DE": "Volkswagen", "RIVN": "Rivian", "LCID": "Lucid"},
-    "luxe": {"KER.PA": "Kering", "CFR.SW": "Richemont", "MONC.MI": "Moncler", "BOSS.DE": "Hugo Boss"},
-    "banques_eu": {"GLE.PA": "Société Générale", "ACA.PA": "Crédit Agricole", "UCG.MI": "Unicredit", "SAN.MC": "Santander", "INGA.AS": "ING", "DBK.DE": "Deutsche Bank"},
+    # CFR.SW (Richemont) et MONC.MI (Moncler) retirés - nécessitent plan Pro (CH/IT)
+    "luxe": {"KER.PA": "Kering", "BOSS.DE": "Hugo Boss", "RMS.PA": "Hermès", "MC.PA": "LVMH"},
+    # UCG.MI et SAN.MC retirés - nécessitent plan Pro (IT/ES)
+    "banques_eu": {"GLE.PA": "Société Générale", "ACA.PA": "Crédit Agricole", "INGA.AS": "ING", "DBK.DE": "Deutsche Bank", "BNP.PA": "BNP Paribas"},
     "banques_us": {"BAC": "Bank of America", "C": "Citigroup", "GS": "Goldman Sachs", "WFC": "Wells Fargo", "MS": "Morgan Stanley"},
     "energie": {"CVX": "Chevron", "SHEL": "Shell", "BP": "BP", "ENGI.PA": "Engie", "CL=F": "Pétrole WTI"},
     "pharma": {"PFE": "Pfizer", "MRNA": "Moderna", "AZN": "AstraZeneca", "NVS": "Novartis"},
@@ -230,10 +239,10 @@ SYMBOL_MAPPING_TWELVEDATA = {
     "GC=F": "XAU/USD",
     "SI=F": "XAG/USD",
     "PL=F": "XPT/USD",
-    # Énergie (format Twelve Data vérifié)
-    "BZ=F": "XBR/USD",      # Brent Crude
-    "CL=F": "WTI/USD",      # Crude Oil WTI
-    "NG=F": "NG/USD",       # Natural Gas
+    # Énergie (format Twelve Data - CL vérifié OK dans diagnostic)
+    "BZ=F": "BZ",           # Brent Crude (à tester)
+    "CL=F": "CL",           # Crude Oil WTI (vérifié OK)
+    "NG=F": "NG",           # Natural Gas (à tester)
     # Commodités agricoles (format Twelve Data vérifié)
     "KC=F": "KC1",          # Coffee
     "CC=F": "CC1",          # Cocoa
@@ -322,9 +331,69 @@ def cleanup_twelvedata_cache():
             TWELVEDATA_CACHE = dict(sorted_items[:400])
             print(f"🧹 Cache nettoyé: {len(sorted_items)} → 400 entrées")
 
-def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
-    """Récupère les données historiques via Twelve Data API (thread-safe)"""
+def get_yahoo_finance_data(symbole, outputsize=30):
+    """Fallback Yahoo Finance pour les symboles non supportés par Twelve Data (indices, futures)"""
     global TWELVEDATA_CACHE
+
+    cache_key = f"yf_{symbole}_{outputsize}"
+    now = time.time()
+
+    # Vérifier le cache
+    with TWELVEDATA_CACHE_LOCK:
+        if cache_key in TWELVEDATA_CACHE:
+            cached = TWELVEDATA_CACHE[cache_key]
+            if now - cached['timestamp'] < TWELVEDATA_CACHE_TTL:
+                return cached['data'], cached['is_fresh']
+
+    try:
+        ticker = yf.Ticker(symbole)
+        # Calculer la période nécessaire (outputsize jours + marge)
+        period = f"{min(outputsize + 5, 60)}d"
+        hist = ticker.history(period=period)
+
+        if hist.empty:
+            return pd.DataFrame(), False
+
+        # Renommer les colonnes pour cohérence avec Twelve Data
+        hist = hist.rename(columns={
+            'Open': 'Open', 'High': 'High', 'Low': 'Low',
+            'Close': 'Close', 'Volume': 'Volume'
+        })
+
+        # Garder seulement les colonnes OHLCV
+        hist = hist[['Open', 'High', 'Low', 'Close', 'Volume']].tail(outputsize)
+
+        # Déterminer si données fraîches
+        is_fresh = True
+        if len(hist) > 0:
+            last_date = hist.index[-1]
+            if hasattr(last_date, 'date'):
+                last_date = last_date.date()
+            today = get_paris_time().date()
+            is_fresh = last_date >= today - timedelta(days=3)
+
+        # Mettre en cache
+        with TWELVEDATA_CACHE_LOCK:
+            TWELVEDATA_CACHE[cache_key] = {
+                'data': hist,
+                'timestamp': now,
+                'is_fresh': is_fresh
+            }
+
+        return hist, is_fresh
+
+    except Exception as e:
+        print(f"⚠️ Yahoo Finance {symbole}: {e}")
+        return pd.DataFrame(), False
+
+def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
+    """Récupère les données historiques via Twelve Data API (thread-safe)
+    Utilise Yahoo Finance en fallback pour les indices et futures non supportés."""
+    global TWELVEDATA_CACHE
+
+    # Fallback Yahoo Finance pour symboles non supportés par Twelve Data
+    if symbole in SYMBOLES_YAHOO_FALLBACK:
+        return get_yahoo_finance_data(symbole, outputsize)
 
     if not TWELVEDATA_API_KEY:
         print("⚠️ TWELVEDATA_API_KEY non configurée")
@@ -1145,7 +1214,7 @@ def get_actifs_filtres_atr(donnees_marche, seuil_atr_min=1.0):
 
 # Cache haut niveau pour éviter le stampede (multiples appels simultanés)
 MARKET_DATA_CACHE = {'data': None, 'timestamp': 0, 'actifs_key': None}
-MARKET_DATA_CACHE_TTL = 300  # 5 minutes (identique au cache Twelve Data)
+MARKET_DATA_CACHE_TTL = 600  # 10 minutes (cohérent avec TWELVEDATA_CACHE_TTL)
 
 def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
     """Récupère les données de marché pour les actifs donnés avec ATR et Volume relatif
@@ -2222,10 +2291,10 @@ def cloturer_trades_jour():
                     symbole, direction, entree, stop, tp1, tp2
                 )
 
-                if resultat_historique:
+                if resultat_historique and prix_historique is not None:
                     # TP ou Stop a été touché plus tôt - utiliser ce résultat
                     resultat = resultat_historique
-                    prix_sortie = prix_historique
+                    prix_sortie = float(prix_historique)
 
                     if direction == 'LONG':
                         pnl_pct = ((prix_sortie - entree) / entree) * 100
@@ -5441,11 +5510,18 @@ def envoyer_whatsapp(message):
         print("⚠️ Twilio non configuré")
         return False
 
+    twilio_from = os.environ.get("TWILIO_WHATSAPP_FROM")
+    twilio_to = os.environ.get("TWILIO_WHATSAPP_TO")
+
+    if not twilio_from or not twilio_to:
+        print("⚠️ TWILIO_WHATSAPP_FROM ou TWILIO_WHATSAPP_TO non configuré")
+        return False
+
     try:
         client_twilio.messages.create(
-            from_=os.environ.get("TWILIO_WHATSAPP_FROM"),
+            from_=twilio_from,
             body=message[:1500],
-            to=os.environ.get("TWILIO_WHATSAPP_TO")
+            to=twilio_to
         )
         return True
     except Exception as e:
@@ -5632,11 +5708,13 @@ def run_scheduler():
                 print(f"🚨 ALERTE CRITIQUE: Scheduler a échoué {consecutive_errors} fois!")
                 # Envoyer notification WhatsApp si configuré
                 try:
-                    if client_twilio:
+                    twilio_to = os.environ.get('TWILIO_WHATSAPP_TO')
+                    twilio_from = os.environ.get('TWILIO_WHATSAPP_FROM')
+                    if client_twilio and twilio_to and twilio_from:
                         client_twilio.messages.create(
                             body=f"🚨 ALERTE TRADING: Scheduler en erreur ({consecutive_errors}x): {str(e)[:100]}",
-                            from_="whatsapp:+14155238886",
-                            to=f"whatsapp:{os.environ.get('TWILIO_TO', '')}"
+                            from_=twilio_from,
+                            to=twilio_to
                         )
                 except Exception as twilio_err:
                     print(f"⚠️ Impossible d'envoyer l'alerte: {twilio_err}")
