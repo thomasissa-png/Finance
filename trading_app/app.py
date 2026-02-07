@@ -534,7 +534,15 @@ def init_database():
         ("direction", "TEXT DEFAULT 'LONG'"),
         ("categorie_actif", "TEXT"),
         ("duree_minutes", "INTEGER"),
-        ("heure_entree", "INTEGER")
+        ("heure_entree", "INTEGER"),
+        # Nouvelles colonnes pour suivi temps réel
+        ("prix_max_atteint", "REAL"),       # Plus haut atteint pendant le trade
+        ("prix_min_atteint", "REAL"),       # Plus bas atteint pendant le trade
+        ("prix_dernier_check", "REAL"),     # Dernier prix vérifié
+        ("timestamp_dernier_check", "DATETIME"),  # Quand
+        ("pnl_max", "REAL"),                # PnL max atteint (%)
+        ("pnl_min", "REAL"),                # PnL min atteint (drawdown %)
+        ("nb_checks", "INTEGER DEFAULT 0")  # Nombre de vérifications
     ]
     for col_nom, col_type in colonnes_trades:
         try:
@@ -1352,7 +1360,8 @@ def enregistrer_recommandation(trade_data):
         return None
 
 def verifier_resultats_trades():
-    """Vérifie et met à jour les résultats des trades ouverts (ordre chronologique)"""
+    """Vérifie et met à jour les résultats des trades ouverts (ordre chronologique)
+    Avec suivi temps réel: prix max/min atteints, PnL max/min"""
     maintenant = get_paris_time()
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔍 Vérification résultats trades...")
 
@@ -1374,6 +1383,7 @@ def verifier_resultats_trades():
             return 0
 
         nb_mis_a_jour = 0
+        nb_tracking = 0
 
         for trade in trades_ouverts:
             try:
@@ -1397,14 +1407,43 @@ def verifier_resultats_trades():
                 prix_sortie = None
                 pnl_pct = None
 
-                # Parcourir chronologiquement chaque bougie
+                # Tracking temps réel: calculer max/min sur toutes les bougies
+                prix_max_session = hist['High'].max()
+                prix_min_session = hist['Low'].min()
+                prix_actuel = hist['Close'].iloc[-1]
+
+                # Récupérer les valeurs précédentes de tracking
+                prix_max_atteint = trade.get('prix_max_atteint') or prix_max_session
+                prix_min_atteint = trade.get('prix_min_atteint') or prix_min_session
+
+                # Mettre à jour les extremes
+                prix_max_atteint = max(prix_max_atteint, prix_max_session)
+                prix_min_atteint = min(prix_min_atteint, prix_min_session)
+
+                # Calculer PnL actuel et extremes
+                if direction == 'LONG':
+                    pnl_actuel = ((prix_actuel - entree) / entree) * 100
+                    pnl_max = ((prix_max_atteint - entree) / entree) * 100
+                    pnl_min = ((prix_min_atteint - entree) / entree) * 100
+                else:
+                    pnl_actuel = ((entree - prix_actuel) / entree) * 100
+                    pnl_max = ((entree - prix_min_atteint) / entree) * 100  # Inversé pour SHORT
+                    pnl_min = ((entree - prix_max_atteint) / entree) * 100
+
+                # Comparer avec les PnL extrêmes précédents
+                prev_pnl_max = trade.get('pnl_max') or pnl_max
+                prev_pnl_min = trade.get('pnl_min') or pnl_min
+                pnl_max = max(pnl_max, prev_pnl_max)
+                pnl_min = min(pnl_min, prev_pnl_min)
+
+                nb_checks = (trade.get('nb_checks') or 0) + 1
+
+                # Parcourir chronologiquement chaque bougie pour vérifier TP/Stop
                 for idx, row in hist.iterrows():
                     high = row['High']
                     low = row['Low']
 
                     if direction == 'LONG':
-                        # LONG: Stop si prix descend sous stop, TP si prix monte au-dessus
-                        # Vérifier le stop d'abord (scénario pessimiste dans une même bougie)
                         if stop > 0 and low <= stop:
                             resultat = 'STOP'
                             prix_sortie = stop
@@ -1421,7 +1460,6 @@ def verifier_resultats_trades():
                             pnl_pct = ((tp1 - entree) / entree) * 100
                             break
                     else:
-                        # SHORT: Stop si prix monte au-dessus du stop, TP si prix descend
                         if stop > 0 and high >= stop:
                             resultat = 'STOP'
                             prix_sortie = stop
@@ -1438,13 +1476,11 @@ def verifier_resultats_trades():
                             pnl_pct = ((entree - tp1) / entree) * 100
                             break
 
-                # Mettre à jour si résultat trouvé
                 if resultat:
-                    # Calculer la durée du trade en minutes
+                    # Trade terminé - calculer durée
                     duree_minutes = None
                     if trade.get('timestamp_reco'):
                         try:
-                            from datetime import datetime
                             ts_reco = datetime.fromisoformat(trade['timestamp_reco'].replace('Z', '+00:00'))
                             duree_minutes = int((maintenant.replace(tzinfo=None) - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
                         except ValueError:
@@ -1452,12 +1488,33 @@ def verifier_resultats_trades():
 
                     cursor.execute('''
                         UPDATE trades_recommandes
-                        SET resultat = ?, prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?, duree_minutes = ?
+                        SET resultat = ?, prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?,
+                            duree_minutes = ?, prix_max_atteint = ?, prix_min_atteint = ?,
+                            prix_dernier_check = ?, timestamp_dernier_check = ?,
+                            pnl_max = ?, pnl_min = ?, nb_checks = ?
                         WHERE id = ?
-                    ''', (resultat, prix_sortie, round(pnl_pct, 2), maintenant, duree_minutes, trade['id']))
+                    ''', (resultat, prix_sortie, round(pnl_pct, 2), maintenant,
+                          duree_minutes, round(prix_max_atteint, 4), round(prix_min_atteint, 4),
+                          round(prix_actuel, 4), maintenant,
+                          round(pnl_max, 2), round(pnl_min, 2), nb_checks,
+                          trade['id']))
                     nb_mis_a_jour += 1
                     duree_str = f" ({duree_minutes}min)" if duree_minutes else ""
-                    print(f"   ✅ {trade['actif']}: {resultat} ({pnl_pct:+.2f}%){duree_str}")
+                    print(f"   ✅ {trade['actif']}: {resultat} ({pnl_pct:+.2f}%) | Max: {pnl_max:+.2f}%{duree_str}")
+                else:
+                    # Trade en cours - mettre à jour le tracking temps réel
+                    cursor.execute('''
+                        UPDATE trades_recommandes
+                        SET prix_max_atteint = ?, prix_min_atteint = ?,
+                            prix_dernier_check = ?, timestamp_dernier_check = ?,
+                            pnl_max = ?, pnl_min = ?, nb_checks = ?
+                        WHERE id = ?
+                    ''', (round(prix_max_atteint, 4), round(prix_min_atteint, 4),
+                          round(prix_actuel, 4), maintenant,
+                          round(pnl_max, 2), round(pnl_min, 2), nb_checks,
+                          trade['id']))
+                    nb_tracking += 1
+                    print(f"   📊 {trade['actif']}: En cours {pnl_actuel:+.2f}% | Max: {pnl_max:+.2f}% | Min: {pnl_min:+.2f}%")
 
             except Exception as e:
                 print(f"   ⚠️ Erreur trade {trade.get('actif', 'inconnu')}: {e}")
@@ -1466,7 +1523,7 @@ def verifier_resultats_trades():
         conn.commit()
         conn.close()
 
-        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_mis_a_jour} trade(s) mis à jour")
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_mis_a_jour} terminé(s), {nb_tracking} en suivi")
         return nb_mis_a_jour
 
     except Exception as e:
@@ -2984,6 +3041,132 @@ def api_trades_jour():
         'date': get_paris_time().strftime('%d/%m/%Y'),
         'trades': trades
     })
+
+@app.route('/api/trades/ouverts')
+def api_trades_ouverts():
+    """Récupère les trades ouverts avec leur tracking temps réel"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT id, actif, symbole, direction, prix_entree, prix_stop, prix_tp1, prix_tp2,
+                   timestamp_reco, prix_max_atteint, prix_min_atteint, prix_dernier_check,
+                   timestamp_dernier_check, pnl_max, pnl_min, nb_checks
+            FROM trades_recommandes
+            WHERE resultat IS NULL AND symbole IS NOT NULL AND symbole != ''
+            ORDER BY timestamp_reco DESC
+        ''')
+
+        trades = []
+        for row in cursor.fetchall():
+            trade = dict(row)
+            entree = float(trade.get('prix_entree') or 0)
+            prix_actuel = float(trade.get('prix_dernier_check') or entree)
+            direction = trade.get('direction', 'LONG')
+
+            if entree > 0:
+                if direction == 'LONG':
+                    pnl_actuel = ((prix_actuel - entree) / entree) * 100
+                else:
+                    pnl_actuel = ((entree - prix_actuel) / entree) * 100
+                trade['pnl_actuel'] = round(pnl_actuel, 2)
+
+            trades.append(trade)
+
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+            'trades_ouverts': trades,
+            'nb_ouverts': len(trades)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/trades/stats-detaillees')
+def api_trades_stats_detaillees():
+    """Statistiques détaillées des trades avec breakdown par catégorie"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        periode = request.args.get('periode', 'semaine')
+        maintenant = get_paris_time()
+
+        if periode == 'jour':
+            date_debut = maintenant.date()
+        elif periode == 'semaine':
+            date_debut = (maintenant - timedelta(days=7)).date()
+        elif periode == 'mois':
+            date_debut = (maintenant - timedelta(days=30)).date()
+        else:
+            date_debut = (maintenant - timedelta(days=365)).date()
+
+        # Stats globales
+        cursor.execute('''
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total,
+                AVG(CASE WHEN pnl_max IS NOT NULL THEN pnl_max END) as pnl_max_moyen,
+                MIN(CASE WHEN pnl_min IS NOT NULL THEN pnl_min END) as pnl_min_extreme,
+                AVG(duree_minutes) as duree_moyenne
+            FROM trades_recommandes WHERE date >= ?
+        ''', (date_debut,))
+        global_stats = dict(cursor.fetchone())
+
+        # Stats par direction
+        cursor.execute('''
+            SELECT direction,
+                COUNT(*) as total,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                AVG(pnl_pct) as pnl_moyen
+            FROM trades_recommandes WHERE date >= ? AND direction IS NOT NULL
+            GROUP BY direction
+        ''', (date_debut,))
+        stats_direction = {row['direction']: dict(row) for row in cursor.fetchall()}
+
+        # Stats par heure d'entrée
+        cursor.execute('''
+            SELECT heure_entree,
+                COUNT(*) as total,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                AVG(pnl_pct) as pnl_moyen
+            FROM trades_recommandes WHERE date >= ? AND heure_entree IS NOT NULL
+            GROUP BY heure_entree ORDER BY heure_entree
+        ''', (date_debut,))
+        stats_heure = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par catégorie d'actif
+        cursor.execute('''
+            SELECT categorie_actif,
+                COUNT(*) as total,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                AVG(pnl_pct) as pnl_moyen
+            FROM trades_recommandes WHERE date >= ? AND categorie_actif IS NOT NULL
+            GROUP BY categorie_actif
+        ''', (date_debut,))
+        stats_categorie = {row['categorie_actif']: dict(row) for row in cursor.fetchall()}
+
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'periode': periode,
+            'date_debut': str(date_debut),
+            'global': global_stats,
+            'par_direction': stats_direction,
+            'par_heure': stats_heure,
+            'par_categorie': stats_categorie
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/performances')
 def api_performances():
