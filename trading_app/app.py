@@ -823,14 +823,27 @@ def init_database():
         ("categorie_actif", "TEXT"),
         ("duree_minutes", "INTEGER"),
         ("heure_entree", "INTEGER"),
-        # Nouvelles colonnes pour suivi temps réel
+        # Colonnes pour suivi temps réel
         ("prix_max_atteint", "REAL"),       # Plus haut atteint pendant le trade
         ("prix_min_atteint", "REAL"),       # Plus bas atteint pendant le trade
         ("prix_dernier_check", "REAL"),     # Dernier prix vérifié
         ("timestamp_dernier_check", "DATETIME"),  # Quand
         ("pnl_max", "REAL"),                # PnL max atteint (%)
         ("pnl_min", "REAL"),                # PnL min atteint (drawdown %)
-        ("nb_checks", "INTEGER DEFAULT 0")  # Nombre de vérifications
+        ("nb_checks", "INTEGER DEFAULT 0"), # Nombre de vérifications
+        # Indicateurs techniques au moment de la recommandation (pour analyse performance)
+        ("rsi_reco", "REAL"),               # RSI au moment de la reco (0-100)
+        ("rsi_signal_reco", "TEXT"),        # SURVENTE/NEUTRE/SURACHAT
+        ("macd_signal_reco", "TEXT"),       # BULLISH/BEARISH/BULLISH_CROSS/BEARISH_CROSS
+        ("atr_pct_reco", "REAL"),           # ATR% au moment de la reco
+        ("volume_relatif_reco", "REAL"),    # Volume relatif au moment de la reco
+        # Niveaux techniques au moment de la recommandation
+        ("pivot_reco", "REAL"),             # Pivot Point
+        ("support1_reco", "REAL"),          # Support 1
+        ("resistance1_reco", "REAL"),       # Resistance 1
+        # Ratio Risk/Reward
+        ("ratio_rr", "TEXT"),               # Ex: "1:1.5", "1:2", "1:3"
+        ("ratio_rr_justification", "TEXT")  # Justification du ratio choisi
     ]
     for col_nom, col_type in colonnes_trades:
         try:
@@ -1598,6 +1611,49 @@ Génère un résumé de clôture complet en JSON selon le format demandé."""
 # GESTION DES TRADES
 # ============================================================================
 
+def enrichir_opportunite_avec_donnees_marche(opportunite, donnees_marche, indicateurs_calcules=None):
+    """
+    Enrichit une opportunité Claude avec les données de marché réelles.
+    Garantit que les indicateurs sont enregistrés même si Claude les oublie.
+    """
+    opp = opportunite.copy()
+    actif_nom = opp.get('actif', '')
+    symbole = opp.get('symbole', '')
+
+    # Chercher les données de marché pour cet actif
+    donnees_actif = None
+    for nom, data in donnees_marche.items():
+        if isinstance(data, dict):
+            if nom == actif_nom or data.get('symbole') == symbole:
+                donnees_actif = data
+                break
+
+    if donnees_actif:
+        # Compléter avec les données de marché (si pas déjà présent)
+        if not opp.get('atr_pct'):
+            opp['atr_pct'] = donnees_actif.get('atr_pct')
+        if not opp.get('volume_relatif'):
+            opp['volume_relatif'] = donnees_actif.get('volume_relatif')
+        if not opp.get('pivot'):
+            opp['pivot'] = donnees_actif.get('pivot')
+        if not opp.get('support1'):
+            opp['support1'] = donnees_actif.get('support1')
+        if not opp.get('resistance1'):
+            opp['resistance1'] = donnees_actif.get('resistance1')
+
+    # Chercher les indicateurs calculés pour cet actif
+    if indicateurs_calcules:
+        indic = indicateurs_calcules.get(actif_nom)
+        if indic:
+            if not opp.get('rsi'):
+                opp['rsi'] = indic.get('RSI')
+            if not opp.get('rsi_signal') and not opp.get('RSI_signal'):
+                opp['rsi_signal'] = indic.get('RSI_signal')
+            if not opp.get('macd_signal') and not opp.get('MACD'):
+                opp['macd_signal'] = indic.get('MACD')
+
+    return opp
+
 def enregistrer_recommandation(trade_data):
     """Enregistre une recommandation de trade (avec fermeture DB garantie)"""
     conn = None
@@ -1653,12 +1709,26 @@ def enregistrer_recommandation(trade_data):
 
         categorie = get_categorie_actif(symbole) if symbole else 'autre'
 
+        # Extraire les indicateurs techniques de la recommandation
+        rsi_reco = trade_data.get('rsi')
+        rsi_signal_reco = trade_data.get('rsi_signal') or trade_data.get('RSI_signal')
+        macd_signal_reco = trade_data.get('macd_signal') or trade_data.get('MACD')
+        atr_pct_reco = trade_data.get('atr_pct')
+        volume_relatif_reco = trade_data.get('volume_relatif')
+        pivot_reco = trade_data.get('pivot')
+        support1_reco = trade_data.get('support1')
+        resistance1_reco = trade_data.get('resistance1')
+        ratio_rr = trade_data.get('ratio_rr', '')
+        ratio_rr_justification = trade_data.get('ratio_rr_justification', '')
+
         cursor.execute('''
             INSERT INTO trades_recommandes
             (date, heure_message, actif, symbole, type_setup, prix_entree, prix_stop,
              prix_tp1, prix_tp2, prix_actuel, catalyseur, duree_estimee, timestamp_reco,
-             direction, categorie_actif, heure_entree)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             direction, categorie_actif, heure_entree,
+             rsi_reco, rsi_signal_reco, macd_signal_reco, atr_pct_reco, volume_relatif_reco,
+             pivot_reco, support1_reco, resistance1_reco, ratio_rr, ratio_rr_justification)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             maintenant.date(),
             maintenant.strftime('%H:%M'),
@@ -1675,7 +1745,17 @@ def enregistrer_recommandation(trade_data):
             maintenant,
             direction,
             categorie,
-            maintenant.hour  # Heure d'entrée pour stats par heure
+            maintenant.hour,  # Heure d'entrée pour stats par heure
+            rsi_reco,
+            rsi_signal_reco,
+            macd_signal_reco,
+            atr_pct_reco,
+            volume_relatif_reco,
+            pivot_reco,
+            support1_reco,
+            resistance1_reco,
+            ratio_rr,
+            ratio_rr_justification
         ))
 
         conn.commit()
@@ -2263,8 +2343,19 @@ Analyse les données de la semaine et génère un rapport complet incluant:
 1. Un résumé exécutif de la semaine (performance globale, contexte marché)
 2. Analyse des forces et faiblesses identifiées
 3. Les patterns observés (heures rentables, types de setups qui marchent)
-4. Recommandations d'ajustement pour la semaine prochaine
-5. Score de confiance pour chaque catégorie d'actifs et type de setup
+4. ANALYSE DES INDICATEURS: Quel RSI, MACD, ATR a généré les meilleurs résultats?
+5. Recommandations d'ajustement pour la semaine prochaine
+6. Score de confiance pour chaque catégorie d'actifs et type de setup
+
+FOCUS SUR LES INDICATEURS (données fournies):
+- stats_par_rsi: Performance par signal RSI (SURVENTE/NEUTRE/SURACHAT)
+- stats_par_macd: Performance par signal MACD (BULLISH/BEARISH/CROSS)
+- stats_par_ratio_rr: Performance par ratio Risk/Reward
+- stats_par_atr: Performance par niveau de volatilité (FAIBLE/MOYEN/ELEVE)
+
+Utilise ces données pour recommander des CRITÈRES PRÉCIS, ex:
+- "Privilégier RSI SURVENTE pour LONG (taux 75% cette semaine)"
+- "Éviter MACD BEARISH pour les indices (taux 30%)"
 
 Sois analytique, data-driven et autocritique.
 
@@ -2283,8 +2374,14 @@ FORMAT DE RÉPONSE EN JSON:
   "patterns_identifies": [
     {"pattern": "Description", "recommandation": "Action à prendre"}
   ],
+  "analyse_indicateurs": {
+    "rsi_optimal": "RSI qui a le mieux performé + recommandation",
+    "macd_optimal": "Signal MACD le plus rentable + recommandation",
+    "atr_optimal": "Niveau ATR le plus rentable + recommandation",
+    "ratio_rr_optimal": "Ratio R/R le plus performant"
+  },
   "ajustements_recommandes": [
-    {"critere": "Nom du critère", "action": "Augmenter/Réduire/Modifier", "raison": "Justification"}
+    {"critere": "Nom du critère", "action": "Augmenter/Réduire/Modifier", "raison": "Justification basée sur données"}
   ],
   "scores_confiance": {
     "indices": {"score": 0, "tendance": "hausse/baisse/stable"},
@@ -2643,9 +2740,62 @@ def generer_rapport_hebdo():
         ''', (date_debut, date_fin))
         stats_par_heure = [dict(row) for row in cursor.fetchall()]
 
+        # Stats par signal RSI (pour identifier les patterns)
+        cursor.execute('''
+            SELECT rsi_signal_reco,
+                   COUNT(*) as nb,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND rsi_signal_reco IS NOT NULL
+            GROUP BY rsi_signal_reco
+        ''', (date_debut, date_fin))
+        stats_par_rsi = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par signal MACD
+        cursor.execute('''
+            SELECT macd_signal_reco,
+                   COUNT(*) as nb,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND macd_signal_reco IS NOT NULL
+            GROUP BY macd_signal_reco
+        ''', (date_debut, date_fin))
+        stats_par_macd = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par ratio R/R
+        cursor.execute('''
+            SELECT ratio_rr,
+                   COUNT(*) as nb,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND ratio_rr IS NOT NULL AND ratio_rr != ''
+            GROUP BY ratio_rr
+        ''', (date_debut, date_fin))
+        stats_par_ratio_rr = [dict(row) for row in cursor.fetchall()]
+
+        # Stats par niveau ATR (volatilité)
+        cursor.execute('''
+            SELECT
+                CASE
+                    WHEN atr_pct_reco < 1.5 THEN 'ATR_FAIBLE (<1.5%)'
+                    WHEN atr_pct_reco < 2.5 THEN 'ATR_MOYEN (1.5-2.5%)'
+                    ELSE 'ATR_ELEVE (>2.5%)'
+                END as niveau_atr,
+                COUNT(*) as nb,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND atr_pct_reco IS NOT NULL
+            GROUP BY niveau_atr
+        ''', (date_debut, date_fin))
+        stats_par_atr = [dict(row) for row in cursor.fetchall()]
+
         conn.close()
 
-        # Préparer les données pour Claude
+        # Préparer les données pour Claude (incluant les analyses d'indicateurs)
         donnees_rapport = {
             'periode': f"{date_debut} au {date_fin}",
             'stats_globales': stats_globales,
@@ -2653,6 +2803,11 @@ def generer_rapport_hebdo():
             'stats_par_categorie': stats_par_categorie,
             'stats_par_type': stats_par_type,
             'stats_par_heure': stats_par_heure,
+            # Nouvelles stats pour analyse des indicateurs
+            'stats_par_rsi': stats_par_rsi,
+            'stats_par_macd': stats_par_macd,
+            'stats_par_ratio_rr': stats_par_ratio_rr,
+            'stats_par_atr': stats_par_atr,
             'nb_trades_total': len(trades_semaine)
         }
 
@@ -2663,8 +2818,14 @@ def generer_rapport_hebdo():
 {donnees_texte}
 
 Analyse ces performances et génère un rapport hebdomadaire complet.
-Identifie les patterns (heures rentables, types de setup efficaces, catégories d'actifs).
-Propose des ajustements concrets pour améliorer les performances."""
+ANALYSE EN PRIORITÉ:
+1. Quel signal RSI a le mieux performé? (stats_par_rsi)
+2. Quel signal MACD a le mieux performé? (stats_par_macd)
+3. Quel ratio R/R a le mieux performé? (stats_par_ratio_rr)
+4. Quel niveau ATR a le mieux performé? (stats_par_atr)
+
+Utilise ces données pour proposer des AJUSTEMENTS PRÉCIS basés sur les indicateurs.
+Identifie les patterns (heures, types de setup, catégories d'actifs, indicateurs)."""
 
         message = client_anthropic.messages.create(
             model="claude-sonnet-4-20250514",
@@ -3633,6 +3794,7 @@ def api_lancer_analyse():
             })
 
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+        donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
         analyse = analyser_marche_json(donnees)
 
         if analyse:
@@ -3640,9 +3802,11 @@ def api_lancer_analyse():
             marche_type, _ = get_market_context()
             sauvegarder_analyse('intraday', analyse, marche_type)
 
-            # Enregistrer les opportunités comme trades
+            # Enregistrer les opportunités comme trades (enrichies avec données réelles)
+            indicateurs = donnees_enrichies.get('indicateurs_calcules', {})
             for opp in analyse.get('opportunites', []):
-                enregistrer_recommandation(opp)
+                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees, indicateurs)
+                enregistrer_recommandation(opp_enrichie)
 
             return jsonify({
                 'success': True,
@@ -4625,14 +4789,18 @@ def executer_analyse_planifiee():
 
     try:
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+        donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
         analyse = analyser_marche_json(donnees)
 
         if analyse:
             marche_type, _ = get_market_context()
             sauvegarder_analyse('planifiee', analyse, marche_type)
 
+            # Enregistrer les opportunités avec toutes les données (enrichies)
+            indicateurs = donnees_enrichies.get('indicateurs_calcules', {})
             for opp in analyse.get('opportunites', []):
-                enregistrer_recommandation(opp)
+                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees, indicateurs)
+                enregistrer_recommandation(opp_enrichie)
 
             print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Analyse sauvegardée")
     except Exception as e:
