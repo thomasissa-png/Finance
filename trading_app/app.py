@@ -529,6 +529,23 @@ def init_database():
         )
     ''')
 
+    # Colonnes feedback loop pour ajustements_proposes
+    colonnes_feedback = [
+        ("perf_avant_nb_trades", "INTEGER"),
+        ("perf_avant_taux_reussite", "REAL"),
+        ("perf_avant_pnl_total", "REAL"),
+        ("perf_apres_nb_trades", "INTEGER"),
+        ("perf_apres_taux_reussite", "REAL"),
+        ("perf_apres_pnl_total", "REAL"),
+        ("feedback_date", "DATETIME"),
+        ("feedback_conclusion", "TEXT")
+    ]
+    for col_nom, col_type in colonnes_feedback:
+        try:
+            cursor.execute(f"ALTER TABLE ajustements_proposes ADD COLUMN {col_nom} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
     # Ajouter colonnes à trades_recommandes si manquantes (ignore si déjà existantes)
     colonnes_trades = [
         ("direction", "TEXT DEFAULT 'LONG'"),
@@ -1531,11 +1548,16 @@ def verifier_resultats_trades():
         return 0
 
 def cloturer_trades_jour():
-    """Clôture les trades du jour qui n'ont pas atteint leur objectif"""
+    """
+    Clôture FORCÉE des trades 5 minutes avant fermeture du marché.
+    - Pas de NON_CONCLU: on prend le PnL réel et on détermine WIN ou LOSS
+    - Règle: PnL > 0 = WIN_FORCE, PnL <= 0 = LOSS_FORCE
+    - Ceci évite de laisser des trades overnight (interdit en day trading levier)
+    """
     maintenant = get_paris_time()
     aujourdhui = maintenant.date()
 
-    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🌙 Clôture trades du jour...")
+    print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔔 Clôture forcée trades (5min avant fermeture)...")
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -1550,38 +1572,83 @@ def cloturer_trades_jour():
         trades_ouverts = [dict(row) for row in cursor.fetchall()]
 
         nb_clotures = 0
+        total_pnl = 0
 
         for trade in trades_ouverts:
             try:
                 symbole = trade['symbole']
                 direction = trade.get('direction', 'LONG')
                 entree = float(trade['prix_entree'] or 0)
+                stop = float(trade['prix_stop'] or 0)
 
                 if entree == 0:
                     continue
 
-                # Récupérer le prix de clôture via Twelve Data
-                hist, _ = get_twelvedata_time_series(symbole, outputsize=1, interval="1day")
+                # Récupérer le prix actuel via Twelve Data (quote temps réel)
+                quote = get_twelvedata_quote(symbole)
 
-                if hist.empty:
+                if not quote:
+                    # Fallback sur les données daily
+                    hist, _ = get_twelvedata_time_series(symbole, outputsize=1, interval="1day")
+                    if hist.empty:
+                        continue
+                    prix_sortie = hist['Close'].iloc[-1]
+                else:
+                    prix_sortie = quote.get('price', 0)
+
+                if prix_sortie == 0:
                     continue
-
-                prix_cloture = hist['Close'].iloc[-1]
 
                 # Calculer le PnL
                 if direction == 'LONG':
-                    pnl_pct = ((prix_cloture - entree) / entree) * 100
+                    pnl_pct = ((prix_sortie - entree) / entree) * 100
                 else:
-                    pnl_pct = ((entree - prix_cloture) / entree) * 100
+                    pnl_pct = ((entree - prix_sortie) / entree) * 100
 
-                # Marquer comme NON_CONCLU
+                # Déterminer le résultat: WIN ou LOSS (pas de NON_CONCLU)
+                if pnl_pct > 0:
+                    resultat = 'WIN_FORCE'  # Gagné mais clôture forcée
+                    emoji = '✅'
+                else:
+                    resultat = 'LOSS_FORCE'  # Perdu, clôture forcée
+                    emoji = '❌'
+
+                # Calculer la durée
+                duree_minutes = None
+                if trade.get('timestamp_reco'):
+                    try:
+                        ts_reco = datetime.fromisoformat(trade['timestamp_reco'].replace('Z', '+00:00'))
+                        duree_minutes = int((maintenant.replace(tzinfo=None) - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
+                    except ValueError:
+                        pass
+
+                # Récupérer les valeurs de tracking si disponibles
+                prix_max = trade.get('prix_max_atteint') or prix_sortie
+                prix_min = trade.get('prix_min_atteint') or prix_sortie
+                pnl_max = trade.get('pnl_max') or pnl_pct
+                pnl_min = trade.get('pnl_min') or pnl_pct
+
+                # Mettre à jour le trade
                 cursor.execute('''
                     UPDATE trades_recommandes
-                    SET resultat = 'NON_CONCLU', prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?
+                    SET resultat = ?, prix_sortie = ?, pnl_pct = ?, timestamp_sortie = ?,
+                        duree_minutes = ?, prix_dernier_check = ?, timestamp_dernier_check = ?,
+                        notes = COALESCE(notes, '') || ?
                     WHERE id = ?
-                ''', (prix_cloture, round(pnl_pct, 2), maintenant, trade['id']))
+                ''', (
+                    resultat, round(prix_sortie, 4), round(pnl_pct, 2), maintenant,
+                    duree_minutes, round(prix_sortie, 4), maintenant,
+                    f" | Clôture forcée 5min avant fermeture",
+                    trade['id']
+                ))
+
                 nb_clotures += 1
-                print(f"   📊 {trade['actif']}: NON_CONCLU ({pnl_pct:+.2f}%)")
+                total_pnl += pnl_pct
+                duree_str = f" ({duree_minutes}min)" if duree_minutes else ""
+
+                # Afficher avec les infos de tracking
+                max_info = f" | Max atteint: {pnl_max:+.2f}%" if pnl_max != pnl_pct else ""
+                print(f"   {emoji} {trade['actif']}: {resultat} ({pnl_pct:+.2f}%){max_info}{duree_str}")
 
             except Exception as e:
                 print(f"   ⚠️ Erreur clôture {trade.get('actif', 'inconnu')}: {e}")
@@ -1590,7 +1657,11 @@ def cloturer_trades_jour():
         conn.commit()
         conn.close()
 
-        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_clotures} trade(s) clôturé(s)")
+        if nb_clotures > 0:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Bilan clôture: {nb_clotures} trade(s), PnL total: {total_pnl:+.2f}%")
+        else:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Aucun trade à clôturer")
+
         return nb_clotures
 
     except Exception as e:
@@ -1637,8 +1708,10 @@ def get_performances(periode='semaine'):
         cursor.execute('''
             SELECT
                 COUNT(*) as total,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis_naturel,
+                SUM(CASE WHEN resultat = 'WIN_FORCE' THEN 1 ELSE 0 END) as reussis_force,
+                SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops_naturel,
+                SUM(CASE WHEN resultat = 'LOSS_FORCE' THEN 1 ELSE 0 END) as stops_force,
                 SUM(CASE WHEN resultat = 'NON_CONCLU' THEN 1 ELSE 0 END) as non_conclus,
                 AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
@@ -1650,25 +1723,36 @@ def get_performances(periode='semaine'):
         conn.close()
 
         total = row[0] or 0
-        reussis = row[1] or 0
-        stops = row[2] or 0
-        non_conclus = row[3] or 0
-        # Conclus = uniquement les trades avec résultat définitif (pas NULL, vide, ou en_cours)
+        reussis_naturel = row[1] or 0
+        reussis_force = row[2] or 0
+        stops_naturel = row[3] or 0
+        stops_force = row[4] or 0
+        non_conclus = row[5] or 0
+
+        # Totaux combinés (naturels + forcés)
+        reussis = reussis_naturel + reussis_force
+        stops = stops_naturel + stops_force
+
+        # Conclus = uniquement les trades avec résultat définitif
         conclus = reussis + stops
 
         return {
             'total': total,
             'reussis': reussis,
+            'reussis_naturel': reussis_naturel,  # TP1, TP2
+            'reussis_force': reussis_force,       # WIN_FORCE (clôture forcée positive)
             'stops': stops,
-            'non_conclus': non_conclus,
-            'en_cours': total - conclus - non_conclus,  # Trades sans résultat encore
+            'stops_naturel': stops_naturel,       # STOP
+            'stops_force': stops_force,           # LOSS_FORCE (clôture forcée négative)
+            'non_conclus': non_conclus,           # Historique (ne devrait plus arriver)
+            'en_cours': total - conclus - non_conclus,  # Trades en cours
             'taux_reussite': round((reussis / conclus * 100) if conclus > 0 else 0, 1),
-            'pnl_moyen': round(row[4] or 0, 2),
-            'pnl_total': round(row[5] or 0, 2)
+            'pnl_moyen': round(row[6] or 0, 2),
+            'pnl_total': round(row[7] or 0, 2)
         }
     except Exception as e:
         print(f"⚠️ Erreur performances: {e}")
-        return {'total': 0, 'reussis': 0, 'stops': 0, 'non_conclus': 0, 'taux_reussite': 0, 'pnl_moyen': 0, 'pnl_total': 0}
+        return {'total': 0, 'reussis': 0, 'reussis_naturel': 0, 'reussis_force': 0, 'stops': 0, 'stops_naturel': 0, 'stops_force': 0, 'non_conclus': 0, 'en_cours': 0, 'taux_reussite': 0, 'pnl_moyen': 0, 'pnl_total': 0}
 
 # ============================================================================
 # JOURNAL DES ACTIFS (MÉMOIRE)
@@ -2184,8 +2268,8 @@ def generer_rapport_hebdo():
         cursor.execute('''
             SELECT
                 COUNT(*) as nb_trades,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total,
                 AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
             FROM trades_recommandes
@@ -2197,7 +2281,7 @@ def generer_rapport_hebdo():
         cursor.execute('''
             SELECT date,
                    COUNT(*) as nb,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
@@ -2210,7 +2294,7 @@ def generer_rapport_hebdo():
         cursor.execute('''
             SELECT categorie_actif,
                    COUNT(*) as nb,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND categorie_actif IS NOT NULL
@@ -2222,7 +2306,7 @@ def generer_rapport_hebdo():
         cursor.execute('''
             SELECT type_setup,
                    COUNT(*) as nb,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND type_setup IS NOT NULL
@@ -2234,7 +2318,7 @@ def generer_rapport_hebdo():
         cursor.execute('''
             SELECT heure_entree,
                    COUNT(*) as nb,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND heure_entree IS NOT NULL
             GROUP BY heure_entree
@@ -2638,6 +2722,245 @@ def get_historique_ajustements(limite=50):
         print(f"⚠️ Erreur historique ajustements: {e}")
         return []
 
+# ============================================================================
+# FEEDBACK LOOP - ÉVALUATION DES AJUSTEMENTS
+# ============================================================================
+
+def calculer_feedback_ajustement(id_ajustement, jours_evaluation=7):
+    """
+    Calcule l'impact d'un ajustement en comparant les performances
+    avant et après son application.
+    """
+    maintenant = get_paris_time()
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer l'ajustement
+        cursor.execute('SELECT * FROM ajustements_proposes WHERE id = ?', (id_ajustement,))
+        row = cursor.fetchone()
+
+        if not row or row['statut'] != 'valide':
+            conn.close()
+            return None, "Ajustement non trouvé ou non validé"
+
+        ajust = dict(row)
+        date_application = ajust.get('date_decision')
+
+        if not date_application:
+            conn.close()
+            return None, "Date d'application non disponible"
+
+        # Convertir la date si nécessaire
+        if isinstance(date_application, str):
+            date_application = datetime.fromisoformat(date_application.replace('Z', '+00:00'))
+
+        date_application = date_application.date() if hasattr(date_application, 'date') else date_application
+
+        # Période AVANT l'ajustement (7 jours avant)
+        date_debut_avant = date_application - timedelta(days=jours_evaluation)
+
+        # Période APRÈS l'ajustement (7 jours après ou jusqu'à maintenant)
+        date_fin_apres = min(date_application + timedelta(days=jours_evaluation), maintenant.date())
+
+        # Stats AVANT (inclut WIN_FORCE et LOSS_FORCE pour compatibilité)
+        cursor.execute('''
+            SELECT
+                COUNT(*) as nb_trades,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+            FROM trades_recommandes
+            WHERE date >= ? AND date < ?
+            AND categorie_actif = ?
+        ''', (date_debut_avant, date_application, ajust.get('categorie')))
+        avant = cursor.fetchone()
+
+        # Stats APRÈS (inclut WIN_FORCE et LOSS_FORCE)
+        cursor.execute('''
+            SELECT
+                COUNT(*) as nb_trades,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ?
+            AND categorie_actif = ?
+        ''', (date_application, date_fin_apres, ajust.get('categorie')))
+        apres = cursor.fetchone()
+
+        # Calculer les taux de réussite
+        avant_conclus = (avant['reussis'] or 0) + (avant['stops'] or 0)
+        apres_conclus = (apres['reussis'] or 0) + (apres['stops'] or 0)
+
+        taux_avant = round((avant['reussis'] / avant_conclus * 100) if avant_conclus > 0 else 0, 1)
+        taux_apres = round((apres['reussis'] / apres_conclus * 100) if apres_conclus > 0 else 0, 1)
+
+        pnl_avant = round(avant['pnl_total'] or 0, 2)
+        pnl_apres = round(apres['pnl_total'] or 0, 2)
+
+        # Déterminer la conclusion
+        if apres_conclus < 3:
+            conclusion = "INSUFFISANT"
+            conclusion_detail = f"Seulement {apres_conclus} trades après ajustement, données insuffisantes"
+        elif taux_apres > taux_avant + 5:
+            conclusion = "POSITIF"
+            conclusion_detail = f"Taux +{taux_apres - taux_avant:.1f}%, PnL: {pnl_avant:.2f}% → {pnl_apres:.2f}%"
+        elif taux_apres < taux_avant - 5:
+            conclusion = "NEGATIF"
+            conclusion_detail = f"Taux {taux_apres - taux_avant:.1f}%, PnL: {pnl_avant:.2f}% → {pnl_apres:.2f}%"
+        else:
+            conclusion = "NEUTRE"
+            conclusion_detail = f"Peu de changement (±5%), PnL: {pnl_avant:.2f}% → {pnl_apres:.2f}%"
+
+        # Sauvegarder le feedback
+        cursor.execute('''
+            UPDATE ajustements_proposes SET
+                perf_avant_nb_trades = ?,
+                perf_avant_taux_reussite = ?,
+                perf_avant_pnl_total = ?,
+                perf_apres_nb_trades = ?,
+                perf_apres_taux_reussite = ?,
+                perf_apres_pnl_total = ?,
+                feedback_date = ?,
+                feedback_conclusion = ?
+            WHERE id = ?
+        ''', (
+            avant['nb_trades'], taux_avant, pnl_avant,
+            apres['nb_trades'], taux_apres, pnl_apres,
+            maintenant, f"{conclusion}: {conclusion_detail}",
+            id_ajustement
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return {
+            'id': id_ajustement,
+            'categorie': ajust.get('categorie'),
+            'avant': {'nb_trades': avant['nb_trades'], 'taux': taux_avant, 'pnl': pnl_avant},
+            'apres': {'nb_trades': apres['nb_trades'], 'taux': taux_apres, 'pnl': pnl_apres},
+            'conclusion': conclusion,
+            'detail': conclusion_detail
+        }, None
+
+    except Exception as e:
+        print(f"⚠️ Erreur feedback ajustement: {e}")
+        return None, str(e)
+
+def evaluer_tous_ajustements_valides():
+    """Évalue tous les ajustements validés qui n'ont pas encore de feedback"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer les ajustements validés sans feedback et > 7 jours
+        date_limite = get_paris_time() - timedelta(days=7)
+        cursor.execute('''
+            SELECT id FROM ajustements_proposes
+            WHERE statut = 'valide'
+            AND feedback_conclusion IS NULL
+            AND date_decision < ?
+        ''', (date_limite,))
+
+        ajustements = [row['id'] for row in cursor.fetchall()]
+        conn.close()
+
+        resultats = []
+        for id_ajust in ajustements:
+            result, error = calculer_feedback_ajustement(id_ajust)
+            if result:
+                resultats.append(result)
+                print(f"📊 Feedback #{id_ajust}: {result['conclusion']}")
+
+        return resultats
+
+    except Exception as e:
+        print(f"⚠️ Erreur évaluation ajustements: {e}")
+        return []
+
+# ============================================================================
+# CRITÈRES DYNAMIQUES ACTIFS
+# ============================================================================
+
+def get_criteres_dynamiques_actifs():
+    """Récupère les critères dynamiques actifs (scores de confiance, exclusions)"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Récupérer les derniers scores de confiance par catégorie
+        cursor.execute('''
+            SELECT categorie, critere, valeur_actuelle, raison, date_maj
+            FROM criteres_dynamiques
+            WHERE critere = 'score_confiance'
+            AND id IN (
+                SELECT MAX(id) FROM criteres_dynamiques
+                WHERE critere = 'score_confiance'
+                GROUP BY categorie
+            )
+        ''')
+
+        scores = {row['categorie']: {
+            'score': row['valeur_actuelle'],
+            'raison': row['raison'],
+            'date_maj': row['date_maj']
+        } for row in cursor.fetchall()}
+
+        # Récupérer les ajustements actifs (validés récemment)
+        cursor.execute('''
+            SELECT categorie, critere, action, raison
+            FROM ajustements_proposes
+            WHERE statut = 'valide'
+            AND date_decision > date('now', '-14 days')
+        ''')
+
+        ajustements_actifs = [dict(row) for row in cursor.fetchall()]
+
+        conn.close()
+
+        return {
+            'scores_confiance': scores,
+            'ajustements_actifs': ajustements_actifs
+        }
+
+    except Exception as e:
+        print(f"⚠️ Erreur critères dynamiques: {e}")
+        return {'scores_confiance': {}, 'ajustements_actifs': []}
+
+def generer_instructions_dynamiques():
+    """Génère les instructions dynamiques à injecter dans le SYSTEM_PROMPT"""
+    criteres = get_criteres_dynamiques_actifs()
+    instructions = []
+
+    # Analyser les scores de confiance
+    for categorie, data in criteres.get('scores_confiance', {}).items():
+        score = data.get('score', 50)
+        if score < 30:
+            instructions.append(f"⛔ ÉVITER {categorie.upper()}: Score confiance {score}/100 - {data.get('raison', '')}")
+        elif score < 50:
+            instructions.append(f"⚠️ PRUDENCE {categorie.upper()}: Score confiance {score}/100 - Limiter les positions")
+        elif score > 80:
+            instructions.append(f"✅ FAVORABLE {categorie.upper()}: Score confiance {score}/100 - Opportunités prioritaires")
+
+    # Ajouter les ajustements actifs
+    for ajust in criteres.get('ajustements_actifs', []):
+        if ajust.get('action') == 'ÉVITER':
+            instructions.append(f"⛔ {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
+        elif ajust.get('action') == 'RÉDUIRE':
+            instructions.append(f"⚠️ RÉDUIRE {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
+        elif ajust.get('action') == 'FAVORISER':
+            instructions.append(f"✅ FAVORISER {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
+
+    if not instructions:
+        return ""
+
+    return "\n\nCRITÈRES DYNAMIQUES ACTIFS (basés sur les performances récentes):\n" + "\n".join(instructions)
+
 def enregistrer_journal_complet():
     """Enregistre le journal complet + bilan (22h30)"""
     # D'abord enregistrer le journal de tous les actifs
@@ -2962,8 +3285,8 @@ def api_lancer_analyse():
             # Stats de la semaine écoulée
             cursor.execute('''
                 SELECT COUNT(*) as total,
-                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as gagnants,
-                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as perdants,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as gagnants,
+                       SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as perdants,
                        ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END), 2) as pnl_moyen
                 FROM trades_recommandes
                 WHERE date >= date('now', '-7 days')
@@ -3110,8 +3433,8 @@ def api_trades_stats_detaillees():
         cursor.execute('''
             SELECT
                 COUNT(*) as total,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                 AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total,
                 AVG(CASE WHEN pnl_max IS NOT NULL THEN pnl_max END) as pnl_max_moyen,
@@ -3125,7 +3448,7 @@ def api_trades_stats_detaillees():
         cursor.execute('''
             SELECT direction,
                 COUNT(*) as total,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                 AVG(pnl_pct) as pnl_moyen
             FROM trades_recommandes WHERE date >= ? AND direction IS NOT NULL
             GROUP BY direction
@@ -3136,7 +3459,7 @@ def api_trades_stats_detaillees():
         cursor.execute('''
             SELECT heure_entree,
                 COUNT(*) as total,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                 AVG(pnl_pct) as pnl_moyen
             FROM trades_recommandes WHERE date >= ? AND heure_entree IS NOT NULL
             GROUP BY heure_entree ORDER BY heure_entree
@@ -3147,7 +3470,7 @@ def api_trades_stats_detaillees():
         cursor.execute('''
             SELECT categorie_actif,
                 COUNT(*) as total,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                 AVG(pnl_pct) as pnl_moyen
             FROM trades_recommandes WHERE date >= ? AND categorie_actif IS NOT NULL
             GROUP BY categorie_actif
@@ -3400,8 +3723,8 @@ def api_stats_evolution():
             cursor.execute('''
                 SELECT date,
                        COUNT(*) as nb_trades,
-                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                       SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                        SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_cumule
                 FROM trades_recommandes
                 GROUP BY date
@@ -3413,8 +3736,8 @@ def api_stats_evolution():
                 SELECT strftime('%Y-W%W', date) as periode,
                        MIN(date) as date,
                        COUNT(*) as nb_trades,
-                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                       SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                        SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_cumule
                 FROM trades_recommandes
                 GROUP BY strftime('%Y-W%W', date)
@@ -3426,8 +3749,8 @@ def api_stats_evolution():
                 SELECT strftime('%Y-%m', date) as periode,
                        MIN(date) as date,
                        COUNT(*) as nb_trades,
-                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                       SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                       SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                        SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_cumule
                 FROM trades_recommandes
                 GROUP BY strftime('%Y-%m', date)
@@ -3762,8 +4085,8 @@ def api_stats_detaillees():
         cursor.execute('''
             SELECT heure_entree as heure,
                    COUNT(*) as nb_trades,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
                    AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
             FROM trades_recommandes
@@ -3777,8 +4100,8 @@ def api_stats_detaillees():
         cursor.execute('''
             SELECT categorie_actif as categorie,
                    COUNT(*) as nb_trades,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
                    AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
             FROM trades_recommandes
@@ -3792,8 +4115,8 @@ def api_stats_detaillees():
         cursor.execute('''
             SELECT type_setup as type,
                    COUNT(*) as nb_trades,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
                    AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
             FROM trades_recommandes
@@ -3806,8 +4129,8 @@ def api_stats_detaillees():
         cursor.execute('''
             SELECT direction,
                    COUNT(*) as nb_trades,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
-                   SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
             WHERE date >= ? AND direction IS NOT NULL
@@ -3819,7 +4142,7 @@ def api_stats_detaillees():
         cursor.execute('''
             SELECT actif, symbole,
                    COUNT(*) as nb_trades,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
             WHERE date >= ? AND resultat IS NOT NULL
@@ -3834,7 +4157,7 @@ def api_stats_detaillees():
         cursor.execute('''
             SELECT actif, symbole,
                    COUNT(*) as nb_trades,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
             WHERE date >= ? AND resultat IS NOT NULL
@@ -3851,8 +4174,8 @@ def api_stats_detaillees():
                 AVG(duree_minutes) as duree_moyenne,
                 MIN(duree_minutes) as duree_min,
                 MAX(duree_minutes) as duree_max,
-                AVG(CASE WHEN resultat IN ('TP1', 'TP2') THEN duree_minutes END) as duree_moyenne_gagnants,
-                AVG(CASE WHEN resultat = 'STOP' THEN duree_minutes END) as duree_moyenne_perdants
+                AVG(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN duree_minutes END) as duree_moyenne_gagnants,
+                AVG(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN duree_minutes END) as duree_moyenne_perdants
             FROM trades_recommandes
             WHERE date >= ? AND duree_minutes IS NOT NULL
         ''', (date_debut,))
@@ -4076,10 +4399,15 @@ def configurer_schedule():
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_cloture_utc).do(executer_cloture_planifiee)
 
-    # Clôture trades US + finale: 22h15 (après clôture US)
-    heure_cloture_trades_utc = get_utc_time_for_paris("22:15")
+    # Clôture forcée trades EU: 17:25 (5min avant fermeture EU 17:30)
+    heure_cloture_eu_trades_utc = get_utc_time_for_paris("17:25")
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
-        getattr(schedule.every(), jour).at(heure_cloture_trades_utc).do(executer_cloture_trades)
+        getattr(schedule.every(), jour).at(heure_cloture_eu_trades_utc).do(executer_cloture_trades)
+
+    # Clôture forcée trades US: 21:55 (5min avant fermeture US 22:00)
+    heure_cloture_us_trades_utc = get_utc_time_for_paris("21:55")
+    for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+        getattr(schedule.every(), jour).at(heure_cloture_us_trades_utc).do(executer_cloture_trades)
 
     # Journal FR: 18h00 (après clôture marchés EU)
     heure_journal_fr_utc = get_utc_time_for_paris("18:00")
@@ -4098,6 +4426,10 @@ def configurer_schedule():
     # Expiration des ajustements non traités: tous les jours à 23h00
     heure_expiration_utc = get_utc_time_for_paris("23:00")
     schedule.every().day.at(heure_expiration_utc).do(expirer_ajustements_anciens)
+
+    # Évaluation feedback des ajustements validés: dimanche 19h00
+    heure_feedback_utc = get_utc_time_for_paris("19:00")
+    schedule.every().sunday.at(heure_feedback_utc).do(evaluer_tous_ajustements_valides)
 
 def run_scheduler():
     """Thread pour le scheduler"""
