@@ -566,34 +566,42 @@ def calculer_indicateurs_complets(symbole):
 
 def enrichir_donnees_avec_indicateurs(donnees_marche):
     """
-    Enrichit les données de marché avec les indicateurs techniques calculés
+    Enrichit les données de marché avec les indicateurs techniques calculés.
+    Calcule RSI/MACD pour TOUS les actifs présents dans donnees_marche.
+    Utilise les données déjà récupérées pour limiter les appels API.
     """
     donnees_enrichies = donnees_marche.copy() if isinstance(donnees_marche, dict) else {}
 
     # Ajouter une section indicateurs
     donnees_enrichies['indicateurs_calcules'] = {}
 
-    # Liste des symboles prioritaires pour les indicateurs (pour limiter les appels API)
-    symboles_prioritaires = [
-        "^FCHI", "^GSPC",  # Indices majeurs
-        "EURUSD=X", "GBPUSD=X",  # Forex
-        "GC=F", "BZ=F",  # Commodities
-        "AAPL", "NVDA", "MSFT"  # Tech US
-    ]
+    # Calculer les indicateurs pour TOUS les actifs présents dans les données
+    # On utilise les données déjà en cache (récupérées par recuperer_donnees_marche)
+    for categorie, actifs in donnees_marche.items():
+        if not isinstance(actifs, dict):
+            continue
 
-    for symbole in symboles_prioritaires:
-        try:
-            indicateurs = calculer_indicateurs_complets(symbole)
-            nom_actif = ACTIFS_PERMANENTS.get(symbole, symbole)
-            donnees_enrichies['indicateurs_calcules'][nom_actif] = {
-                'symbole': symbole,
-                'RSI': indicateurs.get('rsi'),
-                'RSI_signal': indicateurs.get('rsi_interpretation'),
-                'MACD': indicateurs.get('macd_interpretation'),
-                'ATR_pct': indicateurs.get('atr_pct')
-            }
-        except Exception as e:
-            print(f"⚠️ Erreur indicateurs {symbole}: {e}")
+        for nom_actif, data in actifs.items():
+            if not isinstance(data, dict) or 'symbole' not in data:
+                continue
+
+            symbole = data.get('symbole')
+            if not symbole:
+                continue
+
+            try:
+                # Récupérer les données déjà en cache (ne fait pas de nouvel appel API grâce au cache)
+                indicateurs = calculer_indicateurs_complets(symbole)
+
+                donnees_enrichies['indicateurs_calcules'][nom_actif] = {
+                    'symbole': symbole,
+                    'RSI': indicateurs.get('rsi'),
+                    'RSI_signal': indicateurs.get('rsi_interpretation'),
+                    'MACD': indicateurs.get('macd_interpretation'),
+                    'ATR_pct': indicateurs.get('atr_pct')
+                }
+            except Exception as e:
+                print(f"⚠️ Erreur indicateurs {symbole}: {e}")
 
     return donnees_enrichies
 
@@ -1082,6 +1090,17 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                 else:
                     last_date_str = str(last_date)[:10]
 
+                # Pivot Points (Support/Résistance) - basés sur la veille
+                pivot = support1 = resistance1 = None
+                if len(info) >= 2:
+                    prev_high = info['High'].iloc[-2]
+                    prev_low = info['Low'].iloc[-2]
+                    prev_close = info['Close'].iloc[-2]
+
+                    pivot = (prev_high + prev_low + prev_close) / 3
+                    resistance1 = 2 * pivot - prev_low  # R1
+                    support1 = 2 * pivot - prev_high    # S1
+
                 donnees[nom] = {
                     "symbole": symbole,
                     "prix": round(prix_actuel, 2),
@@ -1093,6 +1112,9 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                     "atr": round(atr, 4) if atr else 0,
                     "atr_pct": round(atr_pct, 2) if atr_pct else 0,
                     "volume_relatif": round(volume_relatif, 1),
+                    "pivot": round(pivot, 2) if pivot else None,
+                    "support1": round(support1, 2) if support1 else None,
+                    "resistance1": round(resistance1, 2) if resistance1 else None,
                     "data_date": last_date_str,
                     "is_fresh": is_fresh
                 }
@@ -1204,6 +1226,9 @@ INDICATEURS TECHNIQUES (fournis dans les données):
 - Volume Relatif: Volume actuel vs moyenne 20j. > 150% = intérêt institutionnel
 - RSI (0-100): < 30 = survente (potentiel LONG), > 70 = surachat (potentiel SHORT)
 - MACD: BULLISH_CROSS = signal d'achat, BEARISH_CROSS = signal de vente
+- Pivot/Support1/Resistance1: Niveaux techniques clés calculés sur la veille
+  - UTILISE support1/resistance1 pour placer tes stops et TP intelligemment
+  - Entrée proche du pivot = setup neutre, entrée proche support1 = meilleur R/R
 
 RÈGLES RISK/REWARD DYNAMIQUE:
 - Ratio MINIMUM 1:1.5 (risque 1% → objectif 1.5%)
@@ -1492,7 +1517,7 @@ def analyser_marche_json(donnees):
         for aj in criteres['ajustements_recents'][:3]:
             contexte_criteres += f"- {aj.get('critere', '')}: {aj.get('raison', '')}\n"
 
-    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR%, Volume Relatif, RSI, MACD):
+    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR%, Volume Relatif, RSI, MACD, Pivot/Support/Résistance):
 {donnees_texte}
 
 Heure: {maintenant.strftime('%d/%m/%Y %H:%M')} CET
@@ -1510,6 +1535,7 @@ RÈGLES IMPÉRATIVES:
 - AU MOINS 1 opportunité NEWS TRADING (si conditions favorables)
 - Liste UNIQUEMENT les événements APRÈS {heure_str}
 - UTILISE les indicateurs RSI et MACD fournis pour confirmer tes trades
+- UTILISE les niveaux support1/resistance1 pour placer stop/TP intelligemment
 - RATIO R/R MINIMUM 1:1.5 - justifie ton choix dans ratio_rr_justification
 - Pour chaque opportunité: symbole, atr_pct, volume_relatif, rsi, macd_signal, ratio_rr, ratio_rr_justification"""
 
