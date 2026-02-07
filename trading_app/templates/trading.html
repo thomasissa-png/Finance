@@ -528,11 +528,13 @@ async function loadBilanData() {
                         <tr>
                             <th>Heure</th>
                             <th>Actif</th>
-                            <th>Type</th>
-                            <th>Entree</th>
+                            <th>Dir.</th>
+                            <th>Entrée</th>
                             <th>Stop</th>
                             <th>TP1</th>
-                            <th>Resultat</th>
+                            <th>RSI</th>
+                            <th>MACD</th>
+                            <th>Résultat</th>
                             <th>PnL</th>
                         </tr>
                     </thead>
@@ -541,14 +543,22 @@ async function loadBilanData() {
             for (const trade of dataTrades.trades) {
                 const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'success' :
                                    trade.resultat === 'STOP' ? 'fail' : '';
+                const direction = trade.direction || 'LONG';
+                const dirClass = direction === 'LONG' ? 'positive' : 'negative';
+                const rsi = trade.rsi_reco ? Math.round(trade.rsi_reco) : '-';
+                const macd = trade.macd_signal_reco || '-';
+                const macdClass = macd.includes('BULLISH') ? 'positive' : macd.includes('BEARISH') ? 'negative' : '';
+
                 html += `
                     <tr class="${resultClass}">
                         <td>${trade.heure_message}</td>
                         <td>${trade.actif}</td>
-                        <td>${trade.type_setup}</td>
+                        <td class="${dirClass}">${direction}</td>
                         <td>${trade.prix_entree}</td>
                         <td>${trade.prix_stop}</td>
                         <td>${trade.prix_tp1}</td>
+                        <td>${rsi}</td>
+                        <td class="${macdClass}">${macd}</td>
                         <td>${trade.resultat || 'En cours'}</td>
                         <td>${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
                     </tr>`;

@@ -57,6 +57,10 @@ TWELVEDATA_QUOTA_EXCEEDED = False  # Flag pour stopper tous les appels
 TWELVEDATA_QUOTA_RESET_TIME = None  # Timestamp de reset du quota
 TWELVEDATA_QUOTA_COOLDOWN = 60  # Cooldown en secondes après quota exceeded
 
+# Cache pour les news (évite appels NewsAPI répétés)
+NEWS_CACHE = {'data': None, 'timestamp': 0}
+NEWS_CACHE_TTL = 300  # 5 minutes
+
 # Locks pour thread-safety (bugs critiques #1 et #2)
 TWELVEDATA_RATE_LOCK = Lock()  # Protège TWELVEDATA_LAST_CALL
 TWELVEDATA_CACHE_LOCK = Lock()  # Protège TWELVEDATA_CACHE
@@ -5241,8 +5245,32 @@ def api_cloture():
 
 @app.route('/api/news')
 def api_news():
-    """Récupère et analyse les actualités pour leur impact trading"""
+    """Récupère et analyse les actualités pour leur impact trading.
+    OPTIMISÉ: Cache de 5 minutes pour éviter appels NewsAPI répétés."""
+    global NEWS_CACHE
+
+    # Vérifier le cache d'abord
+    now = time.time()
+    if NEWS_CACHE['data'] and (now - NEWS_CACHE['timestamp']) < NEWS_CACHE_TTL:
+        return jsonify({
+            'success': True,
+            'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+            'news': NEWS_CACHE['data'],
+            'count': len(NEWS_CACHE['data']),
+            'cached': True
+        })
+
     if not NEWSAPI_KEY:
+        # Fallback: retourner les news de la BDD si pas de clé API
+        news_db = get_news_historique(jours=1)
+        if news_db:
+            return jsonify({
+                'success': True,
+                'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+                'news': news_db,
+                'count': len(news_db),
+                'source': 'database'
+            })
         return jsonify({'success': False, 'error': 'NEWSAPI_KEY non configurée'})
 
     try:
@@ -5250,7 +5278,20 @@ def api_news():
         news_analysees, error = fetch_and_analyze_news()
 
         if error:
+            # Fallback: retourner les news en cache ou BDD
+            if NEWS_CACHE['data']:
+                return jsonify({
+                    'success': True,
+                    'news': NEWS_CACHE['data'],
+                    'count': len(NEWS_CACHE['data']),
+                    'cached': True,
+                    'warning': error
+                })
             return jsonify({'success': False, 'error': error})
+
+        # Mettre en cache
+        NEWS_CACHE['data'] = news_analysees
+        NEWS_CACHE['timestamp'] = now
 
         return jsonify({
             'success': True,

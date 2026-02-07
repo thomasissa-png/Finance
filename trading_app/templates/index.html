@@ -671,7 +671,14 @@ async function loadAllData() {
 
 // ===== ÉVÉNEMENTS MACRO =====
 async function loadMacroEvents() {
+    const agendaContainer = document.getElementById('macro-agenda-list');
+
     try {
+        // Afficher état de chargement si vide
+        if (agendaContainer && !agendaContainer.innerHTML.includes('agenda-item')) {
+            agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">⏳</span><span class="agenda-name">Chargement...</span></div>';
+        }
+
         const response = await fetch('/api/evenements-macro');
         const data = await response.json();
 
@@ -686,10 +693,17 @@ async function loadMacroEvents() {
             // Mettre à jour l'agenda avec les événements macro
             if (data.evenements && data.evenements.length > 0) {
                 renderMacroAgenda(data.evenements);
+            } else if (data.weekend) {
+                agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">📅</span><span class="agenda-name">Marchés fermés le weekend</span></div>';
+            } else {
+                agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">✓</span><span class="agenda-name">Aucun événement majeur prévu</span></div>';
             }
         }
     } catch (error) {
         console.error('Erreur événements macro:', error);
+        if (agendaContainer) {
+            agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">⚠️</span><span class="agenda-name">Erreur de chargement</span></div>';
+        }
     }
 }
 
@@ -819,22 +833,32 @@ async function loadNewsHistorique() {
 }
 
 async function refreshNews() {
+    const container = document.getElementById('news-flash-list');
+
     try {
-        // Charger les news du jour
+        // Afficher état de chargement
+        if (!container.innerHTML.includes('news-flash-item')) {
+            container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⏳</span><div class="news-content"><span class="news-text">Chargement des actualités...</span></div></div>';
+        }
+
+        // Charger les news (avec cache côté serveur)
         const response = await fetch('/api/news');
         const data = await response.json();
 
-        if (data.success && data.news) {
+        if (data.success && data.news && data.news.length > 0) {
             renderNewsFlashWithImpact(data.news);
-            // Mettre à jour l'historique
-            await loadNewsHistorique();
+            // Mettre à jour l'historique en arrière-plan (non bloquant)
+            loadNewsHistorique();
             newsIndexJour = 0;
             updateNewsNavigation();
         } else if (data.success && data.articles) {
             renderNewsFlashFromAPI(data.articles);
+        } else {
+            container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">--:--</span><div class="news-content"><span class="news-text">Aucune actualité disponible</span></div></div>';
         }
     } catch (error) {
         console.error('Erreur news:', error);
+        container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⚠️</span><div class="news-content"><span class="news-text">Erreur de chargement des actualités</span></div></div>';
     }
 }
 
@@ -1161,15 +1185,46 @@ function renderPulseWidget(weekendMsg) {
 // ===== ANALYSE =====
 async function loadLastAnalysis() {
     try {
+        // Afficher immédiatement un état de chargement
+        const container = document.getElementById('context-bullets');
+        container.innerHTML = '<li class="loading">⏳ Chargement du contexte...</li>';
+
         const response = await fetch('/api/derniere-analyse');
         const data = await response.json();
 
         if (data.success && data.analyse) {
             analysisData = data.analyse;
+
+            // Vérifier fraîcheur et mettre à jour si périmé (>1h)
+            const now = new Date();
+            if (data.analyse.heure) {
+                const [h, m] = data.analyse.heure.split(':').map(Number);
+                const analyseTime = new Date();
+                analyseTime.setHours(h, m, 0, 0);
+                const diffHours = (now - analyseTime) / (1000 * 60 * 60);
+
+                if (diffHours > 1 && now.getHours() >= 7 && now.getHours() < 23) {
+                    container.innerHTML = '<li style="color: var(--accent-orange);">⚠️ Contexte périmé, mise à jour automatique...</li>';
+                    await actualiserContexte();
+                    return; // actualiserContexte appellera loadLastAnalysis à nouveau
+                }
+            }
+
             renderAnalysis();
+        } else {
+            // Pas d'analyse existante - en lancer une automatiquement (heures de marché)
+            const hour = new Date().getHours();
+            if (hour >= 7 && hour < 23) {
+                container.innerHTML = '<li style="color: var(--accent-orange);">⏳ Première analyse en cours...</li>';
+                await actualiserContexte();
+            } else {
+                container.innerHTML = '<li>Marchés fermés. Analyse disponible demain à partir de 7h.</li>';
+            }
         }
     } catch (error) {
         console.error('Erreur analyse:', error);
+        document.getElementById('context-bullets').innerHTML =
+            '<li class="error-message">Erreur de chargement du contexte</li>';
     }
 }
 
