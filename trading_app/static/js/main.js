@@ -212,7 +212,7 @@ function debounce(func, wait) {
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    toast.innerHTML = message;
+    toast.textContent = message;  // textContent au lieu de innerHTML pour éviter XSS
 
     const bgColor = type === 'success' ? 'var(--gradient-green)' :
                    type === 'error' ? 'var(--gradient-red)' :

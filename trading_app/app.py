@@ -7,6 +7,8 @@ import os
 import json
 import re
 import sqlite3
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from threading import Thread, Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,6 +31,27 @@ import yfinance as yf
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'trading-secret-key-2024')
+
+# Configuration Logging
+# - Fichier rotatif pour persistance (10MB max, 5 fichiers conservés)
+# - Console pour développement
+LOG_PATH = 'trading.log'
+logger = logging.getLogger('trading_app')
+logger.setLevel(logging.DEBUG)
+
+# Handler fichier avec rotation
+file_handler = RotatingFileHandler(LOG_PATH, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+file_handler.setFormatter(file_formatter)
+logger.addHandler(file_handler)
+
+# Handler console pour développement
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)  # Console uniquement WARNING+
+console_formatter = logging.Formatter('[%(levelname)s] %(message)s')
+console_handler.setFormatter(console_formatter)
+logger.addHandler(console_handler)
 
 # Clients API
 client_anthropic = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -409,7 +432,7 @@ def get_yahoo_finance_data(symbole, outputsize=30):
         return hist, is_fresh
 
     except Exception as e:
-        print(f"⚠️ Yahoo Finance {symbole}: {e}")
+        logger.warning(f"Yahoo Finance {symbole}: {e}")
         return pd.DataFrame(), False
 
 def get_yahoo_finance_batch(symboles_list, outputsize=30):
@@ -504,11 +527,11 @@ def get_yahoo_finance_batch(symboles_list, outputsize=30):
                 results[symbole] = (hist, is_fresh)
 
             except Exception as e:
-                print(f"⚠️ Yahoo batch parse {symbole}: {e}")
+                logger.warning(f"Yahoo batch parse {symbole}: {e}")
                 results[symbole] = (pd.DataFrame(), False)
 
     except Exception as e:
-        print(f"⚠️ Yahoo Finance batch download: {e}")
+        logger.warning(f"Yahoo Finance batch download: {e}")
         for symbole in symboles_to_fetch:
             results[symbole] = (pd.DataFrame(), False)
 
@@ -573,7 +596,7 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
             if "quota" in error_msg.lower() or "limit" in error_msg.lower() or error_code == 429:
                 activate_quota_circuit_breaker()
 
-            print(f"⚠️ Twelve Data {symbole}: {error_msg}")
+            logger.warning(f"Twelve Data {symbole}: {error_msg}")
             return pd.DataFrame(), False
 
         # Convertir en DataFrame similaire à yfinance
@@ -1517,7 +1540,13 @@ def init_database():
         ("session_marche", "TEXT"),         # EU_OPEN / US_PREMARKET / US_OPEN / EU_CLOSE / US_CLOSE
         ("pattern_jour", "TEXT"),           # Pattern historique du jour (ex: "Lundi souvent haussier")
         # Score de conviction global
-        ("conviction_score", "INTEGER")     # 1-5 (5 = très haute conviction)
+        ("conviction_score", "INTEGER"),    # 1-5 (5 = très haute conviction)
+        # 8. Trade Quality Grading
+        ("trade_grade", "TEXT"),            # A/B/C/D - Note qualité du setup
+        ("grade_details", "TEXT"),          # JSON détail des critères de notation
+        ("grade_entry_score", "INTEGER"),   # Score qualité entrée (0-100)
+        ("grade_exit_score", "INTEGER"),    # Score qualité sortie (0-100, calculé après clôture)
+        ("grade_setup_score", "INTEGER")    # Score qualité setup (0-100)
     ]
     for col_nom, col_type in colonnes_trades:
         try:
@@ -1632,7 +1661,7 @@ def backup_database():
         print(f"✅ Backup créé: {backup_name}")
         return backup_path
     except Exception as e:
-        print(f"❌ Erreur backup: {e}")
+        logger.error(f"Erreur backup: {e}")
         return None
 
 def cleanup_old_backups(backup_dir, keep=7):
@@ -1742,7 +1771,7 @@ def get_vix_level():
             save_vix_cache()
             return vix_value
     except Exception as e:
-        print(f"⚠️ Erreur récup VIX Yahoo: {e}")
+        logger.warning(f"Erreur récup VIX Yahoo: {e}")
 
     # Fallback: utiliser Twelve Data si disponible
     try:
@@ -1754,7 +1783,7 @@ def get_vix_level():
                 save_vix_cache()
                 return vix_value
     except Exception as e:
-        print(f"⚠️ Erreur récup VIX Twelve Data: {e}")
+        logger.warning(f"Erreur récup VIX Twelve Data: {e}")
 
     # Fallback ultime: utiliser le cache même périmé (mieux que rien)
     if VIX_CACHE.get('value'):
@@ -1790,19 +1819,51 @@ def get_session_marche():
     minute = maintenant.minute
     heure_decimal = heure + minute / 60
 
+    # Détection du décalage DST US/EU (différent ~2 semaines par an)
+    # US DST: 2nd dimanche mars → 1er dimanche novembre
+    # EU DST: dernier dimanche mars → dernier dimanche octobre
+    # Pendant ces périodes, US ouvre 1h plus tôt en heure Paris
+    us_offset = 0
+    mois = maintenant.month
+    jour_mois = maintenant.day
+
+    # Période mars: après 2nd dimanche US, avant dernier dimanche EU
+    if mois == 3 and jour_mois >= 8 and jour_mois <= 31:
+        # Simplification: US DST actif, vérifier si EU DST pas encore actif
+        # Dernier dimanche de mars = jour >= 25 et weekday == 6 (dimanche)
+        dernier_dimanche = 31 - ((datetime(maintenant.year, 3, 31).weekday() + 1) % 7)
+        if jour_mois < dernier_dimanche:
+            us_offset = -1  # US ouvre 1h plus tôt en heure Paris
+
+    # Période octobre/novembre: EU DST terminé, US DST encore actif
+    if mois == 10 and jour_mois >= 25:
+        dernier_dimanche_oct = 31 - ((datetime(maintenant.year, 10, 31).weekday() + 1) % 7)
+        if jour_mois > dernier_dimanche_oct:
+            us_offset = -1
+    elif mois == 11 and jour_mois <= 7:
+        # Avant 1er dimanche novembre, US encore en DST
+        premier_dimanche_nov = (7 - datetime(maintenant.year, 11, 1).weekday()) % 7 + 1
+        if jour_mois < premier_dimanche_nov:
+            us_offset = -1
+
+    # Heures de session ajustées
+    us_open = 15.5 + us_offset
+    us_close = 22 + us_offset
+    eu_us_overlap_end = 17.5 + us_offset
+
     if 9 <= heure_decimal < 11:
         return "EU_OPEN", "Ouverture européenne - Forte activité"
     elif 11 <= heure_decimal < 13:
         return "EU_MID", "Milieu de session EU - Consolidation"
-    elif 13 <= heure_decimal < 15.5:
+    elif 13 <= heure_decimal < us_open:
         return "US_PREMARKET", "Pré-marché US - Attente données"
-    elif 15.5 <= heure_decimal < 17:
-        return "US_OPEN", "Ouverture US - Chevauchement EU/US"
+    elif us_open <= heure_decimal < 17:
+        return "US_OPEN", f"Ouverture US ({us_open:.1f}h Paris) - Chevauchement EU/US"
     elif 17 <= heure_decimal < 17.5:
         return "EU_CLOSE", "Clôture EU - Prise de profits"
-    elif 17.5 <= heure_decimal < 21:
+    elif 17.5 <= heure_decimal < (us_close - 1):
         return "US_ONLY", "Session US seule - Momentum US"
-    elif 21 <= heure_decimal < 22:
+    elif (us_close - 1) <= heure_decimal < us_close:
         return "US_CLOSE", "Clôture US - Volatilité de fin"
     else:
         return "HORS_SESSION", "Hors heures principales"
@@ -1867,6 +1928,251 @@ def get_contexte_trading_complet():
         "jour_semaine": pattern_jour["nom"],
         "pattern_jour": pattern_jour["pattern"],
         "conseil_jour": pattern_jour["conseil"]
+    }
+
+def calculer_trade_grade(trade_data):
+    """
+    Calcule la note qualité d'un trade (A/B/C/D) basée sur plusieurs critères.
+
+    A = Setup parfait (score >= 85): Tous les feux au vert
+    B = Bon setup (score 70-84): La plupart des critères OK
+    C = Setup acceptable (score 50-69): Trade risqué mais justifiable
+    D = Setup faible (score < 50): Trade de basse qualité
+
+    Critères:
+    - Conviction (20 points max)
+    - R:R ratio (20 points max)
+    - Alignement multi-timeframe (15 points max)
+    - Confluence technique (15 points max)
+    - Régime marché adapté (10 points max)
+    - Session appropriée (10 points max)
+    - Sentiment aligné (10 points max)
+    """
+    score = 0
+    details = {}
+
+    # 1. CONVICTION (20 points)
+    conviction = trade_data.get('conviction_score', 3)
+    conviction_score = conviction * 4  # 1→4, 2→8, 3→12, 4→16, 5→20
+    score += conviction_score
+    details['conviction'] = {'score': conviction_score, 'max': 20, 'valeur': conviction}
+
+    # 2. RATIO R:R (20 points)
+    ratio_rr_str = trade_data.get('ratio_rr', '1:1')
+    try:
+        parts = ratio_rr_str.replace(' ', '').split(':')
+        if len(parts) == 2:
+            rr_ratio = float(parts[1]) / float(parts[0])
+        else:
+            rr_ratio = 1.0
+    except:
+        rr_ratio = 1.0
+
+    if rr_ratio >= 3.0:
+        rr_score = 20
+    elif rr_ratio >= 2.5:
+        rr_score = 18
+    elif rr_ratio >= 2.0:
+        rr_score = 15
+    elif rr_ratio >= 1.5:
+        rr_score = 12
+    elif rr_ratio >= 1.0:
+        rr_score = 8
+    else:
+        rr_score = 4
+
+    score += rr_score
+    details['ratio_rr'] = {'score': rr_score, 'max': 20, 'valeur': ratio_rr_str}
+
+    # 3. ALIGNEMENT MULTI-TIMEFRAME (15 points)
+    alignement = trade_data.get('alignement_tf', 0)
+    align_score = alignement * 5  # 0→0, 1→5, 2→10, 3→15
+    score += align_score
+    details['alignement_tf'] = {'score': align_score, 'max': 15, 'valeur': alignement}
+
+    # 4. CONFLUENCE TECHNIQUE (15 points)
+    confluence = trade_data.get('confluence_score', 5)
+    conf_score = int(confluence * 1.5)  # 0→0, 5→7.5, 10→15
+    score += conf_score
+    details['confluence'] = {'score': conf_score, 'max': 15, 'valeur': confluence}
+
+    # 5. RÉGIME MARCHÉ ADAPTÉ (10 points)
+    regime = trade_data.get('regime_marche', 'NORMAL')
+    direction = trade_data.get('direction', 'LONG')
+
+    # En régime EXTREME, seules les positions SHORT ou conviction 5 sont OK
+    if regime == 'EXTREME':
+        if direction == 'SHORT' or conviction == 5:
+            regime_score = 10
+        else:
+            regime_score = 2
+    elif regime == 'VOLATILE':
+        if conviction >= 4:
+            regime_score = 8
+        else:
+            regime_score = 5
+    elif regime == 'CALME':
+        regime_score = 10  # Conditions idéales
+    else:  # NORMAL
+        regime_score = 8
+
+    score += regime_score
+    details['regime'] = {'score': regime_score, 'max': 10, 'valeur': regime}
+
+    # 6. SESSION APPROPRIÉE (10 points)
+    session = trade_data.get('session_marche', 'HORS_SESSION')
+
+    session_scores = {
+        'EU_OPEN': 10,      # Meilleur moment
+        'US_OPEN': 10,      # Très bon
+        'EU_MID': 7,        # Acceptable
+        'US_ONLY': 7,       # OK
+        'US_PREMARKET': 5,  # Risqué (avant données)
+        'EU_CLOSE': 4,      # Prises de profits
+        'US_CLOSE': 3,      # Volatile fin de journée
+        'HORS_SESSION': 2   # Mauvais timing
+    }
+    session_score = session_scores.get(session, 5)
+    score += session_score
+    details['session'] = {'score': session_score, 'max': 10, 'valeur': session}
+
+    # 7. SENTIMENT ALIGNÉ (10 points)
+    sentiment = trade_data.get('sentiment_score', 0)
+
+    # Sentiment doit être aligné avec la direction
+    if direction == 'LONG':
+        if sentiment >= 2:
+            sent_score = 10
+        elif sentiment >= 0:
+            sent_score = 6
+        elif sentiment >= -2:
+            sent_score = 3
+        else:
+            sent_score = 0
+    else:  # SHORT
+        if sentiment <= -2:
+            sent_score = 10
+        elif sentiment <= 0:
+            sent_score = 6
+        elif sentiment <= 2:
+            sent_score = 3
+        else:
+            sent_score = 0
+
+    score += sent_score
+    details['sentiment'] = {'score': sent_score, 'max': 10, 'valeur': sentiment}
+
+    # Calcul du grade final
+    if score >= 85:
+        grade = 'A'
+        grade_label = 'Excellent'
+    elif score >= 70:
+        grade = 'B'
+        grade_label = 'Bon'
+    elif score >= 50:
+        grade = 'C'
+        grade_label = 'Acceptable'
+    else:
+        grade = 'D'
+        grade_label = 'Faible'
+
+    # Score setup (avant exécution)
+    setup_score = score
+
+    return {
+        'grade': grade,
+        'grade_label': grade_label,
+        'setup_score': setup_score,
+        'details': details,
+        'resume': f"{grade} ({setup_score}/100) - {grade_label}"
+    }
+
+def calculer_exit_grade(trade):
+    """
+    Calcule la note de sortie d'un trade après clôture.
+
+    Critères:
+    - Résultat vs objectif (40 points)
+    - Gestion du drawdown (30 points)
+    - Timing de sortie (30 points)
+    """
+    score = 0
+    details = {}
+
+    resultat = trade.get('resultat', 'NON_CONCLU')
+    pnl_pct = trade.get('pnl_pct', 0) or 0
+    pnl_max = trade.get('pnl_max', 0) or 0
+    pnl_min = trade.get('pnl_min', 0) or 0
+
+    # 1. RÉSULTAT VS OBJECTIF (40 points)
+    if resultat == 'TP2':
+        result_score = 40  # Objectif dépassé
+    elif resultat == 'TP1':
+        result_score = 35  # Objectif atteint
+    elif resultat == 'WIN_FORCE':
+        if pnl_pct >= 0.5:
+            result_score = 28
+        else:
+            result_score = 22
+    elif resultat == 'BREAKEVEN':
+        result_score = 15  # Capital préservé
+    elif resultat == 'STOP':
+        result_score = 10  # Stop respecté
+    elif resultat == 'LOSS_FORCE':
+        if pnl_pct >= -0.5:
+            result_score = 8
+        else:
+            result_score = 5
+    else:
+        result_score = 0
+
+    score += result_score
+    details['resultat'] = {'score': result_score, 'max': 40, 'valeur': resultat}
+
+    # 2. GESTION DU DRAWDOWN (30 points)
+    # Mesure: combien de % du gain max a été capturé
+    if pnl_max > 0:
+        if pnl_pct >= pnl_max * 0.8:
+            dd_score = 30  # Excellent - gardé 80%+ du max
+        elif pnl_pct >= pnl_max * 0.5:
+            dd_score = 22  # Bon - gardé 50%+
+        elif pnl_pct >= pnl_max * 0.2:
+            dd_score = 15  # Passable
+        elif pnl_pct >= 0:
+            dd_score = 10  # Breakeven après profit
+        else:
+            dd_score = 5   # Perte après profit
+    else:
+        # Jamais été en profit
+        if pnl_pct >= 0:
+            dd_score = 15
+        elif pnl_pct >= pnl_min * 0.5:
+            dd_score = 12  # Remonté du min
+        else:
+            dd_score = 8   # Près du pire
+
+    score += dd_score
+    details['drawdown'] = {'score': dd_score, 'max': 30, 'pnl_max': pnl_max, 'pnl_pct': pnl_pct}
+
+    # 3. TIMING DE SORTIE (30 points)
+    duree = trade.get('duree_minutes', 0) or 0
+
+    # Pour le day trading, durée idéale entre 30 min et 3h
+    if 30 <= duree <= 180:
+        timing_score = 30  # Durée idéale
+    elif 15 <= duree <= 240:
+        timing_score = 22  # Acceptable
+    elif 5 <= duree <= 360:
+        timing_score = 15  # Long/court mais OK
+    else:
+        timing_score = 8   # Très court ou overnight
+
+    score += timing_score
+    details['timing'] = {'score': timing_score, 'max': 30, 'duree_min': duree}
+
+    return {
+        'exit_score': score,
+        'details': details
     }
 
 # ============================================================================
@@ -2715,7 +3021,7 @@ RÈGLES IMPÉRATIVES:
             return result
         return None
     except Exception as e:
-        print(f"❌ Erreur analyse: {e}")
+        logger.error(f"Erreur analyse: {e}")
         return None
 
 def generer_cloture_json(donnees):
@@ -2747,7 +3053,7 @@ Génère un résumé de clôture complet en JSON selon le format demandé."""
             return json.loads(match.group())
         return None
     except Exception as e:
-        print(f"❌ Erreur clôture: {e}")
+        logger.error(f"Erreur clôture: {e}")
         return None
 
 # ============================================================================
@@ -2817,21 +3123,40 @@ def enregistrer_recommandation(trade_data):
         else:
             direction = 'LONG'
 
-        # Validation cohérence direction/stop/entry
+        # Validation cohérence direction/stop/entry avec logging explicite
+        direction_corrigee = False
+        direction_originale = direction
+        avertissements_coherence = []
+
         if entree > 0 and stop > 0:
             if direction == 'LONG' and stop >= entree:
-                print(f"⚠️ Trade LONG incohérent: stop ({stop}) >= entrée ({entree}), corrigé en SHORT")
+                avertissements_coherence.append(
+                    f"🔄 CORRECTION DIRECTION: LONG→SHORT (stop {stop} >= entrée {entree})"
+                )
+                print(f"⚠️ [{symbole if 'symbole' in dir() else 'N/A'}] Trade LONG incohérent: stop ({stop}) >= entrée ({entree}), AUTO-CORRIGÉ en SHORT")
                 direction = 'SHORT'
+                direction_corrigee = True
             elif direction == 'SHORT' and stop <= entree:
-                print(f"⚠️ Trade SHORT incohérent: stop ({stop}) <= entrée ({entree}), corrigé en LONG")
+                avertissements_coherence.append(
+                    f"🔄 CORRECTION DIRECTION: SHORT→LONG (stop {stop} <= entrée {entree})"
+                )
+                print(f"⚠️ [{symbole if 'symbole' in dir() else 'N/A'}] Trade SHORT incohérent: stop ({stop}) <= entrée ({entree}), AUTO-CORRIGÉ en LONG")
                 direction = 'LONG'
+                direction_corrigee = True
 
         # Validation cohérence TP
         if entree > 0 and tp1 > 0:
             if direction == 'LONG' and tp1 < entree:
-                print(f"⚠️ Trade LONG: TP1 ({tp1}) < entrée ({entree}), incohérent")
+                avertissements_coherence.append(f"⚠️ TP1 ({tp1}) < entrée ({entree}) pour LONG")
+                print(f"⚠️ Trade LONG: TP1 ({tp1}) < entrée ({entree}), incohérent - TRADE SUSPECT")
             elif direction == 'SHORT' and tp1 > entree:
-                print(f"⚠️ Trade SHORT: TP1 ({tp1}) > entrée ({entree}), incohérent")
+                avertissements_coherence.append(f"⚠️ TP1 ({tp1}) > entrée ({entree}) pour SHORT")
+                print(f"⚠️ Trade SHORT: TP1 ({tp1}) > entrée ({entree}), incohérent - TRADE SUSPECT")
+
+        # Stocker les avertissements dans la justification si présents
+        if avertissements_coherence:
+            justification_originale = trade_data.get('justification', '')
+            trade_data['justification'] = f"[COHERENCE: {'; '.join(avertissements_coherence)}] {justification_originale}"
 
         # Trouver le symbole et la catégorie
         symbole = trade_data.get('symbole', '')
@@ -2865,7 +3190,7 @@ def enregistrer_recommandation(trade_data):
         ratio_rr_justification = trade_data.get('ratio_rr_justification', '')
 
         # A/B Testing - récupérer le groupe et la variante
-        ab_groupe, ab_variante = get_variante_ab_pour_symbole(symbole)
+        ab_groupe, ab_variante = get_variante_ab_pour_actif(symbole)
         ab_test_id = None
         if ab_groupe:
             # Trouver le test_id actif pour ce symbole
@@ -2929,6 +3254,25 @@ def enregistrer_recommandation(trade_data):
         # Score de conviction global
         conviction_score = trade_data.get('conviction_score', 3)
 
+        # === TRADE QUALITY GRADING ===
+        # Préparer les données pour le calcul du grade
+        grade_data = {
+            'conviction_score': conviction_score,
+            'ratio_rr': ratio_rr,
+            'alignement_tf': alignement_tf,
+            'confluence_score': confluence_score,
+            'regime_marche': regime_marche,
+            'session_marche': session_marche,
+            'sentiment_score': sentiment_score,
+            'direction': direction
+        }
+        grade_result = calculer_trade_grade(grade_data)
+        trade_grade = grade_result['grade']
+        grade_details = json.dumps(grade_result['details'], ensure_ascii=False)
+        grade_setup_score = grade_result['setup_score']
+
+        logger.info(f"Trade Grade: {symbole} - {grade_result['resume']}")
+
         cursor.execute('''
             INSERT INTO trades_recommandes
             (date, heure_message, actif, symbole, type_setup, prix_entree, prix_stop,
@@ -2942,9 +3286,10 @@ def enregistrer_recommandation(trade_data):
              validite_minutes, heure_expiration, urgence,
              trend_daily, trend_h4, trend_h1, alignement_tf, confluence_score,
              sentiment_score, sentiment_source, sentiment_detail,
-             jour_semaine, session_marche, pattern_jour, conviction_score)
+             jour_semaine, session_marche, pattern_jour, conviction_score,
+             trade_grade, grade_details, grade_setup_score)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             maintenant.date(),
             maintenant.strftime('%H:%M'),
@@ -2997,14 +3342,19 @@ def enregistrer_recommandation(trade_data):
             jour_semaine,
             session_marche,
             pattern_jour,
-            conviction_score
+            conviction_score,
+            # Trade Quality Grading
+            trade_grade,
+            grade_details,
+            grade_setup_score
         ))
 
         conn.commit()
         trade_id = cursor.lastrowid
+        logger.info(f"Trade enregistré: #{trade_id} {symbole} {direction} @ {entree}")
         return trade_id
     except Exception as e:
-        print(f"⚠️ Erreur enregistrement: {e}")
+        logger.error(f"Erreur enregistrement trade {symbole}: {e}")
         return None
     finally:
         if conn:
@@ -3012,15 +3362,18 @@ def enregistrer_recommandation(trade_data):
 
 def verifier_resultats_trades():
     """Vérifie et met à jour les résultats des trades ouverts (ordre chronologique)
-    Avec suivi temps réel: prix max/min atteints, PnL max/min"""
+    Avec suivi temps réel: prix max/min atteints, PnL max/min
+    Utilise une transaction atomique pour éviter les états incohérents."""
     maintenant = get_paris_time()
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔍 Vérification résultats trades...")
 
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        conn.isolation_level = 'DEFERRED'  # Transaction explicite
         cursor = conn.cursor()
+        cursor.execute('BEGIN TRANSACTION')
 
         # Récupérer les trades sans résultat DU JOUR uniquement
         # (évite de vérifier des trades anciens avec des données intraday d'aujourd'hui)
@@ -3049,7 +3402,8 @@ def verifier_resultats_trades():
                 tp1 = float(trade['prix_tp1'] or 0)
                 tp2 = float(trade['prix_tp2'] or 0)
 
-                if entree == 0:
+                if entree <= 0:
+                    print(f"   ⚠️ Trade {trade.get('actif', 'inconnu')}: prix entrée invalide ({entree})")
                     continue
 
                 # Récupérer les données intraday via Twelve Data (5min pour avoir l'ordre chronologique)
@@ -3155,6 +3509,7 @@ def verifier_resultats_trades():
                           trade['id']))
                     nb_mis_a_jour += 1
                     duree_str = f" ({duree_minutes}min)" if duree_minutes else ""
+                    logger.info(f"Trade clos: {trade['actif']} {resultat} PnL={pnl_pct:+.2f}% Max={pnl_max:+.2f}%{duree_str}")
                     print(f"   ✅ {trade['actif']}: {resultat} ({pnl_pct:+.2f}%) | Max: {pnl_max:+.2f}%{duree_str}")
                 else:
                     # Trade en cours - mettre à jour le tracking temps réel
@@ -3172,16 +3527,22 @@ def verifier_resultats_trades():
                     print(f"   📊 {trade['actif']}: En cours {pnl_actuel:+.2f}% | Max: {pnl_max:+.2f}% | Min: {pnl_min:+.2f}%")
 
             except Exception as e:
-                print(f"   ⚠️ Erreur trade {trade.get('actif', 'inconnu')}: {e}")
+                logger.warning(f"Erreur trade {trade.get('actif', 'inconnu')}: {e}")
                 continue
 
-        conn.commit()
+        conn.commit()  # Commit de la transaction atomique
 
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_mis_a_jour} terminé(s), {nb_tracking} en suivi")
         return nb_mis_a_jour
 
     except Exception as e:
-        print(f"❌ Erreur vérification trades: {e}")
+        logger.error(f"Erreur vérification trades: {e}")
+        if conn:
+            try:
+                conn.rollback()  # Annuler toutes les modifications en cas d'erreur
+                print("🔄 Transaction annulée (rollback)")
+            except:
+                pass
         return 0
     finally:
         if conn:
@@ -3301,11 +3662,13 @@ def reevaluer_trades_intraday():
                     distance_tp_pct = ((prix_actuel - tp1) / prix_actuel) * 100 if tp1 > 0 else 0
                     distance_stop_pct = ((stop - prix_actuel) / prix_actuel) * 100 if stop > 0 else 0
 
-                # Déterminer le statut et l'action recommandée
+                # Déterminer le statut et l'action recommandée avec PRIORITÉ
+                # Priorité: SORTIR > REDUIRE > RENFORCER > HOLD
+                # On accumule les signaux et on garde le plus critique
                 statut_intraday = trade.get('statut_intraday', 'EN_COURS')
-                action_recommandee = 'HOLD'
                 stop_ajuste = None
                 detail_reevaluation = []
+                signaux = []  # Liste de (priorité, action, raison)
 
                 # 1. Vérifier si TP50% atteint → Breakeven
                 tp_pct = ((tp1 - entree) / entree) * 100 if direction == 'LONG' and tp1 > 0 else \
@@ -3314,8 +3677,8 @@ def reevaluer_trades_intraday():
                 if tp_pct > 0 and pnl_pct >= tp_pct * 0.5 and statut_intraday == 'EN_COURS':
                     statut_intraday = 'TP50_ATTEINT'
                     stop_ajuste = entree  # Breakeven
-                    detail_reevaluation.append(f"TP50% atteint ({pnl_pct:+.2f}%), stop → breakeven")
-                    action_recommandee = 'HOLD'
+                    detail_reevaluation.append(f"✅ TP50% atteint ({pnl_pct:+.2f}%), stop → breakeven")
+                    signaux.append((0, 'HOLD', 'TP50% protégé'))
 
                 # 2. Trailing stop si activé et conviction élevée
                 if trailing_stop_actif and conviction >= 4:
@@ -3323,29 +3686,55 @@ def reevaluer_trades_intraday():
                         nouveau_stop = prix_actuel * (1 - trailing_stop_pct / 100)
                         if nouveau_stop > (stop_ajuste or stop):
                             stop_ajuste = nouveau_stop
-                            detail_reevaluation.append(f"Trailing stop → {nouveau_stop:.2f}")
+                            detail_reevaluation.append(f"📈 Trailing stop → {nouveau_stop:.2f}")
                     else:
                         nouveau_stop = prix_actuel * (1 + trailing_stop_pct / 100)
                         if nouveau_stop < (stop_ajuste or stop):
                             stop_ajuste = nouveau_stop
-                            detail_reevaluation.append(f"Trailing stop → {nouveau_stop:.2f}")
+                            detail_reevaluation.append(f"📉 Trailing stop → {nouveau_stop:.2f}")
 
-                # 3. Alerte si proche du stop (< 30% du chemin restant)
-                if distance_stop_pct > 0 and distance_stop_pct < 0.2:
-                    detail_reevaluation.append(f"⚠️ PROCHE DU STOP ({distance_stop_pct:.2f}%)")
+                # 3. Alerte si proche du stop (< 30% du chemin original restant)
+                if direction == 'LONG' and stop > 0:
+                    distance_originale_pct = ((entree - stop) / entree) * 100
+                elif direction == 'SHORT' and stop > 0:
+                    distance_originale_pct = ((stop - entree) / entree) * 100
+                else:
+                    distance_originale_pct = 0
+
+                seuil_alerte = distance_originale_pct * 0.30
+                if distance_stop_pct > 0 and distance_stop_pct < seuil_alerte:
+                    pct_restant = (distance_stop_pct / distance_originale_pct * 100) if distance_originale_pct > 0 else 0
+                    detail_reevaluation.append(f"⚠️ PROCHE DU STOP ({pct_restant:.0f}% restant)")
                     if pnl_pct < -0.3:
-                        action_recommandee = 'REDUIRE'
+                        signaux.append((2, 'REDUIRE', f'Proche stop avec perte {pnl_pct:.2f}%'))
 
                 # 4. Renforcer si très positif et haute conviction
                 if pnl_pct > 0.5 and conviction >= 4 and statut_intraday != 'TP50_ATTEINT':
-                    action_recommandee = 'RENFORCER'
-                    detail_reevaluation.append(f"Position en profit ({pnl_pct:+.2f}%), renforcement possible")
+                    detail_reevaluation.append(f"💪 En profit ({pnl_pct:+.2f}%), renforcement possible")
+                    signaux.append((1, 'RENFORCER', f'Profit {pnl_pct:.2f}% + conviction {conviction}'))
 
-                # 5. Sortir si momentum inversé (à implémenter avec indicateurs)
+                # 5. Sortir si momentum inversé
                 pnl_max = trade.get('pnl_max', 0) or 0
                 if pnl_max > 0.5 and pnl_pct < pnl_max * 0.3:
-                    action_recommandee = 'SORTIR'
-                    detail_reevaluation.append(f"Momentum perdu: max {pnl_max:+.2f}% → actuel {pnl_pct:+.2f}%")
+                    detail_reevaluation.append(f"🔻 Momentum perdu: max {pnl_max:+.2f}% → actuel {pnl_pct:+.2f}%")
+                    signaux.append((3, 'SORTIR', f'Perte momentum ({pnl_max:.2f}% → {pnl_pct:.2f}%)'))
+
+                # 6. Sortir si perte importante (> 50% du stop)
+                if pnl_pct < 0 and distance_originale_pct > 0:
+                    perte_vs_stop = abs(pnl_pct) / distance_originale_pct
+                    if perte_vs_stop > 0.7:  # > 70% du chemin vers le stop
+                        signaux.append((3, 'SORTIR', f'Perte critique {pnl_pct:.2f}% (70%+ vers stop)'))
+
+                # Déterminer l'action finale par priorité (le plus haut gagne)
+                if signaux:
+                    signaux.sort(key=lambda x: x[0], reverse=True)
+                    action_recommandee = signaux[0][1]
+                    # Ajouter toutes les raisons au détail
+                    if len(signaux) > 1:
+                        autres_signaux = [f"{s[1]}:{s[2]}" for s in signaux[1:]]
+                        detail_reevaluation.append(f"[Autres signaux: {', '.join(autres_signaux)}]")
+                else:
+                    action_recommandee = 'HOLD'
 
                 # Construire la réévaluation
                 reevaluation = {
@@ -3407,7 +3796,7 @@ def reevaluer_trades_intraday():
         return reevaluations
 
     except Exception as e:
-        print(f"❌ Erreur réévaluation intraday: {e}")
+        logger.error(f"Erreur réévaluation intraday: {e}")
         return []
     finally:
         if conn:
@@ -3451,7 +3840,8 @@ def cloturer_trades_jour():
                 tp1 = float(trade['prix_tp1'] or 0)
                 tp2 = float(trade['prix_tp2'] or 0)
 
-                if entree == 0:
+                if entree <= 0:
+                    print(f"   ⚠️ Trade {trade.get('actif', 'inconnu')}: prix entrée invalide ({entree})")
                     continue
 
                 # AMÉLIORATION: Vérifier si TP/Stop a été touché plus tôt dans la journée
@@ -3491,10 +3881,14 @@ def cloturer_trades_jour():
                     else:
                         pnl_pct = ((entree - prix_sortie) / entree) * 100
 
-                    if pnl_pct > 0:
+                    # Classifier le résultat avec tolérance pour BREAKEVEN
+                    if pnl_pct > 0.05:  # Win si > 0.05%
                         resultat = 'WIN_FORCE'
                         emoji = '✅'
-                    else:
+                    elif pnl_pct >= -0.05:  # Breakeven si entre -0.05% et +0.05%
+                        resultat = 'BREAKEVEN'
+                        emoji = '⚖️'
+                    else:  # Perte si < -0.05%
                         resultat = 'LOSS_FORCE'
                         emoji = '❌'
 
@@ -3551,7 +3945,7 @@ def cloturer_trades_jour():
         return nb_clotures
 
     except Exception as e:
-        print(f"❌ Erreur clôture trades: {e}")
+        logger.error(f"Erreur clôture trades: {e}")
         return 0
     finally:
         if conn:
@@ -3925,7 +4319,7 @@ Sois direct et factuel, comme un trader pro."""
             return result.get('commentaires', {}), result.get('faits_marquants', [])
         return {}, []
     except Exception as e:
-        print(f"❌ Erreur commentaires journal: {e}")
+        logger.error(f"Erreur commentaires journal: {e}")
         return {}, []
 
 def recuperer_recommandations_analystes(symbole):
@@ -4022,7 +4416,7 @@ Fais un bilan honnête de cette journée de trading. Qu'est-ce qui a fonctionné
             return bilan
         return None
     except Exception as e:
-        print(f"❌ Erreur bilan quotidien: {e}")
+        logger.error(f"Erreur bilan quotidien: {e}")
         return None
 
 def enregistrer_journal_quotidien(actifs_a_traiter=None):
@@ -4148,7 +4542,7 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Journal quotidien enregistré")
         return True
     except Exception as e:
-        print(f"❌ Erreur journal quotidien: {e}")
+        logger.error(f"Erreur journal quotidien: {e}")
         return False
 
 def enregistrer_journal_fr():
@@ -4563,7 +4957,7 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
 
         return None
     except Exception as e:
-        print(f"❌ Erreur rapport hebdo: {e}")
+        logger.error(f"Erreur rapport hebdo: {e}")
         return None
 
 def appliquer_ajustements_dynamiques(ajustements, scores_confiance):
@@ -5305,48 +5699,100 @@ def evaluer_ab_test(test_id, jours_minimum=7):
         groupe_a = json.loads(test.get('actifs_groupe_a', '[]'))
         groupe_b = json.loads(test.get('actifs_groupe_b', '[]'))
 
-        # Stats groupe A
+        # Stats groupe A - FILTRÉ PAR ab_test_id pour éviter contamination cross-test
         placeholders_a = ','.join(['?' for _ in groupe_a])
         cursor.execute(f'''
             SELECT
                 COUNT(*) as nb_trades,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
-                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as echecs,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total,
+                AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
             WHERE symbole IN ({placeholders_a})
+            AND ab_test_id = ?
+            AND ab_groupe = 'A'
             AND timestamp_reco >= ?
-        ''', (*groupe_a, date_debut))
+        ''', (*groupe_a, test_id, date_debut))
         stats_a = cursor.fetchone()
 
-        # Stats groupe B
+        # Stats groupe B - FILTRÉ PAR ab_test_id
         placeholders_b = ','.join(['?' for _ in groupe_b])
         cursor.execute(f'''
             SELECT
                 COUNT(*) as nb_trades,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
-                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as echecs,
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total,
+                AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
             WHERE symbole IN ({placeholders_b})
+            AND ab_test_id = ?
+            AND ab_groupe = 'B'
             AND timestamp_reco >= ?
-        ''', (*groupe_b, date_debut))
+        ''', (*groupe_b, test_id, date_debut))
         stats_b = cursor.fetchone()
 
         # Calculer les taux
-        taux_a = round((stats_a['reussis'] / stats_a['nb_trades'] * 100) if stats_a['nb_trades'] > 0 else 0, 1)
-        taux_b = round((stats_b['reussis'] / stats_b['nb_trades'] * 100) if stats_b['nb_trades'] > 0 else 0, 1)
+        nb_a = stats_a['nb_trades'] or 0
+        nb_b = stats_b['nb_trades'] or 0
+        reussis_a = stats_a['reussis'] or 0
+        reussis_b = stats_b['reussis'] or 0
+
+        taux_a = round((reussis_a / nb_a * 100) if nb_a > 0 else 0, 1)
+        taux_b = round((reussis_b / nb_b * 100) if nb_b > 0 else 0, 1)
         pnl_a = round(stats_a['pnl_total'] or 0, 2)
         pnl_b = round(stats_b['pnl_total'] or 0, 2)
 
-        # Déterminer le gagnant
-        if taux_a > taux_b + 5 and pnl_a > pnl_b:
-            gagnant = 'A'
-            conclusion = f"Variante A gagne: taux {taux_a}% vs {taux_b}%, PnL {pnl_a}% vs {pnl_b}%"
-        elif taux_b > taux_a + 5 and pnl_b > pnl_a:
-            gagnant = 'B'
-            conclusion = f"Variante B gagne: taux {taux_b}% vs {taux_a}%, PnL {pnl_b}% vs {pnl_a}%"
+        # Test de significativité statistique (Chi-squared simplifié)
+        # Minimum 10 trades par groupe pour significativité
+        significatif = False
+        p_value_approx = None
+        if nb_a >= 10 and nb_b >= 10:
+            # Calcul du chi-squared pour proportions
+            echecs_a = stats_a['echecs'] or 0
+            echecs_b = stats_b['echecs'] or 0
+            total = nb_a + nb_b
+            total_reussis = reussis_a + reussis_b
+            total_echecs = echecs_a + echecs_b
+
+            if total_reussis > 0 and total_echecs > 0:
+                # Expected values
+                exp_reussis_a = nb_a * total_reussis / total
+                exp_echecs_a = nb_a * total_echecs / total
+                exp_reussis_b = nb_b * total_reussis / total
+                exp_echecs_b = nb_b * total_echecs / total
+
+                # Chi-squared (avec protection division par zéro)
+                chi2 = 0
+                for obs, exp in [(reussis_a, exp_reussis_a), (echecs_a, exp_echecs_a),
+                                 (reussis_b, exp_reussis_b), (echecs_b, exp_echecs_b)]:
+                    if exp > 0:
+                        chi2 += ((obs - exp) ** 2) / exp
+
+                # p < 0.05 correspond à chi2 > 3.84 (1 degré de liberté)
+                significatif = chi2 > 3.84
+                p_value_approx = "< 0.05" if chi2 > 3.84 else ">= 0.05"
+
+        # Déterminer le gagnant avec test statistique
+        if significatif:
+            if taux_a > taux_b and pnl_a > pnl_b:
+                gagnant = 'A'
+                conclusion = f"Variante A gagne (p {p_value_approx}): taux {taux_a}% vs {taux_b}%, PnL {pnl_a}% vs {pnl_b}%"
+            elif taux_b > taux_a and pnl_b > pnl_a:
+                gagnant = 'B'
+                conclusion = f"Variante B gagne (p {p_value_approx}): taux {taux_b}% vs {taux_a}%, PnL {pnl_b}% vs {pnl_a}%"
+            else:
+                gagnant = 'MIXTE'
+                conclusion = f"Résultats mixtes (p {p_value_approx}): A taux={taux_a}%/pnl={pnl_a}%, B taux={taux_b}%/pnl={pnl_b}%"
         else:
-            gagnant = 'EGALITE'
-            conclusion = f"Pas de différence significative: A={taux_a}%/{pnl_a}% vs B={taux_b}%/{pnl_b}%"
+            min_trades = min(nb_a, nb_b)
+            if min_trades < 10:
+                gagnant = 'INSUFFISANT'
+                conclusion = f"Données insuffisantes: A={nb_a} trades, B={nb_b} trades (min 10 requis)"
+            else:
+                gagnant = 'EGALITE'
+                conclusion = f"Pas de différence significative (p {p_value_approx}): A={taux_a}%/{pnl_a}% vs B={taux_b}%/{pnl_b}%"
 
         # Sauvegarder les résultats
         cursor.execute('''
@@ -6474,7 +6920,7 @@ def api_journal_quotidien():
             'json_errors_count': len(result['json_errors'])
         })
     except Exception as e:
-        print(f"❌ Erreur api_journal_quotidien: {e}")
+        logger.error(f"Erreur api_journal_quotidien: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/journal-quotidien/generer', methods=['POST'])
@@ -7219,7 +7665,7 @@ def api_trades_historique():
             }
         })
     except Exception as e:
-        print(f"❌ Erreur api_trades_historique: {e}")
+        logger.error(f"Erreur api_trades_historique: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/equity-curve')
@@ -7379,7 +7825,7 @@ def api_equity_curve():
             }
         })
     except Exception as e:
-        print(f"❌ Erreur api_equity_curve: {e}")
+        logger.error(f"Erreur api_equity_curve: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/journal-quotidien/search')
@@ -7487,7 +7933,7 @@ def api_journal_search():
             }
         })
     except Exception as e:
-        print(f"❌ Erreur api_journal_search: {e}")
+        logger.error(f"Erreur api_journal_search: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/journal-stats')
@@ -7619,7 +8065,7 @@ def api_journal_stats():
             'top_bottom_actifs': top_bottom_actifs
         })
     except Exception as e:
-        print(f"❌ Erreur api_journal_stats: {e}")
+        logger.error(f"Erreur api_journal_stats: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
 # ============================================================================
@@ -7647,7 +8093,7 @@ def envoyer_whatsapp(message):
         )
         return True
     except Exception as e:
-        print(f"❌ Erreur WhatsApp: {e}")
+        logger.error(f"Erreur WhatsApp: {e}")
         return False
 
 # ============================================================================
@@ -7842,7 +8288,7 @@ def run_scheduler():
             consecutive_errors = 0  # Reset si succès
         except Exception as e:
             consecutive_errors += 1
-            print(f"❌ Erreur scheduler (#{consecutive_errors}): {e}")
+            logger.error(f"Erreur scheduler (#{consecutive_errors}): {e}")
 
             # Alerte après plusieurs erreurs consécutives
             if consecutive_errors >= max_consecutive_errors:
