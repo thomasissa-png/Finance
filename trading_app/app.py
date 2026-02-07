@@ -767,9 +767,9 @@ def valider_setup_avant_trade(symbole, direction, prix_entree_prevu, donnees_mar
     Valide qu'un setup de trade est toujours pertinent avant exécution.
 
     Vérifie:
-    - Le prix actuel vs prix prévu (pas trop d'écart)
+    - Le prix actuel vs prix prévu (pas trop d'écart, dynamique selon actif)
     - La direction du mouvement intraday
-    - Le volume (liquidité suffisante)
+    - Le volume (liquidité suffisante, sauf indices)
     - La volatilité (spread raisonnable)
 
     Args:
@@ -789,9 +789,23 @@ def valider_setup_avant_trade(symbole, direction, prix_entree_prevu, donnees_mar
     prix_actuel = quote['prix']
     ecart_pct = abs((prix_actuel - prix_entree_prevu) / prix_entree_prevu * 100)
 
-    # Règles de validation
-    MAX_ECART_PCT = 1.0  # Max 1% d'écart avec le prix recommandé
-    MAX_SPREAD_PCT = 3.0  # Spread intraday max acceptable
+    # Écart max DYNAMIQUE selon le type d'actif
+    # Commodités très volatiles: tolérance plus élevée
+    COMMODITES_VOLATILES = {"NG=F", "CC=F", "KC=F", "SI=F", "PL=F", "ZW=F", "ZC=F", "ZS=F", "SB=F"}
+    COMMODITES_STANDARD = {"GC=F", "BZ=F", "CL=F", "HG=F"}
+
+    if symbole in COMMODITES_VOLATILES:
+        MAX_ECART_PCT = 2.5  # Gaz naturel, cacao, café très volatils
+        MAX_SPREAD_PCT = 5.0
+    elif symbole in COMMODITES_STANDARD:
+        MAX_ECART_PCT = 1.5  # Or, pétrole moyennement volatils
+        MAX_SPREAD_PCT = 4.0
+    elif symbole.endswith("=X"):  # Forex
+        MAX_ECART_PCT = 0.5  # Forex très stable
+        MAX_SPREAD_PCT = 1.5
+    else:
+        MAX_ECART_PCT = 1.0  # Actions et indices: standard
+        MAX_SPREAD_PCT = 3.0
 
     # 1. Vérifier l'écart de prix
     if ecart_pct > MAX_ECART_PCT:
@@ -808,7 +822,8 @@ def valider_setup_avant_trade(symbole, direction, prix_entree_prevu, donnees_mar
         return False, f"Momentum haussier depuis open ({quote['variation_open']:.1f}%)", quote
 
     # 4. Vérifier le volume (si disponible)
-    if quote['volume'] == 0:
+    # Exception: indices via Yahoo Finance peuvent avoir volume=0 (données agrégées)
+    if quote['volume'] == 0 and symbole not in SYMBOLES_YAHOO_FALLBACK:
         return False, "Volume nul - possible problème de données", quote
 
     return True, "Setup validé", quote
@@ -6105,9 +6120,9 @@ def configurer_schedule():
     for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
         getattr(schedule.every(), jour).at(heure_journal_complet_utc).do(executer_journal_complet)
 
-    # Rapport hebdomadaire: Vendredi 23h00 (fin de semaine de trading)
-    heure_rapport_hebdo_utc = get_utc_time_for_paris("23:00")
-    schedule.every().friday.at(heure_rapport_hebdo_utc).do(executer_rapport_hebdo)
+    # Rapport hebdomadaire: Samedi 09h00 (après clôture complète US vendredi soir)
+    heure_rapport_hebdo_utc = get_utc_time_for_paris("09:00")
+    schedule.every().saturday.at(heure_rapport_hebdo_utc).do(executer_rapport_hebdo)
 
     # Expiration des ajustements non traités: tous les jours à 23h00
     heure_expiration_utc = get_utc_time_for_paris("23:00")
