@@ -44,7 +44,7 @@
         <div class="section-header">
             <span class="section-icon">⚡</span>
             <h2 class="section-title">News Flash Trading</h2>
-            <span class="section-meta">Actualités analysées par impact</span>
+            <span class="section-meta" id="news-count">Actualités analysées par impact</span>
         </div>
         <div class="section-content">
             <div class="news-flash-list" id="news-flash-list">
@@ -54,6 +54,11 @@
                         <span class="news-text">Aucune actualité à fort impact pour le moment</span>
                     </div>
                 </div>
+            </div>
+            <div class="news-expand-container" id="news-expand-container" style="display: none;">
+                <button class="news-expand-btn" id="news-expand-btn" onclick="toggleNewsExpand()">
+                    <span id="news-expand-icon">▼</span> Voir plus (<span id="news-hidden-count">0</span>)
+                </button>
             </div>
         </div>
     </section>
@@ -460,6 +465,73 @@
 .news-flash-item.no-impact {
     opacity: 0.6;
 }
+
+.news-flash-item.hidden-news {
+    display: none;
+}
+
+.news-flash-list.expanded .news-flash-item.hidden-news {
+    display: flex;
+}
+
+.news-expand-container {
+    text-align: center;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-color);
+    margin-top: 8px;
+}
+
+.news-expand-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 6px 16px;
+    border-radius: 16px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.news-expand-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+#news-expand-icon {
+    display: inline-block;
+    transition: transform 0.2s;
+}
+
+.news-flash-list.expanded + .news-expand-container #news-expand-icon {
+    transform: rotate(180deg);
+}
+
+/* Macro Alert Mobile Fix */
+@media (max-width: 600px) {
+    .macro-alert-box {
+        flex-direction: column;
+        text-align: center;
+        gap: 12px;
+    }
+
+    .macro-alert-icon {
+        font-size: 28px;
+    }
+
+    .macro-alert-info {
+        width: 100%;
+    }
+
+    .macro-alert-action {
+        width: 100%;
+    }
+
+    .macro-badge {
+        display: block;
+        width: 100%;
+        padding: 8px 12px;
+    }
+}
 </style>
 {% endblock %}
 
@@ -699,8 +771,17 @@ async function refreshNews() {
     }
 }
 
+// Variable pour stocker toutes les news du jour
+let allNewsToday = [];
+
 function renderNewsFlashWithImpact(news) {
     const container = document.getElementById('news-flash-list');
+    const expandContainer = document.getElementById('news-expand-container');
+    const hiddenCountSpan = document.getElementById('news-hidden-count');
+    const newsCountSpan = document.getElementById('news-count');
+
+    // Reset expand state
+    container.classList.remove('expanded');
 
     if (!news || news.length === 0) {
         container.innerHTML = `
@@ -710,13 +791,24 @@ function renderNewsFlashWithImpact(news) {
                     <span class="news-text">Aucune actualité à impact trading détectée</span>
                 </div>
             </div>`;
+        expandContainer.style.display = 'none';
+        newsCountSpan.textContent = 'Aucune news';
         return;
     }
 
+    // Stocker toutes les news
+    allNewsToday = news;
+
+    // Afficher le compteur
+    newsCountSpan.textContent = `${news.length} news analysée${news.length > 1 ? 's' : ''}`;
+
     let html = '';
-    for (const item of news.slice(0, 6)) {
+    const visibleCount = 3;
+
+    news.forEach((item, index) => {
         const impactClass = item.impact ? item.impact.toLowerCase() : 'medium';
         const impactIcon = item.impact === 'HIGH' ? '🔴' : item.impact === 'MEDIUM' ? '🟠' : '⚪';
+        const hiddenClass = index >= visibleCount ? 'hidden-news' : '';
 
         // Formater les actifs concernés
         let actifsHtml = '';
@@ -729,19 +821,44 @@ function renderNewsFlashWithImpact(news) {
             actifsHtml = `<div class="news-actifs">${actifsTags}</div>`;
         }
 
+        // Afficher uniquement l'analyse FR (pas le headline anglais)
         html += `
-            <div class="news-flash-item impact-${impactClass}">
+            <div class="news-flash-item impact-${impactClass} ${hiddenClass}">
                 <div class="news-impact-badge">${impactIcon}</div>
                 <span class="news-time">${item.heure || '--:--'}</span>
                 <div class="news-content">
-                    <span class="news-text">${item.headline || ''}</span>
-                    <span class="news-analyse">${item.analyse || ''}</span>
+                    <span class="news-text">${item.analyse || ''}</span>
                     ${actifsHtml}
                 </div>
             </div>`;
-    }
+    });
 
     container.innerHTML = html;
+
+    // Afficher le bouton expand si plus de 3 news
+    if (news.length > visibleCount) {
+        expandContainer.style.display = 'block';
+        hiddenCountSpan.textContent = news.length - visibleCount;
+    } else {
+        expandContainer.style.display = 'none';
+    }
+}
+
+function toggleNewsExpand() {
+    const container = document.getElementById('news-flash-list');
+    const btn = document.getElementById('news-expand-btn');
+    const icon = document.getElementById('news-expand-icon');
+    const hiddenCount = document.getElementById('news-hidden-count');
+
+    if (container.classList.contains('expanded')) {
+        container.classList.remove('expanded');
+        icon.textContent = '▼';
+        btn.innerHTML = `<span id="news-expand-icon">▼</span> Voir plus (<span id="news-hidden-count">${allNewsToday.length - 3}</span>)`;
+    } else {
+        container.classList.add('expanded');
+        icon.textContent = '▲';
+        btn.innerHTML = `<span id="news-expand-icon">▲</span> Réduire`;
+    }
 }
 
 function renderNewsFlashFromAPI(articles) {
