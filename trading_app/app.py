@@ -551,7 +551,7 @@ def verifier_proximite_evenement_macro(minutes_avant=30):
                 # Si l'événement est dans les X prochaines minutes
                 if 0 <= diff <= minutes_avant:
                     return True, evt
-            except:
+            except (ValueError, KeyError):
                 continue
 
     return False, None
@@ -825,7 +825,7 @@ ACTIFS TRADABLES (avec symboles):
 - Actions FR: LVMH (MC.PA), Airbus (AIR.PA), TotalEnergies (TTE.PA), BNP (BNP.PA)
 - Actions US: Apple (AAPL), Tesla (TSLA), NVIDIA (NVDA), Amazon (AMZN)
 - Commodités: Or (GC=F), Pétrole Brent (BZ=F), Café (KC=F), Cacao (CC=F), Cuivre (HG=F), Blé (ZW=F)
-- Forex: EUR/USD (EURUSD=X), GBP/USD (GBPUSD=X)
+- Forex: EUR/USD (EURUSD=X), GBP/USD (GBPUSD=X), USD/JPY (USDJPY=X)
 
 CRITÈRES D'IMPACT:
 - HIGH: Événement majeur, mouvement attendu > 1%, action immédiate recommandée
@@ -963,7 +963,7 @@ def fetch_and_analyze_news():
                             dt = datetime.fromisoformat(article['heure'].replace('Z', '+00:00'))
                             dt_paris = dt.astimezone(TZ_PARIS)
                             news['heure'] = dt_paris.strftime('%H:%M')
-                        except:
+                        except ValueError:
                             news['heure'] = '--:--'
                     break
             if 'heure' not in news:
@@ -1287,7 +1287,7 @@ def verifier_resultats_trades():
                             from datetime import datetime
                             ts_reco = datetime.fromisoformat(trade['timestamp_reco'].replace('Z', '+00:00'))
                             duree_minutes = int((maintenant.replace(tzinfo=None) - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
-                        except:
+                        except ValueError:
                             pass
 
                     cursor.execute('''
@@ -2470,12 +2470,12 @@ def get_journal_quotidien(symbole=None, limite=30):
             if entry.get('opportunites_jour'):
                 try:
                     entry['opportunites_jour'] = json.loads(entry['opportunites_jour'])
-                except:
+                except json.JSONDecodeError:
                     entry['opportunites_jour'] = []
             if entry.get('recommandations_analystes'):
                 try:
                     entry['recommandations_analystes'] = json.loads(entry['recommandations_analystes'])
-                except:
+                except json.JSONDecodeError:
                     entry['recommandations_analystes'] = []
 
         return entries
@@ -2561,7 +2561,7 @@ def get_derniere_analyse(type_analyse=None):
             result = dict(row)
             try:
                 result['contenu'] = json.loads(result['contenu'])
-            except:
+            except json.JSONDecodeError:
                 pass
             return result
         return None
@@ -2588,7 +2588,7 @@ def get_analyses_du_jour():
             a = dict(row)
             try:
                 a['contenu'] = json.loads(a['contenu'])
-            except:
+            except json.JSONDecodeError:
                 pass
             analyses.append(a)
 
@@ -2889,7 +2889,7 @@ def api_news_raw():
                         dt = datetime.fromisoformat(published.replace('Z', '+00:00'))
                         dt_paris = dt.astimezone(TZ_PARIS)
                         heure = dt_paris.strftime('%H:%M')
-                    except:
+                    except ValueError:
                         pass
 
                 articles.append({
@@ -3083,19 +3083,19 @@ def api_bilan_quotidien():
             # Parser les JSON
             try:
                 bilan['points_positifs'] = json.loads(bilan['points_positifs'] or '[]')
-            except:
+            except json.JSONDecodeError:
                 bilan['points_positifs'] = []
             try:
                 bilan['points_negatifs'] = json.loads(bilan['points_negatifs'] or '[]')
-            except:
+            except json.JSONDecodeError:
                 bilan['points_negatifs'] = []
             try:
                 bilan['lecons_apprises'] = json.loads(bilan['lecons_apprises'] or '[]')
-            except:
+            except json.JSONDecodeError:
                 bilan['lecons_apprises'] = []
             try:
                 bilan['faits_marquants'] = json.loads(bilan['faits_marquants'] or '[]')
-            except:
+            except json.JSONDecodeError:
                 bilan['faits_marquants'] = []
             return jsonify({'success': True, 'bilan': bilan})
 
@@ -3191,7 +3191,7 @@ def api_rapport_hebdo():
             for field in ['chiffres_cles', 'forces', 'faiblesses', 'patterns', 'ajustements', 'scores_confiance', 'focus_semaine']:
                 try:
                     rapport[field] = json.loads(rapport[field] or '[]')
-                except:
+                except json.JSONDecodeError:
                     rapport[field] = [] if field not in ['chiffres_cles', 'scores_confiance'] else {}
 
             return jsonify({'success': True, 'rapport': rapport})
@@ -3329,7 +3329,7 @@ def api_historique_rapports():
             r = dict(row)
             try:
                 r['chiffres_cles'] = json.loads(r['chiffres_cles'] or '{}')
-            except:
+            except json.JSONDecodeError:
                 r['chiffres_cles'] = {}
             rapports.append(r)
 
