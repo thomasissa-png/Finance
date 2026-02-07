@@ -208,6 +208,48 @@
                     </div>
                 </div>
 
+                <!-- Grade vs Performance -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#127942; Grade vs Performance</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="grade-stats-grid" id="grade-stats">
+                            <div class="grade-stat grade-a">
+                                <div class="grade-badge">A</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-a-count">0</span>
+                                    <span class="grade-winrate" id="grade-a-winrate">-</span>
+                                </div>
+                            </div>
+                            <div class="grade-stat grade-b">
+                                <div class="grade-badge">B</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-b-count">0</span>
+                                    <span class="grade-winrate" id="grade-b-winrate">-</span>
+                                </div>
+                            </div>
+                            <div class="grade-stat grade-c">
+                                <div class="grade-badge">C</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-c-count">0</span>
+                                    <span class="grade-winrate" id="grade-c-winrate">-</span>
+                                </div>
+                            </div>
+                            <div class="grade-stat grade-d">
+                                <div class="grade-badge">D</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-d-count">0</span>
+                                    <span class="grade-winrate" id="grade-d-winrate">-</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grade-insight" id="grade-insight">
+                            <p class="no-data">Analysez plus de trades pour voir la correlation</p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Trades du jour -->
                 <div class="card">
                     <div class="card-header">
@@ -217,6 +259,16 @@
                     <div class="card-body">
                         <!-- Filtres rapides -->
                         <div class="trades-filters" id="trades-filters">
+                            <div class="filter-group">
+                                <label>Grade</label>
+                                <select id="filter-grade" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="A">🏆 A - Excellent</option>
+                                    <option value="B">✅ B - Bon</option>
+                                    <option value="C">⚠️ C - Acceptable</option>
+                                    <option value="D">❌ D - Faible</option>
+                                </select>
+                            </div>
                             <div class="filter-group">
                                 <label>Conviction</label>
                                 <select id="filter-conviction" onchange="applyTradesFilters()">
@@ -568,6 +620,7 @@ async function loadBilanData() {
 
         if (dataTrades.success && dataTrades.trades.length > 0) {
             renderTradesTable(dataTrades.trades);
+            calculateGradeStats(dataTrades.trades);
         } else {
             tradesContainer.innerHTML = '<p class="no-data">Aucun trade aujourd\'hui</p>';
         }
@@ -703,15 +756,14 @@ function renderTradesTable(trades) {
                 <tr>
                     <th>Heure</th>
                     <th>Actif</th>
+                    <th>Grade</th>
                     <th>Dir.</th>
                     <th>Conv.</th>
-                    <th>Stratégie</th>
                     <th>Régime</th>
                     <th>Entrée</th>
                     <th>Stop</th>
                     <th>TP1</th>
                     <th>Statut</th>
-                    <th>Action</th>
                     <th>Résultat</th>
                     <th>PnL</th>
                 </tr>
@@ -724,18 +776,25 @@ function renderTradesTable(trades) {
         const direction = trade.direction || 'LONG';
         const dirClass = direction === 'LONG' ? 'positive' : 'negative';
 
+        // Trade Grade (A/B/C/D)
+        const grade = trade.trade_grade || '-';
+        const gradeScore = trade.grade_setup_score || 0;
+        const gradeClass = {
+            'A': 'grade-a',
+            'B': 'grade-b',
+            'C': 'grade-c',
+            'D': 'grade-d'
+        }[grade] || '';
+        const gradeIcon = {
+            'A': '🏆',
+            'B': '✅',
+            'C': '⚠️',
+            'D': '❌'
+        }[grade] || '❓';
+
         // Conviction score (étoiles)
         const conviction = trade.conviction_score || 3;
         const stars = '⭐'.repeat(Math.min(conviction, 5));
-
-        // Stratégie d'entrée
-        const strategie = trade.strategie_entree || '-';
-        const strategieClass = {
-            'IMMEDIATE': 'strat-immediate',
-            'PULLBACK': 'strat-pullback',
-            'BREAKOUT': 'strat-breakout',
-            'LIMIT': 'strat-limit'
-        }[strategie] || '';
 
         // Régime marché
         const regime = trade.regime_marche || '-';
@@ -761,42 +820,29 @@ function renderTradesTable(trades) {
             'TERMINE': '✓'
         }[statut] || '🔄';
 
-        // Action recommandée
-        const action = trade.action_recommandee || '-';
-        const actionClass = {
-            'HOLD': 'action-hold',
-            'RENFORCER': 'action-renforcer',
-            'REDUIRE': 'action-reduire',
-            'SORTIR': 'action-sortir'
-        }[action] || '';
-        const actionIcon = {
-            'HOLD': '✋',
-            'RENFORCER': '💪',
-            'REDUIRE': '📉',
-            'SORTIR': '🚪'
-        }[action] || '';
-
         // Stop affiché (ajusté si disponible)
         const stopAffiche = trade.stop_ajuste || trade.prix_stop;
         const stopModifie = trade.stop_ajuste ? 'stop-ajuste' : '';
 
+        // Warning pour grade D
+        const gradeWarning = grade === 'D' ? ' grade-warning' : '';
+
         html += `
-            <tr class="${resultClass}"
+            <tr class="${resultClass}${gradeWarning}"
+                data-grade="${grade}"
                 data-conviction="${conviction}"
                 data-regime="${regime}"
-                data-strategie="${strategie}"
                 data-statut="${statut}">
                 <td>${trade.heure_message || '-'}</td>
                 <td><strong>${trade.actif || '-'}</strong></td>
+                <td><span class="badge-grade ${gradeClass}" title="Score: ${gradeScore}/100">${gradeIcon} ${grade}</span></td>
                 <td class="${dirClass}">${direction}</td>
                 <td class="conviction-cell" title="Conviction ${conviction}/5">${stars}</td>
-                <td><span class="badge-strategie ${strategieClass}">${strategie}</span></td>
                 <td><span class="badge-regime ${regimeClass}">${regimeIcon} ${regime}</span></td>
                 <td>${trade.prix_entree || '-'}</td>
                 <td class="${stopModifie}">${stopAffiche || '-'}</td>
                 <td>${trade.prix_tp1 || '-'}</td>
                 <td><span class="badge-statut">${statutIcon} ${statut.replace('_', ' ')}</span></td>
-                <td><span class="badge-action ${actionClass}">${actionIcon} ${action}</span></td>
                 <td>${trade.resultat || 'En cours'}</td>
                 <td class="${trade.pnl_pct > 0 ? 'positive' : trade.pnl_pct < 0 ? 'negative' : ''}">${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
             </tr>`;
@@ -808,12 +854,17 @@ function renderTradesTable(trades) {
 
 // ===== FILTRES =====
 function applyTradesFilters() {
+    const gradeFilter = document.getElementById('filter-grade').value;
     const convictionFilter = document.getElementById('filter-conviction').value;
     const regimeFilter = document.getElementById('filter-regime').value;
     const strategieFilter = document.getElementById('filter-strategie').value;
     const statutFilter = document.getElementById('filter-statut').value;
 
     let filteredTrades = window.allTrades || [];
+
+    if (gradeFilter) {
+        filteredTrades = filteredTrades.filter(t => t.trade_grade === gradeFilter);
+    }
 
     if (convictionFilter) {
         const minConv = parseInt(convictionFilter);
@@ -842,11 +893,84 @@ function applyTradesFilters() {
 }
 
 function clearTradesFilters() {
+    document.getElementById('filter-grade').value = '';
     document.getElementById('filter-conviction').value = '';
     document.getElementById('filter-regime').value = '';
     document.getElementById('filter-strategie').value = '';
     document.getElementById('filter-statut').value = '';
     renderTradesTable(window.allTrades || []);
+}
+
+// ===== GRADE STATISTICS =====
+function calculateGradeStats(trades) {
+    const stats = {
+        'A': { total: 0, wins: 0, pnl: 0 },
+        'B': { total: 0, wins: 0, pnl: 0 },
+        'C': { total: 0, wins: 0, pnl: 0 },
+        'D': { total: 0, wins: 0, pnl: 0 }
+    };
+
+    const winResults = ['TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN'];
+
+    for (const trade of trades) {
+        const grade = trade.trade_grade;
+        if (!grade || !stats[grade]) continue;
+
+        stats[grade].total++;
+
+        if (trade.resultat) {
+            if (winResults.includes(trade.resultat)) {
+                stats[grade].wins++;
+            }
+            if (trade.pnl_pct) {
+                stats[grade].pnl += trade.pnl_pct;
+            }
+        }
+    }
+
+    // Update UI
+    for (const [grade, data] of Object.entries(stats)) {
+        const countEl = document.getElementById(`grade-${grade.toLowerCase()}-count`);
+        const winrateEl = document.getElementById(`grade-${grade.toLowerCase()}-winrate`);
+
+        if (countEl) countEl.textContent = data.total;
+        if (winrateEl) {
+            if (data.total > 0) {
+                const terminatedTrades = trades.filter(t => t.trade_grade === grade && t.resultat);
+                if (terminatedTrades.length > 0) {
+                    const winrate = (data.wins / terminatedTrades.length * 100).toFixed(0);
+                    const avgPnl = (data.pnl / terminatedTrades.length).toFixed(2);
+                    winrateEl.textContent = `${winrate}% | ${avgPnl > 0 ? '+' : ''}${avgPnl}%`;
+                } else {
+                    winrateEl.textContent = 'En cours...';
+                }
+            } else {
+                winrateEl.textContent = '-';
+            }
+        }
+    }
+
+    // Generate insight
+    const insightEl = document.getElementById('grade-insight');
+    if (insightEl) {
+        const totalTrades = trades.filter(t => t.trade_grade && t.resultat).length;
+        if (totalTrades >= 5) {
+            const gradeAWinrate = stats.A.total > 0 ? (stats.A.wins / trades.filter(t => t.trade_grade === 'A' && t.resultat).length * 100) : 0;
+            const gradeDWinrate = stats.D.total > 0 ? (stats.D.wins / trades.filter(t => t.trade_grade === 'D' && t.resultat).length * 100) : 0;
+
+            let insight = '';
+            if (gradeAWinrate > gradeDWinrate + 20) {
+                insight = `<p class="insight-positive">&#128200; Les trades Grade A performent ${(gradeAWinrate - gradeDWinrate).toFixed(0)}% mieux que les Grade D. Privilegiez les setups A/B!</p>`;
+            } else if (stats.D.total > stats.A.total) {
+                insight = `<p class="insight-warning">&#9888;&#65039; Vous avez plus de trades D (${stats.D.total}) que de A (${stats.A.total}). Soyez plus selectif!</p>`;
+            } else {
+                insight = `<p class="insight-neutral">&#128202; Distribution equilibree. Continuez a privilegier les grades A et B.</p>`;
+            }
+            insightEl.innerHTML = insight;
+        } else {
+            insightEl.innerHTML = '<p class="no-data">Minimum 5 trades clotures pour voir les insights</p>';
+        }
+    }
 }
 </script>
 {% endblock %}

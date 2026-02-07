@@ -8052,6 +8052,34 @@ def api_journal_stats():
                 key=lambda x: x['pnl_total']
             )[:3]
 
+        # Stats par Trade Grade (A/B/C/D)
+        cursor.execute('''
+            SELECT trade_grade,
+                   COUNT(*) as nb_trades,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
+                   SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total,
+                   AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
+            FROM trades_recommandes
+            WHERE resultat IS NOT NULL AND trade_grade IS NOT NULL
+            GROUP BY trade_grade
+            ORDER BY trade_grade
+        ''')
+
+        stats_par_grade = {}
+        for row in cursor.fetchall():
+            data = dict(row)
+            grade = data['trade_grade']
+            conclus = (data['wins'] or 0) + (data['losses'] or 0)
+            stats_par_grade[grade] = {
+                'nb_trades': data['nb_trades'],
+                'wins': data['wins'] or 0,
+                'losses': data['losses'] or 0,
+                'win_rate': round((data['wins'] / conclus * 100) if conclus > 0 else 0, 1),
+                'pnl_total': round(data['pnl_total'] or 0, 2),
+                'pnl_moyen': round(data['pnl_moyen'] or 0, 2)
+            }
+
         conn.close()
 
         # Inverser pour ordre chronologique
@@ -8062,7 +8090,8 @@ def api_journal_stats():
             'granularite': granularite,
             'stats_periodes': stats_periodes,
             'stats_categories': stats_categories,
-            'top_bottom_actifs': top_bottom_actifs
+            'top_bottom_actifs': top_bottom_actifs,
+            'stats_par_grade': stats_par_grade
         })
     except Exception as e:
         logger.error(f"Erreur api_journal_stats: {e}")

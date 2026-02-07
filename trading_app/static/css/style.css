@@ -2027,3 +2027,146 @@ body {
 
     .journal-layout { grid-template-columns: 1fr; }
 }
+
+/* ============================================================================
+   TRADE QUALITY GRADING
+   ============================================================================ */
+
+/* Grade Badges */
+.badge-grade {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: var(--radius-md);
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.badge-grade.grade-a {
+    background: linear-gradient(135deg, #fef3c7, #fde68a);
+    color: #92400e;
+    border: 1px solid #f59e0b;
+}
+
+.badge-grade.grade-b {
+    background: rgba(16, 185, 129, 0.12);
+    color: #047857;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-grade.grade-c {
+    background: rgba(245, 158, 11, 0.12);
+    color: #b45309;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.badge-grade.grade-d {
+    background: rgba(239, 68, 68, 0.12);
+    color: #b91c1c;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* Grade Warning Row */
+.grade-warning {
+    background: rgba(239, 68, 68, 0.04) !important;
+}
+
+.grade-warning td:first-child::before {
+    content: '⚠️ ';
+}
+
+/* Grade Stats Grid */
+.grade-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-2);
+}
+
+.grade-stat {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.grade-stat .grade-badge {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.grade-stat.grade-a .grade-badge {
+    background: linear-gradient(135deg, #fef3c7, #fde68a);
+    color: #92400e;
+}
+
+.grade-stat.grade-b .grade-badge {
+    background: rgba(16, 185, 129, 0.2);
+    color: #047857;
+}
+
+.grade-stat.grade-c .grade-badge {
+    background: rgba(245, 158, 11, 0.2);
+    color: #b45309;
+}
+
+.grade-stat.grade-d .grade-badge {
+    background: rgba(239, 68, 68, 0.2);
+    color: #b91c1c;
+}
+
+.grade-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.grade-count {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.grade-winrate {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* Grade Insights */
+.grade-insight {
+    margin-top: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.grade-insight p {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.insight-positive {
+    color: var(--accent-green);
+}
+
+.insight-warning {
+    color: var(--accent-orange);
+}
+
+.insight-neutral {
+    color: var(--text-secondary);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .grade-stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}

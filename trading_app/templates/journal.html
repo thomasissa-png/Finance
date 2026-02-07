@@ -350,6 +350,35 @@ function renderStats(data, granularite) {
 
     let html = '<div class="stats-grid">';
 
+    // Stats par Grade (si disponible)
+    if (data.stats_par_grade) {
+        html += '<div class="stats-section"><h3>🎯 Performance par Grade</h3>';
+        html += '<div class="grade-perf-grid">';
+        for (const [grade, stats] of Object.entries(data.stats_par_grade)) {
+            const gradeClass = {'A': 'grade-a', 'B': 'grade-b', 'C': 'grade-c', 'D': 'grade-d'}[grade] || '';
+            const winClass = stats.win_rate >= 60 ? 'positive' : stats.win_rate < 40 ? 'negative' : '';
+            const pnlClass = stats.pnl_total >= 0 ? 'positive' : 'negative';
+            html += `
+                <div class="grade-perf-card ${gradeClass}">
+                    <div class="grade-perf-header">
+                        <span class="grade-letter">${grade}</span>
+                        <span class="grade-count">${stats.nb_trades} trades</span>
+                    </div>
+                    <div class="grade-perf-stats">
+                        <div class="gp-stat">
+                            <span class="gp-label">Win Rate</span>
+                            <span class="gp-value ${winClass}">${stats.win_rate}%</span>
+                        </div>
+                        <div class="gp-stat">
+                            <span class="gp-label">PnL Total</span>
+                            <span class="gp-value ${pnlClass}">${stats.pnl_total >= 0 ? '+' : ''}${stats.pnl_total}%</span>
+                        </div>
+                    </div>
+                </div>`;
+        }
+        html += '</div></div>';
+    }
+
     // Stats principales par période
     html += '<div class="stats-section"><h3>Performance par ' + periodeLabel + '</h3>';
     html += '<div class="stats-table-container"><table class="stats-table"><thead><tr>';
@@ -739,16 +768,24 @@ function renderTimeline() {
 function renderOpportunite(opp) {
     const dirClass = opp.direction === 'LONG' ? 'positive' : 'negative';
     const dirIcon = opp.direction === 'LONG' ? '📈' : '📉';
-    const resultClass = opp.resultat === 'TP1' || opp.resultat === 'TP2' ? 'success' :
-                       opp.resultat === 'STOP' ? 'danger' : 'pending';
-    const resultIcon = opp.resultat === 'TP1' || opp.resultat === 'TP2' ? '✅' :
-                      opp.resultat === 'STOP' ? '❌' : '⏳';
+    const resultClass = opp.resultat === 'TP1' || opp.resultat === 'TP2' || opp.resultat === 'WIN_FORCE' ? 'success' :
+                       opp.resultat === 'STOP' || opp.resultat === 'LOSS_FORCE' ? 'danger' : 'pending';
+    const resultIcon = opp.resultat === 'TP1' || opp.resultat === 'TP2' || opp.resultat === 'WIN_FORCE' ? '✅' :
+                      opp.resultat === 'STOP' || opp.resultat === 'LOSS_FORCE' ? '❌' :
+                      opp.resultat === 'BREAKEVEN' ? '⚖️' : '⏳';
     const typeClass = opp.type_setup === 'NEWS' ? 'news' : 'tech';
+
+    // Trade Grade
+    const grade = opp.trade_grade || '-';
+    const gradeClass = {'A': 'grade-a', 'B': 'grade-b', 'C': 'grade-c', 'D': 'grade-d'}[grade] || '';
+    const gradeIcon = {'A': '🏆', 'B': '✅', 'C': '⚠️', 'D': '❌'}[grade] || '';
+    const gradeScore = opp.grade_setup_score || 0;
 
     return `
         <div class="opp-item ${resultClass}">
             <div class="opp-item-header">
                 <span class="opp-direction ${dirClass}">${dirIcon} ${opp.direction || 'LONG'}</span>
+                ${grade !== '-' ? `<span class="opp-grade ${gradeClass}" title="Score: ${gradeScore}/100">${gradeIcon} ${grade}</span>` : ''}
                 <span class="opp-type ${typeClass}">${opp.type_setup || 'TECH'}</span>
                 <span class="opp-time">${opp.heure_message || '-'}</span>
             </div>
@@ -1326,6 +1363,18 @@ function formatDateFr(dateStr) {
 .opp-type.news { background: var(--accent-orange); color: white; }
 .opp-type.tech { background: var(--accent-primary); color: white; }
 
+/* Grade badges in journal */
+.opp-grade {
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    font-weight: 600;
+}
+.opp-grade.grade-a { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; }
+.opp-grade.grade-b { background: rgba(16, 185, 129, 0.15); color: #047857; }
+.opp-grade.grade-c { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+.opp-grade.grade-d { background: rgba(239, 68, 68, 0.15); color: #b91c1c; }
+
 .opp-time {
     font-size: 0.75rem;
     color: var(--text-muted);
@@ -1777,6 +1826,74 @@ function formatDateFr(dateStr) {
 
 .item-pnl {
     font-weight: 600;
+}
+
+/* Grade Performance Cards in Stats Modal */
+.grade-perf-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-2);
+}
+
+.grade-perf-card {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    border-left: 4px solid var(--border-color);
+}
+
+.grade-perf-card.grade-a { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.05); }
+.grade-perf-card.grade-b { border-left-color: #10b981; background: rgba(16, 185, 129, 0.05); }
+.grade-perf-card.grade-c { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.03); }
+.grade-perf-card.grade-d { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.05); }
+
+.grade-perf-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2);
+}
+
+.grade-letter {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.grade-perf-card.grade-a .grade-letter { color: #f59e0b; }
+.grade-perf-card.grade-b .grade-letter { color: #10b981; }
+.grade-perf-card.grade-c .grade-letter { color: #f59e0b; }
+.grade-perf-card.grade-d .grade-letter { color: #ef4444; }
+
+.grade-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.grade-perf-stats {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.gp-stat {
+    display: flex;
+    justify-content: space-between;
+}
+
+.gp-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.gp-value {
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+@media (max-width: 600px) {
+    .grade-perf-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
 /* Mobile responsive */
