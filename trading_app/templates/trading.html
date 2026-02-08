@@ -1,0 +1,976 @@
+{% extends "base.html" %}
+
+{% block title %}Aide au Trading - Agent Trading{% endblock %}
+
+{% block content %}
+<div class="trading-page">
+    <!-- Header -->
+    <div class="page-header">
+        <h1>&#128176; Aide au Trading</h1>
+        <div class="header-actions">
+            <button class="btn btn-primary" onclick="lancerAnalyse()">
+                <span>&#128640;</span> Nouvelle Analyse
+            </button>
+            <button class="btn btn-secondary" onclick="genererCloture()">
+                <span>&#127769;</span> Cloture Journee
+            </button>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab active" data-tab="premarket" onclick="switchTab('premarket')">
+            &#127749; Pre-Market
+        </button>
+        <button class="tab" data-tab="live" onclick="switchTab('live')">
+            &#128200; Temps Reel
+        </button>
+        <button class="tab" data-tab="opportunities" onclick="switchTab('opportunities')">
+            &#9889; Opportunites
+        </button>
+        <button class="tab" data-tab="news" onclick="switchTab('news')">
+            &#128240; News Trading
+        </button>
+        <button class="tab" data-tab="bilan" onclick="switchTab('bilan')">
+            &#128202; Bilan
+        </button>
+    </div>
+
+    <!-- Tab Contents -->
+    <div class="tab-contents">
+        <!-- Pre-Market -->
+        <div id="tab-premarket" class="tab-content active">
+            <div class="card">
+                <div class="card-header">
+                    <h2>&#127749; Pre-Market Scan</h2>
+                    <span class="update-time" id="premarket-time">--:--</span>
+                </div>
+                <div class="card-body">
+                    <div id="premarket-content">
+                        <div class="premarket-section">
+                            <h3>&#127758; Contexte Global</h3>
+                            <p id="premarket-contexte" class="contexte-text">Chargement...</p>
+                        </div>
+
+                        <div class="premarket-grid">
+                            <div class="premarket-card">
+                                <h4>&#128200; Futures & Pre-Market</h4>
+                                <div id="premarket-futures" class="data-list">
+                                    <p class="no-data">Chargement...</p>
+                                </div>
+                            </div>
+
+                            <div class="premarket-card">
+                                <h4>&#128197; Agenda du Jour</h4>
+                                <div id="premarket-agenda" class="data-list">
+                                    <p class="no-data">Chargement...</p>
+                                </div>
+                            </div>
+
+                            <div class="premarket-card">
+                                <h4>&#128161; Points Cles</h4>
+                                <div id="premarket-points" class="data-list">
+                                    <p class="no-data">Chargement...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Data -->
+        <div id="tab-live" class="tab-content">
+            <div class="live-grid">
+                <!-- Indices -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#128200; Indices</h2>
+                        <button class="btn-refresh" onclick="refreshLiveData()">&#8635;</button>
+                    </div>
+                    <div class="card-body">
+                        <div id="live-indices" class="live-data-grid"></div>
+                    </div>
+                </div>
+
+                <!-- Actions FR -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#127467;&#127479; Actions FR</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="live-fr" class="live-data-grid"></div>
+                    </div>
+                </div>
+
+                <!-- Actions US -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#127482;&#127480; Actions US</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="live-us" class="live-data-grid"></div>
+                    </div>
+                </div>
+
+                <!-- Commodites -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#129689; Commodites</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="live-commodites" class="live-data-grid"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Opportunities -->
+        <div id="tab-opportunities" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2>&#9889; Opportunites de Trading</h2>
+                    <span class="update-time" id="opp-time">--:--</span>
+                </div>
+                <div class="card-body">
+                    <div id="opportunities-list" class="opportunities-grid">
+                        <p class="no-data">Lancez une analyse pour voir les opportunites</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Zones Dangereuses -->
+            <div class="card warning-card">
+                <div class="card-header">
+                    <h2>&#9888;&#65039; Zones Dangereuses</h2>
+                </div>
+                <div class="card-body">
+                    <div id="danger-zones" class="danger-list">
+                        <p class="no-data">-</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- News Trading -->
+        <div id="tab-news" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h2>&#128240; Opportunites News Trading</h2>
+                </div>
+                <div class="card-body">
+                    <div id="news-opportunities" class="news-grid">
+                        <p class="no-data">Aucune opportunite news en cours</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Evenements Impact -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>&#128197; Evenements a Fort Impact</h2>
+                </div>
+                <div class="card-body">
+                    <div id="high-impact-events" class="events-list">
+                        <p class="no-data">Chargement...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bilan -->
+        <div id="tab-bilan" class="tab-content">
+            <div class="bilan-grid">
+                <!-- Performance du jour -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#128202; Performance du Jour</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="stats-grid">
+                            <div class="bilan-stat">
+                                <span class="bilan-value" id="bilan-trades">0</span>
+                                <span class="bilan-label">Trades</span>
+                            </div>
+                            <div class="bilan-stat success">
+                                <span class="bilan-value" id="bilan-reussis">0</span>
+                                <span class="bilan-label">Reussis</span>
+                            </div>
+                            <div class="bilan-stat danger">
+                                <span class="bilan-value" id="bilan-stops">0</span>
+                                <span class="bilan-label">Stops</span>
+                            </div>
+                            <div class="bilan-stat">
+                                <span class="bilan-value" id="bilan-taux">0%</span>
+                                <span class="bilan-label">Taux Reussite</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Grade vs Performance -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#127942; Grade vs Performance</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="grade-stats-grid" id="grade-stats">
+                            <div class="grade-stat grade-a">
+                                <div class="grade-badge">A</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-a-count">0</span>
+                                    <span class="grade-winrate" id="grade-a-winrate">-</span>
+                                </div>
+                            </div>
+                            <div class="grade-stat grade-b">
+                                <div class="grade-badge">B</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-b-count">0</span>
+                                    <span class="grade-winrate" id="grade-b-winrate">-</span>
+                                </div>
+                            </div>
+                            <div class="grade-stat grade-c">
+                                <div class="grade-badge">C</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-c-count">0</span>
+                                    <span class="grade-winrate" id="grade-c-winrate">-</span>
+                                </div>
+                            </div>
+                            <div class="grade-stat grade-d">
+                                <div class="grade-badge">D</div>
+                                <div class="grade-info">
+                                    <span class="grade-count" id="grade-d-count">0</span>
+                                    <span class="grade-winrate" id="grade-d-winrate">-</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grade-insight" id="grade-insight">
+                            <p class="no-data">Analysez plus de trades pour voir la correlation</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trades du jour -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>&#128176; Historique Trades</h2>
+                        <button class="btn-refresh" onclick="loadBilanData()">&#8635;</button>
+                    </div>
+                    <div class="card-body">
+                        <!-- Filtres rapides -->
+                        <div class="trades-filters" id="trades-filters">
+                            <div class="filter-group">
+                                <label>Grade</label>
+                                <select id="filter-grade" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="A">🏆 A - Excellent</option>
+                                    <option value="B">✅ B - Bon</option>
+                                    <option value="C">⚠️ C - Acceptable</option>
+                                    <option value="D">❌ D - Faible</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Conviction</label>
+                                <select id="filter-conviction" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="5">⭐⭐⭐⭐⭐</option>
+                                    <option value="4">⭐⭐⭐⭐+</option>
+                                    <option value="3">⭐⭐⭐+</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Régime</label>
+                                <select id="filter-regime" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="CALME">😌 Calme</option>
+                                    <option value="NORMAL">📊 Normal</option>
+                                    <option value="VOLATILE">⚡ Volatile</option>
+                                    <option value="EXTREME">🔥 Extreme</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Stratégie</label>
+                                <select id="filter-strategie" onchange="applyTradesFilters()">
+                                    <option value="">Toutes</option>
+                                    <option value="IMMEDIATE">Immédiate</option>
+                                    <option value="PULLBACK">Pullback</option>
+                                    <option value="BREAKOUT">Breakout</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Statut</label>
+                                <select id="filter-statut" onchange="applyTradesFilters()">
+                                    <option value="">Tous</option>
+                                    <option value="EN_COURS">En cours</option>
+                                    <option value="TP50_ATTEINT">TP50%</option>
+                                    <option value="termine">Terminé</option>
+                                </select>
+                            </div>
+                            <button class="btn-clear-filters" onclick="clearTradesFilters()">✕ Reset</button>
+                        </div>
+                        <div id="trades-history" class="trades-table">
+                            <p class="no-data">Aucun trade</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cloture -->
+                <div class="card full-width">
+                    <div class="card-header">
+                        <h2>&#127769; Bilan de Cloture</h2>
+                        <span id="cloture-time">-</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="cloture-content">
+                            <p class="no-data">Le bilan sera disponible apres 22h</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Analyse -->
+<div id="modal-analyse" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>&#128640; Analyse en cours...</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="loading-spinner"></div>
+            <p id="modal-status">Recuperation des donnees...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Variables
+let currentTab = 'premarket';
+let marketData = null;
+let analysisData = null;
+
+// Initialisation
+document.addEventListener('DOMContentLoaded', function() {
+    loadAllData();
+    setInterval(refreshLiveData, 60000);
+});
+
+async function loadAllData() {
+    await Promise.all([
+        loadMarketData(),
+        loadLastAnalysis(),
+        loadBilanData()
+    ]);
+}
+
+function switchTab(tab) {
+    // Update buttons
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+
+    // Update content
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById(`tab-${tab}`).classList.add('active');
+
+    currentTab = tab;
+
+    // Load tab-specific data
+    if (tab === 'live') refreshLiveData();
+    if (tab === 'bilan') loadBilanData();
+}
+
+async function loadMarketData() {
+    try {
+        const response = await fetch('/api/donnees-marche');
+        const data = await response.json();
+
+        if (data.success) {
+            marketData = data.donnees;
+            renderLiveData();
+            renderPremarketData();
+        }
+    } catch (error) {
+        console.error('Erreur market data:', error);
+    }
+}
+
+async function refreshLiveData() {
+    await loadMarketData();
+}
+
+function renderLiveData() {
+    if (!marketData) return;
+
+    const categories = {
+        'live-indices': ['CAC 40', 'S&P 500', 'Nasdaq', 'Dow Jones', 'DAX', 'VIX'],
+        'live-fr': ['Airbus', 'LVMH', 'L\'Oreal', 'Hermes', 'TotalEnergies', 'BNP Paribas', 'Sanofi', 'AXA', 'Schneider Electric', 'Safran'],
+        'live-us': ['Apple', 'Microsoft', 'NVIDIA', 'Tesla', 'Amazon', 'Meta', 'Google', 'JPMorgan', 'ExxonMobil', 'Visa'],
+        'live-commodites': ['Or', 'Argent', 'Platine', 'Petrole Brent', 'Gaz naturel', 'Cafe', 'Cacao', 'Cuivre', 'Soja', 'Sucre', 'Ble', 'Mais']
+    };
+
+    for (const [containerId, actifs] of Object.entries(categories)) {
+        const container = document.getElementById(containerId);
+        if (!container) continue;
+
+        let html = '';
+        for (const actif of actifs) {
+            const d = marketData[actif];
+            if (d) {
+                const varClass = d.variation >= 0 ? 'positive' : 'negative';
+                const arrow = d.variation >= 0 ? '&#9650;' : '&#9660;';
+                html += `
+                    <div class="live-item ${varClass}">
+                        <div class="live-name">${actif}</div>
+                        <div class="live-price">${d.prix}</div>
+                        <div class="live-var">${arrow} ${d.variation.toFixed(2)}%</div>
+                        <div class="live-range">${d.bas} - ${d.haut}</div>
+                    </div>`;
+            }
+        }
+        container.innerHTML = html || '<p class="no-data">Donnees non disponibles</p>';
+    }
+}
+
+function renderPremarketData() {
+    if (!marketData) return;
+
+    // Futures
+    const futuresContainer = document.getElementById('premarket-futures');
+    const futures = ['CAC 40', 'S&P 500', 'Nasdaq', 'DAX'];
+    let html = '';
+    for (const f of futures) {
+        const d = marketData[f];
+        if (d) {
+            const varClass = d.variation >= 0 ? 'positive' : 'negative';
+            html += `<div class="data-item ${varClass}">
+                <span>${f}</span>
+                <span>${d.prix} (${d.variation >= 0 ? '+' : ''}${d.variation.toFixed(2)}%)</span>
+            </div>`;
+        }
+    }
+    futuresContainer.innerHTML = html || '<p class="no-data">-</p>';
+}
+
+async function loadLastAnalysis() {
+    try {
+        const response = await fetch('/api/derniere-analyse');
+        const data = await response.json();
+
+        if (data.success && data.analyse) {
+            analysisData = data.analyse;
+            renderAnalysisData();
+        }
+    } catch (error) {
+        console.error('Erreur analyse:', error);
+    }
+}
+
+function renderAnalysisData() {
+    if (!analysisData || !analysisData.contenu) return;
+
+    const contenu = analysisData.contenu;
+
+    // Premarket
+    document.getElementById('premarket-time').textContent = analysisData.heure || '--:--';
+    document.getElementById('premarket-contexte').textContent =
+        contenu.contexte_marche || 'Non disponible';
+
+    // Agenda
+    const agendaContainer = document.getElementById('premarket-agenda');
+    if (contenu.evenements_a_venir && contenu.evenements_a_venir.length > 0) {
+        let html = '';
+        for (const evt of contenu.evenements_a_venir) {
+            const stars = '&#11088;'.repeat(evt.importance || 1);
+            html += `<div class="data-item">
+                <span class="event-time">${evt.heure}</span>
+                <span class="event-name">${evt.evenement}</span>
+                <span class="event-stars">${stars}</span>
+            </div>`;
+        }
+        agendaContainer.innerHTML = html;
+    }
+
+    // Points cles (tactical tip + zones dangereuses)
+    const pointsContainer = document.getElementById('premarket-points');
+    let pointsHtml = '';
+    if (contenu.tactical_tip) {
+        pointsHtml += `<div class="data-item tip">&#128161; ${contenu.tactical_tip}</div>`;
+    }
+    pointsContainer.innerHTML = pointsHtml || '<p class="no-data">-</p>';
+
+    // Opportunities
+    document.getElementById('opp-time').textContent = analysisData.heure || '--:--';
+    const oppContainer = document.getElementById('opportunities-list');
+
+    if (contenu.opportunites && contenu.opportunites.length > 0) {
+        let html = '';
+        for (const opp of contenu.opportunites) {
+            const newsTag = opp.is_news_trading ?
+                '<span class="tag tag-news">&#128240; NEWS</span>' : '';
+
+            html += `
+                <div class="opportunity-card">
+                    <div class="opp-header">
+                        <h3>${opp.actif}</h3>
+                        ${newsTag}
+                    </div>
+                    <div class="opp-price">${opp.prix_actuel || '-'}</div>
+                    <div class="opp-catalyst">
+                        <strong>Catalyseur:</strong> ${opp.catalyseur || '-'}
+                    </div>
+                    <div class="opp-timing">
+                        <strong>Timing:</strong> ${opp.timing || '-'}
+                    </div>
+                    <div class="opp-levels">
+                        <div class="level entry">Entree: ${opp.entree || '-'}</div>
+                        <div class="level stop">Stop: ${opp.stop || '-'}</div>
+                        <div class="level tp1">TP1: ${opp.tp1 || '-'}</div>
+                        <div class="level tp2">TP2: ${opp.tp2 || '-'}</div>
+                    </div>
+                    <div class="opp-meta">
+                        <span>R/R: ${opp.ratio_rr || '-'}</span>
+                        <span>Duree: ${opp.duree || '-'}</span>
+                    </div>
+                    <div class="opp-invalidation">
+                        <strong>Invalidation:</strong> ${opp.invalidation || '-'}
+                    </div>
+                </div>`;
+        }
+        oppContainer.innerHTML = html;
+
+        // News opportunities
+        const newsOpps = contenu.opportunites.filter(o => o.is_news_trading);
+        const newsContainer = document.getElementById('news-opportunities');
+        if (newsOpps.length > 0) {
+            let newsHtml = '';
+            for (const opp of newsOpps) {
+                newsHtml += `
+                    <div class="news-card">
+                        <div class="news-header">
+                            <span class="news-icon">&#128240;</span>
+                            <h3>${opp.actif}</h3>
+                        </div>
+                        <p class="news-catalyst">${opp.catalyseur}</p>
+                        <div class="news-levels">
+                            <span>Entree: ${opp.entree}</span>
+                            <span>Stop: ${opp.stop}</span>
+                            <span>TP1: ${opp.tp1}</span>
+                        </div>
+                    </div>`;
+            }
+            newsContainer.innerHTML = newsHtml;
+        }
+    }
+
+    // Danger zones
+    const dangerContainer = document.getElementById('danger-zones');
+    if (contenu.zones_dangereuses && contenu.zones_dangereuses.length > 0) {
+        let html = '';
+        for (const zone of contenu.zones_dangereuses) {
+            html += `<div class="danger-item">&#9888;&#65039; ${zone}</div>`;
+        }
+        dangerContainer.innerHTML = html;
+    }
+
+    // High impact events
+    const eventsContainer = document.getElementById('high-impact-events');
+    if (contenu.evenements_a_venir) {
+        const highImpact = contenu.evenements_a_venir.filter(e => e.importance >= 2);
+        if (highImpact.length > 0) {
+            let html = '';
+            for (const evt of highImpact) {
+                const impactClass = evt.importance >= 3 ? 'critical' : 'high';
+                html += `
+                    <div class="event-card ${impactClass}">
+                        <span class="event-time">${evt.heure}</span>
+                        <span class="event-name">${evt.evenement}</span>
+                        <span class="event-impact">${'&#11088;'.repeat(evt.importance)}</span>
+                    </div>`;
+            }
+            eventsContainer.innerHTML = html;
+        }
+    }
+}
+
+async function loadBilanData() {
+    try {
+        // Performance jour
+        const respJour = await fetch('/api/performances?periode=jour');
+        const dataJour = await respJour.json();
+
+        if (dataJour.success) {
+            const p = dataJour.performances;
+            document.getElementById('bilan-trades').textContent = p.total;
+            document.getElementById('bilan-reussis').textContent = p.reussis;
+            document.getElementById('bilan-stops').textContent = p.stops;
+            document.getElementById('bilan-taux').textContent = p.taux_reussite + '%';
+        }
+
+        // Trades du jour
+        const respTrades = await fetch('/api/trades-jour');
+        const dataTrades = await respTrades.json();
+
+        const tradesContainer = document.getElementById('trades-history');
+        // Stocker les trades pour le filtrage
+        window.allTrades = dataTrades.trades || [];
+
+        if (dataTrades.success && dataTrades.trades.length > 0) {
+            renderTradesTable(dataTrades.trades);
+            calculateGradeStats(dataTrades.trades);
+        } else {
+            tradesContainer.innerHTML = '<p class="no-data">Aucun trade aujourd\'hui</p>';
+        }
+
+        // Cloture
+        loadClotureData();
+
+    } catch (error) {
+        console.error('Erreur bilan:', error);
+    }
+}
+
+async function loadClotureData() {
+    try {
+        const analyses = await fetch('/api/analyses-jour').then(r => r.json());
+
+        if (analyses.success) {
+            const cloture = analyses.analyses.find(a => a.type_analyse === 'cloture');
+            if (cloture) {
+                document.getElementById('cloture-time').textContent = cloture.heure;
+
+                const contenu = cloture.contenu;
+                const container = document.getElementById('cloture-content');
+
+                let html = `
+                    <div class="cloture-section">
+                        <h3>Resume de la Journee</h3>
+                        <p>${contenu.resume_journee || '-'}</p>
+                    </div>`;
+
+                if (contenu.conseil_demain) {
+                    html += `
+                        <div class="cloture-section tip">
+                            <h3>&#128161; Conseil pour Demain</h3>
+                            <p>${contenu.conseil_demain}</p>
+                        </div>`;
+                }
+
+                if (contenu.setups_demain && contenu.setups_demain.length > 0) {
+                    html += `<div class="cloture-section">
+                        <h3>Setups a Surveiller</h3>
+                        <div class="setups-grid">`;
+                    for (const setup of contenu.setups_demain) {
+                        html += `
+                            <div class="setup-card">
+                                <strong>${setup.actif} ${setup.direction}</strong>
+                                <p>${setup.condition}</p>
+                                <div class="setup-levels">
+                                    <span>E: ${setup.entree}</span>
+                                    <span>TP: ${setup.tp}</span>
+                                    <span>S: ${setup.stop}</span>
+                                </div>
+                            </div>`;
+                    }
+                    html += '</div></div>';
+                }
+
+                container.innerHTML = html;
+            }
+        }
+    } catch (error) {
+        console.error('Erreur cloture:', error);
+    }
+}
+
+async function lancerAnalyse() {
+    const modal = document.getElementById('modal-analyse');
+    const status = document.getElementById('modal-status');
+
+    modal.style.display = 'flex';
+    status.textContent = 'Recuperation des donnees...';
+
+    try {
+        const response = await fetch('/api/analyse');
+        const data = await response.json();
+
+        if (data.success) {
+            status.textContent = 'Analyse terminee !';
+            setTimeout(() => {
+                closeModal();
+                loadAllData();
+            }, 1500);
+        } else {
+            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+        }
+    } catch (error) {
+        status.textContent = 'Erreur de connexion';
+    }
+}
+
+async function genererCloture() {
+    const modal = document.getElementById('modal-analyse');
+    const status = document.getElementById('modal-status');
+
+    modal.style.display = 'flex';
+    status.textContent = 'Generation du bilan de cloture...';
+
+    try {
+        const response = await fetch('/api/cloture');
+        const data = await response.json();
+
+        if (data.success) {
+            status.textContent = 'Cloture generee !';
+            setTimeout(() => {
+                closeModal();
+                switchTab('bilan');
+                loadBilanData();
+            }, 1500);
+        } else {
+            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+        }
+    } catch (error) {
+        status.textContent = 'Erreur de connexion';
+    }
+}
+
+function closeModal() {
+    document.getElementById('modal-analyse').style.display = 'none';
+}
+
+// ===== TRADES TABLE ENRICHIE =====
+function renderTradesTable(trades) {
+    const tradesContainer = document.getElementById('trades-history');
+
+    if (!trades || trades.length === 0) {
+        tradesContainer.innerHTML = '<p class="no-data">Aucun trade correspondant aux filtres</p>';
+        return;
+    }
+
+    let html = `
+        <table class="trades-table-data trades-enriched">
+            <thead>
+                <tr>
+                    <th>Heure</th>
+                    <th>Actif</th>
+                    <th>Grade</th>
+                    <th>Dir.</th>
+                    <th>Conv.</th>
+                    <th>Régime</th>
+                    <th>Entrée</th>
+                    <th>Stop</th>
+                    <th>TP1</th>
+                    <th>Statut</th>
+                    <th>Résultat</th>
+                    <th>PnL</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+    for (const trade of trades) {
+        const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' || trade.resultat === 'WIN_FORCE' ? 'success' :
+                           trade.resultat === 'STOP' || trade.resultat === 'LOSS_FORCE' ? 'fail' : '';
+        const direction = trade.direction || 'LONG';
+        const dirClass = direction === 'LONG' ? 'positive' : 'negative';
+
+        // Trade Grade (A/B/C/D)
+        const grade = trade.trade_grade || '-';
+        const gradeScore = trade.grade_setup_score || 0;
+        const gradeClass = {
+            'A': 'grade-a',
+            'B': 'grade-b',
+            'C': 'grade-c',
+            'D': 'grade-d'
+        }[grade] || '';
+        const gradeIcon = {
+            'A': '🏆',
+            'B': '✅',
+            'C': '⚠️',
+            'D': '❌'
+        }[grade] || '❓';
+
+        // Conviction score (étoiles)
+        const conviction = trade.conviction_score || 3;
+        const stars = '⭐'.repeat(Math.min(conviction, 5));
+
+        // Régime marché
+        const regime = trade.regime_marche || '-';
+        const regimeIcon = {
+            'CALME': '😌',
+            'NORMAL': '📊',
+            'VOLATILE': '⚡',
+            'EXTREME': '🔥'
+        }[regime] || '📊';
+        const regimeClass = {
+            'CALME': 'regime-calme',
+            'NORMAL': 'regime-normal',
+            'VOLATILE': 'regime-volatile',
+            'EXTREME': 'regime-extreme'
+        }[regime] || '';
+
+        // Statut intraday
+        const statut = trade.statut_intraday || (trade.resultat ? 'TERMINE' : 'EN_COURS');
+        const statutIcon = {
+            'EN_COURS': '🔄',
+            'TP50_ATTEINT': '🎯',
+            'STOP_AJUSTE': '🛡️',
+            'TERMINE': '✓'
+        }[statut] || '🔄';
+
+        // Stop affiché (ajusté si disponible)
+        const stopAffiche = trade.stop_ajuste || trade.prix_stop;
+        const stopModifie = trade.stop_ajuste ? 'stop-ajuste' : '';
+
+        // Warning pour grade D
+        const gradeWarning = grade === 'D' ? ' grade-warning' : '';
+
+        html += `
+            <tr class="${resultClass}${gradeWarning}"
+                data-grade="${grade}"
+                data-conviction="${conviction}"
+                data-regime="${regime}"
+                data-statut="${statut}">
+                <td>${trade.heure_message || '-'}</td>
+                <td><strong>${trade.actif || '-'}</strong></td>
+                <td><span class="badge-grade ${gradeClass}" title="Score: ${gradeScore}/100">${gradeIcon} ${grade}</span></td>
+                <td class="${dirClass}">${direction}</td>
+                <td class="conviction-cell" title="Conviction ${conviction}/5">${stars}</td>
+                <td><span class="badge-regime ${regimeClass}">${regimeIcon} ${regime}</span></td>
+                <td>${trade.prix_entree || '-'}</td>
+                <td class="${stopModifie}">${stopAffiche || '-'}</td>
+                <td>${trade.prix_tp1 || '-'}</td>
+                <td><span class="badge-statut">${statutIcon} ${statut.replace('_', ' ')}</span></td>
+                <td>${trade.resultat || 'En cours'}</td>
+                <td class="${trade.pnl_pct > 0 ? 'positive' : trade.pnl_pct < 0 ? 'negative' : ''}">${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
+            </tr>`;
+    }
+
+    html += '</tbody></table>';
+    tradesContainer.innerHTML = html;
+}
+
+// ===== FILTRES =====
+function applyTradesFilters() {
+    const gradeFilter = document.getElementById('filter-grade').value;
+    const convictionFilter = document.getElementById('filter-conviction').value;
+    const regimeFilter = document.getElementById('filter-regime').value;
+    const strategieFilter = document.getElementById('filter-strategie').value;
+    const statutFilter = document.getElementById('filter-statut').value;
+
+    let filteredTrades = window.allTrades || [];
+
+    if (gradeFilter) {
+        filteredTrades = filteredTrades.filter(t => t.trade_grade === gradeFilter);
+    }
+
+    if (convictionFilter) {
+        const minConv = parseInt(convictionFilter);
+        filteredTrades = filteredTrades.filter(t => (t.conviction_score || 3) >= minConv);
+    }
+
+    if (regimeFilter) {
+        filteredTrades = filteredTrades.filter(t => t.regime_marche === regimeFilter);
+    }
+
+    if (strategieFilter) {
+        filteredTrades = filteredTrades.filter(t => t.strategie_entree === strategieFilter);
+    }
+
+    if (statutFilter) {
+        if (statutFilter === 'termine') {
+            filteredTrades = filteredTrades.filter(t => t.resultat !== null);
+        } else {
+            filteredTrades = filteredTrades.filter(t =>
+                t.statut_intraday === statutFilter || (!t.resultat && statutFilter === 'EN_COURS')
+            );
+        }
+    }
+
+    renderTradesTable(filteredTrades);
+}
+
+function clearTradesFilters() {
+    document.getElementById('filter-grade').value = '';
+    document.getElementById('filter-conviction').value = '';
+    document.getElementById('filter-regime').value = '';
+    document.getElementById('filter-strategie').value = '';
+    document.getElementById('filter-statut').value = '';
+    renderTradesTable(window.allTrades || []);
+}
+
+// ===== GRADE STATISTICS =====
+function calculateGradeStats(trades) {
+    const stats = {
+        'A': { total: 0, wins: 0, pnl: 0 },
+        'B': { total: 0, wins: 0, pnl: 0 },
+        'C': { total: 0, wins: 0, pnl: 0 },
+        'D': { total: 0, wins: 0, pnl: 0 }
+    };
+
+    const winResults = ['TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN'];
+
+    for (const trade of trades) {
+        const grade = trade.trade_grade;
+        if (!grade || !stats[grade]) continue;
+
+        stats[grade].total++;
+
+        if (trade.resultat) {
+            if (winResults.includes(trade.resultat)) {
+                stats[grade].wins++;
+            }
+            if (trade.pnl_pct) {
+                stats[grade].pnl += trade.pnl_pct;
+            }
+        }
+    }
+
+    // Update UI
+    for (const [grade, data] of Object.entries(stats)) {
+        const countEl = document.getElementById(`grade-${grade.toLowerCase()}-count`);
+        const winrateEl = document.getElementById(`grade-${grade.toLowerCase()}-winrate`);
+
+        if (countEl) countEl.textContent = data.total;
+        if (winrateEl) {
+            if (data.total > 0) {
+                const terminatedTrades = trades.filter(t => t.trade_grade === grade && t.resultat);
+                if (terminatedTrades.length > 0) {
+                    const winrate = (data.wins / terminatedTrades.length * 100).toFixed(0);
+                    const avgPnl = (data.pnl / terminatedTrades.length).toFixed(2);
+                    winrateEl.textContent = `${winrate}% | ${avgPnl > 0 ? '+' : ''}${avgPnl}%`;
+                } else {
+                    winrateEl.textContent = 'En cours...';
+                }
+            } else {
+                winrateEl.textContent = '-';
+            }
+        }
+    }
+
+    // Generate insight
+    const insightEl = document.getElementById('grade-insight');
+    if (insightEl) {
+        const totalTrades = trades.filter(t => t.trade_grade && t.resultat).length;
+        if (totalTrades >= 5) {
+            const gradeAWinrate = stats.A.total > 0 ? (stats.A.wins / trades.filter(t => t.trade_grade === 'A' && t.resultat).length * 100) : 0;
+            const gradeDWinrate = stats.D.total > 0 ? (stats.D.wins / trades.filter(t => t.trade_grade === 'D' && t.resultat).length * 100) : 0;
+
+            let insight = '';
+            if (gradeAWinrate > gradeDWinrate + 20) {
+                insight = `<p class="insight-positive">&#128200; Les trades Grade A performent ${(gradeAWinrate - gradeDWinrate).toFixed(0)}% mieux que les Grade D. Privilegiez les setups A/B!</p>`;
+            } else if (stats.D.total > stats.A.total) {
+                insight = `<p class="insight-warning">&#9888;&#65039; Vous avez plus de trades D (${stats.D.total}) que de A (${stats.A.total}). Soyez plus selectif!</p>`;
+            } else {
+                insight = `<p class="insight-neutral">&#128202; Distribution equilibree. Continuez a privilegier les grades A et B.</p>`;
+            }
+            insightEl.innerHTML = insight;
+        } else {
+            insightEl.innerHTML = '<p class="no-data">Minimum 5 trades clotures pour voir les insights</p>';
+        }
+    }
+}
+</script>
+{% endblock %}

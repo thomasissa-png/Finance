@@ -1,0 +1,2084 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Plateforme Trading{% endblock %}
+
+{% block content %}
+<div class="trading-desk">
+
+    <!-- TOP BAR: Titre + Bouton Actualiser -->
+    <div class="page-top-bar">
+        <h1 class="page-top-title">Dashboard</h1>
+        <button class="btn-refresh" id="btn-refresh" onclick="actualiserTout()">
+            ⟳ Actualiser
+        </button>
+    </div>
+
+    <!-- 1. CONTEXTE DU JOUR -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📊</span>
+            <h2 class="section-title">Contexte du Jour</h2>
+            <span class="section-meta">Mis à jour : <span id="context-time">--:--</span></span>
+        </div>
+        <div class="section-content">
+            <!-- Pré-market (visible le matin) -->
+            <div class="premarket-section" id="premarket-section">
+                <div class="premarket-header">
+                    <span class="premarket-icon">🌅</span>
+                    <span class="premarket-title">Pré-Market / Overnight</span>
+                </div>
+                <div class="premarket-grid" id="premarket-grid">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+
+            <ul class="context-bullets" id="context-bullets">
+                <li>Lancez une actualisation pour obtenir le contexte du marché...</li>
+            </ul>
+            <div class="context-tags" id="context-tags"></div>
+        </div>
+    </section>
+
+    <!-- 2. NEWS FLASH avec Navigation Historique -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">⚡</span>
+            <h2 class="section-title">News Flash Trading</h2>
+            <div class="news-navigation">
+                <button class="nav-arrow-small" onclick="naviguerNews(1)" id="news-prev" title="Plus récentes" disabled>◀</button>
+                <span class="nav-date" id="news-nav-date">Aujourd'hui</span>
+                <button class="nav-arrow-small" onclick="naviguerNews(-1)" id="news-next" title="Plus anciennes">▶</button>
+            </div>
+            <span class="section-meta" id="news-count">Actualités analysées par impact</span>
+        </div>
+        <div class="section-content">
+            <div class="news-flash-list" id="news-flash-list">
+                <div class="news-flash-item">
+                    <span class="news-time">--:--</span>
+                    <div class="news-content">
+                        <span class="news-text">Aucune actualité à fort impact pour le moment</span>
+                    </div>
+                </div>
+            </div>
+            <div class="news-expand-container" id="news-expand-container" style="display: none;">
+                <button class="news-expand-btn" id="news-expand-btn" onclick="toggleNewsExpand()">
+                    <span id="news-expand-icon">▼</span> Voir plus (<span id="news-hidden-count">0</span>)
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- 3. PULSE MARCHÉ + TOP MOVERS -->
+    <div class="grid-2 mb-3">
+        <!-- Pulse Marché -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📈</span>
+                <h2 class="section-title">Pulse Marché</h2>
+                <span class="section-meta" id="pulse-update-time">--:--</span>
+            </div>
+            <div class="section-content">
+                <div class="pulse-widget" id="pulse-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Top Movers -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">🔥</span>
+                <h2 class="section-title">Top Movers</h2>
+                <span class="section-meta">Plus fortes variations</span>
+            </div>
+            <div class="section-content">
+                <div class="top-movers-widget" id="top-movers-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- RÉGIME MARCHÉ + QUICK STATS -->
+    <div class="grid-2 mb-3">
+        <!-- Widget Régime Marché -->
+        <section class="section" id="section-regime" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📊</span>
+                <h2 class="section-title">Régime Marché</h2>
+                <span class="section-meta" id="regime-update-time">--:--</span>
+            </div>
+            <div class="section-content">
+                <div class="regime-widget" id="regime-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quick Stats A/B Testing -->
+        <section class="section" id="section-quick-stats" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📈</span>
+                <h2 class="section-title">Quick Stats (7j)</h2>
+                <span class="section-meta">Performance par dimension</span>
+            </div>
+            <div class="section-content">
+                <div class="quick-stats-widget" id="quick-stats-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- ALERTE MACRO (si événement imminent) -->
+    <section class="section section-alert" id="section-alerte-macro" style="display: none;">
+        <div class="section-header">
+            <span class="section-icon">🚨</span>
+            <h2 class="section-title">Alerte Macro</h2>
+        </div>
+        <div class="section-content">
+            <div class="alerte-macro-content" id="alerte-macro-content">
+            </div>
+        </div>
+    </section>
+
+    <!-- 3bis. AGENDA -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">📅</span>
+            <h2 class="section-title">Agenda Macro</h2>
+            <span class="section-meta">Événements économiques du jour</span>
+        </div>
+        <div class="section-content">
+            <div class="agenda-list" id="agenda-list">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 4. OPPORTUNITÉS ACTIVES -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">🎯</span>
+            <h2 class="section-title">Opportunités Actives</h2>
+            <span class="section-meta" id="opp-count">0 opportunités</span>
+        </div>
+        <div class="section-content">
+            <div class="opportunities-scroll" id="opportunities-container">
+                <div class="no-data" style="width: 100%;">Lancez une actualisation pour voir les opportunités</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 5. ZONES DANGER -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">⚠️</span>
+            <h2 class="section-title">Zones Danger</h2>
+            <span class="section-meta">Points de vigilance</span>
+        </div>
+        <div class="section-content">
+            <div class="danger-list" id="danger-zones">
+                <div class="danger-item safe">
+                    <span class="danger-icon">✅</span>
+                    <span>Aucune zone critique identifiée</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 6. A/B TESTS EN COURS -->
+    <section class="section" id="section-ab-tests" style="display: none;">
+        <div class="section-header">
+            <span class="section-icon">🧪</span>
+            <h2 class="section-title">Tests A/B Actifs</h2>
+            <span class="section-meta" id="ab-tests-count">0 tests</span>
+        </div>
+        <div class="section-content">
+            <div id="ab-tests-container">
+                <div class="no-data">Aucun test A/B en cours</div>
+            </div>
+        </div>
+    </section>
+
+</div>
+
+<!-- Modal Analyse -->
+<div id="modal-analyse" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Actualisation en cours</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="text-align: center;">
+            <div style="width: 48px; height: 48px; border: 3px solid var(--border-color); border-top-color: var(--accent-blue); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 24px;"></div>
+            <p id="modal-status" style="color: var(--text-secondary);">
+                Récupération des données de marché...
+            </p>
+        </div>
+    </div>
+</div>
+
+<style>
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Alerte Macro */
+.section-alert {
+    border: 2px solid var(--accent-red);
+    animation: pulse-border 2s infinite;
+}
+
+@keyframes pulse-border {
+    0%, 100% { border-color: var(--accent-red); }
+    50% { border-color: rgba(239, 68, 68, 0.3); }
+}
+
+.macro-alert-box {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+    border-radius: 8px;
+}
+
+.macro-alert-icon {
+    font-size: 32px;
+}
+
+.macro-alert-info {
+    flex: 1;
+}
+
+.macro-alert-title {
+    font-weight: 600;
+    color: var(--accent-red);
+    margin-bottom: 4px;
+}
+
+.macro-alert-time {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.macro-alert-impact {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+}
+
+.macro-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.macro-badge.danger {
+    background: var(--accent-red);
+    color: white;
+}
+
+.macro-badge.warning {
+    background: var(--accent-orange);
+    color: white;
+}
+
+.macro-badge.ok {
+    background: var(--accent-green);
+    color: white;
+}
+
+/* Indicateurs ATR & Volume sur les opportunités */
+.opp-indicators {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0;
+}
+
+.indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 6px;
+    min-width: 60px;
+}
+
+.indicator-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    letter-spacing: 0.5px;
+}
+
+.indicator-value {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* ATR Indicator colors */
+.atr-indicator.high {
+    background: rgba(34, 197, 94, 0.15);
+}
+.atr-indicator.high .indicator-value {
+    color: var(--accent-green);
+}
+
+.atr-indicator.medium {
+    background: rgba(251, 191, 36, 0.15);
+}
+.atr-indicator.medium .indicator-value {
+    color: var(--accent-orange);
+}
+
+.atr-indicator.low {
+    background: rgba(239, 68, 68, 0.15);
+}
+.atr-indicator.low .indicator-value {
+    color: var(--accent-red);
+}
+
+/* Volume Indicator colors */
+.vol-indicator.high {
+    background: rgba(34, 197, 94, 0.15);
+}
+.vol-indicator.high .indicator-value {
+    color: var(--accent-green);
+}
+
+.vol-indicator.medium {
+    background: rgba(100, 116, 139, 0.15);
+}
+.vol-indicator.medium .indicator-value {
+    color: var(--text-secondary);
+}
+
+.vol-indicator.low {
+    background: rgba(239, 68, 68, 0.15);
+}
+.vol-indicator.low .indicator-value {
+    color: var(--accent-red);
+}
+
+/* Direction tags */
+.opp-tags {
+    display: flex;
+    gap: 6px;
+}
+
+.opp-tag.direction-long {
+    background: var(--accent-green);
+    color: white;
+}
+
+.opp-tag.direction-short {
+    background: var(--accent-red);
+    color: white;
+}
+
+/* Agenda improvements */
+.agenda-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.agenda-content {
+    flex: 1;
+}
+
+.agenda-impact {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}
+
+.agenda-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Indicateur Weekend */
+.weekend-indicator {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(99, 102, 241, 0.1) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    color: var(--accent-purple, #8b5cf6);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.weekend-closed-msg {
+    background: linear-gradient(135deg, rgba(100, 116, 139, 0.1) 0%, rgba(71, 85, 105, 0.05) 100%);
+    border-radius: 8px;
+    border: 1px dashed var(--border-color);
+}
+
+/* News Navigation */
+.news-navigation {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    margin-right: 12px;
+}
+
+.nav-arrow-small {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 10px;
+}
+
+.nav-arrow-small:hover:not(:disabled) {
+    background: var(--accent-primary);
+    color: white;
+    border-color: var(--accent-primary);
+}
+
+.nav-arrow-small:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.nav-date {
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 80px;
+    text-align: center;
+}
+
+/* News Flash avec Impact Trading */
+.news-flash-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.news-flash-item:last-child {
+    border-bottom: none;
+}
+
+.news-flash-item.impact-high {
+    background: linear-gradient(90deg, rgba(239, 68, 68, 0.1) 0%, transparent 100%);
+    margin: 0 -12px;
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+
+.news-flash-item.impact-medium {
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.08) 0%, transparent 100%);
+    margin: 0 -12px;
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+
+.news-impact-badge {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.news-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-weight: 500;
+    min-width: 40px;
+    flex-shrink: 0;
+}
+
+.news-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.news-text {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+
+.news-analyse {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.news-actifs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.news-actif {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-family: monospace;
+}
+
+.news-actif.long {
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--accent-green);
+}
+
+.news-actif.short {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--accent-red);
+}
+
+.news-source {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.news-impact-cours {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-top: 4px;
+}
+
+.news-flash-item.no-impact {
+    opacity: 0.6;
+}
+
+.news-flash-item.hidden-news {
+    display: none;
+}
+
+.news-flash-list.expanded .news-flash-item.hidden-news {
+    display: flex;
+}
+
+.news-expand-container {
+    text-align: center;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border-color);
+    margin-top: 8px;
+}
+
+.news-expand-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 6px 16px;
+    border-radius: 16px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.news-expand-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+#news-expand-icon {
+    display: inline-block;
+    transition: transform 0.2s;
+}
+
+.news-flash-list.expanded + .news-expand-container #news-expand-icon {
+    transform: rotate(180deg);
+}
+
+/* Macro Alert Mobile Fix */
+@media (max-width: 600px) {
+    .macro-alert-box {
+        flex-direction: column;
+        text-align: center;
+        gap: 12px;
+    }
+
+    .macro-alert-icon {
+        font-size: 28px;
+    }
+
+    .macro-alert-info {
+        width: 100%;
+    }
+
+    .macro-alert-action {
+        width: 100%;
+    }
+
+    .macro-badge {
+        display: block;
+        width: 100%;
+        padding: 8px 12px;
+    }
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Variables globales
+let marketData = null;
+let analysisData = null;
+let pulseInterval = null;
+let newsInterval = null;
+let contextInterval = null;
+let isRefreshingContext = false;  // Flag anti-boucle infinie
+let contextRefreshAttempts = 0;   // Compteur de tentatives
+const MAX_REFRESH_ATTEMPTS = 2;   // Maximum 2 tentatives par session
+
+// Fonction utilitaire fetch avec retry exponentiel et validation
+async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+    const delays = [1000, 2000, 4000]; // 1s, 2s, 4s
+    let lastError;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch(url, options);
+            if (!response.ok && response.status >= 500) {
+                // Erreur serveur, retry possible
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return response;
+        } catch (error) {
+            lastError = error;
+            if (attempt < maxRetries) {
+                console.log(`Retry ${attempt + 1}/${maxRetries} pour ${url} dans ${delays[attempt]}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+            }
+        }
+    }
+    throw lastError;
+}
+
+// Fonction utilitaire pour fetch JSON avec gestion d'erreurs
+async function fetchJSON(url, options = {}) {
+    try {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            console.warn(`API ${url} retourné ${response.status}`);
+            return { success: false, error: `HTTP ${response.status}` };
+        }
+        return await response.json();
+    } catch (error) {
+        console.error(`Erreur fetch ${url}:`, error);
+        return { success: false, error: error.message };
+    }
+}
+
+// Initialisation
+document.addEventListener('DOMContentLoaded', function() {
+    loadAllData();
+
+    // Auto-refresh Pulse Marché toutes les 15 secondes
+    pulseInterval = setInterval(refreshMarkets, 15000);
+
+    // Auto-refresh News Flash toutes les 10 minutes
+    newsInterval = setInterval(refreshNews, 600000);
+
+    // Auto-refresh Contexte toutes les heures entre 7h-23h CET
+    contextInterval = setInterval(function() {
+        const now = new Date();
+        const hour = now.getHours();
+        const dayOfWeek = now.getDay();
+        // Skip weekend et si déjà en cours
+        if (dayOfWeek === 0 || dayOfWeek === 6) return;
+        if (isRefreshingContext) return;
+        // Reset le compteur de tentatives toutes les heures
+        contextRefreshAttempts = 0;
+        if (hour >= 7 && hour < 23) {
+            console.log('Auto-refresh contexte horaire...');
+            actualiserContexte();
+        }
+    }, 3600000);
+
+    // Vérifier immédiatement si le contexte doit être rafraîchi
+    setTimeout(checkAndRefreshContext, 5000);
+});
+
+// Cleanup des intervals pour éviter memory leak
+function cleanupIntervals() {
+    if (pulseInterval) {
+        clearInterval(pulseInterval);
+        pulseInterval = null;
+    }
+    if (newsInterval) {
+        clearInterval(newsInterval);
+        newsInterval = null;
+    }
+    if (contextInterval) {
+        clearInterval(contextInterval);
+        contextInterval = null;
+    }
+    console.log('Intervals nettoyés');
+}
+
+// Nettoyer à la fermeture de page
+window.addEventListener('beforeunload', cleanupIntervals);
+
+// Pause/resume des intervals quand l'onglet est caché/visible
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+        // Onglet caché - stopper les refreshs pour économiser ressources
+        cleanupIntervals();
+    } else {
+        // Onglet visible - relancer les refreshs
+        if (!pulseInterval) {
+            loadAllData(); // Refresh immédiat
+            pulseInterval = setInterval(refreshMarkets, 15000);
+            newsInterval = setInterval(refreshNews, 600000);
+            contextInterval = setInterval(function() {
+                const now = new Date();
+                const hour = now.getHours();
+                const dayOfWeek = now.getDay();
+                if (dayOfWeek === 0 || dayOfWeek === 6) return;
+                if (isRefreshingContext) return;
+                contextRefreshAttempts = 0;
+                if (hour >= 7 && hour < 23) {
+                    actualiserContexte();
+                }
+            }, 3600000);
+        }
+    }
+});
+
+async function checkAndRefreshContext() {
+    // Protection anti-boucle
+    if (isRefreshingContext || contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) return;
+
+    const now = new Date();
+    const hour = now.getHours();
+    const dayOfWeek = now.getDay();
+
+    // Skip weekend
+    if (dayOfWeek === 0 || dayOfWeek === 6) return;
+
+    if (hour >= 7 && hour < 23) {
+        try {
+            const response = await fetch('/api/derniere-analyse');
+            const data = await response.json();
+
+            if (data.success && data.analyse) {
+                const analyseTime = new Date(data.analyse.timestamp);
+                const diffHours = (now - analyseTime) / (1000 * 60 * 60);
+
+                if (diffHours > 1) {
+                    console.log('Contexte périmé, tentative unique de rafraîchissement...');
+                    actualiserContexte();
+                }
+            } else {
+                // Pas d'analyse, en lancer une
+                actualiserContexte();
+            }
+        } catch (error) {
+            console.error('Erreur vérification contexte:', error);
+        }
+    }
+}
+
+async function actualiserContexte(forceReset = false) {
+    // Protection anti-boucle infinie
+    if (isRefreshingContext) {
+        console.log('Actualisation déjà en cours, skip');
+        return false;
+    }
+
+    // Reset manuel des tentatives si demandé (clic sur bouton Actualiser)
+    if (forceReset) {
+        contextRefreshAttempts = 0;
+    }
+
+    // Vérifier weekend
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+        console.log('Weekend détecté, pas d\'actualisation automatique');
+        document.getElementById('context-bullets').innerHTML =
+            '<li>📅 Weekend - Marchés fermés. Contexte disponible lundi.</li>';
+        return false;
+    }
+
+    // Limiter les tentatives automatiques (pas les manuelles)
+    if (!forceReset && contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) {
+        console.log('Maximum de tentatives automatiques atteint');
+        document.getElementById('context-bullets').innerHTML =
+            '<li style="color: var(--text-muted);">Contexte non disponible. Cliquez sur "Actualiser" pour réessayer.</li>';
+        return false;
+    }
+
+    isRefreshingContext = true;
+    contextRefreshAttempts++;
+
+    try {
+        const data = await fetchJSON('/api/analyse');
+
+        isRefreshingContext = false;
+
+        if (data.success && data.analyse) {
+            // Nouvelle analyse générée avec succès
+            analysisData = data.analyse;
+            renderAnalysis();
+            contextRefreshAttempts = 0;  // Reset le compteur
+            return true;
+        } else {
+            // Pas de nouvelle analyse (API error, pas de clé, etc.)
+            console.log('Pas de nouvelle analyse disponible:', data.error || 'raison inconnue');
+            document.getElementById('context-bullets').innerHTML =
+                '<li style="color: var(--text-muted);">Analyse non disponible. Vérifiez la clé API Claude.</li>';
+            return false;
+        }
+    } catch (error) {
+        isRefreshingContext = false;
+        console.error('Erreur actualisation contexte:', error);
+        document.getElementById('context-bullets').innerHTML =
+            '<li class="error-message">Erreur de connexion</li>';
+        return false;
+    }
+}
+
+async function loadAllData() {
+    // OPTIMISÉ: Charger toutes les données en parallèle
+    // Le weekend est détecté par chaque API côté serveur
+    await Promise.all([
+        refreshMarkets(),
+        loadLastAnalysis(),
+        refreshNews(),
+        loadPremarket(),
+        loadMacroEvents(),
+        loadABTests(),
+        loadRegimeMarche(),
+        loadQuickStats()
+    ]);
+}
+
+// ===== RÉGIME MARCHÉ =====
+async function loadRegimeMarche() {
+    try {
+        const data = await fetchJSON('/api/contexte-trading');
+
+        const widget = document.getElementById('regime-widget');
+        const timeSpan = document.getElementById('regime-update-time');
+
+        if (data.success && data.contexte) {
+            const ctx = data.contexte;
+            const now = new Date();
+            timeSpan.textContent = now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+
+            // Déterminer la classe du régime
+            const regimeClass = {
+                'CALME': 'regime-calme',
+                'NORMAL': 'regime-normal',
+                'VOLATILE': 'regime-volatile',
+                'EXTREME': 'regime-extreme'
+            }[ctx.regime_marche] || 'regime-normal';
+
+            // Icône du régime
+            const regimeIcon = {
+                'CALME': '😌',
+                'NORMAL': '📊',
+                'VOLATILE': '⚡',
+                'EXTREME': '🔥'
+            }[ctx.regime_marche] || '📊';
+
+            // Session icon
+            const sessionIcon = {
+                'EU_OPEN': '🇪🇺',
+                'US_PREMARKET': '🌅',
+                'US_OPEN': '🇺🇸',
+                'EU_CLOSE': '🌆',
+                'US_CLOSE': '🌙',
+                'HORS_SESSION': '💤'
+            }[ctx.session_marche] || '📈';
+
+            widget.innerHTML = `
+                <div class="regime-container ${regimeClass}">
+                    <div class="regime-main">
+                        <div class="regime-vix">
+                            <span class="regime-vix-label">VIX</span>
+                            <span class="regime-vix-value">${ctx.vix_niveau?.toFixed(1) || '--'}</span>
+                        </div>
+                        <div class="regime-status">
+                            <span class="regime-icon">${regimeIcon}</span>
+                            <span class="regime-name">${ctx.regime_marche}</span>
+                        </div>
+                    </div>
+                    <div class="regime-details">
+                        <div class="regime-row">
+                            <span class="regime-label">${sessionIcon} Session</span>
+                            <span class="regime-value">${ctx.session_marche?.replace('_', ' ') || '--'}</span>
+                        </div>
+                        <div class="regime-row">
+                            <span class="regime-label">📅 Jour</span>
+                            <span class="regime-value">${ctx.jour_semaine || '--'}</span>
+                        </div>
+                    </div>
+                    <div class="regime-rules">
+                        <span class="regime-rules-icon">💡</span>
+                        <span class="regime-rules-text">${ctx.regles_adaptees || 'Règles standard'}</span>
+                    </div>
+                </div>
+            `;
+        } else {
+            widget.innerHTML = '<div class="no-data">Données indisponibles</div>';
+        }
+    } catch (error) {
+        console.error('Erreur régime marché:', error);
+        document.getElementById('regime-widget').innerHTML = '<div class="error-message">Erreur de chargement</div>';
+    }
+}
+
+// ===== QUICK STATS A/B TESTING =====
+async function loadQuickStats() {
+    try {
+        const data = await fetchJSON('/api/stats-avancees');
+
+        const widget = document.getElementById('quick-stats-widget');
+
+        if (data.success) {
+            let html = '<div class="quick-stats-container">';
+
+            // Stats par conviction
+            if (data.par_conviction && data.par_conviction.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Conviction</div>';
+                for (const stat of data.par_conviction) {
+                    const stars = '⭐'.repeat(stat.conviction_score || 0);
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${stars || '☆'}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            // Stats par régime
+            if (data.par_regime_marche && data.par_regime_marche.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Régime</div>';
+                for (const stat of data.par_regime_marche) {
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    const regimeIcon = {'CALME': '😌', 'NORMAL': '📊', 'VOLATILE': '⚡', 'EXTREME': '🔥'}[stat.regime_marche] || '📊';
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${regimeIcon} ${stat.regime_marche || 'N/A'}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            // Stats par stratégie d'entrée
+            if (data.par_strategie_entree && data.par_strategie_entree.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Stratégie</div>';
+                for (const stat of data.par_strategie_entree) {
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${stat.strategie_entree || 'N/A'}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            // Stats par jour de la semaine
+            if (data.par_jour_semaine && data.par_jour_semaine.length > 0) {
+                html += '<div class="quick-stats-section">';
+                html += '<div class="quick-stats-title">Par Jour</div>';
+                for (const stat of data.par_jour_semaine) {
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
+                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
+                    const jourShort = (stat.jour_semaine || 'N/A').substring(0, 3);
+                    html += `
+                        <div class="quick-stats-row">
+                            <span class="quick-stats-label">${jourShort}</span>
+                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            }
+
+            html += '</div>';
+
+            // Message si pas de données
+            if (!data.par_conviction?.length && !data.par_regime_marche?.length) {
+                html = '<div class="no-data">Pas encore de données (nouveaux champs)</div>';
+            }
+
+            widget.innerHTML = html;
+        } else {
+            widget.innerHTML = '<div class="no-data">Données indisponibles</div>';
+        }
+    } catch (error) {
+        console.error('Erreur quick stats:', error);
+        document.getElementById('quick-stats-widget').innerHTML = '<div class="error-message">Erreur de chargement</div>';
+    }
+}
+
+// ===== A/B TESTS =====
+async function loadABTests() {
+    try {
+        const data = await fetchJSON('/api/ab-tests');
+
+        const section = document.getElementById('section-ab-tests');
+        const container = document.getElementById('ab-tests-container');
+        const countSpan = document.getElementById('ab-tests-count');
+
+        if (data.success && data.tests_actifs && data.tests_actifs.length > 0) {
+            section.style.display = 'block';
+            countSpan.textContent = `${data.tests_actifs.length} test${data.tests_actifs.length > 1 ? 's' : ''}`;
+
+            let html = '';
+            for (const test of data.tests_actifs) {
+                const statsA = test.stats_groupe_a || {};
+                const statsB = test.stats_groupe_b || {};
+
+                html += `
+                <div class="ab-test-card">
+                    <div class="ab-test-header">
+                        <span class="ab-test-name">🧪 ${test.nom}</span>
+                        <span class="ab-test-status">Actif</span>
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
+                        ${test.description || ''}
+                    </p>
+                    <div class="ab-stats-grid">
+                        <div class="ab-groupe-stats groupe-a">
+                            <div class="ab-groupe-label">Groupe A: ${test.variante_a}</div>
+                            <div class="ab-groupe-value">${statsA.trades || 0} trades</div>
+                            <div style="font-size: 0.8rem;">
+                                Win: ${statsA.win_rate || 0}% | PnL: ${statsA.pnl_total >= 0 ? '+' : ''}${statsA.pnl_total || 0}%
+                            </div>
+                        </div>
+                        <div class="ab-groupe-stats groupe-b">
+                            <div class="ab-groupe-label">Groupe B: ${test.variante_b}</div>
+                            <div class="ab-groupe-value">${statsB.trades || 0} trades</div>
+                            <div style="font-size: 0.8rem;">
+                                Win: ${statsB.win_rate || 0}% | PnL: ${statsB.pnl_total >= 0 ? '+' : ''}${statsB.pnl_total || 0}%
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+            container.innerHTML = html;
+        } else {
+            section.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Erreur A/B tests:', error);
+    }
+}
+
+// ===== ÉVÉNEMENTS MACRO =====
+async function loadMacroEvents() {
+    const agendaContainer = document.getElementById('agenda-list');  // Corrigé: était 'macro-agenda-list'
+
+    try {
+        // Afficher état de chargement si vide
+        if (agendaContainer && !agendaContainer.innerHTML.includes('agenda-item')) {
+            agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">⏳</span><span class="agenda-name">Chargement...</span></div>';
+        }
+
+        const data = await fetchJSON('/api/evenements-macro');
+
+        if (data.success) {
+            // Afficher alerte si événement imminent
+            if (data.alerte_imminente && data.evenement_imminent) {
+                showMacroAlert(data.evenement_imminent);
+            } else {
+                hideMacroAlert();
+            }
+
+            // Mettre à jour l'agenda avec les événements macro
+            if (data.evenements && data.evenements.length > 0) {
+                renderMacroAgenda(data.evenements);
+            } else if (data.weekend) {
+                if (agendaContainer) agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">📅</span><span class="agenda-name">Marchés fermés le weekend</span></div>';
+            } else {
+                if (agendaContainer) agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">✓</span><span class="agenda-name">Aucun événement majeur prévu</span></div>';
+            }
+        } else {
+            console.warn('API evenements-macro retour échec:', data.error);
+        }
+    } catch (error) {
+        console.error('Erreur événements macro:', error);
+        if (agendaContainer) {
+            agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">⚠️</span><span class="agenda-name">Erreur de chargement</span></div>';
+        }
+    }
+}
+
+function showMacroAlert(evt) {
+    const section = document.getElementById('section-alerte-macro');
+    const content = document.getElementById('alerte-macro-content');
+
+    section.style.display = 'block';
+    content.innerHTML = `
+        <div class="macro-alert-box">
+            <div class="macro-alert-icon">⚠️</div>
+            <div class="macro-alert-info">
+                <div class="macro-alert-title">${evt.nom}</div>
+                <div class="macro-alert-time">Dans moins de 30 minutes (${evt.heure})</div>
+                <div class="macro-alert-impact">${evt.impact || 'Forte volatilité attendue'}</div>
+            </div>
+            <div class="macro-alert-action">
+                <span class="macro-badge danger">ÉVITER LES POSITIONS</span>
+            </div>
+        </div>
+    `;
+}
+
+function hideMacroAlert() {
+    document.getElementById('section-alerte-macro').style.display = 'none';
+}
+
+function renderMacroAgenda(events) {
+    const container = document.getElementById('agenda-list');
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    let html = '';
+    for (const evt of events) {
+        const stars = '⭐'.repeat(evt.importance || 1);
+        const impactReco = evt.impact_recommande || 'PRUDENCE';
+        const badgeClass = impactReco === 'ÉVITER' ? 'danger' : impactReco === 'PRUDENCE' ? 'warning' : 'ok';
+
+        // Déterminer si passé, actif ou à venir
+        let statusClass = '';
+        if (evt.heure) {
+            const [evtHour, evtMin] = evt.heure.split(':').map(Number);
+            if (evtHour < currentHour || (evtHour === currentHour && evtMin < currentMinute)) {
+                statusClass = 'past';
+            } else if (Math.abs(evtHour - currentHour) === 0 && Math.abs(evtMin - currentMinute) <= 30) {
+                statusClass = 'active';
+            }
+        }
+
+        html += `
+            <div class="agenda-item ${statusClass}">
+                <span class="agenda-time">${evt.heure || '--:--'}</span>
+                <div class="agenda-content">
+                    <div class="agenda-name">${evt.nom || '-'}</div>
+                    <div class="agenda-impact">${evt.impact || ''}</div>
+                </div>
+                <div class="agenda-meta">
+                    <span class="agenda-stars">${stars}</span>
+                    <span class="macro-badge ${badgeClass}">${impactReco}</span>
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html || '<div class="no-data">Aucun événement macro prévu</div>';
+}
+
+// ===== PRÉ-MARKET =====
+async function loadPremarket() {
+    const section = document.getElementById('premarket-section');
+    const container = document.getElementById('premarket-grid');
+    const now = new Date();
+    const hour = now.getHours();
+
+    // Afficher seulement avant 15h30 (ouverture US)
+    if (hour >= 16) {
+        section.style.display = 'none';
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/premarket');
+        const data = await response.json();
+
+        if (data.success && Object.keys(data.premarket).length > 0) {
+            section.style.display = 'block';
+            let html = '';
+
+            for (const [nom, info] of Object.entries(data.premarket)) {
+                const isPositive = info.variation_overnight >= 0;
+                const varClass = isPositive ? 'positive' : 'negative';
+                const varSign = isPositive ? '+' : '';
+
+                html += `
+                    <div class="premarket-item">
+                        <span class="premarket-name">${nom}</span>
+                        <span class="premarket-value ${varClass}">${varSign}${info.variation_overnight.toFixed(2)}%</span>
+                    </div>`;
+            }
+
+            container.innerHTML = html;
+        } else {
+            section.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Erreur premarket:', error);
+        section.style.display = 'none';
+    }
+}
+
+// ===== NEWS FLASH via NewsAPI avec Navigation Historique =====
+let newsHistorique = [];
+let newsIndexJour = 0;
+
+async function loadNewsHistorique() {
+    try {
+        const response = await fetch('/api/news/historique?jours=7');
+        const data = await response.json();
+
+        if (data.success && data.historique) {
+            newsHistorique = data.historique;
+        }
+    } catch (error) {
+        console.error('Erreur chargement historique news:', error);
+    }
+}
+
+async function refreshNews() {
+    const container = document.getElementById('news-flash-list');
+
+    try {
+        // Afficher état de chargement
+        if (!container.innerHTML.includes('news-flash-item')) {
+            container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⏳</span><div class="news-content"><span class="news-text">Chargement des actualités...</span></div></div>';
+        }
+
+        // Charger les news (avec cache côté serveur)
+        const response = await fetch('/api/news');
+        const data = await response.json();
+
+        if (data.success && data.news && data.news.length > 0) {
+            renderNewsFlashWithImpact(data.news);
+            // Mettre à jour l'historique en arrière-plan (non bloquant)
+            loadNewsHistorique();
+            newsIndexJour = 0;
+            updateNewsNavigation();
+        } else if (data.success && data.articles) {
+            renderNewsFlashFromAPI(data.articles);
+        } else {
+            container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">--:--</span><div class="news-content"><span class="news-text">Aucune actualité disponible</span></div></div>';
+        }
+    } catch (error) {
+        console.error('Erreur news:', error);
+        container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⚠️</span><div class="news-content"><span class="news-text">Erreur de chargement des actualités</span></div></div>';
+    }
+}
+
+function naviguerNews(direction) {
+    // direction: +1 = vers récent (gauche), -1 = vers ancien (droite)
+    const newIndex = newsIndexJour - direction;
+    if (newIndex >= 0 && newIndex < newsHistorique.length) {
+        newsIndexJour = newIndex;
+        const jourData = newsHistorique[newsIndexJour];
+        renderNewsFlashWithImpact(jourData.news || []);
+        updateNewsNavigation();
+    }
+}
+
+function updateNewsNavigation() {
+    const prevBtn = document.getElementById('news-prev');  // ◀ = vers récent
+    const nextBtn = document.getElementById('news-next');  // ▶ = vers ancien
+    const dateLabel = document.getElementById('news-nav-date');
+
+    if (!newsHistorique.length) return;
+
+    // ◀ (prev) disabled si on est sur les plus récentes (index 0)
+    prevBtn.disabled = newsIndexJour <= 0;
+    // ▶ (next) disabled si on est sur les plus anciennes
+    nextBtn.disabled = newsIndexJour >= newsHistorique.length - 1;
+
+    if (newsIndexJour === 0) {
+        dateLabel.textContent = "Aujourd'hui";
+    } else {
+        const jourData = newsHistorique[newsIndexJour];
+        dateLabel.textContent = jourData.date || `J-${newsIndexJour}`;
+    }
+}
+
+// Variable pour stocker toutes les news du jour
+let allNewsToday = [];
+
+function renderNewsFlashWithImpact(news) {
+    const container = document.getElementById('news-flash-list');
+    const expandContainer = document.getElementById('news-expand-container');
+    const hiddenCountSpan = document.getElementById('news-hidden-count');
+    const newsCountSpan = document.getElementById('news-count');
+
+    // Reset expand state
+    container.classList.remove('expanded');
+
+    if (!news || news.length === 0) {
+        container.innerHTML = `
+            <div class="news-flash-item no-impact">
+                <span class="news-time">--:--</span>
+                <div class="news-content">
+                    <span class="news-text">Aucune actualité à impact trading détectée</span>
+                </div>
+            </div>`;
+        expandContainer.style.display = 'none';
+        newsCountSpan.textContent = 'Aucune news';
+        return;
+    }
+
+    // Stocker toutes les news
+    allNewsToday = news;
+
+    // Afficher le compteur
+    newsCountSpan.textContent = `${news.length} news analysée${news.length > 1 ? 's' : ''}`;
+
+    let html = '';
+    const visibleCount = 3;
+
+    news.forEach((item, index) => {
+        const impactClass = item.impact ? item.impact.toLowerCase() : 'medium';
+        const impactIcon = item.impact === 'HIGH' ? '🔴' : item.impact === 'MEDIUM' ? '🟠' : '⚪';
+        const hiddenClass = index >= visibleCount ? 'hidden-news' : '';
+
+        // Formater l'heure (toujours afficher si disponible)
+        const heureAffichee = item.heure && item.heure !== '--:--' ? item.heure : '';
+
+        // Formater les actifs concernés avec impact estimé
+        let actifsHtml = '';
+        if (item.actifs && item.actifs.length > 0) {
+            const actifsTags = item.actifs.map(a => {
+                const dirClass = a.direction === 'LONG' ? 'long' : 'short';
+                const dirIcon = a.direction === 'LONG' ? '↗' : '↘';
+                const impactEstime = a.impact_estime || a.raison || '';
+                const impactText = impactEstime ? ` (${impactEstime})` : '';
+                return `<span class="news-actif ${dirClass}">${dirIcon} ${a.nom || a.symbole}${impactText}</span>`;
+            }).join('');
+            actifsHtml = `<div class="news-actifs">${actifsTags}</div>`;
+        }
+
+        // Afficher l'impact attendu sur les cours si disponible
+        const impactCours = item.impact_cours ? `<span class="news-impact-cours">${item.impact_cours}</span>` : '';
+
+        // Afficher l'analyse + impact cours
+        html += `
+            <div class="news-flash-item impact-${impactClass} ${hiddenClass}">
+                <div class="news-impact-badge">${impactIcon}</div>
+                <span class="news-time">${heureAffichee || '--:--'}</span>
+                <div class="news-content">
+                    <span class="news-text">${item.analyse || ''}</span>
+                    ${impactCours}
+                    ${actifsHtml}
+                </div>
+            </div>`;
+    });
+
+    container.innerHTML = html;
+
+    // Afficher le bouton expand si plus de 3 news
+    if (news.length > visibleCount) {
+        expandContainer.style.display = 'block';
+        hiddenCountSpan.textContent = news.length - visibleCount;
+    } else {
+        expandContainer.style.display = 'none';
+    }
+}
+
+function toggleNewsExpand() {
+    const container = document.getElementById('news-flash-list');
+    const btn = document.getElementById('news-expand-btn');
+    const icon = document.getElementById('news-expand-icon');
+    const hiddenCount = document.getElementById('news-hidden-count');
+
+    if (container.classList.contains('expanded')) {
+        container.classList.remove('expanded');
+        icon.textContent = '▼';
+        btn.innerHTML = `<span id="news-expand-icon">▼</span> Voir plus (<span id="news-hidden-count">${allNewsToday.length - 3}</span>)`;
+    } else {
+        container.classList.add('expanded');
+        icon.textContent = '▲';
+        btn.innerHTML = `<span id="news-expand-icon">▲</span> Réduire`;
+    }
+}
+
+function renderNewsFlashFromAPI(articles) {
+    const container = document.getElementById('news-flash-list');
+
+    if (!articles || articles.length === 0) {
+        container.innerHTML = `
+            <div class="news-flash-item">
+                <span class="news-time">--:--</span>
+                <div class="news-content">
+                    <span class="news-text">Aucune actualité disponible</span>
+                </div>
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    for (const article of articles.slice(0, 6)) {
+        html += `
+            <div class="news-flash-item">
+                <span class="news-time">${article.heure || '--:--'}</span>
+                <div class="news-content">
+                    <span class="news-text">${article.titre}</span>
+                    <span class="news-source">${article.source}</span>
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+// ===== TOP MOVERS =====
+async function loadTopMovers() {
+    try {
+        const response = await fetch('/api/top-movers');
+        const data = await response.json();
+
+        if (data.success) {
+            renderTopMovers(data.gainers, data.losers, data.weekend, data.message_weekend);
+        }
+    } catch (error) {
+        console.error('Erreur top movers:', error);
+    }
+}
+
+function renderTopMovers(gainers, losers, isWeekend, weekendMsg) {
+    const container = document.getElementById('top-movers-widget');
+
+    let html = '';
+
+    // Message weekend si applicable
+    if (isWeekend && weekendMsg) {
+        html += `<div class="weekend-indicator">${weekendMsg}</div>`;
+    }
+
+    html += '<div class="movers-grid">';
+
+    // Gainers - 5 éléments
+    html += '<div class="movers-column gainers">';
+    html += '<div class="movers-title positive">▲ Hausse</div>';
+    for (const g of gainers.slice(0, 5)) {
+        html += `
+            <div class="mover-item">
+                <span class="mover-name">${g.nom}</span>
+                <span class="mover-value positive">+${g.variation.toFixed(2)}%</span>
+            </div>`;
+    }
+    html += '</div>';
+
+    // Losers - 5 éléments
+    html += '<div class="movers-column losers">';
+    html += '<div class="movers-title negative">▼ Baisse</div>';
+    for (const l of losers.slice(0, 5)) {
+        html += `
+            <div class="mover-item">
+                <span class="mover-name">${l.nom}</span>
+                <span class="mover-value negative">${l.variation.toFixed(2)}%</span>
+            </div>`;
+    }
+    html += '</div>';
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+
+// ===== ACTUALISER TOUT =====
+async function actualiserTout() {
+    const btn = document.getElementById('btn-refresh');
+    const modal = document.getElementById('modal-analyse');
+    const status = document.getElementById('modal-status');
+
+    btn.classList.add('loading');
+    btn.textContent = '⟳ Actualisation...';
+    modal.classList.add('active');
+    status.textContent = 'Récupération des données de marché...';
+
+    try {
+        // Rafraîchir les marchés
+        await refreshMarkets();
+        status.textContent = 'Analyse en cours avec Claude...';
+
+        // Lancer l'analyse (forceReset=true car action utilisateur)
+        const data = await fetchJSON('/api/analyse');
+
+        if (data.success) {
+            status.textContent = 'Actualisation terminée !';
+            setTimeout(() => {
+                closeModal();
+                loadLastAnalysis();
+            }, 1000);
+        } else {
+            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+        }
+    } catch (error) {
+        status.textContent = 'Erreur de connexion';
+    } finally {
+        btn.classList.remove('loading');
+        btn.textContent = '⟳ Actualiser';
+    }
+}
+
+function closeModal() {
+    document.getElementById('modal-analyse').classList.remove('active');
+}
+
+// ===== MARCHÉS =====
+let isWeekendMode = false;
+
+async function refreshMarkets() {
+    try {
+        // OPTIMISÉ: Utiliser fetchWithRetry pour plus de résilience
+        const response = await fetchWithRetry('/api/donnees-marche');
+        const data = await response.json();
+
+        if (data.success) {
+            marketData = data.donnees;
+            isWeekendMode = data.weekend || false;
+            renderPulseWidget(data.message_weekend);
+
+            // Mettre à jour l'heure
+            const now = new Date();
+            document.getElementById('pulse-update-time').textContent =
+                now.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'});
+
+            // Rafraîchir aussi les Top Movers
+            loadTopMovers();
+        } else {
+            // Afficher message d'erreur dans le widget
+            const container = document.getElementById('pulse-widget');
+            container.innerHTML = `<div class="error-message">Erreur: ${data.error || 'Données non disponibles'}</div>`;
+            console.error('API error:', data.error);
+        }
+    } catch (error) {
+        console.error('Erreur markets après retries:', error);
+        // Afficher message d'erreur réseau
+        const container = document.getElementById('pulse-widget');
+        container.innerHTML = '<div class="error-message">Erreur de connexion au serveur</div>';
+    }
+}
+
+function renderPulseWidget(weekendMsg) {
+    const container = document.getElementById('pulse-widget');
+    const indices = [
+        {key: 'CAC 40', name: 'CAC 40'},
+        {key: 'S&P 500', name: 'S&P 500'},
+        {key: 'Nasdaq', name: 'Nasdaq'},
+        {key: 'Or', name: 'Or'},
+        {key: 'EUR/USD', name: 'EUR/USD'},
+        {key: 'VIX', name: 'VIX'}
+    ];
+
+    let html = '';
+
+    // Indicateur weekend
+    if (isWeekendMode && weekendMsg) {
+        html += `<div class="weekend-indicator">${weekendMsg}</div>`;
+    }
+
+    for (const item of indices) {
+        const d = marketData[item.key];
+        if (d) {
+            const isPositive = d.variation >= 0;
+            const barWidth = Math.min(Math.abs(d.variation) * 15, 100);
+            // CORRIGÉ: Forex réel (EUR/USD, GBP/USD) = 4 décimales
+            // Exclure les métaux (Or, Argent) qui ont des prix élevés
+            const forexPairs = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'EURUSD', 'GBPUSD', 'USDJPY'];
+            const isForex = forexPairs.some(pair => item.key.includes(pair) || item.name === pair);
+            const decimals = isForex ? 4 : 2;
+            const priceFormatted = d.prix ? d.prix.toLocaleString('fr-FR', {minimumFractionDigits: decimals, maximumFractionDigits: decimals}) : '-';
+
+            html += `
+                <div class="pulse-item">
+                    <span class="pulse-name">${item.name}</span>
+                    <span class="pulse-price">${priceFormatted}</span>
+                    <div class="pulse-bar-container">
+                        <div class="pulse-bar ${isPositive ? 'positive' : 'negative'}"
+                             style="width: ${barWidth}%"></div>
+                    </div>
+                    <span class="pulse-value ${isPositive ? 'positive' : 'negative'}">
+                        ${isPositive ? '+' : ''}${d.variation.toFixed(2)}%
+                    </span>
+                </div>`;
+        }
+    }
+
+    container.innerHTML = html || '<div class="no-data">Données non disponibles</div>';
+}
+
+// ===== ANALYSE =====
+async function loadLastAnalysis() {
+    try {
+        const container = document.getElementById('context-bullets');
+        container.innerHTML = '<li class="loading">⏳ Chargement du contexte...</li>';
+
+        const response = await fetch('/api/derniere-analyse');
+        const data = await response.json();
+
+        const now = new Date();
+        const hour = now.getHours();
+        const dayOfWeek = now.getDay();
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+
+        if (data.success && data.analyse) {
+            analysisData = data.analyse;
+
+            // Vérifier fraîcheur (>1h) mais NE PAS boucler
+            if (data.analyse.heure && !isWeekend && !isRefreshingContext) {
+                const [h, m] = data.analyse.heure.split(':').map(Number);
+                const analyseTime = new Date();
+                analyseTime.setHours(h, m, 0, 0);
+                const diffHours = (now - analyseTime) / (1000 * 60 * 60);
+
+                if (diffHours > 1 && hour >= 7 && hour < 23 && contextRefreshAttempts < MAX_REFRESH_ATTEMPTS) {
+                    container.innerHTML = '<li style="color: var(--accent-orange);">⚠️ Contexte de ' + data.analyse.heure + ' (périmé)</li>';
+                    // Lancer actualisation en arrière-plan SANS rappeler loadLastAnalysis
+                    actualiserContexte();  // Ne pas await, ne pas return
+                }
+            }
+
+            // Toujours afficher les données existantes
+            renderAnalysis();
+        } else {
+            // Pas d'analyse existante
+            if (isWeekend) {
+                container.innerHTML = '<li>📅 Weekend - Marchés fermés. Reprise lundi.</li>';
+            } else if (hour >= 7 && hour < 23) {
+                // Tenter UNE SEULE FOIS de générer une analyse
+                if (contextRefreshAttempts < MAX_REFRESH_ATTEMPTS) {
+                    container.innerHTML = '<li style="color: var(--accent-orange);">⏳ Génération du contexte...</li>';
+                    actualiserContexte();  // Pas de await pour éviter blocage
+                } else {
+                    container.innerHTML = '<li>Contexte non disponible. Cliquez sur "Actualiser".</li>';
+                }
+            } else {
+                container.innerHTML = '<li>Marchés fermés. Analyse disponible entre 7h et 23h.</li>';
+            }
+        }
+    } catch (error) {
+        console.error('Erreur analyse:', error);
+        document.getElementById('context-bullets').innerHTML =
+            '<li class="error-message">Erreur de chargement du contexte</li>';
+    }
+}
+
+function checkContextFreshness() {
+    // Vérifier si besoin de rafraîchir (avec protection anti-boucle)
+    if (isRefreshingContext || contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) return;
+
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) return;  // Weekend
+
+    if (analysisData && analysisData.heure) {
+        const [h, m] = analysisData.heure.split(':').map(Number);
+        const analyseTime = new Date();
+        analyseTime.setHours(h, m, 0, 0);
+
+        const diffHours = (now - analyseTime) / (1000 * 60 * 60);
+
+        if (diffHours > 1 && now.getHours() >= 7 && now.getHours() < 23) {
+            console.log('Contexte périmé, tentative de rafraîchissement...');
+            actualiserContexte();
+        }
+    }
+}
+
+// Mettre à jour zones danger quand opportunités changent
+function updateDangerZonesFromOpportunities(opportunities) {
+    if (!opportunities || opportunities.length === 0) return;
+
+    // Si des opportunités ont été identifiées, vérifier les zones de risque
+    const container = document.getElementById('danger-zones');
+    let dangerItems = [];
+
+    for (const opp of opportunities) {
+        if (opp.invalidation) {
+            dangerItems.push(`${opp.actif}: ${opp.invalidation}`);
+        }
+    }
+
+    if (dangerItems.length > 0) {
+        let html = '';
+        for (const danger of dangerItems) {
+            html += `<div class="danger-item"><span class="danger-icon">⚠️</span><span>${danger}</span></div>`;
+        }
+        container.innerHTML = html;
+    }
+}
+
+function renderAnalysis() {
+    if (!analysisData || !analysisData.contenu) return;
+
+    const contenu = analysisData.contenu;
+
+    // Alerte macro si présente
+    if (contenu.alerte_macro) {
+        const alertSection = document.getElementById('section-alerte-macro');
+        const alertContent = document.getElementById('alerte-macro-content');
+        alertSection.style.display = 'block';
+        alertContent.innerHTML = `
+            <div class="macro-alert-box">
+                <div class="macro-alert-icon">🚨</div>
+                <div class="macro-alert-info">
+                    <div class="macro-alert-title">${contenu.alerte_macro}</div>
+                </div>
+                <div class="macro-alert-action">
+                    <span class="macro-badge danger">ÉVITER LES POSITIONS</span>
+                </div>
+            </div>
+        `;
+    }
+
+    // Contexte - format bullet points
+    document.getElementById('context-time').textContent = analysisData.heure || '--:--';
+    renderContextBullets(contenu.contexte_marche);
+
+    // Tags contexte
+    renderContextTags(contenu);
+
+    // News Flash
+    renderNewsFlash(contenu.news_flash || contenu.actualites || []);
+
+    // Agenda (événements)
+    renderAgenda(contenu.evenements_a_venir || []);
+
+    // Opportunités
+    renderOpportunities(contenu.opportunites || []);
+
+    // Zones danger (inclure les actifs exclus ATR)
+    let zones = contenu.zones_dangereuses || [];
+    if (contenu.actifs_exclus_atr && contenu.actifs_exclus_atr.length > 0) {
+        zones = zones.concat([`Actifs exclus (ATR < 1%): ${contenu.actifs_exclus_atr.join(', ')}`]);
+    }
+    renderDangerZones(zones);
+}
+
+function renderContextBullets(contexte) {
+    const container = document.getElementById('context-bullets');
+
+    if (!contexte) {
+        container.innerHTML = '<li>Aucun contexte disponible. Lancez une actualisation.</li>';
+        return;
+    }
+
+    // Transformer le texte en bullet points
+    // Séparer par phrases ou par points
+    let points = [];
+
+    // Essayer de séparer par points ou par phrases
+    if (contexte.includes('•')) {
+        points = contexte.split('•').filter(p => p.trim());
+    } else if (contexte.includes('\n')) {
+        points = contexte.split('\n').filter(p => p.trim());
+    } else {
+        // Séparer par phrases (. suivi d'espace et majuscule)
+        points = contexte.split(/\.\s+(?=[A-Z])/).filter(p => p.trim());
+        if (points.length === 1) {
+            // Si une seule phrase, garder tel quel
+            points = [contexte];
+        }
+    }
+
+    let html = '';
+    for (const point of points.slice(0, 5)) { // Max 5 points
+        html += `<li>${point.trim().replace(/\.$/, '')}.</li>`;
+    }
+
+    container.innerHTML = html || '<li>Aucun contexte disponible.</li>';
+}
+
+function renderContextTags(contenu) {
+    const container = document.getElementById('context-tags');
+    let html = '';
+
+    if (contenu.sentiment) {
+        const sentimentClass = contenu.sentiment.toLowerCase().includes('bull') ? 'bullish' :
+                               contenu.sentiment.toLowerCase().includes('bear') ? 'bearish' : 'neutral';
+        html += `<span class="context-tag ${sentimentClass}">${contenu.sentiment}</span>`;
+    }
+
+    if (contenu.volatilite) {
+        html += `<span class="context-tag">Volatilité: ${contenu.volatilite}</span>`;
+    }
+
+    if (contenu.tendance) {
+        html += `<span class="context-tag">${contenu.tendance}</span>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderNewsFlash(news) {
+    const container = document.getElementById('news-flash-list');
+
+    if (!news || news.length === 0) {
+        container.innerHTML = `
+            <div class="news-flash-item">
+                <span class="news-time">--:--</span>
+                <div class="news-content">
+                    <span class="news-text">Aucune actualité à fort impact pour le moment</span>
+                </div>
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    for (const item of news.slice(0, 5)) {
+        const impact = item.impact || 'medium';
+        const impactLabel = impact === 'high' ? '🔴 Fort' : impact === 'medium' ? '🟠 Moyen' : '⚪ Faible';
+
+        html += `
+            <div class="news-flash-item">
+                <span class="news-time">${item.heure || '--:--'}</span>
+                <div class="news-content">
+                    <span class="news-text">${item.titre || item.texte || '-'}</span>
+                    <span class="news-impact ${impact}">${impactLabel}</span>
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderAgenda(events) {
+    const container = document.getElementById('agenda-list');
+
+    if (!events || events.length === 0) {
+        container.innerHTML = '<div class="no-data">Aucun événement prévu</div>';
+        return;
+    }
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+
+    let html = '';
+    for (const evt of events.slice(0, 6)) {
+        const stars = '⭐'.repeat(evt.importance || 1);
+
+        // Déterminer si passé, actif ou à venir
+        let statusClass = '';
+        if (evt.heure) {
+            const [evtHour, evtMin] = evt.heure.split(':').map(Number);
+            if (evtHour < currentHour || (evtHour === currentHour && evtMin < currentMinute)) {
+                statusClass = 'past';
+            } else if (evtHour === currentHour) {
+                statusClass = 'active';
+            }
+        }
+
+        html += `
+            <div class="agenda-item ${statusClass}">
+                <span class="agenda-time">${evt.heure || '--:--'}</span>
+                <div class="agenda-content">
+                    <div class="agenda-name">${evt.evenement || '-'}</div>
+                </div>
+                <span class="agenda-stars">${stars}</span>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderOpportunities(opportunities) {
+    const container = document.getElementById('opportunities-container');
+    const countEl = document.getElementById('opp-count');
+
+    // Weekend: afficher marchés fermés
+    if (isWeekendMode) {
+        container.innerHTML = `
+            <div class="weekend-closed-msg" style="width: 100%; text-align: center; padding: 2rem;">
+                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔒</div>
+                <div style="color: var(--text-muted); font-size: 0.95rem;">Marchés fermés</div>
+                <div style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem;">Reprise lundi à 9h</div>
+            </div>`;
+        countEl.textContent = 'Weekend';
+        return;
+    }
+
+    if (!opportunities || opportunities.length === 0) {
+        container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunité en cours</div>';
+        countEl.textContent = '0 opportunité';
+        return;
+    }
+
+    countEl.textContent = opportunities.length + ' opportunité' + (opportunities.length > 1 ? 's' : '');
+
+    let html = '';
+    for (const opp of opportunities) {
+        const isNews = opp.is_news_trading;
+        const tagClass = isNews ? 'news' : 'tech';
+        const tagText = isNews ? 'NEWS' : 'TECH';
+        const cardClass = isNews ? 'news-trading' : '';
+        const direction = opp.direction || 'LONG';
+        const dirClass = direction === 'SHORT' ? 'short' : 'long';
+
+        // Indicateurs ATR et Volume
+        const atrPct = opp.atr_pct || 0;
+        const volRel = opp.volume_relatif || 100;
+        const atrClass = atrPct >= 2 ? 'high' : atrPct >= 1 ? 'medium' : 'low';
+        const volClass = volRel >= 150 ? 'high' : volRel >= 100 ? 'medium' : 'low';
+
+        const gaugePosition = calculateGaugePosition(opp);
+
+        html += `
+            <div class="opp-card ${cardClass}">
+                <div class="opp-header">
+                    <span class="opp-asset">${opp.actif || 'N/A'}</span>
+                    <div class="opp-tags">
+                        <span class="opp-tag direction-${dirClass}">${direction}</span>
+                        <span class="opp-tag ${tagClass}">${tagText}</span>
+                    </div>
+                </div>
+
+                <div class="opp-price">${opp.prix_actuel || '-'}</div>
+
+                <!-- Indicateurs ATR & Volume -->
+                <div class="opp-indicators">
+                    <div class="indicator atr-indicator ${atrClass}" title="Average True Range - Volatilité moyenne">
+                        <span class="indicator-label">ATR</span>
+                        <span class="indicator-value">${atrPct.toFixed(1)}%</span>
+                    </div>
+                    <div class="indicator vol-indicator ${volClass}" title="Volume relatif vs moyenne 20j">
+                        <span class="indicator-label">Vol</span>
+                        <span class="indicator-value">${volRel.toFixed(0)}%</span>
+                    </div>
+                </div>
+
+                <div class="opp-catalyst">${opp.catalyseur || 'Catalyseur non spécifié'}</div>
+
+                <div class="price-gauge">
+                    <div class="gauge-track">
+                        <div class="gauge-zones">
+                            <div class="gauge-zone stop"></div>
+                            <div class="gauge-zone entry"></div>
+                            <div class="gauge-zone tp1"></div>
+                            <div class="gauge-zone tp2"></div>
+                        </div>
+                        <div class="gauge-current" style="left: ${gaugePosition}%"></div>
+                    </div>
+                    <div class="gauge-labels">
+                        <div class="gauge-label stop">
+                            <span>Stop</span>
+                            <span>${opp.stop || '-'}</span>
+                        </div>
+                        <div class="gauge-label entry">
+                            <span>Entrée</span>
+                            <span>${opp.entree || '-'}</span>
+                        </div>
+                        <div class="gauge-label tp">
+                            <span>TP1</span>
+                            <span>${opp.tp1 || '-'}</span>
+                        </div>
+                        <div class="gauge-label tp">
+                            <span>TP2</span>
+                            <span>${opp.tp2 || '-'}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="opp-meta">
+                    <div class="opp-rr">
+                        R/R: <strong>${opp.ratio_rr || '1:2'}</strong>
+                    </div>
+                    <div class="opp-timer">
+                        ⏱ ${opp.duree || '1-2h'}
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function calculateGaugePosition(opp) {
+    const prix = parseFloat(opp.prix_actuel) || 0;
+    const stop = parseFloat(opp.stop) || 0;
+    // CORRIGÉ: Fallback vers TP1 si TP2 absent
+    const target = parseFloat(opp.tp2) || parseFloat(opp.tp1) || 0;
+    const direction = (opp.direction || 'LONG').toUpperCase();
+
+    if (stop === 0 || target === 0 || prix === 0) return 50;
+
+    let position;
+    if (direction === 'SHORT') {
+        // SHORT: stop est au-dessus de l'entrée, target en dessous
+        // Position 0% = au stop (perte max), 100% = au target (gain max)
+        const range = stop - target;
+        if (range <= 0) return 50;
+        position = ((stop - prix) / range) * 100;
+    } else {
+        // LONG: stop est en dessous de l'entrée, target au-dessus
+        const range = target - stop;
+        if (range <= 0) return 50;
+        position = ((prix - stop) / range) * 100;
+    }
+
+    return Math.max(5, Math.min(95, position));
+}
+
+function renderDangerZones(zones) {
+    const container = document.getElementById('danger-zones');
+
+    if (!zones || zones.length === 0) {
+        container.innerHTML = `
+            <div class="danger-item safe">
+                <span class="danger-icon">✅</span>
+                <span>Aucune zone critique identifiée</span>
+            </div>`;
+        return;
+    }
+
+    let html = '';
+    for (const zone of zones) {
+        html += `
+            <div class="danger-item">
+                <span class="danger-icon">⚠️</span>
+                <span>${zone}</span>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+</script>
+{% endblock %}

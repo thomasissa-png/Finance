@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+
+{% block title %}Journal {{ symbole }} - Agent Trading{% endblock %}
+
+{% block content %}
+<div class="journal-page">
+    <div class="page-header">
+        <a href="/memoire" class="back-link">&larr; Retour</a>
+        <h1 id="page-title">Journal: {{ symbole }}</h1>
+        <button class="btn btn-primary" onclick="showAddEntryModal()">+ Nouvelle Entree</button>
+    </div>
+
+    <!-- Actif Info Card -->
+    <div class="card actif-info-card">
+        <div class="actif-header">
+            <h2 id="actif-name">{{ symbole }}</h2>
+            <span class="actif-symbol" id="actif-symbol">{{ symbole }}</span>
+        </div>
+        <div class="actif-price-info">
+            <div class="price-current">
+                <span class="label">Prix actuel</span>
+                <span class="value" id="prix-actuel">-</span>
+            </div>
+            <div class="price-var">
+                <span class="label">Variation jour</span>
+                <span class="value" id="var-jour">-</span>
+            </div>
+            <div class="price-range">
+                <span class="label">Range jour</span>
+                <span class="value" id="range-jour">-</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Indicateurs techniques -->
+    <div class="card">
+        <div class="card-header">
+            <h2>&#128202; Indicateurs Techniques</h2>
+            <button class="btn-refresh" onclick="loadIndicateurs()">&#8635;</button>
+        </div>
+        <div class="card-body">
+            <div id="indicateurs-content" class="indicateurs-grid">
+                <p class="no-data">Chargement...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Journal Entries -->
+    <div class="card">
+        <div class="card-header">
+            <h2>&#128221; Historique du Journal</h2>
+            <span id="entries-count">0 entrees</span>
+        </div>
+        <div class="card-body">
+            <div id="journal-entries" class="journal-entries-list">
+                <p class="no-data">Chargement...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Add Entry -->
+<div id="modal-add-entry" class="modal" style="display: none;">
+    <div class="modal-content modal-form">
+        <div class="modal-header">
+            <h2>&#128221; Nouvelle Entree</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="form-add-entry" onsubmit="submitEntry(event)">
+                <input type="hidden" id="entry-symbole" value="{{ symbole }}">
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="entry-type" required>
+                        <option value="news">News / Actualite</option>
+                        <option value="resultats">Resultats Financiers</option>
+                        <option value="analyse">Analyse Technique</option>
+                        <option value="macro">Macro / Secteur</option>
+                        <option value="autre">Autre</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Titre</label>
+                    <input type="text" id="entry-titre" required>
+                </div>
+                <div class="form-group">
+                    <label>Contenu</label>
+                    <textarea id="entry-contenu" required rows="4"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Impact sur le cours</label>
+                    <select id="entry-impact">
+                        <option value="">Non defini</option>
+                        <option value="hausse_forte">Hausse Forte (+3%+)</option>
+                        <option value="hausse">Hausse (+1-3%)</option>
+                        <option value="neutre">Neutre</option>
+                        <option value="baisse">Baisse (-1-3%)</option>
+                        <option value="baisse_forte">Baisse Forte (-3%+)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Importance</label>
+                    <select id="entry-importance">
+                        <option value="1">Faible</option>
+                        <option value="2" selected>Moyenne</option>
+                        <option value="3">Haute</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Annuler</button>
+                    <button type="submit" class="btn btn-primary">Enregistrer</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const symbole = '{{ symbole }}';
+let actifNom = '';
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadActifInfo();
+    loadIndicateurs();
+    loadJournalEntries();
+});
+
+async function loadActifInfo() {
+    try {
+        const response = await fetch('/api/actifs');
+        const data = await response.json();
+
+        if (data.success) {
+            // Chercher le nom
+            for (const [sym, nom] of Object.entries(data.permanents)) {
+                if (sym === symbole) {
+                    actifNom = nom;
+                    break;
+                }
+            }
+            if (!actifNom) {
+                for (const [cat, actifs] of Object.entries(data.rotation)) {
+                    if (actifs[symbole]) {
+                        actifNom = actifs[symbole];
+                        break;
+                    }
+                }
+            }
+
+            document.getElementById('page-title').textContent = `Journal: ${actifNom || symbole}`;
+            document.getElementById('actif-name').textContent = actifNom || symbole;
+            document.getElementById('actif-symbol').textContent = symbole;
+        }
+
+        // Prix actuel
+        const marketResp = await fetch('/api/donnees-marche');
+        const marketData = await marketResp.json();
+
+        if (marketData.success) {
+            const actif = Object.entries(marketData.donnees).find(([nom, d]) => d.symbole === symbole);
+            if (actif) {
+                const [nom, d] = actif;
+                document.getElementById('prix-actuel').textContent = d.prix;
+                const varEl = document.getElementById('var-jour');
+                varEl.textContent = (d.variation >= 0 ? '+' : '') + d.variation + '%';
+                varEl.className = 'value ' + (d.variation >= 0 ? 'positive' : 'negative');
+                document.getElementById('range-jour').textContent = `${d.bas} - ${d.haut}`;
+            }
+        }
+    } catch (error) {
+        console.error('Erreur:', error);
+    }
+}
+
+async function loadIndicateurs() {
+    try {
+        const response = await fetch(`/api/indicateurs/${symbole}`);
+        const data = await response.json();
+
+        const container = document.getElementById('indicateurs-content');
+
+        if (data.success && data.indicateurs) {
+            const ind = data.indicateurs;
+            let html = '';
+
+            if (ind.vwap) {
+                html += `<div class="indicateur-item">
+                    <span class="ind-label">VWAP</span>
+                    <span class="ind-value">${ind.vwap}</span>
+                </div>`;
+            }
+
+            if (ind.pivot) {
+                html += `
+                    <div class="indicateur-item">
+                        <span class="ind-label">Pivot</span>
+                        <span class="ind-value">${ind.pivot}</span>
+                    </div>
+                    <div class="indicateur-item support">
+                        <span class="ind-label">S1</span>
+                        <span class="ind-value">${ind.s1}</span>
+                    </div>
+                    <div class="indicateur-item support">
+                        <span class="ind-label">S2</span>
+                        <span class="ind-value">${ind.s2}</span>
+                    </div>
+                    <div class="indicateur-item resistance">
+                        <span class="ind-label">R1</span>
+                        <span class="ind-value">${ind.r1}</span>
+                    </div>
+                    <div class="indicateur-item resistance">
+                        <span class="ind-label">R2</span>
+                        <span class="ind-value">${ind.r2}</span>
+                    </div>`;
+            }
+
+            if (ind.atr_pct) {
+                html += `<div class="indicateur-item">
+                    <span class="ind-label">ATR %</span>
+                    <span class="ind-value">${ind.atr_pct}%</span>
+                </div>`;
+            }
+
+            if (ind.volume_relatif_pct) {
+                const volClass = ind.volume_relatif_pct > 100 ? 'high' : 'low';
+                html += `<div class="indicateur-item ${volClass}">
+                    <span class="ind-label">Volume Relatif</span>
+                    <span class="ind-value">${ind.volume_relatif_pct}%</span>
+                </div>`;
+            }
+
+            container.innerHTML = html || '<p class="no-data">Indicateurs non disponibles</p>';
+        } else {
+            container.innerHTML = '<p class="no-data">Indicateurs non disponibles</p>';
+        }
+    } catch (error) {
+        console.error('Erreur indicateurs:', error);
+        document.getElementById('indicateurs-content').innerHTML = '<p class="no-data">Erreur chargement</p>';
+    }
+}
+
+async function loadJournalEntries() {
+    try {
+        const response = await fetch(`/api/journal/${symbole}`);
+        const data = await response.json();
+
+        const container = document.getElementById('journal-entries');
+
+        if (data.success && data.entries.length > 0) {
+            document.getElementById('entries-count').textContent = `${data.entries.length} entrees`;
+
+            let html = '';
+            for (const entry of data.entries) {
+                const impactClass = entry.impact_cours?.includes('hausse') ? 'positive' :
+                                   entry.impact_cours?.includes('baisse') ? 'negative' : '';
+                const typeIcon = {
+                    'news': '&#128240;',
+                    'resultats': '&#128200;',
+                    'analyse': '&#128202;',
+                    'macro': '&#127758;',
+                    'autre': '&#128221;'
+                }[entry.type_info] || '&#128221;';
+
+                html += `
+                    <div class="journal-entry">
+                        <div class="entry-header">
+                            <span class="entry-icon">${typeIcon}</span>
+                            <span class="entry-type">${entry.type_info}</span>
+                            <span class="entry-date">${entry.date}</span>
+                            <span class="entry-importance">${'&#11088;'.repeat(entry.importance)}</span>
+                        </div>
+                        <h4 class="entry-title">${entry.titre}</h4>
+                        <p class="entry-content">${entry.contenu}</p>
+                        ${entry.impact_cours ? `<div class="entry-impact ${impactClass}">Impact: ${formatImpact(entry.impact_cours)}</div>` : ''}
+                    </div>`;
+            }
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = '<p class="no-data">Aucune entree dans le journal</p>';
+        }
+    } catch (error) {
+        console.error('Erreur journal:', error);
+    }
+}
+
+function formatImpact(impact) {
+    const mapping = {
+        'hausse_forte': '&#128200; Hausse Forte (+3%+)',
+        'hausse': '&#128314; Hausse (+1-3%)',
+        'neutre': '&#11036; Neutre',
+        'baisse': '&#128315; Baisse (-1-3%)',
+        'baisse_forte': '&#128201; Baisse Forte (-3%+)'
+    };
+    return mapping[impact] || impact;
+}
+
+function showAddEntryModal() {
+    document.getElementById('modal-add-entry').style.display = 'flex';
+}
+
+function closeModal() {
+    document.getElementById('modal-add-entry').style.display = 'none';
+    document.getElementById('form-add-entry').reset();
+}
+
+async function submitEntry(event) {
+    event.preventDefault();
+
+    const data = {
+        symbole: symbole,
+        nom_actif: actifNom || symbole,
+        type_info: document.getElementById('entry-type').value,
+        titre: document.getElementById('entry-titre').value,
+        contenu: document.getElementById('entry-contenu').value,
+        impact_cours: document.getElementById('entry-impact').value,
+        importance: parseInt(document.getElementById('entry-importance').value)
+    };
+
+    try {
+        const response = await fetch('/api/journal', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            closeModal();
+            loadJournalEntries();
+        } else {
+            alert('Erreur');
+        }
+    } catch (error) {
+        console.error('Erreur:', error);
+        alert('Erreur de connexion');
+    }
+}
+</script>
+{% endblock %}

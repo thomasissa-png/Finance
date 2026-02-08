@@ -1,0 +1,1931 @@
+{% extends "base.html" %}
+
+{% block title %}Journal - Plateforme Trading{% endblock %}
+
+{% block content %}
+<div class="journal-page">
+
+    <!-- Header -->
+    <div class="page-top-bar">
+        <h1 class="page-top-title">Journal Automatique</h1>
+        <span class="page-top-info">Mise à jour: 18h (FR) • 22h30 (Complet)</span>
+    </div>
+
+    <!-- Barre de recherche et filtres -->
+    <div class="journal-filters-bar">
+        <div class="filters-left">
+            <div class="search-box">
+                <input type="text" id="journal-search" placeholder="🔍 Rechercher (actif, catalyst, commentaire...)" onkeyup="debounceSearch()">
+            </div>
+            <div class="date-filters">
+                <input type="date" id="date-from" onchange="applyFilters()">
+                <span class="date-separator">→</span>
+                <input type="date" id="date-to" onchange="applyFilters()">
+            </div>
+        </div>
+        <div class="filters-right">
+            <button class="btn-filter" onclick="showStatsModal()">📊 Stats période</button>
+            <button class="btn-filter" onclick="clearFilters()">🔄 Réinitialiser</button>
+        </div>
+    </div>
+
+    <!-- Indicateur de résultats -->
+    <div class="search-results-info" id="search-results-info" style="display: none;">
+        <span id="results-count">0 résultats</span>
+        <span id="results-pages" class="results-pages"></span>
+    </div>
+
+    <!-- Layout principal -->
+    <div class="journal-grid">
+        <!-- Sidebar: Liste des actifs -->
+        <div class="journal-sidebar-list">
+            <h3 class="sidebar-title">Journal</h3>
+            <!-- Général en premier -->
+            <div class="actif-category">
+                <div class="actif-item general-item" id="general-item" onclick="selectGeneral()">
+                    <span class="actif-icon">📊</span>
+                    <span class="actif-nom">Général</span>
+                    <span class="actif-badge">Bilan</span>
+                </div>
+            </div>
+            <h3 class="sidebar-title sidebar-title-small">Actifs suivis</h3>
+            <div class="actifs-filter">
+                <select id="filter-categorie" onchange="filterActifs()">
+                    <option value="">Toutes catégories</option>
+                    <option value="indice">Indices</option>
+                    <option value="action_eu">Actions EU</option>
+                    <option value="action_us">Actions US</option>
+                    <option value="commodite">Commodités</option>
+                    <option value="forex">Forex</option>
+                </select>
+            </div>
+            <div id="actifs-list" class="actifs-sidebar">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+
+        <!-- Contenu principal: Journal de l'actif sélectionné -->
+        <div class="journal-main">
+            <!-- Header actif sélectionné -->
+            <div class="selected-asset-header" id="selected-asset-header" style="display: none;">
+                <div class="asset-header-info">
+                    <h2 class="asset-header-name" id="asset-name">-</h2>
+                    <span class="asset-header-symbol" id="asset-symbol">-</span>
+                </div>
+                <div class="asset-header-stats">
+                    <div class="asset-stat">
+                        <span class="stat-label">Variation Jour</span>
+                        <span class="stat-value" id="asset-var-jour">-</span>
+                    </div>
+                    <div class="asset-stat">
+                        <span class="stat-label">Prix</span>
+                        <span class="stat-value" id="asset-prix">-</span>
+                    </div>
+                    <div class="asset-stat">
+                        <span class="stat-label">Opportunités</span>
+                        <span class="stat-value" id="asset-nb-opps">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Placeholder quand pas d'actif sélectionné -->
+            <div class="journal-placeholder" id="journal-placeholder">
+                <div class="placeholder-icon">📊</div>
+                <h3>Sélectionnez un actif</h3>
+                <p>Choisissez un actif ou "Général" pour voir le bilan du jour</p>
+            </div>
+
+            <!-- Section Général (bilan quotidien) -->
+            <div class="general-section" id="general-section" style="display: none;">
+                <div class="general-header">
+                    <h2>Bilan de la Journée</h2>
+                    <span class="general-date" id="general-date">-</span>
+                </div>
+                <div id="general-content">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+
+            <!-- Timeline du journal -->
+            <div class="journal-timeline" id="journal-timeline" style="display: none;">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let actifsData = {};
+let selectedSymbole = null;
+let journalData = [];
+let opportunitesData = [];
+let isGeneralSelected = false;
+let searchTimeout = null;
+let currentPage = 0;
+let totalPages = 0;
+let statsData = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadActifs();
+    // Set default date range (last 30 days)
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    document.getElementById('date-to').value = today.toISOString().split('T')[0];
+    document.getElementById('date-from').value = thirtyDaysAgo.toISOString().split('T')[0];
+});
+
+function debounceSearch() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        currentPage = 0;
+        applyFilters();
+    }, 300);
+}
+
+async function applyFilters() {
+    const search = document.getElementById('journal-search').value.trim();
+    const dateFrom = document.getElementById('date-from').value;
+    const dateTo = document.getElementById('date-to').value;
+    const symbole = selectedSymbole || '';
+
+    // Show loading
+    const timeline = document.getElementById('journal-timeline');
+    if (timeline) timeline.innerHTML = '<div class="loading">Recherche en cours...</div>';
+
+    try {
+        const params = new URLSearchParams({
+            q: search,
+            date_from: dateFrom,
+            date_to: dateTo,
+            page: currentPage,
+            limit: 50
+        });
+        if (symbole) params.append('symbole', symbole);
+
+        const response = await fetch(`/api/journal-quotidien/search?${params}`);
+        const data = await response.json();
+
+        if (data.success) {
+            journalData = data.entries;
+            totalPages = data.pagination.total_pages;
+
+            // Update results info
+            const infoBar = document.getElementById('search-results-info');
+            const resultsCount = document.getElementById('results-count');
+            const resultsPages = document.getElementById('results-pages');
+
+            if (search || dateFrom || dateTo) {
+                infoBar.style.display = 'flex';
+                resultsCount.textContent = `${data.pagination.total_count} résultat(s)`;
+                if (totalPages > 1) {
+                    resultsPages.innerHTML = `
+                        <button onclick="prevPage()" ${currentPage === 0 ? 'disabled' : ''}>◀</button>
+                        Page ${currentPage + 1}/${totalPages}
+                        <button onclick="nextPage()" ${currentPage >= totalPages - 1 ? 'disabled' : ''}>▶</button>
+                    `;
+                } else {
+                    resultsPages.innerHTML = '';
+                }
+            } else {
+                infoBar.style.display = 'none';
+            }
+
+            // Render results
+            if (isGeneralSelected) {
+                renderGeneralSearch();
+            } else if (selectedSymbole) {
+                await loadOpportunitesActif(selectedSymbole);
+                renderTimeline();
+                timeline.style.display = 'block';
+            } else {
+                renderGeneralSearch();
+            }
+        }
+    } catch (error) {
+        console.error('Erreur recherche:', error);
+    }
+}
+
+function prevPage() {
+    if (currentPage > 0) {
+        currentPage--;
+        applyFilters();
+    }
+}
+
+function nextPage() {
+    if (currentPage < totalPages - 1) {
+        currentPage++;
+        applyFilters();
+    }
+}
+
+function clearFilters() {
+    document.getElementById('journal-search').value = '';
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    document.getElementById('date-to').value = today.toISOString().split('T')[0];
+    document.getElementById('date-from').value = thirtyDaysAgo.toISOString().split('T')[0];
+    currentPage = 0;
+    document.getElementById('search-results-info').style.display = 'none';
+
+    if (selectedSymbole) {
+        loadJournalActif(selectedSymbole);
+    }
+}
+
+function renderGeneralSearch() {
+    const container = document.getElementById('journal-timeline');
+    document.getElementById('journal-placeholder').style.display = 'none';
+    document.getElementById('general-section').style.display = 'none';
+    document.getElementById('selected-asset-header').style.display = 'none';
+    container.style.display = 'block';
+
+    if (journalData.length === 0) {
+        container.innerHTML = '<div class="no-data">Aucun résultat trouvé</div>';
+        return;
+    }
+
+    // Group by date for general view
+    const byDate = {};
+    for (const entry of journalData) {
+        if (!byDate[entry.date]) byDate[entry.date] = [];
+        byDate[entry.date].push(entry);
+    }
+
+    let html = '';
+    for (const date of Object.keys(byDate).sort().reverse()) {
+        const entries = byDate[date];
+        html += `
+            <div class="timeline-day">
+                <div class="timeline-date">
+                    <span class="date-day">${formatDateFr(date)}</span>
+                    <span class="date-count">${entries.length} actif(s)</span>
+                </div>
+                <div class="timeline-content">
+                    ${entries.map(entry => `
+                        <div class="search-result-item" onclick="selectActif('${entry.symbole}')">
+                            <div class="result-header">
+                                <span class="result-name">${entry.nom_actif}</span>
+                                <span class="result-symbol">${entry.symbole}</span>
+                                <span class="result-var ${entry.variation_jour >= 0 ? 'positive' : 'negative'}">
+                                    ${entry.variation_jour >= 0 ? '+' : ''}${(entry.variation_jour || 0).toFixed(2)}%
+                                </span>
+                            </div>
+                            ${entry.commentaire_ia ? `<div class="result-comment">${entry.commentaire_ia.substring(0, 150)}...</div>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+async function showStatsModal() {
+    // Créer le modal s'il n'existe pas
+    let modal = document.getElementById('stats-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'stats-modal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal-content stats-modal-content">
+                <div class="modal-header">
+                    <h2>📊 Statistiques Périodiques</h2>
+                    <button class="modal-close" onclick="closeStatsModal()">✕</button>
+                </div>
+                <div class="modal-tabs">
+                    <button class="tab-btn active" onclick="loadStats('semaine')">Hebdo</button>
+                    <button class="tab-btn" onclick="loadStats('mois')">Mensuel</button>
+                </div>
+                <div class="modal-body" id="stats-modal-body">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+
+    modal.style.display = 'flex';
+    await loadStats('semaine');
+}
+
+function closeStatsModal() {
+    const modal = document.getElementById('stats-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function loadStats(granularite) {
+    // Update tabs
+    document.querySelectorAll('.modal-tabs .tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.toLowerCase().includes(granularite === 'semaine' ? 'hebdo' : 'mens'));
+    });
+
+    const container = document.getElementById('stats-modal-body');
+    container.innerHTML = '<div class="loading">Chargement...</div>';
+
+    try {
+        const response = await fetch(`/api/journal-stats?granularite=${granularite}&limite=12`);
+        const data = await response.json();
+
+        if (data.success) {
+            statsData = data;
+            renderStats(data, granularite);
+        } else {
+            container.innerHTML = '<div class="no-data">Erreur de chargement</div>';
+        }
+    } catch (error) {
+        console.error('Erreur stats:', error);
+        container.innerHTML = '<div class="no-data">Erreur de chargement</div>';
+    }
+}
+
+function renderStats(data, granularite) {
+    const container = document.getElementById('stats-modal-body');
+    const periodeLabel = granularite === 'semaine' ? 'Semaine' : 'Mois';
+
+    let html = '<div class="stats-grid">';
+
+    // Stats par Grade (si disponible)
+    if (data.stats_par_grade) {
+        html += '<div class="stats-section"><h3>🎯 Performance par Grade</h3>';
+        html += '<div class="grade-perf-grid">';
+        for (const [grade, stats] of Object.entries(data.stats_par_grade)) {
+            const gradeClass = {'A': 'grade-a', 'B': 'grade-b', 'C': 'grade-c', 'D': 'grade-d'}[grade] || '';
+            const winClass = stats.win_rate >= 60 ? 'positive' : stats.win_rate < 40 ? 'negative' : '';
+            const pnlClass = stats.pnl_total >= 0 ? 'positive' : 'negative';
+            html += `
+                <div class="grade-perf-card ${gradeClass}">
+                    <div class="grade-perf-header">
+                        <span class="grade-letter">${grade}</span>
+                        <span class="grade-count">${stats.nb_trades} trades</span>
+                    </div>
+                    <div class="grade-perf-stats">
+                        <div class="gp-stat">
+                            <span class="gp-label">Win Rate</span>
+                            <span class="gp-value ${winClass}">${stats.win_rate}%</span>
+                        </div>
+                        <div class="gp-stat">
+                            <span class="gp-label">PnL Total</span>
+                            <span class="gp-value ${pnlClass}">${stats.pnl_total >= 0 ? '+' : ''}${stats.pnl_total}%</span>
+                        </div>
+                    </div>
+                </div>`;
+        }
+        html += '</div></div>';
+    }
+
+    // Stats principales par période
+    html += '<div class="stats-section"><h3>Performance par ' + periodeLabel + '</h3>';
+    html += '<div class="stats-table-container"><table class="stats-table"><thead><tr>';
+    html += '<th>Période</th><th>Trades</th><th>Win Rate</th><th>PnL</th><th>Durée Moy.</th><th>Conviction</th>';
+    html += '</tr></thead><tbody>';
+
+    for (const stat of data.stats_periodes) {
+        const pnlClass = stat.pnl_total >= 0 ? 'positive' : 'negative';
+        const wrClass = stat.win_rate >= 60 ? 'positive' : stat.win_rate < 40 ? 'negative' : '';
+        html += `<tr>
+            <td><strong>${stat.periode}</strong></td>
+            <td>${stat.nb_trades}</td>
+            <td class="${wrClass}">${stat.win_rate}%</td>
+            <td class="${pnlClass}">${stat.pnl_total >= 0 ? '+' : ''}${stat.pnl_total}%</td>
+            <td>${stat.duree_moyenne} min</td>
+            <td>${stat.conviction_moyenne}/5</td>
+        </tr>`;
+    }
+
+    html += '</tbody></table></div></div>';
+
+    // Top/Bottom actifs (dernière période)
+    const lastPeriode = data.stats_periodes[data.stats_periodes.length - 1]?.periode;
+    if (lastPeriode && data.top_bottom_actifs[lastPeriode]) {
+        const topBottom = data.top_bottom_actifs[lastPeriode];
+
+        html += '<div class="stats-section stats-half"><h3>🏆 Top Actifs (' + lastPeriode + ')</h3>';
+        html += '<div class="top-bottom-list">';
+        for (const item of topBottom.top || []) {
+            html += `<div class="top-item">
+                <span class="item-name">${item.actif || item.symbole}</span>
+                <span class="item-trades">${item.nb_trades} trades</span>
+                <span class="item-pnl positive">+${item.pnl_total}%</span>
+            </div>`;
+        }
+        html += '</div></div>';
+
+        html += '<div class="stats-section stats-half"><h3>📉 Pires Actifs (' + lastPeriode + ')</h3>';
+        html += '<div class="top-bottom-list">';
+        for (const item of topBottom.bottom || []) {
+            html += `<div class="bottom-item">
+                <span class="item-name">${item.actif || item.symbole}</span>
+                <span class="item-trades">${item.nb_trades} trades</span>
+                <span class="item-pnl negative">${item.pnl_total}%</span>
+            </div>`;
+        }
+        html += '</div></div>';
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+async function selectGeneral() {
+    isGeneralSelected = true;
+    selectedSymbole = null;
+    renderActifsSidebar();
+
+    // Masquer les autres sections
+    document.getElementById('journal-placeholder').style.display = 'none';
+    document.getElementById('selected-asset-header').style.display = 'none';
+    document.getElementById('journal-timeline').style.display = 'none';
+    document.getElementById('general-section').style.display = 'block';
+    document.getElementById('general-item').classList.add('active');
+
+    await loadBilanQuotidien();
+}
+
+async function loadBilanQuotidien() {
+    try {
+        const response = await fetch('/api/bilan-quotidien');
+        const data = await response.json();
+
+        const container = document.getElementById('general-content');
+
+        if (data.success && data.bilan) {
+            const bilan = data.bilan;
+            document.getElementById('general-date').textContent = formatDateFr(bilan.date);
+
+            // Faits marquants
+            const faitsMarquants = bilan.faits_marquants || [];
+            const hasFaits = faitsMarquants.length > 0;
+
+            // Points positifs/négatifs/leçons
+            const hasPositifs = (bilan.points_positifs || []).length > 0;
+            const hasNegatifs = (bilan.points_negatifs || []).length > 0;
+            const hasLecons = (bilan.lecons_apprises || []).length > 0;
+            const hasResume = bilan.contenu && bilan.contenu.trim().length > 0;
+
+            let html = '';
+
+            // Faits marquants du jour
+            if (hasFaits) {
+                html += `
+                    <div class="faits-marquants">
+                        <h3>📰 Faits Marquants</h3>
+                        <ul>
+                            ${faitsMarquants.map(f => `<li>${f}</li>`).join('')}
+                        </ul>
+                    </div>`;
+            }
+
+            // Résumé
+            if (hasResume) {
+                html += `
+                    <div class="bilan-resume">
+                        <h3>📋 Analyse de la Journée</h3>
+                        <p>${bilan.contenu}</p>
+                    </div>`;
+            }
+
+            // Points positifs/négatifs (seulement si présents)
+            if (hasPositifs || hasNegatifs) {
+                html += `<div class="bilan-grid">`;
+                if (hasPositifs) {
+                    html += `
+                        <div class="bilan-card success">
+                            <h4>✅ Ce qui a fonctionné</h4>
+                            <ul>
+                                ${bilan.points_positifs.map(p => `<li>${p}</li>`).join('')}
+                            </ul>
+                        </div>`;
+                }
+                if (hasNegatifs) {
+                    html += `
+                        <div class="bilan-card danger">
+                            <h4>❌ Ce qui n'a pas fonctionné</h4>
+                            <ul>
+                                ${bilan.points_negatifs.map(p => `<li>${p}</li>`).join('')}
+                            </ul>
+                        </div>`;
+                }
+                html += `</div>`;
+            }
+
+            // Leçons apprises
+            if (hasLecons) {
+                html += `
+                    <div class="bilan-lecons">
+                        <h4>💡 À retenir pour demain</h4>
+                        <ul>
+                            ${bilan.lecons_apprises.map(l => `<li>${l}</li>`).join('')}
+                        </ul>
+                    </div>`;
+            }
+
+            if (!html) {
+                html = '<div class="no-data">Le bilan sera généré à 22h30.</div>';
+            }
+
+            container.innerHTML = html;
+        } else {
+            container.innerHTML = `
+                <div class="no-data">
+                    <p>Aucun bilan disponible pour aujourd'hui.</p>
+                    <p class="text-muted">Le bilan est généré automatiquement à 22h30.</p>
+                </div>`;
+        }
+    } catch (error) {
+        console.error('Erreur bilan:', error);
+        document.getElementById('general-content').innerHTML = '<div class="no-data">Erreur de chargement</div>';
+    }
+}
+
+async function loadActifs() {
+    try {
+        const response = await fetch('/api/actifs');
+        const data = await response.json();
+
+        if (data.success) {
+            actifsData = data.permanents;
+            renderActifsSidebar();
+        }
+    } catch (error) {
+        console.error('Erreur chargement actifs:', error);
+    }
+}
+
+function renderActifsSidebar() {
+    const container = document.getElementById('actifs-list');
+    const filterCat = document.getElementById('filter-categorie').value;
+
+    // Update general item state
+    const generalItem = document.getElementById('general-item');
+    if (generalItem) {
+        generalItem.className = 'actif-item general-item' + (isGeneralSelected ? ' active' : '');
+    }
+
+    const categories = {
+        'indice': {'label': 'Indices', 'symboles': ['^FCHI', '^GSPC', '^IXIC', '^DJI', '^GDAXI', '^VIX']},
+        'action_eu': {'label': 'Actions EU', 'symboles': ['AIR.PA', 'MC.PA', 'OR.PA', 'RMS.PA', 'TTE.PA', 'SAN.PA', 'BNP.PA', 'AXA.PA', 'SU.PA', 'SAF.PA']},
+        'action_us': {'label': 'Actions US', 'symboles': ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'AMZN', 'META', 'GOOGL', 'JPM', 'XOM', 'V']},
+        'commodite': {'label': 'Commodités', 'symboles': ['GC=F', 'SI=F', 'PL=F', 'BZ=F', 'NG=F', 'KC=F', 'CC=F', 'HG=F', 'ZS=F', 'SB=F', 'ZW=F', 'ZC=F']},
+        'forex': {'label': 'Forex', 'symboles': ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X']}
+    };
+
+    let html = '';
+    for (const [catKey, catData] of Object.entries(categories)) {
+        if (filterCat && filterCat !== catKey) continue;
+
+        html += `<div class="actif-category">
+            <div class="category-title">${catData.label}</div>`;
+
+        for (const sym of catData.symboles) {
+            if (actifsData[sym]) {
+                const isActive = selectedSymbole === sym && !isGeneralSelected;
+                html += `
+                    <div class="actif-item ${isActive ? 'active' : ''}" data-symbole="${sym}" onclick="selectActif('${sym}')">
+                        <span class="actif-nom">${actifsData[sym]}</span>
+                    </div>`;
+            }
+        }
+        html += '</div>';
+    }
+
+    container.innerHTML = html || '<div class="no-data">Aucun actif</div>';
+}
+
+function filterActifs() {
+    renderActifsSidebar();
+}
+
+async function selectActif(symbole) {
+    selectedSymbole = symbole;
+    isGeneralSelected = false;
+    renderActifsSidebar();
+
+    // Afficher le header et masquer le placeholder + général
+    document.getElementById('journal-placeholder').style.display = 'none';
+    document.getElementById('general-section').style.display = 'none';
+    document.getElementById('selected-asset-header').style.display = 'flex';
+    document.getElementById('journal-timeline').style.display = 'block';
+
+    // Mettre à jour le header
+    document.getElementById('asset-name').textContent = actifsData[symbole] || symbole;
+    document.getElementById('asset-symbol').textContent = symbole;
+
+    // Charger les données
+    await Promise.all([
+        loadJournalActif(symbole),
+        loadOpportunitesActif(symbole)
+    ]);
+
+    renderTimeline();
+}
+
+async function loadJournalActif(symbole) {
+    try {
+        const response = await fetch(`/api/journal-quotidien?symbole=${symbole}&limite=30`);
+        const data = await response.json();
+
+        if (data.success) {
+            journalData = data.entries;
+
+            // Mettre à jour les stats header
+            if (journalData.length > 0) {
+                const dernierJour = journalData[0];
+                const varClass = dernierJour.variation_jour >= 0 ? 'positive' : 'negative';
+                const varSign = dernierJour.variation_jour >= 0 ? '+' : '';
+                document.getElementById('asset-var-jour').innerHTML =
+                    `<span class="${varClass}">${varSign}${dernierJour.variation_jour?.toFixed(2) || 0}%</span>`;
+                document.getElementById('asset-prix').textContent = dernierJour.prix_cloture?.toFixed(2) || '-';
+            }
+        }
+    } catch (error) {
+        console.error('Erreur journal:', error);
+    }
+}
+
+async function loadOpportunitesActif(symbole) {
+    try {
+        const response = await fetch(`/api/historique-opportunites/${symbole}`);
+        const data = await response.json();
+
+        if (data.success) {
+            opportunitesData = data.trades;
+            document.getElementById('asset-nb-opps').textContent = opportunitesData.length;
+        }
+    } catch (error) {
+        console.error('Erreur opportunités:', error);
+    }
+}
+
+function renderTimeline() {
+    const container = document.getElementById('journal-timeline');
+
+    if (journalData.length === 0) {
+        container.innerHTML = `
+            <div class="no-data">
+                Aucune donnée de journal pour cet actif.<br>
+                Le journal est mis à jour automatiquement à 18h (FR) et 22h30 (tous).
+            </div>`;
+        return;
+    }
+
+    // Grouper les opportunités par date
+    const oppsByDate = {};
+    for (const opp of opportunitesData) {
+        if (!oppsByDate[opp.date]) oppsByDate[opp.date] = [];
+        oppsByDate[opp.date].push(opp);
+    }
+
+    let html = '';
+    for (const entry of journalData) {
+        const date = entry.date;
+        const oppsJour = oppsByDate[date] || [];
+        const varClass = entry.variation_jour >= 0 ? 'positive' : 'negative';
+        const varSign = entry.variation_jour >= 0 ? '+' : '';
+
+        // Filtrer les recommandations analystes valides (pas de N/A)
+        const recosRaw = entry.recommandations_analystes || [];
+        const recos = recosRaw.filter(r =>
+            r.firm && r.firm !== 'N/A' &&
+            r.grade && r.grade !== 'N/A'
+        );
+
+        // Vérifie si ce jour a du contenu notable
+        const hasComment = entry.commentaire_ia && entry.commentaire_ia.trim().length > 0;
+        const hasRecos = recos.length > 0;
+        const hasOpps = oppsJour.length > 0;
+
+        html += `
+            <div class="timeline-day">
+                <div class="timeline-date">
+                    <span class="date-day">${formatDateFr(date)}</span>
+                </div>
+
+                <div class="timeline-content">
+                    <!-- Performance du jour -->
+                    <div class="day-performance">
+                        <div class="perf-main">
+                            <span class="perf-value ${varClass}">${varSign}${entry.variation_jour?.toFixed(2) || 0}%</span>
+                        </div>
+                        <div class="perf-prices">
+                            <span>O: ${entry.prix_ouverture?.toFixed(2) || '-'}</span>
+                            <span class="positive">H: ${entry.prix_max?.toFixed(2) || '-'}</span>
+                            <span class="negative">L: ${entry.prix_min?.toFixed(2) || '-'}</span>
+                            <span>C: ${entry.prix_cloture?.toFixed(2) || '-'}</span>
+                        </div>
+                    </div>
+
+                    <!-- Commentaire expert (seulement si notable) -->
+                    ${hasComment ? `
+                    <div class="day-comment">
+                        <div class="comment-text">${entry.commentaire_ia}</div>
+                    </div>
+                    ` : ''}
+
+                    <!-- Recommandations Analystes (seulement si changement réel) -->
+                    ${hasRecos ? `
+                    <div class="day-analysts">
+                        <div class="analysts-header">
+                            <span class="analysts-icon">📊</span>
+                            <span class="analysts-title">Analystes</span>
+                        </div>
+                        <div class="analysts-list">
+                            ${recos.map(r => `
+                                <div class="analyst-item">
+                                    <span class="analyst-firm">${r.firm}</span>
+                                    <span class="analyst-grade">${r.grade}</span>
+                                    ${r.action && r.action !== 'N/A' ? `<span class="analyst-action">${r.action}</span>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    <!-- Opportunités du jour -->
+                    ${hasOpps ? `
+                    <div class="day-opportunities">
+                        <div class="opps-header">
+                            <span class="opps-icon">🎯</span>
+                            <span class="opps-title">${oppsJour.length} Trade${oppsJour.length > 1 ? 's' : ''}</span>
+                        </div>
+                        <div class="opps-list">
+                            ${oppsJour.map(opp => renderOpportunite(opp)).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function renderOpportunite(opp) {
+    const dirClass = opp.direction === 'LONG' ? 'positive' : 'negative';
+    const dirIcon = opp.direction === 'LONG' ? '📈' : '📉';
+    const resultClass = opp.resultat === 'TP1' || opp.resultat === 'TP2' || opp.resultat === 'WIN_FORCE' ? 'success' :
+                       opp.resultat === 'STOP' || opp.resultat === 'LOSS_FORCE' ? 'danger' : 'pending';
+    const resultIcon = opp.resultat === 'TP1' || opp.resultat === 'TP2' || opp.resultat === 'WIN_FORCE' ? '✅' :
+                      opp.resultat === 'STOP' || opp.resultat === 'LOSS_FORCE' ? '❌' :
+                      opp.resultat === 'BREAKEVEN' ? '⚖️' : '⏳';
+    const typeClass = opp.type_setup === 'NEWS' ? 'news' : 'tech';
+
+    // Trade Grade
+    const grade = opp.trade_grade || '-';
+    const gradeClass = {'A': 'grade-a', 'B': 'grade-b', 'C': 'grade-c', 'D': 'grade-d'}[grade] || '';
+    const gradeIcon = {'A': '🏆', 'B': '✅', 'C': '⚠️', 'D': '❌'}[grade] || '';
+    const gradeScore = opp.grade_setup_score || 0;
+
+    return `
+        <div class="opp-item ${resultClass}">
+            <div class="opp-item-header">
+                <span class="opp-direction ${dirClass}">${dirIcon} ${opp.direction || 'LONG'}</span>
+                ${grade !== '-' ? `<span class="opp-grade ${gradeClass}" title="Score: ${gradeScore}/100">${gradeIcon} ${grade}</span>` : ''}
+                <span class="opp-type ${typeClass}">${opp.type_setup || 'TECH'}</span>
+                <span class="opp-time">${opp.heure_message || '-'}</span>
+            </div>
+            <div class="opp-item-body">
+                <div class="opp-prices">
+                    <span>Entrée: ${opp.prix_entree || '-'}</span>
+                    <span class="negative">Stop: ${opp.prix_stop || '-'}</span>
+                    <span class="positive">TP1: ${opp.prix_tp1 || '-'}</span>
+                </div>
+                ${opp.catalyseur ? `<div class="opp-catalyst">${opp.catalyseur}</div>` : ''}
+            </div>
+            <div class="opp-item-result">
+                <span class="result-icon">${resultIcon}</span>
+                <span class="result-text">${opp.resultat || 'En cours'}</span>
+                ${opp.pnl_pct ? `<span class="result-pnl ${opp.pnl_pct >= 0 ? 'positive' : 'negative'}">${opp.pnl_pct >= 0 ? '+' : ''}${opp.pnl_pct.toFixed(2)}%</span>` : ''}
+            </div>
+        </div>`;
+}
+
+function formatDateFr(dateStr) {
+    if (!dateStr) return '-';
+    const [year, month, day] = dateStr.split('-');
+    const date = new Date(year, month - 1, day);
+    const options = {weekday: 'long', day: 'numeric', month: 'long'};
+    return date.toLocaleDateString('fr-FR', options);
+}
+</script>
+
+<style>
+/* Journal Page Styles */
+.page-top-info {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+/* General item style */
+.general-item {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
+    border: 1px solid var(--accent-primary);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.general-item .actif-icon {
+    font-size: 1.25rem;
+}
+
+.general-item .actif-badge {
+    margin-left: auto;
+    padding: 2px 8px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.sidebar-title-small {
+    margin-top: var(--space-2);
+    font-size: 0.75rem;
+}
+
+/* General section */
+.general-section {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+}
+
+.general-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-3);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.general-header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+    color: var(--text-primary);
+}
+
+.general-date {
+    font-size: 0.9375rem;
+    color: var(--text-muted);
+    text-transform: capitalize;
+}
+
+/* Faits marquants */
+.faits-marquants {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(99, 102, 241, 0.1));
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+    border-left: 4px solid var(--accent-primary);
+}
+
+.faits-marquants h3 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 1rem;
+    color: var(--accent-primary);
+}
+
+.faits-marquants ul {
+    margin: 0;
+    padding-left: var(--space-3);
+}
+
+.faits-marquants li {
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    line-height: 1.5;
+    font-weight: 500;
+}
+
+.bilan-resume {
+    background: var(--bg-secondary);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+}
+
+.bilan-resume h3 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.bilan-resume p {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.bilan-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.bilan-card {
+    background: var(--bg-secondary);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border-left: 4px solid var(--border-color);
+}
+
+.bilan-card.success {
+    border-left-color: var(--accent-green);
+}
+
+.bilan-card.danger {
+    border-left-color: var(--accent-red);
+}
+
+.bilan-card h4 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 0.9375rem;
+    color: var(--text-primary);
+}
+
+.bilan-card ul {
+    margin: 0;
+    padding-left: var(--space-3);
+}
+
+.bilan-card li {
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    line-height: 1.5;
+}
+
+.bilan-lecons {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.1), rgba(217, 119, 6, 0.1));
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.bilan-lecons h4 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 0.9375rem;
+    color: var(--text-primary);
+}
+
+.bilan-lecons ul {
+    margin: 0;
+    padding-left: var(--space-3);
+}
+
+.bilan-lecons li {
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    line-height: 1.5;
+}
+
+/* Analyst recommendations */
+.day-analysts {
+    margin: var(--space-2) 0;
+    padding: var(--space-2);
+    background: rgba(59, 130, 246, 0.05);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--accent-primary);
+}
+
+.analysts-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-bottom: var(--space-2);
+}
+
+.analysts-icon {
+    font-size: 1rem;
+}
+
+.analysts-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--accent-primary);
+}
+
+.analysts-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.analyst-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--bg-primary);
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+}
+
+.analyst-firm {
+    color: var(--text-secondary);
+}
+
+.analyst-grade {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.analyst-action {
+    padding: 2px 6px;
+    background: var(--accent-orange);
+    color: white;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+}
+
+.journal-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: var(--space-3);
+    min-height: calc(100vh - 200px);
+}
+
+.journal-sidebar-list {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2);
+    position: sticky;
+    top: 80px;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+}
+
+.sidebar-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--border-light);
+    margin-bottom: var(--space-1);
+}
+
+.actifs-filter {
+    padding: var(--space-1);
+}
+
+.actifs-filter select {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    font-size: 0.8125rem;
+}
+
+.actif-category {
+    margin-bottom: var(--space-2);
+}
+
+.category-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    padding: var(--space-1) var(--space-2);
+    text-transform: uppercase;
+}
+
+.actif-item {
+    padding: 10px var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.actif-item:hover {
+    background: var(--bg-secondary);
+}
+
+.actif-item.active {
+    background: rgba(59, 130, 246, 0.1);
+    border-left: 3px solid var(--accent-primary);
+}
+
+.actif-nom {
+    font-size: 0.9375rem;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* Header actif sélectionné */
+.selected-asset-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+
+.asset-header-name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.asset-header-symbol {
+    font-family: 'SF Mono', monospace;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.asset-header-stats {
+    display: flex;
+    gap: var(--space-4);
+}
+
+.asset-stat {
+    text-align: center;
+}
+
+.asset-stat .stat-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.asset-stat .stat-value {
+    font-family: 'SF Mono', monospace;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+/* Placeholder */
+.journal-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-5);
+    text-align: center;
+    background: var(--bg-primary);
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-lg);
+    min-height: 400px;
+}
+
+.placeholder-icon {
+    font-size: 3rem;
+    margin-bottom: var(--space-2);
+}
+
+.journal-placeholder h3 {
+    color: var(--text-primary);
+    margin-bottom: var(--space-1);
+}
+
+.journal-placeholder p {
+    color: var(--text-muted);
+}
+
+/* Timeline */
+.journal-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.timeline-day {
+    display: flex;
+    gap: var(--space-3);
+}
+
+.timeline-date {
+    flex: 0 0 120px;
+    text-align: right;
+    padding-top: var(--space-2);
+}
+
+.date-day {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: capitalize;
+}
+
+.timeline-content {
+    flex: 1;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-3);
+    position: relative;
+}
+
+.timeline-content::before {
+    content: '';
+    position: absolute;
+    left: -20px;
+    top: 20px;
+    width: 12px;
+    height: 12px;
+    background: var(--accent-primary);
+    border-radius: 50%;
+    border: 3px solid var(--bg-secondary);
+}
+
+/* Performance du jour */
+.day-performance {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-light);
+    margin-bottom: var(--space-2);
+}
+
+.perf-main {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.perf-label {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.perf-value {
+    font-family: 'SF Mono', monospace;
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.perf-prices {
+    display: flex;
+    gap: var(--space-2);
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+}
+
+/* Commentaire AI */
+.day-comment {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-2);
+}
+
+.comment-icon {
+    font-size: 1rem;
+}
+
+.comment-text {
+    font-size: 0.9375rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+/* Opportunités */
+.day-opportunities {
+    margin-top: var(--space-2);
+}
+
+.opps-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-bottom: var(--space-2);
+}
+
+.opps-icon {
+    font-size: 1rem;
+}
+
+.opps-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--accent-primary);
+}
+
+.opps-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.opp-item {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-2);
+    border-left: 3px solid var(--border-color);
+}
+
+.opp-item.success { border-left-color: var(--accent-green); }
+.opp-item.danger { border-left-color: var(--accent-red); }
+.opp-item.pending { border-left-color: var(--accent-orange); }
+
+.opp-item-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+}
+
+.opp-direction {
+    font-weight: 600;
+    font-size: 0.8125rem;
+}
+
+.opp-type {
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.opp-type.news { background: var(--accent-orange); color: white; }
+.opp-type.tech { background: var(--accent-primary); color: white; }
+
+/* Grade badges in journal */
+.opp-grade {
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 0.6875rem;
+    font-weight: 600;
+}
+.opp-grade.grade-a { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; }
+.opp-grade.grade-b { background: rgba(16, 185, 129, 0.15); color: #047857; }
+.opp-grade.grade-c { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+.opp-grade.grade-d { background: rgba(239, 68, 68, 0.15); color: #b91c1c; }
+
+.opp-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+.opp-item-body {
+    margin-bottom: var(--space-1);
+}
+
+.opp-prices {
+    display: flex;
+    gap: var(--space-2);
+    font-family: 'SF Mono', monospace;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
+.opp-catalyst {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.opp-item-result {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding-top: var(--space-1);
+    border-top: 1px solid var(--border-light);
+}
+
+.result-icon {
+    font-size: 0.875rem;
+}
+
+.result-text {
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.result-pnl {
+    font-family: 'SF Mono', monospace;
+    font-weight: 600;
+    margin-left: auto;
+}
+
+/* Pas d'opportunité */
+.day-no-opps {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    padding-top: var(--space-2);
+}
+
+.no-opps-icon {
+    opacity: 0.5;
+}
+
+@media (max-width: 1024px) {
+    .journal-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .journal-sidebar-list {
+        position: static;
+        max-height: 300px;
+    }
+
+    .timeline-day {
+        flex-direction: column;
+    }
+
+    .timeline-date {
+        flex: 0;
+        text-align: left;
+    }
+
+    .timeline-content::before {
+        display: none;
+    }
+
+    .selected-asset-header {
+        flex-direction: column;
+        gap: var(--space-2);
+    }
+
+    .asset-header-stats {
+        width: 100%;
+        justify-content: space-around;
+    }
+
+    .bilan-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .perf-prices {
+        flex-wrap: wrap;
+    }
+}
+
+/* ============================================
+   SEARCH & FILTERS BAR
+   ============================================ */
+.journal-filters-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.filters-left {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.filters-right {
+    display: flex;
+    gap: var(--space-2);
+}
+
+.search-box {
+    flex: 1;
+    min-width: 200px;
+    max-width: 400px;
+}
+
+.search-box input {
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.search-box input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.date-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.date-filters input[type="date"] {
+    padding: var(--space-2);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.date-separator {
+    color: var(--text-muted);
+}
+
+.btn-filter {
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+}
+
+.btn-filter:hover {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: white;
+}
+
+.search-results-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-3);
+    font-size: 0.85rem;
+}
+
+.results-pages {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.results-pages button {
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.results-pages button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ============================================
+   SEARCH RESULTS
+   ============================================ */
+.search-result-item {
+    padding: var(--space-3);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-2);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid transparent;
+}
+
+.search-result-item:hover {
+    border-color: var(--accent-primary);
+    transform: translateX(4px);
+}
+
+.result-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-1);
+}
+
+.result-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.result-symbol {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.result-var {
+    margin-left: auto;
+    font-weight: 600;
+}
+
+.result-comment {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.date-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: var(--space-2);
+}
+
+/* ============================================
+   STATS MODAL
+   ============================================ */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+    padding: var(--space-4);
+}
+
+.modal-content {
+    background: var(--bg-primary);
+    border-radius: var(--radius-lg);
+    max-width: 900px;
+    width: 100%;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.stats-modal-content {
+    min-width: 700px;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: var(--space-1);
+}
+
+.modal-close:hover {
+    color: var(--text-primary);
+}
+
+.modal-tabs {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.tab-btn {
+    padding: var(--space-2) var(--space-4);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.tab-btn.active {
+    background: var(--accent-primary);
+    color: white;
+}
+
+.tab-btn:hover:not(.active) {
+    background: var(--bg-tertiary);
+}
+
+.modal-body {
+    padding: var(--space-4);
+    overflow-y: auto;
+    flex: 1;
+}
+
+.stats-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.stats-section {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+}
+
+.stats-section h3 {
+    margin: 0 0 var(--space-3) 0;
+    font-size: 1rem;
+    color: var(--text-primary);
+}
+
+.stats-half {
+    display: inline-block;
+    width: calc(50% - var(--space-2));
+    vertical-align: top;
+    margin-right: var(--space-2);
+}
+
+.stats-table-container {
+    overflow-x: auto;
+}
+
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.stats-table th,
+.stats-table td {
+    padding: var(--space-2);
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.stats-table th {
+    color: var(--text-muted);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.stats-table td {
+    color: var(--text-primary);
+}
+
+.top-bottom-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.top-item,
+.bottom-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+}
+
+.top-item {
+    border-left: 3px solid var(--success-color);
+}
+
+.bottom-item {
+    border-left: 3px solid var(--danger-color);
+}
+
+.item-name {
+    flex: 1;
+    font-weight: 500;
+}
+
+.item-trades {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.item-pnl {
+    font-weight: 600;
+}
+
+/* Grade Performance Cards in Stats Modal */
+.grade-perf-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-2);
+}
+
+.grade-perf-card {
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    border-left: 4px solid var(--border-color);
+}
+
+.grade-perf-card.grade-a { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.05); }
+.grade-perf-card.grade-b { border-left-color: #10b981; background: rgba(16, 185, 129, 0.05); }
+.grade-perf-card.grade-c { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.03); }
+.grade-perf-card.grade-d { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.05); }
+
+.grade-perf-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2);
+}
+
+.grade-letter {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.grade-perf-card.grade-a .grade-letter { color: #f59e0b; }
+.grade-perf-card.grade-b .grade-letter { color: #10b981; }
+.grade-perf-card.grade-c .grade-letter { color: #f59e0b; }
+.grade-perf-card.grade-d .grade-letter { color: #ef4444; }
+
+.grade-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.grade-perf-stats {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.gp-stat {
+    display: flex;
+    justify-content: space-between;
+}
+
+.gp-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.gp-value {
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+@media (max-width: 600px) {
+    .grade-perf-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .journal-filters-bar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .filters-left,
+    .filters-right {
+        width: 100%;
+    }
+
+    .search-box {
+        max-width: none;
+    }
+
+    .date-filters {
+        flex-wrap: wrap;
+    }
+
+    .stats-modal-content {
+        min-width: auto;
+        width: 95vw;
+    }
+
+    .stats-half {
+        width: 100%;
+        margin-right: 0;
+        margin-bottom: var(--space-3);
+    }
+}
+</style>
+{% endblock %}

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Plateforme Trading{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="nav-title">Plateforme<span class="nav-title-highlight">Trading</span></span>
+        </div>
+
+        <div class="nav-links">
+            <a href="/" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
+                Dashboard
+            </a>
+            <a href="/memoire" class="nav-link {% if request.endpoint == 'memoire' %}active{% endif %}">
+                Performances
+            </a>
+            <a href="/journal" class="nav-link {% if request.endpoint == 'journal' %}active{% endif %}">
+                Journal
+            </a>
+            <a href="/ajustements" class="nav-link {% if request.endpoint == 'ajustements' %}active{% endif %}">
+                Ajustements
+            </a>
+        </div>
+
+        <div class="nav-status">
+            <div class="market-badges" id="market-badges">
+                <span class="market-badge closed" id="badge-eu">EU</span>
+                <span class="market-badge closed" id="badge-us">US</span>
+            </div>
+            <div class="status-indicator">
+                <span class="status-dot online" id="status-dot"></span>
+                <span id="status-text">En ligne</span>
+            </div>
+            <span id="clock" class="nav-clock">--:--:--</span>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <span>Plateforme Trading v2.0</span>
+            <span id="last-update">-</span>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
