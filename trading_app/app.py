@@ -4906,7 +4906,11 @@ def enregistrer_journal_fr():
     return enregistrer_journal_quotidien(actifs_fr)
 
 def generer_rapport_hebdo():
-    """Génère le rapport hebdomadaire avec analyse et ajustements"""
+    """Génère le rapport hebdomadaire avec analyse et ajustements
+
+    CORRIGÉ: Période basée sur semaine ISO calendaire (lundi-dimanche)
+    CORRIGÉ: Exclut les trades ouverts (sans résultat) des statistiques
+    """
     maintenant = get_paris_time()
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Génération rapport hebdomadaire...")
 
@@ -4915,12 +4919,18 @@ def generer_rapport_hebdo():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # Calculer les dates de la semaine
-        date_fin = maintenant.date()
-        date_debut = date_fin - timedelta(days=7)
+        # CORRIGÉ: Calculer la semaine ISO précédente (lundi-dimanche)
+        # Si on est samedi, on prend la semaine qui vient de se terminer
+        jour_actuel = maintenant.date()
+        # Trouver le lundi de la semaine précédente
+        jours_depuis_lundi = jour_actuel.weekday()  # 0=lundi, 6=dimanche
+        lundi_semaine_courante = jour_actuel - timedelta(days=jours_depuis_lundi)
+        # Semaine précédente = lundi - 7 jours
+        date_debut = lundi_semaine_courante - timedelta(days=7)
+        date_fin = date_debut + timedelta(days=6)  # Dimanche de cette semaine
         semaine = f"{date_debut.year}-W{date_debut.isocalendar()[1]:02d}"
 
-        # Récupérer les trades de la semaine
+        # Récupérer les trades de la semaine (tous, pour contexte)
         cursor.execute('''
             SELECT * FROM trades_recommandes
             WHERE date >= ? AND date <= ?
@@ -4928,7 +4938,7 @@ def generer_rapport_hebdo():
         ''', (date_debut, date_fin))
         trades_semaine = [dict(row) for row in cursor.fetchall()]
 
-        # Récupérer les stats détaillées
+        # CORRIGÉ: Stats détaillées - EXCLURE trades ouverts (resultat IS NOT NULL)
         cursor.execute('''
             SELECT
                 COUNT(*) as nb_trades,
@@ -4938,10 +4948,20 @@ def generer_rapport_hebdo():
                 AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
+            AND resultat IS NOT NULL
         ''', (date_debut, date_fin))
         stats_globales = dict(cursor.fetchone())
 
-        # Stats par jour
+        # Compter aussi les trades encore ouverts pour info
+        cursor.execute('''
+            SELECT COUNT(*) as nb_ouverts
+            FROM trades_recommandes
+            WHERE date >= ? AND date <= ? AND resultat IS NULL
+        ''', (date_debut, date_fin))
+        nb_ouverts = cursor.fetchone()['nb_ouverts'] or 0
+        stats_globales['nb_ouverts'] = nb_ouverts
+
+        # CORRIGÉ: Stats par jour - EXCLURE trades ouverts
         cursor.execute('''
             SELECT date,
                    COUNT(*) as nb,
@@ -4949,12 +4969,13 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
+            AND resultat IS NOT NULL
             GROUP BY date
             ORDER BY pnl DESC
         ''', (date_debut, date_fin))
         stats_par_jour = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par catégorie
+        # Stats par catégorie (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT categorie_actif,
                    COUNT(*) as nb,
@@ -4962,11 +4983,12 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND categorie_actif IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY categorie_actif
         ''', (date_debut, date_fin))
         stats_par_categorie = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par type
+        # Stats par type (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT type_setup,
                    COUNT(*) as nb,
@@ -4974,23 +4996,25 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND type_setup IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY type_setup
         ''', (date_debut, date_fin))
         stats_par_type = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par heure
+        # Stats par heure (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT heure_entree,
                    COUNT(*) as nb,
                    SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND heure_entree IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY heure_entree
             ORDER BY heure_entree
         ''', (date_debut, date_fin))
         stats_par_heure = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par signal RSI (pour identifier les patterns)
+        # Stats par signal RSI (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT rsi_signal_reco,
                    COUNT(*) as nb,
@@ -4998,11 +5022,12 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND rsi_signal_reco IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY rsi_signal_reco
         ''', (date_debut, date_fin))
         stats_par_rsi = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par signal MACD
+        # Stats par signal MACD (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT macd_signal_reco,
                    COUNT(*) as nb,
@@ -5010,11 +5035,12 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND macd_signal_reco IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY macd_signal_reco
         ''', (date_debut, date_fin))
         stats_par_macd = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par ratio R/R
+        # Stats par ratio R/R (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT ratio_rr,
                    COUNT(*) as nb,
@@ -5022,11 +5048,12 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND ratio_rr IS NOT NULL AND ratio_rr != ''
+            AND resultat IS NOT NULL
             GROUP BY ratio_rr
         ''', (date_debut, date_fin))
         stats_par_ratio_rr = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par niveau ATR (volatilité)
+        # Stats par niveau ATR (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT
                 CASE
@@ -5039,11 +5066,12 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND atr_pct_reco IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY niveau_atr
         ''', (date_debut, date_fin))
         stats_par_atr = [dict(row) for row in cursor.fetchall()]
 
-        # === NOUVELLES STATS A/B TESTING AVANCÉ ===
+        # === STATS A/B TESTING AVANCÉ (CORRIGÉ: exclure trades ouverts) ===
 
         # Stats par jour de la semaine (saisonnalité)
         cursor.execute('''
@@ -5053,6 +5081,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND jour_semaine IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY jour_semaine
             ORDER BY CASE jour_semaine
                 WHEN 'LUNDI' THEN 1
@@ -5072,6 +5101,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND session_marche IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY session_marche
         ''', (date_debut, date_fin))
         stats_par_session = [dict(row) for row in cursor.fetchall()]
@@ -5084,6 +5114,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND conviction_score IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY conviction_score
             ORDER BY conviction_score
         ''', (date_debut, date_fin))
@@ -5097,6 +5128,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND strategie_entree IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY strategie_entree
         ''', (date_debut, date_fin))
         stats_par_strategie_entree = [dict(row) for row in cursor.fetchall()]
@@ -5110,6 +5142,7 @@ def generer_rapport_hebdo():
                 AVG(vix_niveau) as vix_moyen
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND regime_marche IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY regime_marche
         ''', (date_debut, date_fin))
         stats_par_regime = [dict(row) for row in cursor.fetchall()]
@@ -5123,6 +5156,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
+            AND resultat IS NOT NULL
             GROUP BY type_stop
         ''', (date_debut, date_fin))
         stats_par_type_stop = [dict(row) for row in cursor.fetchall()]
@@ -5135,12 +5169,13 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND alignement_tf IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY alignement_tf
             ORDER BY alignement_tf
         ''', (date_debut, date_fin))
         stats_par_alignement = [dict(row) for row in cursor.fetchall()]
 
-        # Stats par sentiment
+        # Stats par sentiment (CORRIGÉ: exclure trades ouverts)
         cursor.execute('''
             SELECT
                 CASE
@@ -5155,11 +5190,12 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND sentiment_score IS NOT NULL
+            AND resultat IS NOT NULL
             GROUP BY sentiment_bucket
         ''', (date_debut, date_fin))
         stats_par_sentiment = [dict(row) for row in cursor.fetchall()]
 
-        # Stats A/B Testing - performances par groupe pour chaque test actif
+        # Stats A/B Testing (CORRIGÉ: exclure trades ouverts + inclure WIN_FORCE)
         stats_ab_tests = []
         cursor.execute("SELECT * FROM ab_tests WHERE statut = 'actif'")
         tests_actifs = [dict(row) for row in cursor.fetchall()]
@@ -5169,20 +5205,22 @@ def generer_rapport_hebdo():
             # Stats groupe A
             cursor.execute('''
                 SELECT COUNT(*) as nb,
-                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                        SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
                 FROM trades_recommandes
                 WHERE ab_test_id = ? AND ab_groupe = 'A' AND date >= ? AND date <= ?
+                AND resultat IS NOT NULL
             ''', (test_id, date_debut, date_fin))
             stats_a = dict(cursor.fetchone())
 
             # Stats groupe B
             cursor.execute('''
                 SELECT COUNT(*) as nb,
-                       SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                        SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
                 FROM trades_recommandes
                 WHERE ab_test_id = ? AND ab_groupe = 'B' AND date >= ? AND date <= ?
+                AND resultat IS NOT NULL
             ''', (test_id, date_debut, date_fin))
             stats_b = dict(cursor.fetchone())
 
@@ -5723,10 +5761,14 @@ def calculer_feedback_ajustement(id_ajustement, jours_evaluation=7):
         pnl_avant = round(avant['pnl_total'] or 0, 2)
         pnl_apres = round(apres['pnl_total'] or 0, 2)
 
+        # CORRIGÉ: Seuil augmenté de 3 à 5 trades pour significativité
         # Déterminer la conclusion
-        if apres_conclus < 3:
+        if apres_conclus < 5:
             conclusion = "INSUFFISANT"
-            conclusion_detail = f"Seulement {apres_conclus} trades après ajustement, données insuffisantes"
+            conclusion_detail = f"Seulement {apres_conclus} trades après ajustement (min 5 requis)"
+        elif avant_conclus < 5:
+            conclusion = "INSUFFISANT"
+            conclusion_detail = f"Seulement {avant_conclus} trades avant ajustement (min 5 requis pour comparaison)"
         elif taux_apres > taux_avant + 5:
             conclusion = "POSITIF"
             conclusion_detail = f"Taux +{taux_apres - taux_avant:.1f}%, PnL: {pnl_avant:.2f}% → {pnl_apres:.2f}%"
@@ -5808,6 +5850,9 @@ def get_historique_feedback_categorie(categorie, type_ajustement='strategie'):
     """
     Analyse l'historique des feedbacks pour une catégorie donnée.
     Retourne: {'nb_positifs': int, 'nb_negatifs': int, 'nb_neutres': int, 'recommandation': str}
+
+    CORRIGÉ: Utilise AND au lieu de OR pour filtrer correctement par catégorie ET type.
+    CORRIGÉ: Seuils augmentés de 2 à 5 pour significativité statistique.
     """
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -5815,13 +5860,16 @@ def get_historique_feedback_categorie(categorie, type_ajustement='strategie'):
         cursor = conn.cursor()
 
         # Récupérer les feedbacks des 30 derniers jours pour cette catégorie
+        # CORRIGÉ: AND au lieu de OR - on veut les feedbacks de CETTE catégorie
         date_limite = get_paris_time() - timedelta(days=30)
         cursor.execute('''
             SELECT feedback_conclusion
             FROM ajustements_proposes
-            WHERE (categorie = ? OR type_ajustement = ?)
+            WHERE categorie = ?
+            AND type_ajustement = ?
             AND statut = 'valide'
             AND feedback_conclusion IS NOT NULL
+            AND feedback_conclusion NOT LIKE '%INSUFFISANT%'
             AND date_decision > ?
         ''', (categorie, type_ajustement, date_limite))
 
@@ -5830,32 +5878,34 @@ def get_historique_feedback_categorie(categorie, type_ajustement='strategie'):
 
         nb_positifs = sum(1 for r in resultats if r and 'POSITIF' in r)
         nb_negatifs = sum(1 for r in resultats if r and 'NEGATIF' in r)
-        nb_neutres = sum(1 for r in resultats if r and ('NEUTRE' in r or 'INSUFFISANT' in r))
+        nb_neutres = sum(1 for r in resultats if r and 'NEUTRE' in r)
 
+        # CORRIGÉ: Seuils augmentés de 2 à 5 pour significativité statistique
         total_conclus = nb_positifs + nb_negatifs
-        if total_conclus == 0:
-            recommandation = 'MANUEL'  # Pas assez de données
-        elif nb_positifs >= 2 and nb_negatifs == 0:
-            recommandation = 'AUTO_VALIDER'  # Pattern positif fort
-        elif nb_negatifs >= 2 and nb_positifs == 0:
-            recommandation = 'BLOQUER'  # Circuit breaker
-        elif nb_positifs > nb_negatifs * 2:
-            recommandation = 'AUTO_VALIDER'  # Plus de positifs
-        elif nb_negatifs > nb_positifs * 2:
-            recommandation = 'BLOQUER'  # Plus de négatifs
+        if total_conclus < 3:
+            recommandation = 'MANUEL'  # Pas assez de données (minimum 3 feedbacks conclus)
+        elif nb_positifs >= 5 and nb_negatifs == 0:
+            recommandation = 'AUTO_VALIDER'  # Pattern positif fort (5+ sans négatif)
+        elif nb_negatifs >= 5 and nb_positifs == 0:
+            recommandation = 'BLOQUER'  # Circuit breaker (5+ négatifs sans positif)
+        elif nb_positifs >= 5 and nb_positifs > nb_negatifs * 3:
+            recommandation = 'AUTO_VALIDER'  # Ratio 3:1 positifs (5+ positifs)
+        elif nb_negatifs >= 5 and nb_negatifs > nb_positifs * 3:
+            recommandation = 'BLOQUER'  # Ratio 3:1 négatifs (5+ négatifs)
         else:
-            recommandation = 'MANUEL'  # Résultats mitigés
+            recommandation = 'MANUEL'  # Résultats mitigés ou insuffisants
 
         return {
             'nb_positifs': nb_positifs,
             'nb_negatifs': nb_negatifs,
             'nb_neutres': nb_neutres,
+            'total_conclus': total_conclus,
             'recommandation': recommandation
         }
 
     except Exception as e:
         print(f"⚠️ Erreur historique feedback: {e}")
-        return {'nb_positifs': 0, 'nb_negatifs': 0, 'nb_neutres': 0, 'recommandation': 'MANUEL'}
+        return {'nb_positifs': 0, 'nb_negatifs': 0, 'nb_neutres': 0, 'total_conclus': 0, 'recommandation': 'MANUEL'}
 
 def auto_valider_ajustement_si_positif(id_ajustement, categorie, type_ajustement):
     """
@@ -6026,6 +6076,9 @@ def evaluer_ab_test(test_id, jours_minimum=7):
     """
     Évalue les résultats d'un test A/B après une période minimale.
     Compare les performances des deux groupes.
+
+    CORRIGÉ: BREAKEVEN n'est plus compté comme réussite (c'est neutre)
+    CORRIGÉ: Logique gagnant améliorée avec score pondéré taux/PnL
     """
     maintenant = get_paris_time()
 
@@ -6055,69 +6108,75 @@ def evaluer_ab_test(test_id, jours_minimum=7):
         groupe_a = json.loads(test.get('actifs_groupe_a', '[]'))
         groupe_b = json.loads(test.get('actifs_groupe_b', '[]'))
 
-        # Stats groupe A - FILTRÉ PAR ab_test_id pour éviter contamination cross-test
+        # Stats groupe A - CORRIGÉ: BREAKEVEN exclu des réussites (c'est neutre, PnL ≈ 0)
         placeholders_a = ','.join(['?' for _ in groupe_a])
         cursor.execute(f'''
             SELECT
                 COUNT(*) as nb_trades,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                 SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as echecs,
+                SUM(CASE WHEN resultat = 'BREAKEVEN' THEN 1 ELSE 0 END) as breakeven,
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total,
                 AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
             WHERE symbole IN ({placeholders_a})
             AND ab_test_id = ?
             AND ab_groupe = 'A'
+            AND resultat IS NOT NULL
             AND timestamp_reco >= ?
         ''', (*groupe_a, test_id, date_debut))
         stats_a = cursor.fetchone()
 
-        # Stats groupe B - FILTRÉ PAR ab_test_id
+        # Stats groupe B - CORRIGÉ: BREAKEVEN exclu des réussites
         placeholders_b = ','.join(['?' for _ in groupe_b])
         cursor.execute(f'''
             SELECT
                 COUNT(*) as nb_trades,
-                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN') THEN 1 ELSE 0 END) as reussis,
+                SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                 SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as echecs,
+                SUM(CASE WHEN resultat = 'BREAKEVEN' THEN 1 ELSE 0 END) as breakeven,
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total,
                 AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
             WHERE symbole IN ({placeholders_b})
             AND ab_test_id = ?
             AND ab_groupe = 'B'
+            AND resultat IS NOT NULL
             AND timestamp_reco >= ?
         ''', (*groupe_b, test_id, date_debut))
         stats_b = cursor.fetchone()
 
-        # Calculer les taux
+        # Calculer les taux (sur trades conclus uniquement, sans breakeven)
         nb_a = stats_a['nb_trades'] or 0
         nb_b = stats_b['nb_trades'] or 0
         reussis_a = stats_a['reussis'] or 0
         reussis_b = stats_b['reussis'] or 0
+        echecs_a = stats_a['echecs'] or 0
+        echecs_b = stats_b['echecs'] or 0
 
-        taux_a = round((reussis_a / nb_a * 100) if nb_a > 0 else 0, 1)
-        taux_b = round((reussis_b / nb_b * 100) if nb_b > 0 else 0, 1)
+        # Taux calculé sur trades décisifs (excluant breakeven)
+        decisifs_a = reussis_a + echecs_a
+        decisifs_b = reussis_b + echecs_b
+        taux_a = round((reussis_a / decisifs_a * 100) if decisifs_a > 0 else 0, 1)
+        taux_b = round((reussis_b / decisifs_b * 100) if decisifs_b > 0 else 0, 1)
         pnl_a = round(stats_a['pnl_total'] or 0, 2)
         pnl_b = round(stats_b['pnl_total'] or 0, 2)
 
         # Test de significativité statistique (Chi-squared simplifié)
-        # Minimum 10 trades par groupe pour significativité
+        # Minimum 10 trades DÉCISIFS par groupe pour significativité
         significatif = False
         p_value_approx = None
-        if nb_a >= 10 and nb_b >= 10:
-            # Calcul du chi-squared pour proportions
-            echecs_a = stats_a['echecs'] or 0
-            echecs_b = stats_b['echecs'] or 0
-            total = nb_a + nb_b
+        if decisifs_a >= 10 and decisifs_b >= 10:
+            total = decisifs_a + decisifs_b
             total_reussis = reussis_a + reussis_b
             total_echecs = echecs_a + echecs_b
 
             if total_reussis > 0 and total_echecs > 0:
                 # Expected values
-                exp_reussis_a = nb_a * total_reussis / total
-                exp_echecs_a = nb_a * total_echecs / total
-                exp_reussis_b = nb_b * total_reussis / total
-                exp_echecs_b = nb_b * total_echecs / total
+                exp_reussis_a = decisifs_a * total_reussis / total
+                exp_echecs_a = decisifs_a * total_echecs / total
+                exp_reussis_b = decisifs_b * total_reussis / total
+                exp_echecs_b = decisifs_b * total_echecs / total
 
                 # Chi-squared (avec protection division par zéro)
                 chi2 = 0
@@ -6130,22 +6189,34 @@ def evaluer_ab_test(test_id, jours_minimum=7):
                 significatif = chi2 > 3.84
                 p_value_approx = "< 0.05" if chi2 > 3.84 else ">= 0.05"
 
-        # Déterminer le gagnant avec test statistique
+        # CORRIGÉ: Logique gagnant améliorée avec score pondéré
+        # Score = 60% taux de réussite + 40% PnL normalisé
+        def calculer_score(taux, pnl, pnl_max):
+            score_taux = taux  # 0-100
+            # Normaliser PnL sur une échelle 0-100 (supposant max ±20%)
+            pnl_normalise = min(100, max(0, (pnl + 20) * 2.5)) if pnl_max != 0 else 50
+            return 0.6 * score_taux + 0.4 * pnl_normalise
+
+        pnl_max = max(abs(pnl_a), abs(pnl_b), 1)  # Éviter division par 0
+        score_a = calculer_score(taux_a, pnl_a, pnl_max)
+        score_b = calculer_score(taux_b, pnl_b, pnl_max)
+
         if significatif:
-            if taux_a > taux_b and pnl_a > pnl_b:
+            # Utiliser le score pondéré au lieu de la double condition stricte
+            if score_a > score_b + 5:  # Différence significative de 5 points
                 gagnant = 'A'
-                conclusion = f"Variante A gagne (p {p_value_approx}): taux {taux_a}% vs {taux_b}%, PnL {pnl_a}% vs {pnl_b}%"
-            elif taux_b > taux_a and pnl_b > pnl_a:
+                conclusion = f"Variante A gagne (p {p_value_approx}, score {score_a:.1f} vs {score_b:.1f}): taux {taux_a}% vs {taux_b}%, PnL {pnl_a}% vs {pnl_b}%"
+            elif score_b > score_a + 5:
                 gagnant = 'B'
-                conclusion = f"Variante B gagne (p {p_value_approx}): taux {taux_b}% vs {taux_a}%, PnL {pnl_b}% vs {pnl_a}%"
+                conclusion = f"Variante B gagne (p {p_value_approx}, score {score_b:.1f} vs {score_a:.1f}): taux {taux_b}% vs {taux_a}%, PnL {pnl_b}% vs {pnl_a}%"
             else:
-                gagnant = 'MIXTE'
-                conclusion = f"Résultats mixtes (p {p_value_approx}): A taux={taux_a}%/pnl={pnl_a}%, B taux={taux_b}%/pnl={pnl_b}%"
+                gagnant = 'EGALITE'
+                conclusion = f"Scores très proches (p {p_value_approx}): A={score_a:.1f} vs B={score_b:.1f}, différence < 5 points"
         else:
-            min_trades = min(nb_a, nb_b)
-            if min_trades < 10:
+            min_decisifs = min(decisifs_a, decisifs_b)
+            if min_decisifs < 10:
                 gagnant = 'INSUFFISANT'
-                conclusion = f"Données insuffisantes: A={nb_a} trades, B={nb_b} trades (min 10 requis)"
+                conclusion = f"Données insuffisantes: A={decisifs_a} trades décisifs, B={decisifs_b} (min 10 requis)"
             else:
                 gagnant = 'EGALITE'
                 conclusion = f"Pas de différence significative (p {p_value_approx}): A={taux_a}%/{pnl_a}% vs B={taux_b}%/{pnl_b}%"
@@ -6251,17 +6322,26 @@ def evaluer_tous_ab_tests():
 # ============================================================================
 
 def get_criteres_dynamiques_actifs():
-    """Récupère les critères dynamiques actifs (scores de confiance, exclusions)"""
+    """
+    Récupère les critères dynamiques actifs (scores de confiance, exclusions).
+
+    CORRIGÉ: Ajout d'expiration dynamique basée sur l'âge des données
+    CORRIGÉ: Typage explicite des scores en int
+    """
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
+        maintenant = get_paris_time()
+
         # Récupérer les derniers scores de confiance par catégorie
+        # CORRIGÉ: Exclure les scores de plus de 14 jours (obsolètes)
         cursor.execute('''
             SELECT categorie, critere, valeur_actuelle, raison, date_maj
             FROM criteres_dynamiques
             WHERE critere = 'score_confiance'
+            AND date_maj > date('now', '-14 days')
             AND id IN (
                 SELECT MAX(id) FROM criteres_dynamiques
                 WHERE critere = 'score_confiance'
@@ -6269,21 +6349,55 @@ def get_criteres_dynamiques_actifs():
             )
         ''')
 
-        scores = {row['categorie']: {
-            'score': row['valeur_actuelle'],
-            'raison': row['raison'],
-            'date_maj': row['date_maj']
-        } for row in cursor.fetchall()}
+        scores = {}
+        for row in cursor.fetchall():
+            # CORRIGÉ: Typage explicite en int
+            try:
+                score_val = int(float(row['valeur_actuelle']))
+            except (ValueError, TypeError):
+                score_val = 50  # Valeur par défaut si conversion échoue
 
-        # Récupérer les ajustements actifs (validés dans les 30 derniers jours)
+            # Calculer l'âge en jours
+            date_maj = row['date_maj']
+            if isinstance(date_maj, str):
+                try:
+                    date_maj = datetime.fromisoformat(date_maj.replace('Z', '+00:00'))
+                except:
+                    date_maj = maintenant
+            age_jours = (maintenant - date_maj).days if hasattr(date_maj, 'days') else 0
+
+            scores[row['categorie']] = {
+                'score': score_val,
+                'raison': row['raison'],
+                'date_maj': row['date_maj'],
+                'age_jours': age_jours
+            }
+
+        # CORRIGÉ: Expiration dynamique des ajustements selon le type
+        # - Actions urgentes (ÉVITER): 7 jours max
+        # - Actions prudentes (RÉDUIRE/FAVORISER): 14 jours max
         cursor.execute('''
-            SELECT categorie, critere, action, raison
+            SELECT categorie, critere, action, raison, date_decision
             FROM ajustements_proposes
             WHERE statut = 'valide'
-            AND date_decision > date('now', '-30 days')
+            AND (
+                (action = 'ÉVITER' AND date_decision > date('now', '-7 days'))
+                OR (action IN ('RÉDUIRE', 'FAVORISER') AND date_decision > date('now', '-14 days'))
+            )
         ''')
 
-        ajustements_actifs = [dict(row) for row in cursor.fetchall()]
+        ajustements_actifs = []
+        for row in cursor.fetchall():
+            ajust = dict(row)
+            # Calculer l'âge en jours pour pondération
+            date_decision = row['date_decision']
+            if isinstance(date_decision, str):
+                try:
+                    date_decision = datetime.fromisoformat(date_decision.replace('Z', '+00:00'))
+                    ajust['age_jours'] = (maintenant - date_decision).days
+                except:
+                    ajust['age_jours'] = 0
+            ajustements_actifs.append(ajust)
 
         conn.close()
 
@@ -6297,28 +6411,61 @@ def get_criteres_dynamiques_actifs():
         return {'scores_confiance': {}, 'ajustements_actifs': []}
 
 def generer_instructions_dynamiques():
-    """Génère les instructions dynamiques à injecter dans le SYSTEM_PROMPT"""
+    """
+    Génère les instructions dynamiques à injecter dans le SYSTEM_PROMPT.
+
+    CORRIGÉ: Trou des seuils 50-80 comblé (ajout 'NORMAL')
+    CORRIGÉ: Pondération temporelle (ajustements récents prioritaires)
+    """
     criteres = get_criteres_dynamiques_actifs()
     instructions = []
 
     # Analyser les scores de confiance
+    # CORRIGÉ: Couverture complète des seuils (0-30, 30-50, 50-65, 65-80, 80+)
     for categorie, data in criteres.get('scores_confiance', {}).items():
         score = data.get('score', 50)
-        if score < 30:
-            instructions.append(f"⛔ ÉVITER {categorie.upper()}: Score confiance {score}/100 - {data.get('raison', '')}")
-        elif score < 50:
-            instructions.append(f"⚠️ PRUDENCE {categorie.upper()}: Score confiance {score}/100 - Limiter les positions")
-        elif score > 80:
-            instructions.append(f"✅ FAVORABLE {categorie.upper()}: Score confiance {score}/100 - Opportunités prioritaires")
+        age = data.get('age_jours', 0)
+        age_info = f" (mis à jour il y a {age}j)" if age > 3 else ""
 
-    # Ajouter les ajustements actifs
-    for ajust in criteres.get('ajustements_actifs', []):
+        if score < 30:
+            instructions.append(f"⛔ ÉVITER {categorie.upper()}: Score {score}/100{age_info} - {data.get('raison', '')}")
+        elif score < 50:
+            instructions.append(f"⚠️ PRUDENCE {categorie.upper()}: Score {score}/100{age_info} - Limiter les positions")
+        elif score < 65:
+            # CORRIGÉ: Zone neutre explicite
+            instructions.append(f"➖ NORMAL {categorie.upper()}: Score {score}/100{age_info} - Pas de biais particulier")
+        elif score < 80:
+            instructions.append(f"👍 BON {categorie.upper()}: Score {score}/100{age_info} - Conditions favorables")
+        else:
+            instructions.append(f"✅ EXCELLENT {categorie.upper()}: Score {score}/100{age_info} - Opportunités prioritaires")
+
+    # CORRIGÉ: Ajustements triés par priorité (récents et urgents d'abord)
+    ajustements = criteres.get('ajustements_actifs', [])
+
+    # Priorité: ÉVITER > RÉDUIRE > FAVORISER, puis par âge croissant
+    def priorite_ajustement(a):
+        action_prio = {'ÉVITER': 0, 'RÉDUIRE': 1, 'FAVORISER': 2}.get(a.get('action', ''), 3)
+        age = a.get('age_jours', 0)
+        return (action_prio, age)
+
+    ajustements_tries = sorted(ajustements, key=priorite_ajustement)
+
+    for ajust in ajustements_tries:
+        age = ajust.get('age_jours', 0)
+        # CORRIGÉ: Pondération temporelle dans le message
+        if age == 0:
+            recence = "🆕 NOUVEAU"
+        elif age <= 2:
+            recence = "📍 RÉCENT"
+        else:
+            recence = f"📅 {age}j"
+
         if ajust.get('action') == 'ÉVITER':
-            instructions.append(f"⛔ {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
+            instructions.append(f"⛔ [{recence}] {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
         elif ajust.get('action') == 'RÉDUIRE':
-            instructions.append(f"⚠️ RÉDUIRE {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
+            instructions.append(f"⚠️ [{recence}] RÉDUIRE {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
         elif ajust.get('action') == 'FAVORISER':
-            instructions.append(f"✅ FAVORISER {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
+            instructions.append(f"✅ [{recence}] FAVORISER {ajust.get('categorie', '').upper()}: {ajust.get('raison', '')}")
 
     if not instructions:
         return ""
