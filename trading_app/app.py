@@ -4629,10 +4629,10 @@ FORMAT DE RÉPONSE EN JSON:
     {"critere": "Nom du critère", "action": "Augmenter/Réduire/Modifier", "raison": "Justification basée sur données"}
   ],
   "scores_confiance": {
-    "indices": {"score": 0, "tendance": "hausse/baisse/stable"},
-    "actions_eu": {"score": 0, "tendance": ""},
-    "actions_us": {"score": 0, "tendance": ""},
-    "commodites": {"score": 0, "tendance": ""},
+    "indice": {"score": 0, "tendance": "hausse/baisse/stable"},
+    "action_eu": {"score": 0, "tendance": ""},
+    "action_us": {"score": 0, "tendance": ""},
+    "commodite": {"score": 0, "tendance": ""},
     "forex": {"score": 0, "tendance": ""},
     "news_trading": {"score": 0, "tendance": ""},
     "technique": {"score": 0, "tendance": ""}
@@ -5457,6 +5457,37 @@ def get_criteres_dynamiques():
         print(f"⚠️ Erreur critères dynamiques: {e}")
         return {'scores_confiance': {}, 'ajustements_recents': []}
 
+def normaliser_categorie(categorie):
+    """
+    Normalise les noms de catégories pour assurer la cohérence.
+    Mappe les variations vers les noms standardisés utilisés dans categorie_actif.
+    """
+    if not categorie:
+        return categorie
+
+    categorie_lower = categorie.lower().strip()
+
+    # Mapping des variations vers les noms standardisés
+    mapping = {
+        # Indices
+        'indices': 'indice',
+        'index': 'indice',
+        # Actions EU
+        'actions_eu': 'action_eu',
+        'actions européennes': 'action_eu',
+        'actions eu': 'action_eu',
+        # Actions US
+        'actions_us': 'action_us',
+        'actions américaines': 'action_us',
+        'actions us': 'action_us',
+        # Commodités
+        'commodites': 'commodite',
+        'commodités': 'commodite',
+        'matières premières': 'commodite',
+    }
+
+    return mapping.get(categorie_lower, categorie_lower)
+
 def extraire_categorie_ajustement(critere, raison, action):
     """
     Extrait une catégorie spécifique d'un ajustement stratégique.
@@ -5515,13 +5546,16 @@ def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapp
                 score = score_data.get('score', 50)
                 tendance = score_data.get('tendance', 'stable')
 
+                # CORRIGÉ: Normaliser la catégorie pour cohérence avec categorie_actif
+                categorie_normalisee = normaliser_categorie(categorie)
+
                 cursor.execute('''
                     INSERT INTO ajustements_proposes
                     (type_ajustement, categorie, critere, action, valeur_proposee, raison, source, statut, date_proposition)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     'score_confiance',
-                    categorie,
+                    categorie_normalisee,
                     'score_confiance',
                     f"Définir score à {score}/100",
                     str(score),
