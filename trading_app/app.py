@@ -1588,10 +1588,7 @@ def valider_opportunite(opp):
         if gain_cible_pct > atr_max_gain:
             avertissements.append(f"TP ambitieux: {gain_cible_pct:.2f}% > {atr_max_gain:.2f}% (1.5x ATR)")
 
-    # Validation volume relatif: éviter les actifs peu liquides
-    volume_relatif = opp.get('volume_relatif', 100)
-    if volume_relatif and volume_relatif < 50:
-        avertissements.append(f"Volume faible: {volume_relatif:.0f}% < 50% moyenne")
+    # Note: Pas de validation volume - trading via turbos (liquidité assurée par market maker)
 
     # === VALIDATION HEURES DE MARCHÉ ===
     # Avertir si le marché n'est pas ouvert (trades à planifier, pas exécuter immédiatement)
