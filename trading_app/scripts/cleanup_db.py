@@ -18,6 +18,25 @@ from datetime import datetime
 # Chemin de la base de données
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'trading.db')
 
+# Liste blanche des tables autorisées (protection contre injection SQL)
+TABLES_VALIDES = {
+    'trades_recommandes',
+    'analyses',
+    'journal_quotidien',
+    'bilan_quotidien',
+    'alertes_news',
+    'rapports_hebdo',
+    'criteres_dynamiques',
+    'ajustements_proposes',
+    'ab_tests'
+}
+
+def _validate_table_name(table):
+    """Valide qu'un nom de table est dans la liste blanche"""
+    if table not in TABLES_VALIDES:
+        raise ValueError(f"Table non autorisée: {table}")
+    return table
+
 def get_db_stats():
     """Affiche les statistiques actuelles de la base"""
     conn = sqlite3.connect(DB_PATH)
@@ -36,9 +55,11 @@ def get_db_stats():
 
     for table in tables:
         try:
+            _validate_table_name(table)
+            # Requête sécurisée - table validée contre la liste blanche
             cursor.execute(f'SELECT COUNT(*) FROM {table}')
             stats[table] = cursor.fetchone()[0]
-        except sqlite3.OperationalError:
+        except (sqlite3.OperationalError, ValueError):
             stats[table] = 0
 
     conn.close()
@@ -88,9 +109,11 @@ def cleanup_all():
     results = {}
     for table in tables_to_clean:
         try:
+            _validate_table_name(table)
+            # Requête sécurisée - table validée contre la liste blanche
             cursor.execute(f'DELETE FROM {table}')
             results[table] = cursor.rowcount
-        except sqlite3.OperationalError:
+        except (sqlite3.OperationalError, ValueError):
             results[table] = 0
 
     # Réinitialiser les auto-increment

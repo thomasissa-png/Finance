@@ -30,7 +30,13 @@ import yfinance as yf
 # ============================================================================
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'trading-secret-key-2024')
+# SECRET_KEY requis - utilise une valeur par défaut uniquement en dev
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    import warnings
+    warnings.warn("SECRET_KEY non définie! Utilisation d'une clé temporaire (non sécurisé en production)")
+    _secret_key = 'dev-only-insecure-key-' + os.urandom(16).hex()
+app.config['SECRET_KEY'] = _secret_key
 
 # Configuration Logging
 # - Fichier rotatif pour persistance (10MB max, 5 fichiers conservés)
@@ -65,6 +71,7 @@ NEWS_ENVOYEES_AUJOURDHUI = 0
 MAX_NEWS_PAR_JOUR = 3
 DERNIERE_VERIFICATION_DATE = None
 DB_PATH = 'trading.db'
+DB_TIMEOUT = 10.0  # Timeout SQLite standardisé (secondes)
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")
 TWELVEDATA_API_KEY = os.environ.get("TWELVEDATA_API_KEY")
 
@@ -96,6 +103,22 @@ TWELVEDATA_FETCH_LOCK = Lock()  # Protège contre le stampede (multiples appels 
 
 # Timezone
 TZ_PARIS = pytz.timezone('Europe/Paris')
+
+# ============================================================================
+# SÉCURITÉ - Headers et protection API
+# ============================================================================
+
+@app.after_request
+def add_security_headers(response):
+    """Ajoute des headers de sécurité à toutes les réponses"""
+    # Protection contre le clickjacking
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    # Protection XSS (navigateurs modernes)
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    # Referrer policy
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 def to_python_type(val):
     """Convertit les types numpy en types Python natifs pour la sérialisation JSON.
@@ -2093,9 +2116,22 @@ def get_paris_time():
 def get_utc_time_for_paris(heure_paris):
     """Convertit une heure française en heure UTC"""
     maintenant = get_paris_time()
+    # Validation du format HH:MM
+    try:
+        parts = heure_paris.split(':')
+        if len(parts) < 2:
+            raise ValueError(f"Format heure invalide: {heure_paris}")
+        hour = int(parts[0])
+        minute = int(parts[1])
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError(f"Heure hors limites: {heure_paris}")
+    except (ValueError, AttributeError) as e:
+        logger.warning(f"Format heure invalide '{heure_paris}': {e}, utilisation 09:00 par défaut")
+        hour, minute = 9, 0
+
     heure_cible = maintenant.replace(
-        hour=int(heure_paris.split(':')[0]),
-        minute=int(heure_paris.split(':')[1]),
+        hour=hour,
+        minute=minute,
         second=0,
         microsecond=0
     )
@@ -3772,7 +3808,7 @@ def verifier_resultats_trades():
 
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         conn.isolation_level = 'DEFERRED'  # Transaction explicite
         cursor = conn.cursor()
@@ -4346,7 +4382,7 @@ def get_trades_du_jour():
 def get_performances(periode='semaine'):
     """Récupère les performances sur une période"""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         maintenant = get_paris_time()
@@ -6636,7 +6672,7 @@ def enregistrer_journal_complet():
 def get_journal_quotidien(symbole=None, limite=30, date_from=None, date_to=None, offset=0):
     """Récupère le journal quotidien avec navigation par date et pagination"""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -7673,7 +7709,7 @@ def api_stats_evolution():
         granularite = request.args.get('granularite', 'jour')  # jour, semaine, mois
         limite = int(request.args.get('limite', 30))
 
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -8142,7 +8178,7 @@ def api_stats_detaillees():
     """Récupère les statistiques détaillées par heure, actif et type"""
     try:
         periode = request.args.get('periode', 'mois')
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -8313,7 +8349,7 @@ def api_trades_historique():
         conviction_min = request.args.get('conviction_min', '')
         regime = request.args.get('regime', '')
 
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -8409,7 +8445,7 @@ def api_equity_curve():
         periode = request.args.get('periode', 'annee')
         granularite = request.args.get('granularite', 'jour')  # jour, semaine, mois
 
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -8577,7 +8613,7 @@ def api_journal_search():
         limit = min(limit, 200)
         offset = page * limit
 
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -8677,7 +8713,7 @@ def api_journal_stats():
         granularite = request.args.get('granularite', 'semaine')  # semaine, mois
         limite = int(request.args.get('limite', 12))
 
-        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
