@@ -45,9 +45,9 @@
             <span class="section-icon">⚡</span>
             <h2 class="section-title">News Flash Trading</h2>
             <div class="news-navigation">
-                <button class="nav-arrow-small" onclick="naviguerNews(-1)" id="news-prev" title="Jour précédent">◀</button>
+                <button class="nav-arrow-small" onclick="naviguerNews(1)" id="news-prev" title="Plus récentes" disabled>◀</button>
                 <span class="nav-date" id="news-nav-date">Aujourd'hui</span>
-                <button class="nav-arrow-small" onclick="naviguerNews(1)" id="news-next" title="Jour suivant" disabled>▶</button>
+                <button class="nav-arrow-small" onclick="naviguerNews(-1)" id="news-next" title="Plus anciennes">▶</button>
             </div>
             <span class="section-meta" id="news-count">Actualités analysées par impact</span>
         </div>
@@ -552,6 +552,17 @@
 .news-source {
     font-size: 10px;
     color: var(--text-muted);
+}
+
+.news-impact-cours {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-top: 4px;
 }
 
 .news-flash-item.no-impact {
@@ -1206,7 +1217,8 @@ async function refreshNews() {
 }
 
 function naviguerNews(direction) {
-    const newIndex = newsIndexJour - direction; // -1 = passé, +1 = futur
+    // direction: +1 = vers récent (gauche), -1 = vers ancien (droite)
+    const newIndex = newsIndexJour - direction;
     if (newIndex >= 0 && newIndex < newsHistorique.length) {
         newsIndexJour = newIndex;
         const jourData = newsHistorique[newsIndexJour];
@@ -1216,14 +1228,16 @@ function naviguerNews(direction) {
 }
 
 function updateNewsNavigation() {
-    const prevBtn = document.getElementById('news-prev');
-    const nextBtn = document.getElementById('news-next');
+    const prevBtn = document.getElementById('news-prev');  // ◀ = vers récent
+    const nextBtn = document.getElementById('news-next');  // ▶ = vers ancien
     const dateLabel = document.getElementById('news-nav-date');
 
     if (!newsHistorique.length) return;
 
-    prevBtn.disabled = newsIndexJour >= newsHistorique.length - 1;
-    nextBtn.disabled = newsIndexJour <= 0;
+    // ◀ (prev) disabled si on est sur les plus récentes (index 0)
+    prevBtn.disabled = newsIndexJour <= 0;
+    // ▶ (next) disabled si on est sur les plus anciennes
+    nextBtn.disabled = newsIndexJour >= newsHistorique.length - 1;
 
     if (newsIndexJour === 0) {
         dateLabel.textContent = "Aujourd'hui";
@@ -1272,24 +1286,33 @@ function renderNewsFlashWithImpact(news) {
         const impactIcon = item.impact === 'HIGH' ? '🔴' : item.impact === 'MEDIUM' ? '🟠' : '⚪';
         const hiddenClass = index >= visibleCount ? 'hidden-news' : '';
 
-        // Formater les actifs concernés
+        // Formater l'heure (toujours afficher si disponible)
+        const heureAffichee = item.heure && item.heure !== '--:--' ? item.heure : '';
+
+        // Formater les actifs concernés avec impact estimé
         let actifsHtml = '';
         if (item.actifs && item.actifs.length > 0) {
             const actifsTags = item.actifs.map(a => {
                 const dirClass = a.direction === 'LONG' ? 'long' : 'short';
                 const dirIcon = a.direction === 'LONG' ? '↗' : '↘';
-                return `<span class="news-actif ${dirClass}">${dirIcon} ${a.symbole}</span>`;
+                const impactEstime = a.impact_estime || a.raison || '';
+                const impactText = impactEstime ? ` (${impactEstime})` : '';
+                return `<span class="news-actif ${dirClass}">${dirIcon} ${a.nom || a.symbole}${impactText}</span>`;
             }).join('');
             actifsHtml = `<div class="news-actifs">${actifsTags}</div>`;
         }
 
-        // Afficher uniquement l'analyse FR (pas le headline anglais)
+        // Afficher l'impact attendu sur les cours si disponible
+        const impactCours = item.impact_cours ? `<span class="news-impact-cours">${item.impact_cours}</span>` : '';
+
+        // Afficher l'analyse + impact cours
         html += `
             <div class="news-flash-item impact-${impactClass} ${hiddenClass}">
                 <div class="news-impact-badge">${impactIcon}</div>
-                <span class="news-time">${item.heure || '--:--'}</span>
+                <span class="news-time">${heureAffichee || '--:--'}</span>
                 <div class="news-content">
                     <span class="news-text">${item.analyse || ''}</span>
+                    ${impactCours}
                     ${actifsHtml}
                 </div>
             </div>`;
@@ -1505,7 +1528,10 @@ function renderPulseWidget(weekendMsg) {
         if (d) {
             const isPositive = d.variation >= 0;
             const barWidth = Math.min(Math.abs(d.variation) * 15, 100);
-            const priceFormatted = d.prix ? d.prix.toLocaleString('fr-FR', {maximumFractionDigits: 2}) : '-';
+            // Forex (EUR/USD, etc.) = 4 décimales, autres = 2 décimales
+            const isForex = item.key.includes('/') && item.key.includes('USD');
+            const decimals = isForex ? 4 : 2;
+            const priceFormatted = d.prix ? d.prix.toLocaleString('fr-FR', {minimumFractionDigits: decimals, maximumFractionDigits: decimals}) : '-';
 
             html += `
                 <div class="pulse-item">

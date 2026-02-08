@@ -1965,7 +1965,8 @@ def calculer_trade_grade(trade_data):
             rr_ratio = float(parts[1]) / float(parts[0])
         else:
             rr_ratio = 1.0
-    except:
+    except (ValueError, ZeroDivisionError, TypeError) as e:
+        logger.warning(f"Erreur parsing ratio R:R '{ratio_rr_str}': {e}")
         rr_ratio = 1.0
 
     if rr_ratio >= 3.0:
@@ -2709,14 +2710,17 @@ FORMAT JSON:
       "headline": "Titre original de la news",
       "impact": "HIGH/MEDIUM/LOW",
       "analyse": "Explication courte de l'impact trading (1 phrase)",
+      "impact_cours": "+1.5% à +3% attendu" ou "-0.5% à -1% attendu",
       "actifs": [
-        {"symbole": "KC=F", "nom": "Café", "direction": "LONG", "raison": "Supply shock"}
+        {"symbole": "KC=F", "nom": "Café", "direction": "LONG", "raison": "Supply shock", "impact_estime": "+2%"}
       ],
       "timing": "immédiat/aujourd'hui/cette semaine",
       "source": "Source originale"
     }
   ]
 }
+
+IMPORTANT: Pour chaque news, estime l'IMPACT SUR LES COURS en pourcentage (impact_cours et impact_estime par actif).
 
 Si aucune news n'a d'impact trading significatif, retourne un tableau vide."""
 
@@ -2815,19 +2819,35 @@ def fetch_and_analyze_news():
 
         # 3. Enrichir avec l'heure formatée
         for news in news_analysees:
-            # Trouver l'article original pour récupérer l'heure
+            headline = news.get('headline', '').lower()
+            best_match = None
+            best_score = 0
+
+            # Trouver l'article original avec correspondance flexible
             for article in articles:
-                if article['titre'] in news.get('headline', ''):
-                    if article.get('heure'):
-                        try:
-                            dt = datetime.fromisoformat(article['heure'].replace('Z', '+00:00'))
-                            dt_paris = dt.astimezone(TZ_PARIS)
-                            news['heure'] = dt_paris.strftime('%H:%M')
-                        except ValueError:
-                            news['heure'] = '--:--'
+                titre = article.get('titre', '').lower()
+                # Vérifier plusieurs types de correspondance
+                if titre in headline or headline in titre:
+                    best_match = article
                     break
-            if 'heure' not in news:
-                news['heure'] = '--:--'
+                # Correspondance par mots-clés significatifs (>5 caractères)
+                titre_mots = set(m for m in titre.split() if len(m) > 5)
+                headline_mots = set(m for m in headline.split() if len(m) > 5)
+                score = len(titre_mots & headline_mots)
+                if score > best_score:
+                    best_score = score
+                    best_match = article
+
+            if best_match and best_match.get('heure'):
+                try:
+                    dt = datetime.fromisoformat(best_match['heure'].replace('Z', '+00:00'))
+                    dt_paris = dt.astimezone(TZ_PARIS)
+                    news['heure'] = dt_paris.strftime('%H:%M')
+                except ValueError:
+                    news['heure'] = get_paris_time().strftime('%H:%M')
+            else:
+                # Utiliser l'heure courante si pas de correspondance
+                news['heure'] = get_paris_time().strftime('%H:%M')
 
         # 4. Sauvegarder les news analysées en base
         sauvegarder_news_analysees(news_analysees)
@@ -2858,7 +2878,9 @@ def sauvegarder_news_analysees(news_list):
 
             if cursor.fetchone() is None:
                 # Insérer la nouvelle news
-                actifs_concernes = ', '.join([a.get('symbole', '') for a in news.get('actifs_concernes', [])])
+                # Note: Le JSON de Claude utilise 'actifs', pas 'actifs_concernes'
+                actifs_list = news.get('actifs', news.get('actifs_concernes', []))
+                actifs_concernes = ', '.join([a.get('symbole', '') for a in actifs_list])
                 cursor.execute('''
                     INSERT INTO alertes_news (date, heure, titre, contenu, actif, impact, timestamp)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -2920,8 +2942,11 @@ def analyser_marche_json(donnees):
     actifs_faible_atr = get_actifs_filtres_atr(donnees, seuil_atr_min=1.0)
     liste_exclus = [a['nom'] for a in actifs_faible_atr]
 
-    # Enrichir les données avec les indicateurs RSI/MACD calculés
-    donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
+    # Enrichir les données avec les indicateurs RSI/MACD calculés (si pas déjà fait)
+    if 'indicateurs_calcules' in donnees:
+        donnees_enrichies = donnees  # Déjà enrichies
+    else:
+        donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
 
     # Formater les données pour le prompt
     donnees_texte = json.dumps(donnees_enrichies, ensure_ascii=False, indent=2)
@@ -3133,25 +3158,53 @@ def enregistrer_recommandation(trade_data):
                 avertissements_coherence.append(
                     f"🔄 CORRECTION DIRECTION: LONG→SHORT (stop {stop} >= entrée {entree})"
                 )
-                print(f"⚠️ [{symbole if 'symbole' in dir() else 'N/A'}] Trade LONG incohérent: stop ({stop}) >= entrée ({entree}), AUTO-CORRIGÉ en SHORT")
+                print(f"⚠️ [{trade_data.get('symbole', 'N/A')}] Trade LONG incohérent: stop ({stop}) >= entrée ({entree}), AUTO-CORRIGÉ en SHORT")
                 direction = 'SHORT'
                 direction_corrigee = True
             elif direction == 'SHORT' and stop <= entree:
                 avertissements_coherence.append(
                     f"🔄 CORRECTION DIRECTION: SHORT→LONG (stop {stop} <= entrée {entree})"
                 )
-                print(f"⚠️ [{symbole if 'symbole' in dir() else 'N/A'}] Trade SHORT incohérent: stop ({stop}) <= entrée ({entree}), AUTO-CORRIGÉ en LONG")
+                print(f"⚠️ [{trade_data.get('symbole', 'N/A')}] Trade SHORT incohérent: stop ({stop}) <= entrée ({entree}), AUTO-CORRIGÉ en LONG")
                 direction = 'LONG'
                 direction_corrigee = True
 
-        # Validation cohérence TP
+        # Validation cohérence TP avec auto-correction
+        tp2 = float(trade_data.get('tp2', 0) or 0)
+        tp_corrige = False
+
         if entree > 0 and tp1 > 0:
             if direction == 'LONG' and tp1 < entree:
-                avertissements_coherence.append(f"⚠️ TP1 ({tp1}) < entrée ({entree}) pour LONG")
-                print(f"⚠️ Trade LONG: TP1 ({tp1}) < entrée ({entree}), incohérent - TRADE SUSPECT")
+                # Auto-correction: inverser TP1 par rapport à l'entrée
+                ecart = entree - tp1
+                tp1_corrige = entree + ecart
+                avertissements_coherence.append(f"🔄 CORRECTION TP1: {tp1} → {tp1_corrige} (LONG)")
+                print(f"⚠️ Trade LONG: TP1 ({tp1}) < entrée ({entree}), AUTO-CORRIGÉ → {tp1_corrige}")
+                tp1 = tp1_corrige
+                tp_corrige = True
+                # Corriger aussi TP2 si présent et incohérent
+                if tp2 > 0 and tp2 < entree:
+                    ecart2 = entree - tp2
+                    tp2 = entree + ecart2
+                    avertissements_coherence.append(f"🔄 CORRECTION TP2 → {tp2}")
             elif direction == 'SHORT' and tp1 > entree:
-                avertissements_coherence.append(f"⚠️ TP1 ({tp1}) > entrée ({entree}) pour SHORT")
-                print(f"⚠️ Trade SHORT: TP1 ({tp1}) > entrée ({entree}), incohérent - TRADE SUSPECT")
+                # Auto-correction: inverser TP1 par rapport à l'entrée
+                ecart = tp1 - entree
+                tp1_corrige = entree - ecart
+                avertissements_coherence.append(f"🔄 CORRECTION TP1: {tp1} → {tp1_corrige} (SHORT)")
+                print(f"⚠️ Trade SHORT: TP1 ({tp1}) > entrée ({entree}), AUTO-CORRIGÉ → {tp1_corrige}")
+                tp1 = tp1_corrige
+                tp_corrige = True
+                # Corriger aussi TP2 si présent et incohérent
+                if tp2 > 0 and tp2 > entree:
+                    ecart2 = tp2 - entree
+                    tp2 = entree - ecart2
+                    avertissements_coherence.append(f"🔄 CORRECTION TP2 → {tp2}")
+
+        # Mettre à jour les valeurs dans trade_data si corrigées
+        if tp_corrige:
+            trade_data['tp1'] = tp1
+            trade_data['tp2'] = tp2
 
         # Stocker les avertissements dans la justification si présents
         if avertissements_coherence:
@@ -6389,7 +6442,8 @@ def api_lancer_analyse():
 
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
         donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
-        analyse = analyser_marche_json(donnees)
+        # Passer les données enrichies pour éviter double calcul dans analyser_marche_json
+        analyse = analyser_marche_json(donnees_enrichies)
 
         if analyse:
             # Sauvegarder l'analyse
@@ -6397,10 +6451,46 @@ def api_lancer_analyse():
             sauvegarder_analyse('intraday', analyse, marche_type)
 
             # Enregistrer les opportunités comme trades (enrichies avec données réelles)
+            # Avec validation: conviction >= 3 et ratio R:R >= 1.5
             indicateurs = donnees_enrichies.get('indicateurs_calcules', {})
+            opportunites_valides = 0
+            opportunites_rejetees = 0
+
             for opp in analyse.get('opportunites', []):
+                # Validation 1: Conviction >= 3
+                conviction = opp.get('conviction_score', 0)
+                if conviction < 3:
+                    print(f"⚠️ [{opp.get('symbole', 'N/A')}] Opportunité rejetée: conviction {conviction} < 3")
+                    opportunites_rejetees += 1
+                    continue
+
+                # Validation 2: Ratio R:R >= 1.5
+                entree = float(opp.get('entree', 0) or 0)
+                stop = float(opp.get('stop', 0) or 0)
+                tp1 = float(opp.get('tp1', 0) or 0)
+                direction = opp.get('direction', 'LONG').upper()
+
+                if entree > 0 and stop > 0 and tp1 > 0:
+                    if direction == 'LONG':
+                        risque = entree - stop
+                        reward = tp1 - entree
+                    else:  # SHORT
+                        risque = stop - entree
+                        reward = entree - tp1
+
+                    if risque > 0:
+                        ratio_rr_calc = reward / risque
+                        if ratio_rr_calc < 1.5:
+                            print(f"⚠️ [{opp.get('symbole', 'N/A')}] Opportunité rejetée: R:R {ratio_rr_calc:.2f} < 1.5")
+                            opportunites_rejetees += 1
+                            continue
+
                 opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees, indicateurs)
                 enregistrer_recommandation(opp_enrichie)
+                opportunites_valides += 1
+
+            if opportunites_rejetees > 0:
+                print(f"📊 Bilan opportunités: {opportunites_valides} validées, {opportunites_rejetees} rejetées")
 
             return jsonify({
                 'success': True,
