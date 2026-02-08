@@ -7088,42 +7088,70 @@ def api_lancer_analyse():
             indicateurs = donnees_enrichies.get('indicateurs_calcules', {})
             opportunites_valides = 0
             opportunites_rejetees = 0
+            symboles_traites = set()  # Déduplication
+
+            # Récupérer le régime de marché actuel pour adapter les validations
+            vix_actuel = get_vix_level()
+            regime_actuel, _, _ = get_regime_marche(vix_actuel)
+
+            # Conviction minimale adaptée au régime de marché
+            conviction_min_par_regime = {
+                'CALME': 2,      # Marché calme: plus souple
+                'NORMAL': 3,     # Standard
+                'VOLATILE': 4,   # Exiger plus de conviction
+                'EXTREME': 5     # Uniquement conviction max
+            }
+            conviction_min = conviction_min_par_regime.get(regime_actuel, 3)
+
+            # Liste des actifs exclus pour validation ATR
+            actifs_exclus_atr = set(a['nom'] for a in get_actifs_filtres_atr(donnees_enrichies, seuil_atr_min=1.0))
 
             for opp in analyse.get('opportunites', []):
-                # Validation 1: Conviction >= 3
-                conviction = opp.get('conviction_score', 0)
-                if conviction < 3:
-                    print(f"⚠️ [{opp.get('symbole', 'N/A')}] Opportunité rejetée: conviction {conviction} < 3")
+                symbole = opp.get('symbole', opp.get('actif', 'N/A'))
+                actif_nom = opp.get('actif', '')
+
+                # Validation 0: Déduplication - skip si déjà traité
+                if symbole in symboles_traites:
+                    print(f"⚠️ [{symbole}] Opportunité dupliquée ignorée")
+                    continue
+
+                # Validation 1: ATR - Claude a pu ignorer les exclusions
+                if actif_nom in actifs_exclus_atr or symbole in actifs_exclus_atr:
+                    print(f"⚠️ [{symbole}] Opportunité rejetée: ATR < 1% (exclus)")
                     opportunites_rejetees += 1
                     continue
 
-                # Validation 2: Ratio R:R >= 1.5
-                entree = float(opp.get('entree', 0) or 0)
-                stop = float(opp.get('stop', 0) or 0)
-                tp1 = float(opp.get('tp1', 0) or 0)
-                direction = opp.get('direction', 'LONG').upper()
+                # Validation 2: Conviction adaptée au régime
+                # Si conviction manquante, estimer basé sur d'autres indicateurs
+                conviction = opp.get('conviction_score')
+                if conviction is None:
+                    # Estimer conviction basée sur confluence/alignement
+                    confluence = opp.get('confluence_score', 5)
+                    alignement = opp.get('alignement_tf', 1)
+                    conviction = min(5, max(1, (confluence // 2) + alignement))
+                    opp['conviction_score'] = conviction
+                    print(f"ℹ️ [{symbole}] Conviction estimée: {conviction} (confluence={confluence}, alignement={alignement})")
 
-                if entree > 0 and stop > 0 and tp1 > 0:
-                    if direction == 'LONG':
-                        risque = entree - stop
-                        reward = tp1 - entree
-                    else:  # SHORT
-                        risque = stop - entree
-                        reward = entree - tp1
+                if conviction < conviction_min:
+                    print(f"⚠️ [{symbole}] Opportunité rejetée: conviction {conviction} < {conviction_min} (régime {regime_actuel})")
+                    opportunites_rejetees += 1
+                    continue
 
-                    if risque > 0:
-                        ratio_rr_calc = reward / risque
-                        if ratio_rr_calc < 1.5:
-                            print(f"⚠️ [{opp.get('symbole', 'N/A')}] Opportunité rejetée: R:R {ratio_rr_calc:.2f} < 1.5")
-                            opportunites_rejetees += 1
-                            continue
+                # Validation 3: Ratio R:R délégué à valider_opportunite (seuils adaptatifs)
+                # On injecte le régime pour que valider_opportunite utilise le bon seuil
+                opp['regime_marche'] = regime_actuel
 
-                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees, indicateurs)
-                enregistrer_recommandation(opp_enrichie)
-                opportunites_valides += 1
+                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees_enrichies, indicateurs)
+                result = enregistrer_recommandation(opp_enrichie)
 
-            if opportunites_rejetees > 0:
-                print(f"📊 Bilan opportunités: {opportunites_valides} validées, {opportunites_rejetees} rejetées")
+                if result:
+                    symboles_traites.add(symbole)
+                    opportunites_valides += 1
+                else:
+                    opportunites_rejetees += 1
+
+            if opportunites_rejetees > 0 or opportunites_valides > 0:
+                print(f"📊 Bilan opportunités (régime {regime_actuel}): {opportunites_valides} validées, {opportunites_rejetees} rejetées")
 
             return jsonify({
                 'success': True,
