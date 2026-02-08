@@ -1569,11 +1569,102 @@ def valider_opportunite(opp):
         erreurs.append(f"Ratio R:R insuffisant: {ratio_rr:.2f} (minimum {rr_minimum} en régime {regime_marche})")
         return False, None, avertissements, erreurs
 
+    # === VALIDATION OBJECTIF 0.7% ===
+    # Calculer le gain cible en pourcentage
+    if direction == 'LONG':
+        gain_cible_pct = ((tp1 - entree) / entree) * 100
+    else:
+        gain_cible_pct = ((entree - tp1) / entree) * 100
+
+    # Avertir si gain cible < 0.7% (objectif minimum day trading)
+    if gain_cible_pct < 0.7:
+        avertissements.append(f"Gain cible faible: {gain_cible_pct:.2f}% < 0.7% objectif")
+
+    # Validation ATR: le gain cible ne doit pas dépasser 1.5x l'ATR daily
+    # (sinon le TP est irréaliste pour la volatilité de l'actif)
+    atr_pct = opp.get('atr_pct', 0)
+    if atr_pct and atr_pct > 0:
+        atr_max_gain = atr_pct * 1.5  # Max 1.5x ATR daily réaliste en intraday
+        if gain_cible_pct > atr_max_gain:
+            avertissements.append(f"TP ambitieux: {gain_cible_pct:.2f}% > {atr_max_gain:.2f}% (1.5x ATR)")
+
+    # Validation volume relatif: éviter les actifs peu liquides
+    volume_relatif = opp.get('volume_relatif', 100)
+    if volume_relatif and volume_relatif < 50:
+        avertissements.append(f"Volume faible: {volume_relatif:.0f}% < 50% moyenne")
+
+    # === VALIDATION HEURES DE MARCHÉ ===
+    # Avertir si le marché n'est pas ouvert (trades à planifier, pas exécuter immédiatement)
+    symbole = opp.get('symbole') or opp.get('nom', '')
+    if symbole:
+        maintenant = get_paris_time()
+        heure_decimal = maintenant.hour + maintenant.minute / 60
+        jour_semaine = maintenant.weekday()  # 0=Lundi, 6=Dimanche
+
+        # Weekend: tous les marchés fermés (sauf crypto si implémenté plus tard)
+        if jour_semaine >= 5:
+            avertissements.append(f"Weekend: marchés fermés, trade à exécuter lundi")
+        else:
+            # Déterminer le type de marché
+            categorie = get_categorie_actif(symbole)
+
+            if categorie == 'action_eu' or symbole in ['^FCHI', '^GDAXI', '^STOXX50E']:
+                # Euronext/Xetra: 9h00-17h30 Paris
+                if heure_decimal < 9 or heure_decimal >= 17.5:
+                    if heure_decimal >= 8:
+                        avertissements.append(f"Marché EU pré-ouverture: ouverture à 9h00")
+                    elif heure_decimal >= 17.5:
+                        avertissements.append(f"Marché EU fermé: réouverture demain 9h00")
+                    else:
+                        avertissements.append(f"Marché EU fermé (nuit)")
+                elif heure_decimal >= 17:
+                    avertissements.append(f"Marché EU bientôt fermé: 30min restantes")
+
+            elif categorie == 'action_us' or symbole in ['^GSPC', '^IXIC', '^DJI']:
+                # NYSE/NASDAQ: 15h30-22h00 Paris (9:30-16:00 ET, +6h normalement)
+                # Calculer dynamiquement avec pytz
+                tz_ny = pytz.timezone('America/New_York')
+                now_ny = datetime.now(tz_ny)
+                now_paris = datetime.now(TZ_PARIS)
+                diff_heures = (now_paris.hour - now_ny.hour) % 24
+                if diff_heures > 12:
+                    diff_heures -= 24
+
+                us_open = 9.5 + diff_heures  # 9:30 NY en heure Paris
+                us_close = 16 + diff_heures  # 16:00 NY en heure Paris
+
+                if heure_decimal < us_open or heure_decimal >= us_close:
+                    if heure_decimal >= (us_open - 1.5) and heure_decimal < us_open:
+                        avertissements.append(f"Marché US pré-ouverture: ouverture à {us_open:.0f}h30 Paris")
+                    elif heure_decimal >= us_close:
+                        avertissements.append(f"Marché US fermé: réouverture demain {us_open:.0f}h30 Paris")
+                    else:
+                        avertissements.append(f"Marché US fermé (hors heures)")
+                elif heure_decimal >= (us_close - 0.5):
+                    avertissements.append(f"Marché US bientôt fermé: 30min restantes")
+
+            elif categorie == 'forex':
+                # Forex: 24h du dimanche 23h au vendredi 22h Paris
+                # Dimanche: fermé avant 23h
+                if jour_semaine == 6:  # Dimanche
+                    if heure_decimal < 23:
+                        avertissements.append(f"Forex fermé jusqu'à 23h (ouverture Sydney)")
+                # Vendredi: fermeture à 22h
+                elif jour_semaine == 4 and heure_decimal >= 21:
+                    avertissements.append(f"Forex fermeture imminente vendredi 22h")
+
+            # Commodités/Futures: horaires variables, pas de warning systématique
+            # mais attention aux heures de faible liquidité
+            elif categorie == 'commodite' and symbole.endswith('=F'):
+                if heure_decimal < 8 or heure_decimal >= 22:
+                    avertissements.append(f"Futures: liquidité réduite hors heures principales")
+
     # Opportunité valide - construire la version corrigée
     opp_valide = opp.copy()
     opp_valide['direction'] = direction
     opp_valide['ratio_rr_calcule'] = round(ratio_rr, 2)
     opp_valide['rr_minimum_applique'] = rr_minimum
+    opp_valide['gain_cible_pct'] = round(gain_cible_pct, 2)
 
     return True, opp_valide, avertissements, []
 
