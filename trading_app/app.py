@@ -1262,6 +1262,273 @@ def enrichir_donnees_avec_indicateurs(donnees_marche):
     return donnees_enrichies
 
 # ============================================================================
+# VALIDATION JSON ET OPPORTUNITÉS
+# ============================================================================
+
+def extraire_json_claude(reponse):
+    """
+    Extrait et valide le JSON de la réponse Claude de manière robuste.
+
+    Problème résolu: la regex \{[\s\S]*\} capture tout entre le premier
+    et dernier {}, ce qui peut inclure du texte invalide.
+
+    Retourne: (dict, erreur) - dict si succès, None + message si échec
+    """
+    if not reponse:
+        return None, "Réponse vide"
+
+    # Nettoyer la réponse (enlever markdown code blocks si présents)
+    reponse_clean = reponse.strip()
+    if reponse_clean.startswith('```json'):
+        reponse_clean = reponse_clean[7:]
+    if reponse_clean.startswith('```'):
+        reponse_clean = reponse_clean[3:]
+    if reponse_clean.endswith('```'):
+        reponse_clean = reponse_clean[:-3]
+    reponse_clean = reponse_clean.strip()
+
+    # Essai 1: Parser directement si c'est du JSON pur
+    if reponse_clean.startswith('{'):
+        try:
+            # Trouver la fin du JSON en comptant les accolades
+            depth = 0
+            end_idx = 0
+            for i, char in enumerate(reponse_clean):
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_idx = i + 1
+                        break
+
+            if end_idx > 0:
+                json_str = reponse_clean[:end_idx]
+                result = json.loads(json_str)
+                return result, None
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse error (essai 1): {e}")
+
+    # Essai 2: Chercher un bloc JSON dans le texte
+    try:
+        # Trouver le premier { et son } correspondant
+        start_idx = reponse_clean.find('{')
+        if start_idx == -1:
+            return None, "Aucun JSON trouvé dans la réponse"
+
+        depth = 0
+        end_idx = 0
+        for i in range(start_idx, len(reponse_clean)):
+            char = reponse_clean[i]
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    end_idx = i + 1
+                    break
+
+        if end_idx > start_idx:
+            json_str = reponse_clean[start_idx:end_idx]
+            result = json.loads(json_str)
+            return result, None
+    except json.JSONDecodeError as e:
+        return None, f"JSON invalide: {e}"
+
+    return None, "Impossible d'extraire le JSON"
+
+
+def valider_structure_analyse(result):
+    """
+    Valide que le JSON d'analyse contient tous les champs requis.
+
+    Retourne: (bool, list_erreurs)
+    """
+    erreurs = []
+
+    # Champs obligatoires niveau racine
+    champs_requis = ['contexte_marche', 'opportunites']
+    for champ in champs_requis:
+        if champ not in result:
+            erreurs.append(f"Champ manquant: {champ}")
+
+    # Vérifier que opportunites est une liste
+    if 'opportunites' in result:
+        if not isinstance(result['opportunites'], list):
+            erreurs.append("'opportunites' doit être une liste")
+
+    return len(erreurs) == 0, erreurs
+
+
+def valider_opportunite(opp):
+    """
+    Valide une opportunité individuelle de manière stricte.
+
+    Retourne: (bool valide, dict opp_corrigee, list avertissements, list erreurs_bloquantes)
+    """
+    avertissements = []
+    erreurs = []
+
+    # Champs obligatoires
+    champs_requis = ['entree', 'stop', 'tp1', 'direction']
+    for champ in champs_requis:
+        if champ not in opp or opp[champ] is None:
+            erreurs.append(f"Champ obligatoire manquant: {champ}")
+
+    if erreurs:
+        return False, None, avertissements, erreurs
+
+    # Conversion et validation des prix
+    try:
+        entree = float(opp.get('entree', 0) or 0)
+        stop = float(opp.get('stop', 0) or 0)
+        tp1 = float(opp.get('tp1', 0) or 0)
+        tp2 = float(opp.get('tp2', 0) or 0)
+    except (ValueError, TypeError) as e:
+        erreurs.append(f"Conversion prix impossible: {e}")
+        return False, None, avertissements, erreurs
+
+    # Validation prix > 0
+    if entree <= 0:
+        erreurs.append(f"Prix entrée invalide: {entree}")
+    if stop <= 0:
+        erreurs.append(f"Prix stop invalide: {stop}")
+    if tp1 <= 0:
+        erreurs.append(f"Prix TP1 invalide: {tp1}")
+
+    if erreurs:
+        return False, None, avertissements, erreurs
+
+    # Validation direction
+    direction = str(opp.get('direction', '')).upper().strip()
+    if direction not in ['LONG', 'SHORT']:
+        erreurs.append(f"Direction invalide: '{opp.get('direction')}' (attendu: LONG ou SHORT)")
+        return False, None, avertissements, erreurs
+
+    # Validation cohérence STOP/ENTREE/TP (REJET au lieu d'auto-correction)
+    if direction == 'LONG':
+        if stop >= entree:
+            erreurs.append(f"LONG incohérent: stop ({stop}) >= entrée ({entree})")
+        if tp1 <= entree:
+            erreurs.append(f"LONG incohérent: TP1 ({tp1}) <= entrée ({entree})")
+        if tp2 > 0 and tp2 <= tp1:
+            avertissements.append(f"TP2 ({tp2}) <= TP1 ({tp1}), TP2 ignoré")
+    else:  # SHORT
+        if stop <= entree:
+            erreurs.append(f"SHORT incohérent: stop ({stop}) <= entrée ({entree})")
+        if tp1 >= entree:
+            erreurs.append(f"SHORT incohérent: TP1 ({tp1}) >= entrée ({entree})")
+        if tp2 > 0 and tp2 >= tp1:
+            avertissements.append(f"TP2 ({tp2}) >= TP1 ({tp1}), TP2 ignoré")
+
+    if erreurs:
+        return False, None, avertissements, erreurs
+
+    # Calcul et validation du ratio R:R
+    if direction == 'LONG':
+        risque = entree - stop
+        reward = tp1 - entree
+    else:
+        risque = stop - entree
+        reward = entree - tp1
+
+    if risque <= 0:
+        erreurs.append(f"Risque invalide: {risque}")
+        return False, None, avertissements, erreurs
+
+    ratio_rr = reward / risque
+    if ratio_rr < 1.5:
+        erreurs.append(f"Ratio R:R insuffisant: {ratio_rr:.2f} (minimum 1.5)")
+        return False, None, avertissements, erreurs
+
+    # Opportunité valide - construire la version corrigée
+    opp_valide = opp.copy()
+    opp_valide['direction'] = direction
+    opp_valide['ratio_rr_calcule'] = round(ratio_rr, 2)
+
+    return True, opp_valide, avertissements, []
+
+
+def analyser_cloture_intraday(hist, direction, entree, stop, tp1, tp2):
+    """
+    Analyse la clôture d'un trade en tenant compte:
+    - De l'ordre chronologique des bougies
+    - Du slippage potentiel (prix réel vs niveau théorique)
+    - De la priorité temporelle intra-bougie
+
+    Retourne: (resultat, prix_sortie, pnl_pct, bougie_idx) ou (None, None, None, None)
+    """
+    if hist is None or hist.empty:
+        return None, None, None, None
+
+    # S'assurer que les bougies sont triées chronologiquement
+    hist = hist.sort_index()
+
+    for idx, row in hist.iterrows():
+        high = row['High']
+        low = row['Low']
+        open_p = row['Open']
+        close_p = row['Close']
+
+        if direction == 'LONG':
+            # Pour un LONG: Stop si Low <= stop, TP si High >= tp
+            stop_touche = stop > 0 and low <= stop
+            tp2_touche = tp2 > 0 and high >= tp2
+            tp1_touche = tp1 > 0 and high >= tp1
+
+            # Déterminer l'ordre probable intra-bougie
+            # Si les deux sont touchés dans la même bougie, utiliser Open->Close
+            if stop_touche and (tp1_touche or tp2_touche):
+                # Heuristique: si Close > Open, le mouvement principal était haussier
+                # donc TP probablement touché avant le dump final
+                if close_p > open_p:
+                    # Mouvement haussier: TP probablement d'abord
+                    if tp2_touche:
+                        return 'TP2', tp2, ((tp2 - entree) / entree) * 100, idx
+                    return 'TP1', tp1, ((tp1 - entree) / entree) * 100, idx
+                else:
+                    # Mouvement baissier: Stop probablement d'abord
+                    # Slippage: utiliser le Low réel si < stop
+                    prix_sortie_reel = min(low, stop)
+                    return 'STOP', prix_sortie_reel, ((prix_sortie_reel - entree) / entree) * 100, idx
+
+            # Un seul niveau touché
+            if stop_touche:
+                prix_sortie_reel = min(low, stop)  # Slippage potentiel
+                return 'STOP', prix_sortie_reel, ((prix_sortie_reel - entree) / entree) * 100, idx
+            if tp2_touche:
+                return 'TP2', tp2, ((tp2 - entree) / entree) * 100, idx
+            if tp1_touche:
+                return 'TP1', tp1, ((tp1 - entree) / entree) * 100, idx
+
+        else:  # SHORT
+            stop_touche = stop > 0 and high >= stop
+            tp2_touche = tp2 > 0 and low <= tp2
+            tp1_touche = tp1 > 0 and low <= tp1
+
+            if stop_touche and (tp1_touche or tp2_touche):
+                if close_p < open_p:
+                    # Mouvement baissier: TP probablement d'abord
+                    if tp2_touche:
+                        return 'TP2', tp2, ((entree - tp2) / entree) * 100, idx
+                    return 'TP1', tp1, ((entree - tp1) / entree) * 100, idx
+                else:
+                    # Mouvement haussier: Stop probablement d'abord
+                    prix_sortie_reel = max(high, stop)
+                    return 'STOP', prix_sortie_reel, ((entree - prix_sortie_reel) / entree) * 100, idx
+
+            if stop_touche:
+                prix_sortie_reel = max(high, stop)  # Slippage potentiel
+                return 'STOP', prix_sortie_reel, ((entree - prix_sortie_reel) / entree) * 100, idx
+            if tp2_touche:
+                return 'TP2', tp2, ((entree - tp2) / entree) * 100, idx
+            if tp1_touche:
+                return 'TP1', tp1, ((entree - tp1) / entree) * 100, idx
+
+    return None, None, None, None
+
+
+# ============================================================================
 # BASE DE DONNÉES
 # ============================================================================
 
@@ -2752,12 +3019,13 @@ Retourne UNIQUEMENT les news pertinentes pour le trading en JSON."""
         )
 
         reponse = message.content[0].text
-        match = re.search(r'\{[\s\S]*\}', reponse)
+        result, erreur = extraire_json_claude(reponse)
 
-        if match:
-            result = json.loads(match.group())
-            return result.get('news_analysees', [])
-        return []
+        if erreur:
+            logger.warning(f"Extraction JSON news échouée: {erreur}")
+            return []
+
+        return result.get('news_analysees', [])
     except Exception as e:
         print(f"⚠️ Erreur analyse news: {e}")
         return []
@@ -3036,15 +3304,23 @@ RÈGLES IMPÉRATIVES:
 
         reponse = message.content[0].text
 
-        # Extraire le JSON
-        match = re.search(r'\{[\s\S]*\}', reponse)
-        if match:
-            result = json.loads(match.group())
-            # Ajouter l'alerte macro si présente
-            if alerte_macro and not result.get('alerte_macro'):
-                result['alerte_macro'] = alerte_macro
-            return result
-        return None
+        # Extraire le JSON avec la nouvelle fonction robuste
+        result, erreur = extraire_json_claude(reponse)
+        if erreur:
+            logger.error(f"Extraction JSON échouée: {erreur}")
+            return None
+
+        # Valider la structure
+        valide, erreurs_structure = valider_structure_analyse(result)
+        if not valide:
+            logger.error(f"Structure JSON invalide: {erreurs_structure}")
+            return None
+
+        # Ajouter l'alerte macro si présente
+        if alerte_macro and not result.get('alerte_macro'):
+            result['alerte_macro'] = alerte_macro
+
+        return result
     except Exception as e:
         logger.error(f"Erreur analyse: {e}")
         return None
@@ -3073,10 +3349,11 @@ Génère un résumé de clôture complet en JSON selon le format demandé."""
         )
 
         reponse = message.content[0].text
-        match = re.search(r'\{[\s\S]*\}', reponse)
-        if match:
-            return json.loads(match.group())
-        return None
+        result, erreur = extraire_json_claude(reponse)
+        if erreur:
+            logger.error(f"Extraction JSON clôture échouée: {erreur}")
+            return None
+        return result
     except Exception as e:
         logger.error(f"Erreur clôture: {e}")
         return None
@@ -3129,87 +3406,40 @@ def enrichir_opportunite_avec_donnees_marche(opportunite, donnees_marche, indica
     return opp
 
 def enregistrer_recommandation(trade_data):
-    """Enregistre une recommandation de trade (avec fermeture DB garantie)"""
+    """Enregistre une recommandation de trade (avec fermeture DB garantie)
+
+    CHANGEMENT v2: Validation stricte au lieu d'auto-correction.
+    Les trades incohérents sont REJETÉS et loggés, pas corrigés silencieusement.
+    """
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         maintenant = get_paris_time()
 
-        # Déterminer la direction et valider la cohérence stop/entry
-        entree = float(trade_data.get('entree', 0) or 0)
-        stop = float(trade_data.get('stop', 0) or 0)
-        tp1 = float(trade_data.get('tp1', 0) or 0)
+        # VALIDATION STRICTE avec la nouvelle fonction
+        valide, opp_validee, avertissements, erreurs = valider_opportunite(trade_data)
 
-        if trade_data.get('direction'):
-            direction = trade_data.get('direction').upper()
-        elif stop > entree and entree > 0:
-            direction = 'SHORT'
-        else:
-            direction = 'LONG'
+        if not valide:
+            # Trade rejeté - logger les erreurs et retourner None
+            symbole = trade_data.get('symbole', trade_data.get('actif', 'N/A'))
+            logger.error(f"❌ Trade REJETÉ [{symbole}]: {'; '.join(erreurs)}")
+            print(f"❌ Trade REJETÉ [{symbole}]: {'; '.join(erreurs)}")
+            if conn:
+                conn.close()
+            return None
 
-        # Validation cohérence direction/stop/entry avec logging explicite
-        direction_corrigee = False
-        direction_originale = direction
-        avertissements_coherence = []
+        # Logger les avertissements (non bloquants)
+        if avertissements:
+            symbole = trade_data.get('symbole', trade_data.get('actif', 'N/A'))
+            logger.warning(f"⚠️ Trade [{symbole}] avertissements: {'; '.join(avertissements)}")
 
-        if entree > 0 and stop > 0:
-            if direction == 'LONG' and stop >= entree:
-                avertissements_coherence.append(
-                    f"🔄 CORRECTION DIRECTION: LONG→SHORT (stop {stop} >= entrée {entree})"
-                )
-                print(f"⚠️ [{trade_data.get('symbole', 'N/A')}] Trade LONG incohérent: stop ({stop}) >= entrée ({entree}), AUTO-CORRIGÉ en SHORT")
-                direction = 'SHORT'
-                direction_corrigee = True
-            elif direction == 'SHORT' and stop <= entree:
-                avertissements_coherence.append(
-                    f"🔄 CORRECTION DIRECTION: SHORT→LONG (stop {stop} <= entrée {entree})"
-                )
-                print(f"⚠️ [{trade_data.get('symbole', 'N/A')}] Trade SHORT incohérent: stop ({stop}) <= entrée ({entree}), AUTO-CORRIGÉ en LONG")
-                direction = 'LONG'
-                direction_corrigee = True
-
-        # Validation cohérence TP avec auto-correction
-        tp2 = float(trade_data.get('tp2', 0) or 0)
-        tp_corrige = False
-
-        if entree > 0 and tp1 > 0:
-            if direction == 'LONG' and tp1 < entree:
-                # Auto-correction: inverser TP1 par rapport à l'entrée
-                ecart = entree - tp1
-                tp1_corrige = entree + ecart
-                avertissements_coherence.append(f"🔄 CORRECTION TP1: {tp1} → {tp1_corrige} (LONG)")
-                print(f"⚠️ Trade LONG: TP1 ({tp1}) < entrée ({entree}), AUTO-CORRIGÉ → {tp1_corrige}")
-                tp1 = tp1_corrige
-                tp_corrige = True
-                # Corriger aussi TP2 si présent et incohérent
-                if tp2 > 0 and tp2 < entree:
-                    ecart2 = entree - tp2
-                    tp2 = entree + ecart2
-                    avertissements_coherence.append(f"🔄 CORRECTION TP2 → {tp2}")
-            elif direction == 'SHORT' and tp1 > entree:
-                # Auto-correction: inverser TP1 par rapport à l'entrée
-                ecart = tp1 - entree
-                tp1_corrige = entree - ecart
-                avertissements_coherence.append(f"🔄 CORRECTION TP1: {tp1} → {tp1_corrige} (SHORT)")
-                print(f"⚠️ Trade SHORT: TP1 ({tp1}) > entrée ({entree}), AUTO-CORRIGÉ → {tp1_corrige}")
-                tp1 = tp1_corrige
-                tp_corrige = True
-                # Corriger aussi TP2 si présent et incohérent
-                if tp2 > 0 and tp2 > entree:
-                    ecart2 = tp2 - entree
-                    tp2 = entree - ecart2
-                    avertissements_coherence.append(f"🔄 CORRECTION TP2 → {tp2}")
-
-        # Mettre à jour les valeurs dans trade_data si corrigées
-        if tp_corrige:
-            trade_data['tp1'] = tp1
-            trade_data['tp2'] = tp2
-
-        # Stocker les avertissements dans la justification si présents
-        if avertissements_coherence:
-            justification_originale = trade_data.get('justification', '')
-            trade_data['justification'] = f"[COHERENCE: {'; '.join(avertissements_coherence)}] {justification_originale}"
+        # Utiliser les données validées
+        entree = float(opp_validee.get('entree', 0))
+        stop = float(opp_validee.get('stop', 0))
+        tp1 = float(opp_validee.get('tp1', 0))
+        tp2 = float(opp_validee.get('tp2', 0) or 0)
+        direction = opp_validee.get('direction', 'LONG')
 
         # Trouver le symbole et la catégorie
         symbole = trade_data.get('symbole', '')
@@ -3500,43 +3730,11 @@ def verifier_resultats_trades():
 
                 nb_checks = (trade.get('nb_checks') or 0) + 1
 
-                # Parcourir chronologiquement chaque bougie pour vérifier TP/Stop
-                for idx, row in hist.iterrows():
-                    high = row['High']
-                    low = row['Low']
-
-                    if direction == 'LONG':
-                        if stop > 0 and low <= stop:
-                            resultat = 'STOP'
-                            prix_sortie = stop
-                            pnl_pct = ((stop - entree) / entree) * 100
-                            break
-                        elif tp2 > 0 and high >= tp2:
-                            resultat = 'TP2'
-                            prix_sortie = tp2
-                            pnl_pct = ((tp2 - entree) / entree) * 100
-                            break
-                        elif tp1 > 0 and high >= tp1:
-                            resultat = 'TP1'
-                            prix_sortie = tp1
-                            pnl_pct = ((tp1 - entree) / entree) * 100
-                            break
-                    else:
-                        if stop > 0 and high >= stop:
-                            resultat = 'STOP'
-                            prix_sortie = stop
-                            pnl_pct = ((entree - stop) / entree) * 100
-                            break
-                        elif tp2 > 0 and low <= tp2:
-                            resultat = 'TP2'
-                            prix_sortie = tp2
-                            pnl_pct = ((entree - tp2) / entree) * 100
-                            break
-                        elif tp1 > 0 and low <= tp1:
-                            resultat = 'TP1'
-                            prix_sortie = tp1
-                            pnl_pct = ((entree - tp1) / entree) * 100
-                            break
+                # NOUVELLE LOGIQUE: Utiliser analyser_cloture_intraday
+                # Prend en compte: ordre chronologique, slippage, priorité intra-bougie
+                resultat, prix_sortie, pnl_pct, bougie_cloture = analyser_cloture_intraday(
+                    hist, direction, entree, stop, tp1, tp2
+                )
 
                 if resultat:
                     # Trade terminé - calculer durée
@@ -4366,11 +4564,11 @@ Sois direct et factuel, comme un trader pro."""
         )
 
         reponse = message.content[0].text
-        match = re.search(r'\{[\s\S]*\}', reponse)
-        if match:
-            result = json.loads(match.group())
-            return result.get('commentaires', {}), result.get('faits_marquants', [])
-        return {}, []
+        result, erreur = extraire_json_claude(reponse)
+        if erreur:
+            logger.warning(f"Extraction JSON journal échouée: {erreur}")
+            return {}, []
+        return result.get('commentaires', {}), result.get('faits_marquants', [])
     except Exception as e:
         logger.error(f"Erreur commentaires journal: {e}")
         return {}, []
@@ -4443,10 +4641,11 @@ Fais un bilan honnête de cette journée de trading. Qu'est-ce qui a fonctionné
         )
 
         reponse = message.content[0].text
-        match = re.search(r'\{[\s\S]*\}', reponse)
-        if match:
-            bilan = json.loads(match.group())
-
+        bilan, erreur = extraire_json_claude(reponse)
+        if erreur:
+            logger.warning(f"Extraction JSON bilan échouée: {erreur}")
+            return None
+        if bilan:
             # Sauvegarder le bilan
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -4968,11 +5167,13 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
         )
 
         reponse = message.content[0].text
-        match = re.search(r'\{[\s\S]*\}', reponse)
+        rapport, erreur = extraire_json_claude(reponse)
 
-        if match:
-            rapport = json.loads(match.group())
+        if erreur:
+            logger.warning(f"Extraction JSON rapport hebdo échouée: {erreur}")
+            return None
 
+        if rapport:
             # Sauvegarder le rapport
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
