@@ -650,6 +650,30 @@ let isRefreshingContext = false;  // Flag anti-boucle infinie
 let contextRefreshAttempts = 0;   // Compteur de tentatives
 const MAX_REFRESH_ATTEMPTS = 2;   // Maximum 2 tentatives par session
 
+// Fonction utilitaire fetch avec retry exponentiel
+async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+    const delays = [1000, 2000, 4000]; // 1s, 2s, 4s
+    let lastError;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch(url, options);
+            if (!response.ok && response.status >= 500) {
+                // Erreur serveur, retry possible
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return response;
+        } catch (error) {
+            lastError = error;
+            if (attempt < maxRetries) {
+                console.log(`Retry ${attempt + 1}/${maxRetries} pour ${url} dans ${delays[attempt]}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+            }
+        }
+    }
+    throw lastError;
+}
+
 // Initialisation
 document.addEventListener('DOMContentLoaded', function() {
     loadAllData();
@@ -678,6 +702,52 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Vérifier immédiatement si le contexte doit être rafraîchi
     setTimeout(checkAndRefreshContext, 5000);
+});
+
+// Cleanup des intervals pour éviter memory leak
+function cleanupIntervals() {
+    if (pulseInterval) {
+        clearInterval(pulseInterval);
+        pulseInterval = null;
+    }
+    if (newsInterval) {
+        clearInterval(newsInterval);
+        newsInterval = null;
+    }
+    if (contextInterval) {
+        clearInterval(contextInterval);
+        contextInterval = null;
+    }
+    console.log('Intervals nettoyés');
+}
+
+// Nettoyer à la fermeture de page
+window.addEventListener('beforeunload', cleanupIntervals);
+
+// Pause/resume des intervals quand l'onglet est caché/visible
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+        // Onglet caché - stopper les refreshs pour économiser ressources
+        cleanupIntervals();
+    } else {
+        // Onglet visible - relancer les refreshs
+        if (!pulseInterval) {
+            loadAllData(); // Refresh immédiat
+            pulseInterval = setInterval(refreshMarkets, 15000);
+            newsInterval = setInterval(refreshNews, 600000);
+            contextInterval = setInterval(function() {
+                const now = new Date();
+                const hour = now.getHours();
+                const dayOfWeek = now.getDay();
+                if (dayOfWeek === 0 || dayOfWeek === 6) return;
+                if (isRefreshingContext) return;
+                contextRefreshAttempts = 0;
+                if (hour >= 7 && hour < 23) {
+                    actualiserContexte();
+                }
+            }, 3600000);
+        }
+    }
 });
 
 async function checkAndRefreshContext() {
@@ -771,11 +841,10 @@ async function actualiserContexte() {
 }
 
 async function loadAllData() {
-    // D'abord charger les données marché pour détecter le weekend
-    await refreshMarkets();
-
-    // Ensuite charger le reste en parallèle
+    // OPTIMISÉ: Charger toutes les données en parallèle
+    // Le weekend est détecté par chaque API côté serveur
     await Promise.all([
+        refreshMarkets(),
         loadLastAnalysis(),
         refreshNews(),
         loadPremarket(),
@@ -880,13 +949,15 @@ async function loadQuickStats() {
                 html += '<div class="quick-stats-title">Par Conviction</div>';
                 for (const stat of data.par_conviction) {
                     const stars = '⭐'.repeat(stat.conviction_score || 0);
-                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
                     const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
                     html += `
                         <div class="quick-stats-row">
                             <span class="quick-stats-label">${stars || '☆'}</span>
                             <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${stat.nb})</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
                         </div>
                     `;
                 }
@@ -898,14 +969,16 @@ async function loadQuickStats() {
                 html += '<div class="quick-stats-section">';
                 html += '<div class="quick-stats-title">Par Régime</div>';
                 for (const stat of data.par_regime_marche) {
-                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
                     const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
                     const regimeIcon = {'CALME': '😌', 'NORMAL': '📊', 'VOLATILE': '⚡', 'EXTREME': '🔥'}[stat.regime_marche] || '📊';
                     html += `
                         <div class="quick-stats-row">
                             <span class="quick-stats-label">${regimeIcon} ${stat.regime_marche || 'N/A'}</span>
                             <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${stat.nb})</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
                         </div>
                     `;
                 }
@@ -917,13 +990,15 @@ async function loadQuickStats() {
                 html += '<div class="quick-stats-section">';
                 html += '<div class="quick-stats-title">Par Stratégie</div>';
                 for (const stat of data.par_strategie_entree) {
-                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
                     const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
                     html += `
                         <div class="quick-stats-row">
                             <span class="quick-stats-label">${stat.strategie_entree || 'N/A'}</span>
                             <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${stat.nb})</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
                         </div>
                     `;
                 }
@@ -935,14 +1010,16 @@ async function loadQuickStats() {
                 html += '<div class="quick-stats-section">';
                 html += '<div class="quick-stats-title">Par Jour</div>';
                 for (const stat of data.par_jour_semaine) {
-                    const winRate = stat.nb > 0 ? Math.round((stat.wins / stat.nb) * 100) : 0;
+                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
+                    const conclus = (stat.wins || 0) + (stat.losses || 0);
+                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
                     const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
                     const jourShort = (stat.jour_semaine || 'N/A').substring(0, 3);
                     html += `
                         <div class="quick-stats-row">
                             <span class="quick-stats-label">${jourShort}</span>
                             <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${stat.nb})</span>
+                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
                         </div>
                     `;
                 }
@@ -1476,7 +1553,8 @@ let isWeekendMode = false;
 
 async function refreshMarkets() {
     try {
-        const response = await fetch('/api/donnees-marche');
+        // OPTIMISÉ: Utiliser fetchWithRetry pour plus de résilience
+        const response = await fetchWithRetry('/api/donnees-marche');
         const data = await response.json();
 
         if (data.success) {
@@ -1498,7 +1576,7 @@ async function refreshMarkets() {
             console.error('API error:', data.error);
         }
     } catch (error) {
-        console.error('Erreur markets:', error);
+        console.error('Erreur markets après retries:', error);
         // Afficher message d'erreur réseau
         const container = document.getElementById('pulse-widget');
         container.innerHTML = '<div class="error-message">Erreur de connexion au serveur</div>';
@@ -1528,8 +1606,10 @@ function renderPulseWidget(weekendMsg) {
         if (d) {
             const isPositive = d.variation >= 0;
             const barWidth = Math.min(Math.abs(d.variation) * 15, 100);
-            // Forex (EUR/USD, etc.) = 4 décimales, autres = 2 décimales
-            const isForex = item.key.includes('/') && item.key.includes('USD');
+            // CORRIGÉ: Forex réel (EUR/USD, GBP/USD) = 4 décimales
+            // Exclure les métaux (Or, Argent) qui ont des prix élevés
+            const forexPairs = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'EURUSD', 'GBPUSD', 'USDJPY'];
+            const isForex = forexPairs.some(pair => item.key.includes(pair) || item.name === pair);
             const decimals = isForex ? 4 : 2;
             const priceFormatted = d.prix ? d.prix.toLocaleString('fr-FR', {minimumFractionDigits: decimals, maximumFractionDigits: decimals}) : '-';
 
@@ -1940,12 +2020,25 @@ function renderOpportunities(opportunities) {
 function calculateGaugePosition(opp) {
     const prix = parseFloat(opp.prix_actuel) || 0;
     const stop = parseFloat(opp.stop) || 0;
-    const tp2 = parseFloat(opp.tp2) || 0;
+    // CORRIGÉ: Fallback vers TP1 si TP2 absent
+    const target = parseFloat(opp.tp2) || parseFloat(opp.tp1) || 0;
+    const direction = (opp.direction || 'LONG').toUpperCase();
 
-    if (stop === 0 || tp2 === 0 || prix === 0) return 50;
+    if (stop === 0 || target === 0 || prix === 0) return 50;
 
-    const range = tp2 - stop;
-    const position = ((prix - stop) / range) * 100;
+    let position;
+    if (direction === 'SHORT') {
+        // SHORT: stop est au-dessus de l'entrée, target en dessous
+        // Position 0% = au stop (perte max), 100% = au target (gain max)
+        const range = stop - target;
+        if (range <= 0) return 50;
+        position = ((stop - prix) / range) * 100;
+    } else {
+        // LONG: stop est en dessous de l'entrée, target au-dessus
+        const range = target - stop;
+        if (range <= 0) return 50;
+        position = ((prix - stop) / range) * 100;
+    }
 
     return Math.max(5, Math.min(95, position));
 }

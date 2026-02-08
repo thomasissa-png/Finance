@@ -1531,14 +1531,26 @@ def valider_opportunite(opp):
         return False, None, avertissements, erreurs
 
     ratio_rr = reward / risque
-    if ratio_rr < 1.5:
-        erreurs.append(f"Ratio R:R insuffisant: {ratio_rr:.2f} (minimum 1.5)")
+
+    # R:R minimum adapté au régime de marché (VIX)
+    regime_marche = opp.get('regime_marche', 'NORMAL')
+    rr_min_par_regime = {
+        'CALME': 1.3,      # VIX < 15: marché calme, R:R plus souple
+        'NORMAL': 1.5,     # VIX 15-20: conditions standard
+        'VOLATILE': 1.8,   # VIX 20-30: exiger plus de reward pour le risque
+        'EXTREME': 2.0     # VIX > 30: très sélectif
+    }
+    rr_minimum = rr_min_par_regime.get(regime_marche, 1.5)
+
+    if ratio_rr < rr_minimum:
+        erreurs.append(f"Ratio R:R insuffisant: {ratio_rr:.2f} (minimum {rr_minimum} en régime {regime_marche})")
         return False, None, avertissements, erreurs
 
     # Opportunité valide - construire la version corrigée
     opp_valide = opp.copy()
     opp_valide['direction'] = direction
     opp_valide['ratio_rr_calcule'] = round(ratio_rr, 2)
+    opp_valide['rr_minimum_applique'] = rr_minimum
 
     return True, opp_valide, avertissements, []
 
@@ -3519,6 +3531,11 @@ def enregistrer_recommandation(trade_data):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         maintenant = get_paris_time()
+
+        # Injecter le régime de marché actuel si non présent (pour validation R:R adaptatif)
+        if 'regime_marche' not in trade_data or not trade_data.get('regime_marche'):
+            regime, _, _ = get_regime_marche()
+            trade_data['regime_marche'] = regime
 
         # VALIDATION STRICTE avec la nouvelle fonction
         valide, opp_validee, avertissements, erreurs = valider_opportunite(trade_data)
