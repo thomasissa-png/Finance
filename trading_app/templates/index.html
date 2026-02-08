@@ -650,7 +650,7 @@ let isRefreshingContext = false;  // Flag anti-boucle infinie
 let contextRefreshAttempts = 0;   // Compteur de tentatives
 const MAX_REFRESH_ATTEMPTS = 2;   // Maximum 2 tentatives par session
 
-// Fonction utilitaire fetch avec retry exponentiel
+// Fonction utilitaire fetch avec retry exponentiel et validation
 async function fetchWithRetry(url, options = {}, maxRetries = 3) {
     const delays = [1000, 2000, 4000]; // 1s, 2s, 4s
     let lastError;
@@ -672,6 +672,21 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3) {
         }
     }
     throw lastError;
+}
+
+// Fonction utilitaire pour fetch JSON avec gestion d'erreurs
+async function fetchJSON(url, options = {}) {
+    try {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            console.warn(`API ${url} retourné ${response.status}`);
+            return { success: false, error: `HTTP ${response.status}` };
+        }
+        return await response.json();
+    } catch (error) {
+        console.error(`Erreur fetch ${url}:`, error);
+        return { success: false, error: error.message };
+    }
 }
 
 // Initialisation
@@ -784,11 +799,16 @@ async function checkAndRefreshContext() {
     }
 }
 
-async function actualiserContexte() {
+async function actualiserContexte(forceReset = false) {
     // Protection anti-boucle infinie
     if (isRefreshingContext) {
         console.log('Actualisation déjà en cours, skip');
         return false;
+    }
+
+    // Reset manuel des tentatives si demandé (clic sur bouton Actualiser)
+    if (forceReset) {
+        contextRefreshAttempts = 0;
     }
 
     // Vérifier weekend
@@ -801,9 +821,9 @@ async function actualiserContexte() {
         return false;
     }
 
-    // Limiter les tentatives
-    if (contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) {
-        console.log('Maximum de tentatives atteint');
+    // Limiter les tentatives automatiques (pas les manuelles)
+    if (!forceReset && contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) {
+        console.log('Maximum de tentatives automatiques atteint');
         document.getElementById('context-bullets').innerHTML =
             '<li style="color: var(--text-muted);">Contexte non disponible. Cliquez sur "Actualiser" pour réessayer.</li>';
         return false;
@@ -813,8 +833,7 @@ async function actualiserContexte() {
     contextRefreshAttempts++;
 
     try {
-        const response = await fetch('/api/analyse');
-        const data = await response.json();
+        const data = await fetchJSON('/api/analyse');
 
         isRefreshingContext = false;
 
@@ -858,8 +877,7 @@ async function loadAllData() {
 // ===== RÉGIME MARCHÉ =====
 async function loadRegimeMarche() {
     try {
-        const response = await fetch('/api/contexte-trading');
-        const data = await response.json();
+        const data = await fetchJSON('/api/contexte-trading');
 
         const widget = document.getElementById('regime-widget');
         const timeSpan = document.getElementById('regime-update-time');
@@ -935,8 +953,7 @@ async function loadRegimeMarche() {
 // ===== QUICK STATS A/B TESTING =====
 async function loadQuickStats() {
     try {
-        const response = await fetch('/api/stats-avancees');
-        const data = await response.json();
+        const data = await fetchJSON('/api/stats-avancees');
 
         const widget = document.getElementById('quick-stats-widget');
 
@@ -1046,8 +1063,7 @@ async function loadQuickStats() {
 // ===== A/B TESTS =====
 async function loadABTests() {
     try {
-        const response = await fetch('/api/ab-tests');
-        const data = await response.json();
+        const data = await fetchJSON('/api/ab-tests');
 
         const section = document.getElementById('section-ab-tests');
         const container = document.getElementById('ab-tests-container');
@@ -1108,8 +1124,7 @@ async function loadMacroEvents() {
             agendaContainer.innerHTML = '<div class="agenda-item"><span class="agenda-time">⏳</span><span class="agenda-name">Chargement...</span></div>';
         }
 
-        const response = await fetch('/api/evenements-macro');
-        const data = await response.json();
+        const data = await fetchJSON('/api/evenements-macro');
 
         if (data.success) {
             // Afficher alerte si événement imminent
@@ -1523,9 +1538,8 @@ async function actualiserTout() {
         await refreshMarkets();
         status.textContent = 'Analyse en cours avec Claude...';
 
-        // Lancer l'analyse
-        const response = await fetch('/api/analyse');
-        const data = await response.json();
+        // Lancer l'analyse (forceReset=true car action utilisateur)
+        const data = await fetchJSON('/api/analyse');
 
         if (data.success) {
             status.textContent = 'Actualisation terminée !';

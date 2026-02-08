@@ -2227,43 +2227,27 @@ def get_regime_marche(vix_niveau=None):
             "TRÈS SÉLECTIF: uniquement conviction 5, stops -1.5%, éviter les indices"
 
 def get_session_marche():
-    """Détermine la session de marché actuelle"""
+    """Détermine la session de marché actuelle
+    Utilise pytz pour gérer automatiquement le DST US/EU"""
     maintenant = get_paris_time()
     heure = maintenant.hour
     minute = maintenant.minute
     heure_decimal = heure + minute / 60
 
-    # Détection du décalage DST US/EU (différent ~2 semaines par an)
-    # US DST: 2nd dimanche mars → 1er dimanche novembre
-    # EU DST: dernier dimanche mars → dernier dimanche octobre
-    # Pendant ces périodes, US ouvre 1h plus tôt en heure Paris
-    us_offset = 0
-    mois = maintenant.month
-    jour_mois = maintenant.day
+    # Calculer l'offset US dynamiquement via pytz (gère DST automatiquement)
+    # NYSE ouvre à 9:30 ET, ferme à 16:00 ET
+    tz_ny = pytz.timezone('America/New_York')
+    now_ny = datetime.now(tz_ny)
+    now_paris = datetime.now(TZ_PARIS)
 
-    # Période mars: après 2nd dimanche US, avant dernier dimanche EU
-    if mois == 3 and jour_mois >= 8 and jour_mois <= 31:
-        # Simplification: US DST actif, vérifier si EU DST pas encore actif
-        # Dernier dimanche de mars = jour >= 25 et weekday == 6 (dimanche)
-        dernier_dimanche = 31 - ((datetime(maintenant.year, 3, 31).weekday() + 1) % 7)
-        if jour_mois < dernier_dimanche:
-            us_offset = -1  # US ouvre 1h plus tôt en heure Paris
+    # Différence d'heures entre Paris et NY (normalement 6h, peut être 5h ou 7h pendant transitions DST)
+    diff_heures = (now_paris.hour - now_ny.hour) % 24
+    if diff_heures > 12:
+        diff_heures -= 24
 
-    # Période octobre/novembre: EU DST terminé, US DST encore actif
-    if mois == 10 and jour_mois >= 25:
-        dernier_dimanche_oct = 31 - ((datetime(maintenant.year, 10, 31).weekday() + 1) % 7)
-        if jour_mois > dernier_dimanche_oct:
-            us_offset = -1
-    elif mois == 11 and jour_mois <= 7:
-        # Avant 1er dimanche novembre, US encore en DST
-        premier_dimanche_nov = (7 - datetime(maintenant.year, 11, 1).weekday()) % 7 + 1
-        if jour_mois < premier_dimanche_nov:
-            us_offset = -1
-
-    # Heures de session ajustées
-    us_open = 15.5 + us_offset
-    us_close = 22 + us_offset
-    eu_us_overlap_end = 17.5 + us_offset
+    # Heures US en heure Paris (9:30 ET = 15:30 CET normalement)
+    us_open = 9.5 + diff_heures  # 9:30 NY -> 15:30 Paris (si diff=6)
+    us_close = 16 + diff_heures  # 16:00 NY -> 22:00 Paris (si diff=6)
 
     if 9 <= heure_decimal < 11:
         return "EU_OPEN", "Ouverture européenne - Forte activité"
@@ -7978,10 +7962,12 @@ def api_stats_avancees():
         date_debut = (get_paris_time() - timedelta(days=7)).strftime('%Y-%m-%d')
 
         # Stats par jour de la semaine
+        # CORRIGÉ: Ajout losses pour calcul win rate correct (wins/conclus, pas wins/total)
         cursor.execute('''
             SELECT jour_semaine,
                 COUNT(*) as nb,
                 SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
                 ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END), 2) as pnl_moyen
             FROM trades_recommandes
             WHERE date >= ? AND jour_semaine IS NOT NULL
@@ -7994,6 +7980,7 @@ def api_stats_avancees():
             SELECT conviction_score,
                 COUNT(*) as nb,
                 SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
                 ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END), 2) as pnl_moyen
             FROM trades_recommandes
             WHERE date >= ? AND conviction_score IS NOT NULL
@@ -8007,6 +7994,7 @@ def api_stats_avancees():
             SELECT strategie_entree,
                 COUNT(*) as nb,
                 SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
                 ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END), 2) as pnl_moyen
             FROM trades_recommandes
             WHERE date >= ? AND strategie_entree IS NOT NULL
@@ -8019,6 +8007,7 @@ def api_stats_avancees():
             SELECT regime_marche,
                 COUNT(*) as nb,
                 SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
                 ROUND(AVG(vix_niveau), 1) as vix_moyen
             FROM trades_recommandes
             WHERE date >= ? AND regime_marche IS NOT NULL
