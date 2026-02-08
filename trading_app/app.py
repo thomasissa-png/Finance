@@ -733,8 +733,11 @@ def get_twelvedata_quote(symbole):
         print(f"⚠️ Erreur quote {symbole}: {e}")
         return None
 
-def get_twelvedata_intraday(symbole, interval="5min", outputsize=78):
-    """Récupère les données intraday (pour vérification trades)"""
+def get_twelvedata_intraday(symbole, interval="5min", outputsize=288):
+    """Récupère les données intraday (pour vérification trades).
+
+    288 bougies de 5min = 24h de trading, permet de couvrir les trades overnight.
+    """
     return get_twelvedata_time_series(symbole, outputsize=outputsize, interval=interval)
 
 def get_fresh_quote_for_trade(symbole):
@@ -833,6 +836,11 @@ def valider_setup_avant_trade(symbole, direction, prix_entree_prevu, donnees_mar
         return False, "Impossible d'obtenir un prix frais", None
 
     prix_actuel = quote['prix']
+
+    # Protection division par zéro
+    if prix_entree_prevu <= 0:
+        return False, f"Prix d'entrée prévu invalide ({prix_entree_prevu})", None
+
     ecart_pct = abs((prix_actuel - prix_entree_prevu) / prix_entree_prevu * 100)
 
     # Écart max DYNAMIQUE selon le type d'actif
@@ -1171,6 +1179,77 @@ def calculer_atr(df, periode=14):
 
     return float(round(atr, 4)), float(round(atr_pct, 2))
 
+def calculer_trend(df):
+    """
+    Calcule la tendance basée sur EMA20 et structure des prix.
+    Retourne: 'UP', 'DOWN', ou 'RANGE'
+    """
+    if df is None or df.empty or len(df) < 20:
+        return 'RANGE'
+
+    try:
+        # EMA20
+        ema20 = df['Close'].ewm(span=20, adjust=False).mean()
+        prix_actuel = df['Close'].iloc[-1]
+        ema_actuelle = ema20.iloc[-1]
+
+        # Higher highs / Lower lows sur les 5 dernières bougies
+        recent = df.tail(5)
+        highs = recent['High'].values
+        lows = recent['Low'].values
+
+        higher_highs = all(highs[i] >= highs[i-1] for i in range(1, len(highs)))
+        lower_lows = all(lows[i] <= lows[i-1] for i in range(1, len(lows)))
+
+        # Tendance
+        if prix_actuel > ema_actuelle and higher_highs:
+            return 'UP'
+        elif prix_actuel < ema_actuelle and lower_lows:
+            return 'DOWN'
+        else:
+            return 'RANGE'
+    except Exception:
+        return 'RANGE'
+
+def calculer_tendances_multi_tf(symbole):
+    """
+    Calcule les tendances sur plusieurs timeframes (Daily, H4, H1).
+    Retourne: dict avec trend_daily, trend_h4, trend_h1, alignement_tf
+    """
+    trends = {
+        'trend_daily': 'RANGE',
+        'trend_h4': 'RANGE',
+        'trend_h1': 'RANGE',
+        'alignement_tf': 0
+    }
+
+    try:
+        # Daily (30 bougies)
+        df_daily, _ = get_twelvedata_time_series(symbole, outputsize=30, interval="1day")
+        if not df_daily.empty:
+            trends['trend_daily'] = calculer_trend(df_daily)
+
+        # H4 (30 bougies = 5 jours)
+        df_h4, _ = get_twelvedata_time_series(symbole, outputsize=30, interval="4h")
+        if not df_h4.empty:
+            trends['trend_h4'] = calculer_trend(df_h4)
+
+        # H1 (24 bougies = 1 jour)
+        df_h1, _ = get_twelvedata_time_series(symbole, outputsize=24, interval="1h")
+        if not df_h1.empty:
+            trends['trend_h1'] = calculer_trend(df_h1)
+
+        # Calculer alignement (combien de TF sont dans la même direction)
+        trend_values = [trends['trend_daily'], trends['trend_h4'], trends['trend_h1']]
+        up_count = trend_values.count('UP')
+        down_count = trend_values.count('DOWN')
+        trends['alignement_tf'] = max(up_count, down_count)
+
+    except Exception as e:
+        print(f"⚠️ Erreur calcul tendances multi-TF {symbole}: {e}")
+
+    return trends
+
 def calculer_indicateurs_complets(symbole):
     """
     Calcule tous les indicateurs techniques pour un symbole
@@ -1205,6 +1284,9 @@ def calculer_indicateurs_complets(symbole):
         else:
             rsi_interpretation = 'NEUTRE'
 
+    # Calcul des tendances multi-timeframe (H1, H4, Daily)
+    tendances = calculer_tendances_multi_tf(symbole)
+
     return {
         'rsi': rsi,
         'rsi_interpretation': rsi_interpretation,
@@ -1214,7 +1296,11 @@ def calculer_indicateurs_complets(symbole):
         'macd_interpretation': macd_type,
         'atr': atr_val,
         'atr_pct': atr_pct,
-        'is_fresh': is_fresh
+        'is_fresh': is_fresh,
+        'trend_daily': tendances['trend_daily'],
+        'trend_h4': tendances['trend_h4'],
+        'trend_h1': tendances['trend_h1'],
+        'alignement_tf': tendances['alignement_tf']
     }
 
 def enrichir_donnees_avec_indicateurs(donnees_marche):
@@ -1247,7 +1333,11 @@ def enrichir_donnees_avec_indicateurs(donnees_marche):
                 'RSI': indicateurs.get('rsi'),
                 'RSI_signal': indicateurs.get('rsi_interpretation'),
                 'MACD': indicateurs.get('macd_interpretation'),
-                'ATR_pct': indicateurs.get('atr_pct')
+                'ATR_pct': indicateurs.get('atr_pct'),
+                'trend_daily': indicateurs.get('trend_daily'),
+                'trend_h4': indicateurs.get('trend_h4'),
+                'trend_h1': indicateurs.get('trend_h1'),
+                'alignement_tf': indicateurs.get('alignement_tf')
             }
 
             # Enrichir aussi directement les données de l'actif
@@ -1255,6 +1345,10 @@ def enrichir_donnees_avec_indicateurs(donnees_marche):
                 donnees_enrichies[nom_actif]['rsi'] = indicateurs.get('rsi')
                 donnees_enrichies[nom_actif]['rsi_signal'] = indicateurs.get('rsi_interpretation')
                 donnees_enrichies[nom_actif]['macd_signal'] = indicateurs.get('macd_interpretation')
+                donnees_enrichies[nom_actif]['trend_daily'] = indicateurs.get('trend_daily')
+                donnees_enrichies[nom_actif]['trend_h4'] = indicateurs.get('trend_h4')
+                donnees_enrichies[nom_actif]['trend_h1'] = indicateurs.get('trend_h1')
+                donnees_enrichies[nom_actif]['alignement_tf'] = indicateurs.get('alignement_tf')
 
         except Exception as e:
             print(f"⚠️ Erreur indicateurs {symbole}: {e}")
@@ -1459,6 +1553,10 @@ def analyser_cloture_intraday(hist, direction, entree, stop, tp1, tp2):
     Retourne: (resultat, prix_sortie, pnl_pct, bougie_idx) ou (None, None, None, None)
     """
     if hist is None or hist.empty:
+        return None, None, None, None
+
+    # Protection division par zéro
+    if entree <= 0:
         return None, None, None, None
 
     # S'assurer que les bougies sont triées chronologiquement
@@ -2609,14 +2707,14 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                 # Variation: clôture précédente vers clôture actuelle (standard du marché)
                 if len(info) >= 2:
                     cloture_precedente = info['Close'].iloc[-2]
-                    variation = ((prix_actuel - cloture_precedente) / cloture_precedente) * 100
+                    variation = ((prix_actuel - cloture_precedente) / cloture_precedente) * 100 if cloture_precedente > 0 else 0
                 else:
                     variation = 0
 
                 # Variation sur 5 jours
                 if len(info) >= 5:
                     prix_5j = info['Close'].iloc[-5]
-                    var_5j = ((prix_actuel - prix_5j) / prix_5j) * 100
+                    var_5j = ((prix_actuel - prix_5j) / prix_5j) * 100 if prix_5j > 0 else 0
                 else:
                     var_5j = 0
 
@@ -2630,7 +2728,7 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
                     ranges = pd.concat([high_low, high_close, low_close], axis=1)
                     true_range = np.max(ranges, axis=1)
                     atr = true_range.rolling(14).mean().iloc[-1]
-                    atr_pct = (atr / prix_actuel) * 100
+                    atr_pct = (atr / prix_actuel) * 100 if prix_actuel > 0 else 0
 
                 # Volume relatif (vs moyenne 20 jours)
                 volume_relatif = 100
@@ -2696,8 +2794,8 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
 def calculer_indicateurs_techniques(symbole):
     """Calcule les indicateurs techniques pour un actif via Twelve Data"""
     try:
-        # Données intraday 5min (environ 78 bougies pour 6.5h de trading)
-        df_intraday, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=78)
+        # Données intraday 5min (288 bougies = 24h pour couvrir trades overnight)
+        df_intraday, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=288)
         # Données daily pour 30 jours
         df_daily, _ = get_twelvedata_time_series(symbole, outputsize=30, interval="1day")
 
@@ -2739,7 +2837,8 @@ def calculer_indicateurs_techniques(symbole):
             atr = true_range.rolling(14).mean().iloc[-1]
 
             indicateurs['atr'] = float(round(atr, 2))
-            indicateurs['atr_pct'] = float(round((atr / df_daily['Close'].iloc[-1]) * 100, 2))
+            prix_close = df_daily['Close'].iloc[-1]
+            indicateurs['atr_pct'] = float(round((atr / prix_close) * 100, 2)) if prix_close > 0 else 0
 
         # Volume relatif
         if len(df_daily) >= 20 and 'Volume' in df_daily.columns:
@@ -2752,9 +2851,12 @@ def calculer_indicateurs_techniques(symbole):
         indicateurs['prix_actuel'] = float(round(df_daily['Close'].iloc[-1], 2))
         if len(df_daily) >= 2:
             cloture_precedente = df_daily['Close'].iloc[-2]
-            indicateurs['variation_jour'] = float(round(
-                ((df_daily['Close'].iloc[-1] - cloture_precedente) / cloture_precedente) * 100, 2
-            ))
+            if cloture_precedente > 0:
+                indicateurs['variation_jour'] = float(round(
+                    ((df_daily['Close'].iloc[-1] - cloture_precedente) / cloture_precedente) * 100, 2
+                ))
+            else:
+                indicateurs['variation_jour'] = 0
         else:
             indicateurs['variation_jour'] = 0
 
@@ -3689,8 +3791,8 @@ def verifier_resultats_trades():
                     print(f"   ⚠️ Trade {trade.get('actif', 'inconnu')}: prix entrée invalide ({entree})")
                     continue
 
-                # Récupérer les données intraday via Twelve Data (5min pour avoir l'ordre chronologique)
-                hist, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=78)
+                # Récupérer les données intraday via Twelve Data (5min, 288 bougies = 24h pour trades overnight)
+                hist, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=288)
 
                 if hist.empty:
                     continue
@@ -3804,8 +3906,8 @@ def analyser_historique_intraday_pour_tp_stop(symbole, direction, entree, stop, 
     Analyse l'historique intraday complet pour détecter si TP ou Stop a été touché.
     Retourne: (resultat, prix_sortie, note) ou (None, None, None) si rien touché.
     """
-    # Récupérer l'historique intraday complet (5min, ~78 bougies = 6.5h)
-    hist, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=78)
+    # Récupérer l'historique intraday complet (5min, 288 bougies = 24h pour trades overnight)
+    hist, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=288)
 
     if hist.empty:
         return None, None, None
