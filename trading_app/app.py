@@ -4346,7 +4346,7 @@ def get_trades_du_jour():
 def get_performances(periode='semaine'):
     """Récupère les performances sur une période"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
         cursor = conn.cursor()
 
         maintenant = get_paris_time()
@@ -7673,7 +7673,7 @@ def api_stats_evolution():
         granularite = request.args.get('granularite', 'jour')  # jour, semaine, mois
         limite = int(request.args.get('limite', 30))
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -7716,20 +7716,21 @@ def api_stats_evolution():
                 LIMIT ?
             ''', (limite,))
 
-        stats = []
-        pnl_running = 0
-        for row in cursor.fetchall():
-            data = dict(row)
-            pnl_running += data['pnl_cumule'] or 0
-            data['pnl_cumule_running'] = round(pnl_running, 2)
-            conclus = data['reussis'] + data['stops']
-            data['taux_reussite'] = round((data['reussis'] / conclus * 100) if conclus > 0 else 0, 1)
-            stats.append(data)
+        # Récupérer les données (triées DESC) et les inverser pour ordre chronologique
+        raw_data = [dict(row) for row in cursor.fetchall()]
+        raw_data.reverse()  # Maintenant en ordre chronologique (plus ancien en premier)
 
         conn.close()
 
-        # Inverser pour avoir l'ordre chronologique
-        stats.reverse()
+        # Calculer le cumul dans l'ordre chronologique correct
+        stats = []
+        pnl_running = 0
+        for data in raw_data:
+            pnl_running += data['pnl_cumule'] or 0
+            data['pnl_cumule_running'] = round(pnl_running, 2)
+            conclus = (data['reussis'] or 0) + (data['stops'] or 0)
+            data['taux_reussite'] = round((data['reussis'] / conclus * 100) if conclus > 0 else 0, 1)
+            stats.append(data)
 
         return jsonify({
             'success': True,
@@ -8141,7 +8142,7 @@ def api_stats_detaillees():
     """Récupère les statistiques détaillées par heure, actif et type"""
     try:
         periode = request.args.get('periode', 'mois')
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -8212,32 +8213,34 @@ def api_stats_detaillees():
         ''', (date_debut,))
         stats_par_direction = [dict(row) for row in cursor.fetchall()]
 
-        # Top 5 actifs les plus performants
+        # Top 5 actifs les plus performants (basé sur trades CONCLUS uniquement)
         cursor.execute('''
             SELECT actif, symbole,
                    COUNT(*) as nb_trades,
                    SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
-            WHERE date >= ? AND resultat IS NOT NULL
+            WHERE date >= ? AND resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'STOP', 'LOSS_FORCE')
             GROUP BY symbole
-            HAVING nb_trades >= 2
-            ORDER BY (CAST(reussis AS FLOAT) / nb_trades) DESC, pnl_moyen DESC
+            HAVING (reussis + stops) >= 2
+            ORDER BY (CAST(reussis AS FLOAT) / (reussis + stops)) DESC, pnl_moyen DESC
             LIMIT 5
         ''', (date_debut,))
         top_actifs = [dict(row) for row in cursor.fetchall()]
 
-        # Bottom 5 actifs les moins performants
+        # Bottom 5 actifs les moins performants (basé sur trades CONCLUS uniquement)
         cursor.execute('''
             SELECT actif, symbole,
                    COUNT(*) as nb_trades,
                    SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
+                   SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen
             FROM trades_recommandes
-            WHERE date >= ? AND resultat IS NOT NULL
+            WHERE date >= ? AND resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'STOP', 'LOSS_FORCE')
             GROUP BY symbole
-            HAVING nb_trades >= 2
-            ORDER BY (CAST(reussis AS FLOAT) / nb_trades) ASC, pnl_moyen ASC
+            HAVING (reussis + stops) >= 2
+            ORDER BY (CAST(reussis AS FLOAT) / (reussis + stops)) ASC, pnl_moyen ASC
             LIMIT 5
         ''', (date_debut,))
         bottom_actifs = [dict(row) for row in cursor.fetchall()]
@@ -8267,8 +8270,8 @@ def api_stats_detaillees():
                 s['duree_moyenne'] = round(s.get('duree_moyenne') or 0, 0)
 
         for s in top_actifs + bottom_actifs:
-            conclus = (s.get('reussis') or 0) + (s.get('nb_trades') or 0) - (s.get('reussis') or 0)
-            s['taux_reussite'] = round((s.get('reussis', 0) / s.get('nb_trades', 1) * 100) if s.get('nb_trades') else 0, 1)
+            conclus = (s.get('reussis') or 0) + (s.get('stops') or 0)
+            s['taux_reussite'] = round((s.get('reussis', 0) / conclus * 100) if conclus > 0 else 0, 1)
             s['pnl_moyen'] = round(s.get('pnl_moyen') or 0, 2)
 
         return jsonify({

@@ -220,6 +220,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadChartData();
     loadDetailedStats();
     loadAjustementsEnAttente();
+    loadRapportHebdo();
 });
 
 // ===== STATS DÉTAILLÉES =====
@@ -293,7 +294,7 @@ function renderStatsDirection(stats) {
 
 function renderStatsDuree(stats) {
     const container = document.getElementById('stats-duree');
-    if (!stats || stats.moyenne === 0) {
+    if (!stats || !stats.moyenne || stats.moyenne === 0) {
         container.innerHTML = '<div class="no-data">Pas de données de durée</div>';
         return;
     }
@@ -560,10 +561,6 @@ function renderRapportHebdo(rapport) {
     container.innerHTML = html;
 }
 
-// Charger le rapport hebdo au démarrage
-document.addEventListener('DOMContentLoaded', function() {
-    loadRapportHebdo();
-});
 
 // ===== AJUSTEMENTS EN ATTENTE =====
 async function loadAjustementsEnAttente() {
@@ -846,7 +843,7 @@ async function loadPerformances() {
             document.getElementById('perf-total').textContent = p.total;
             document.getElementById('perf-reussis').textContent = p.reussis;
             document.getElementById('perf-stops').textContent = p.stops;
-            document.getElementById('perf-non-conclus').textContent = p.non_conclus;
+            document.getElementById('perf-non-conclus').textContent = p.en_cours;
 
             const tauxEl = document.getElementById('perf-taux');
             tauxEl.textContent = p.taux_reussite + '%';
@@ -1000,7 +997,9 @@ function renderTradesTable() {
                                 <option value="">Tous</option>
                                 <option value="TP1" ${tableFilters.resultat === 'TP1' ? 'selected' : ''}>✅ TP1</option>
                                 <option value="TP2" ${tableFilters.resultat === 'TP2' ? 'selected' : ''}>✅ TP2</option>
+                                <option value="WIN_FORCE" ${tableFilters.resultat === 'WIN_FORCE' ? 'selected' : ''}>✅ Clôt. +</option>
                                 <option value="STOP" ${tableFilters.resultat === 'STOP' ? 'selected' : ''}>❌ Stop</option>
+                                <option value="LOSS_FORCE" ${tableFilters.resultat === 'LOSS_FORCE' ? 'selected' : ''}>❌ Clôt. -</option>
                                 <option value="en_cours" ${tableFilters.resultat === 'en_cours' ? 'selected' : ''}>⏳ En cours</option>
                             </select>
                         </th>
