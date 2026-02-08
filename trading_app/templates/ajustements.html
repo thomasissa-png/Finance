@@ -1,0 +1,1196 @@
+{% extends "base.html" %}
+
+{% block title %}Ajustements - Plateforme Trading{% endblock %}
+
+{% block content %}
+<div class="ajustements-page">
+
+    <!-- Header -->
+    <div class="page-top-bar">
+        <h1 class="page-top-title">Gestion des Ajustements</h1>
+    </div>
+
+    <!-- Onglets -->
+    <div class="tabs-container">
+        <button class="tab-btn active" onclick="switchTab('pending', this)">
+            En attente <span class="tab-badge" id="pending-count">0</span>
+        </button>
+        <button class="tab-btn" onclick="switchTab('history', this)">
+            Historique
+        </button>
+        <button class="tab-btn" onclick="switchTab('impact', this)">
+            Impact & Feedback
+        </button>
+    </div>
+
+    <!-- Tab: En attente -->
+    <section class="section tab-content active" id="tab-pending">
+        <div class="section-header">
+            <span class="section-icon">&#9881;</span>
+            <h2 class="section-title">Ajustements en Attente</h2>
+            <div class="section-actions">
+                <button class="btn-action success" onclick="validerTous()">Tout valider</button>
+                <button class="btn-action danger" onclick="rejeterTous()">Tout rejeter</button>
+            </div>
+        </div>
+        <div class="section-content" id="pending-content">
+            <div class="loading">Chargement...</div>
+        </div>
+    </section>
+
+    <!-- Tab: Historique -->
+    <section class="section tab-content" id="tab-history">
+        <div class="section-header">
+            <span class="section-icon">&#128221;</span>
+            <h2 class="section-title">Historique des Ajustements</h2>
+            <div class="filter-group">
+                <select id="filter-statut" onchange="loadHistorique()">
+                    <option value="">Tous</option>
+                    <option value="valide">Valides</option>
+                    <option value="rejete">Rejetes</option>
+                </select>
+                <select id="filter-type" onchange="loadHistorique()">
+                    <option value="">Tous types</option>
+                    <option value="score_confiance">Scores</option>
+                    <option value="strategie">Strategies</option>
+                </select>
+            </div>
+        </div>
+        <div class="section-content" id="history-content">
+            <div class="loading">Chargement...</div>
+        </div>
+    </section>
+
+    <!-- Tab: Impact & Feedback -->
+    <section class="section tab-content" id="tab-impact">
+        <div class="section-header">
+            <span class="section-icon">&#128202;</span>
+            <h2 class="section-title">Impact des Ajustements</h2>
+            <span class="section-meta">Mesure de l'efficacite des ajustements valides</span>
+        </div>
+        <div class="section-content" id="impact-content">
+            <div class="loading">Chargement...</div>
+        </div>
+    </section>
+
+    <!-- Modal Commentaire -->
+    <div class="modal-overlay" id="modal-comment" onclick="closeModal(event)">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="modal-title">Confirmer l'action</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="ajustement-preview" id="modal-preview"></div>
+                <div class="comment-section">
+                    <label for="comment-input">Commentaire (optionnel)</label>
+                    <textarea id="comment-input" placeholder="Ajoutez un commentaire pour expliquer votre decision..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeModal()">Annuler</button>
+                <button class="btn-confirm" id="modal-confirm">Confirmer</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Variables globales
+let pendingAjustements = [];
+let historyAjustements = [];
+let currentAction = null;
+let currentId = null;
+
+// Init
+document.addEventListener('DOMContentLoaded', function() {
+    loadPending();
+    loadHistorique();
+    loadImpact();
+});
+
+// ===== NAVIGATION ONGLETS =====
+function switchTab(tabName, btn) {
+    // Desactiver tous les onglets
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+    // Activer l'onglet selectionne
+    btn.classList.add('active');
+    document.getElementById('tab-' + tabName).classList.add('active');
+}
+
+// ===== AJUSTEMENTS EN ATTENTE =====
+async function loadPending() {
+    try {
+        const response = await fetch('/api/ajustements-proposes');
+        const data = await response.json();
+
+        if (data.success) {
+            pendingAjustements = data.ajustements || [];
+            renderPending();
+            document.getElementById('pending-count').textContent = pendingAjustements.length;
+        }
+    } catch (error) {
+        console.error('Erreur chargement:', error);
+        document.getElementById('pending-content').innerHTML =
+            '<div class="error-message">Erreur de chargement</div>';
+    }
+}
+
+function renderPending() {
+    const container = document.getElementById('pending-content');
+
+    if (!pendingAjustements || pendingAjustements.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">&#10004;</div>
+                <div class="empty-title">Aucun ajustement en attente</div>
+                <div class="empty-text">Les nouveaux ajustements seront proposes lors de la generation du rapport hebdomadaire.</div>
+            </div>`;
+        return;
+    }
+
+    let html = '<div class="ajustements-grid">';
+
+    for (const ajust of pendingAjustements) {
+        const typeIcon = ajust.type_ajustement === 'score_confiance' ? '&#128202;' : '&#9889;';
+        const typeLabel = ajust.type_ajustement === 'score_confiance' ? 'Score de Confiance' : 'Strategie';
+        const typeClass = ajust.type_ajustement === 'score_confiance' ? 'score' : 'strategie';
+
+        // Formater la date
+        const dateProposition = ajust.date_proposition ?
+            new Date(ajust.date_proposition).toLocaleDateString('fr-FR', {day: '2-digit', month: 'short', year: 'numeric'}) : '-';
+
+        html += `
+            <div class="ajustement-card" data-id="${ajust.id}">
+                <div class="card-header">
+                    <span class="type-badge ${typeClass}">${typeIcon} ${typeLabel}</span>
+                    <span class="date-badge">${dateProposition}</span>
+                </div>
+
+                <div class="card-category">${ajust.categorie || 'General'}</div>
+
+                <div class="card-action">${ajust.action || '-'}</div>
+
+                ${ajust.valeur_proposee ? `<div class="card-value">Valeur: <strong>${ajust.valeur_proposee}</strong></div>` : ''}
+
+                <div class="card-raison">${ajust.raison || ''}</div>
+
+                <div class="card-source">Source: ${ajust.source || 'Rapport hebdomadaire'}</div>
+
+                <div class="card-actions">
+                    <button class="btn-validate" onclick="showConfirmModal(${ajust.id}, true)">
+                        &#10004; Valider
+                    </button>
+                    <button class="btn-reject" onclick="showConfirmModal(${ajust.id}, false)">
+                        &#10006; Rejeter
+                    </button>
+                </div>
+            </div>`;
+    }
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+// ===== MODAL CONFIRMATION =====
+function showConfirmModal(id, isValidation) {
+    currentId = id;
+    currentAction = isValidation;
+
+    const ajust = pendingAjustements.find(a => a.id === id);
+    if (!ajust) return;
+
+    const modal = document.getElementById('modal-comment');
+    const title = document.getElementById('modal-title');
+    const preview = document.getElementById('modal-preview');
+    const confirmBtn = document.getElementById('modal-confirm');
+
+    title.textContent = isValidation ? 'Valider cet ajustement ?' : 'Rejeter cet ajustement ?';
+
+    preview.innerHTML = `
+        <div class="preview-category">${ajust.categorie || 'General'}</div>
+        <div class="preview-action">${ajust.action || '-'}</div>
+        <div class="preview-raison">${ajust.raison || ''}</div>
+    `;
+
+    confirmBtn.className = isValidation ? 'btn-confirm success' : 'btn-confirm danger';
+    confirmBtn.textContent = isValidation ? 'Valider' : 'Rejeter';
+    confirmBtn.onclick = () => executeAction();
+
+    document.getElementById('comment-input').value = '';
+    modal.classList.add('visible');
+}
+
+function closeModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('modal-comment').classList.remove('visible');
+    currentId = null;
+    currentAction = null;
+}
+
+async function executeAction() {
+    if (currentId === null) return;
+
+    const commentaire = document.getElementById('comment-input').value.trim();
+    const endpoint = currentAction ?
+        `/api/ajustements-proposes/${currentId}/valider` :
+        `/api/ajustements-proposes/${currentId}/rejeter`;
+
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({commentaire: commentaire || null})
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            closeModal();
+            // Animation de suppression
+            const card = document.querySelector(`.ajustement-card[data-id="${currentId}"]`);
+            if (card) {
+                card.classList.add('fade-out');
+                setTimeout(() => {
+                    loadPending();
+                    loadHistorique();
+                }, 300);
+            }
+        } else {
+            alert('Erreur: ' + (data.error || data.message));
+        }
+    } catch (error) {
+        console.error('Erreur:', error);
+        alert('Erreur de communication avec le serveur');
+    }
+}
+
+async function validerTous() {
+    if (!pendingAjustements.length) return;
+    if (!confirm(`Valider les ${pendingAjustements.length} ajustements en attente ?`)) return;
+
+    try {
+        const response = await fetch('/api/ajustements-proposes/valider-tous', {method: 'POST'});
+        const data = await response.json();
+
+        if (data.success) {
+            loadPending();
+            loadHistorique();
+        } else {
+            alert('Erreur: ' + data.error);
+        }
+    } catch (error) {
+        console.error('Erreur:', error);
+    }
+}
+
+async function rejeterTous() {
+    if (!pendingAjustements.length) return;
+    if (!confirm(`Rejeter les ${pendingAjustements.length} ajustements en attente ?`)) return;
+
+    try {
+        const response = await fetch('/api/ajustements-proposes/rejeter-tous', {method: 'POST'});
+        const data = await response.json();
+
+        if (data.success) {
+            loadPending();
+            loadHistorique();
+        } else {
+            alert('Erreur: ' + data.error);
+        }
+    } catch (error) {
+        console.error('Erreur:', error);
+    }
+}
+
+// ===== HISTORIQUE =====
+async function loadHistorique() {
+    const statutFilter = document.getElementById('filter-statut').value;
+    const typeFilter = document.getElementById('filter-type').value;
+
+    try {
+        const response = await fetch('/api/ajustements-historique?limite=100');
+        const data = await response.json();
+
+        if (data.success) {
+            historyAjustements = data.historique || [];
+
+            // Appliquer les filtres
+            let filtered = historyAjustements;
+            if (statutFilter) {
+                filtered = filtered.filter(a => a.statut === statutFilter);
+            }
+            if (typeFilter) {
+                filtered = filtered.filter(a => a.type_ajustement === typeFilter);
+            }
+
+            renderHistorique(filtered);
+        }
+    } catch (error) {
+        console.error('Erreur historique:', error);
+    }
+}
+
+function renderHistorique(historique) {
+    const container = document.getElementById('history-content');
+
+    if (!historique || historique.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">&#128195;</div>
+                <div class="empty-title">Aucun historique</div>
+                <div class="empty-text">L'historique des ajustements valides ou rejetes apparaitra ici.</div>
+            </div>`;
+        return;
+    }
+
+    let html = '<div class="history-table-wrapper"><table class="history-table">';
+    html += `
+        <thead>
+            <tr>
+                <th>Date Decision</th>
+                <th>Statut</th>
+                <th>Type</th>
+                <th>Categorie</th>
+                <th>Action</th>
+                <th>Decideur</th>
+                <th>Commentaire</th>
+                <th>Impact</th>
+            </tr>
+        </thead>
+        <tbody>`;
+
+    for (const ajust of historique) {
+        const dateDecision = ajust.date_decision ?
+            new Date(ajust.date_decision).toLocaleDateString('fr-FR', {day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'}) : '-';
+
+        const statutClass = ajust.statut === 'valide' ? 'success' : 'danger';
+        const statutLabel = ajust.statut === 'valide' ? '&#10004; Valide' : '&#10006; Rejete';
+        const typeLabel = ajust.type_ajustement === 'score_confiance' ? 'Score' : 'Strategie';
+
+        // Calculer l'impact si disponible
+        let impactHtml = '-';
+        if (ajust.feedback_conclusion) {
+            const impactClass = ajust.feedback_conclusion === 'POSITIF' ? 'success' :
+                               ajust.feedback_conclusion === 'NEGATIF' ? 'danger' : 'neutral';
+            impactHtml = `<span class="impact-badge ${impactClass}">${ajust.feedback_conclusion}</span>`;
+        } else if (ajust.statut === 'valide') {
+            impactHtml = '<span class="impact-badge pending">En evaluation</span>';
+        }
+
+        html += `
+            <tr>
+                <td>${dateDecision}</td>
+                <td><span class="status-badge ${statutClass}">${statutLabel}</span></td>
+                <td>${typeLabel}</td>
+                <td>${ajust.categorie || '-'}</td>
+                <td class="action-cell" title="${ajust.action || ''}">${ajust.action || '-'}</td>
+                <td>${ajust.decideur || '-'}</td>
+                <td class="comment-cell" title="${ajust.commentaire_utilisateur || ''}">${ajust.commentaire_utilisateur || '-'}</td>
+                <td>${impactHtml}</td>
+            </tr>`;
+    }
+
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+}
+
+// ===== IMPACT & FEEDBACK =====
+async function loadImpact() {
+    const container = document.getElementById('impact-content');
+
+    try {
+        const response = await fetch('/api/ajustements-historique?limite=50');
+        const data = await response.json();
+
+        if (!data.success || !data.historique) {
+            container.innerHTML = '<div class="error-message">Erreur de chargement</div>';
+            return;
+        }
+
+        // Filtrer seulement les valides avec feedback
+        const avecFeedback = data.historique.filter(a =>
+            a.statut === 'valide' && a.feedback_conclusion
+        );
+
+        if (avecFeedback.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-icon">&#128200;</div>
+                    <div class="empty-title">Pas encore de feedback</div>
+                    <div class="empty-text">Le feedback est calcule 7 jours apres la validation d'un ajustement pour mesurer son impact reel.</div>
+                </div>`;
+            return;
+        }
+
+        // Calculer les stats globales
+        const positifs = avecFeedback.filter(a => a.feedback_conclusion === 'POSITIF').length;
+        const negatifs = avecFeedback.filter(a => a.feedback_conclusion === 'NEGATIF').length;
+        const neutres = avecFeedback.filter(a => a.feedback_conclusion === 'NEUTRE').length;
+        const total = avecFeedback.length;
+
+        let html = `
+            <div class="impact-stats">
+                <div class="impact-stat-card success">
+                    <div class="stat-value">${positifs}</div>
+                    <div class="stat-label">Positifs</div>
+                    <div class="stat-pct">${total > 0 ? Math.round(positifs/total*100) : 0}%</div>
+                </div>
+                <div class="impact-stat-card neutral">
+                    <div class="stat-value">${neutres}</div>
+                    <div class="stat-label">Neutres</div>
+                    <div class="stat-pct">${total > 0 ? Math.round(neutres/total*100) : 0}%</div>
+                </div>
+                <div class="impact-stat-card danger">
+                    <div class="stat-value">${negatifs}</div>
+                    <div class="stat-label">Negatifs</div>
+                    <div class="stat-pct">${total > 0 ? Math.round(negatifs/total*100) : 0}%</div>
+                </div>
+            </div>
+
+            <h3 class="impact-section-title">Details par Ajustement</h3>
+            <div class="impact-details">`;
+
+        for (const ajust of avecFeedback) {
+            const impactClass = ajust.feedback_conclusion === 'POSITIF' ? 'success' :
+                               ajust.feedback_conclusion === 'NEGATIF' ? 'danger' : 'neutral';
+
+            // Calculer la variation
+            const tauxAvant = ajust.perf_avant_taux_reussite || 0;
+            const tauxApres = ajust.perf_apres_taux_reussite || 0;
+            const pnlAvant = ajust.perf_avant_pnl_total || 0;
+            const pnlApres = ajust.perf_apres_pnl_total || 0;
+
+            const variationTaux = tauxApres - tauxAvant;
+            const variationPnl = pnlApres - pnlAvant;
+
+            html += `
+                <div class="impact-item ${impactClass}">
+                    <div class="impact-header">
+                        <span class="impact-category">${ajust.categorie || '-'}</span>
+                        <span class="impact-badge ${impactClass}">${ajust.feedback_conclusion}</span>
+                    </div>
+                    <div class="impact-action">${ajust.action || '-'}</div>
+                    <div class="impact-metrics">
+                        <div class="metric">
+                            <span class="metric-label">Taux reussite</span>
+                            <span class="metric-before">${tauxAvant.toFixed(1)}%</span>
+                            <span class="metric-arrow">&rarr;</span>
+                            <span class="metric-after">${tauxApres.toFixed(1)}%</span>
+                            <span class="metric-diff ${variationTaux >= 0 ? 'positive' : 'negative'}">
+                                ${variationTaux >= 0 ? '+' : ''}${variationTaux.toFixed(1)}%
+                            </span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">PnL</span>
+                            <span class="metric-before">${pnlAvant.toFixed(2)}%</span>
+                            <span class="metric-arrow">&rarr;</span>
+                            <span class="metric-after">${pnlApres.toFixed(2)}%</span>
+                            <span class="metric-diff ${variationPnl >= 0 ? 'positive' : 'negative'}">
+                                ${variationPnl >= 0 ? '+' : ''}${variationPnl.toFixed(2)}%
+                            </span>
+                        </div>
+                    </div>
+                    ${ajust.commentaire_utilisateur ? `<div class="impact-comment">"${ajust.commentaire_utilisateur}"</div>` : ''}
+                </div>`;
+        }
+
+        html += '</div>';
+        container.innerHTML = html;
+
+    } catch (error) {
+        console.error('Erreur impact:', error);
+        container.innerHTML = '<div class="error-message">Erreur de chargement</div>';
+    }
+}
+</script>
+
+<style>
+/* Page Layout */
+.ajustements-page {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: var(--space-3);
+}
+
+/* Tabs */
+.tabs-container {
+    display: flex;
+    gap: 4px;
+    margin-bottom: var(--space-3);
+    background: var(--bg-secondary);
+    padding: 4px;
+    border-radius: var(--radius-md);
+    width: fit-content;
+}
+
+.tab-btn {
+    padding: 10px 20px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+}
+
+.tab-btn.active {
+    background: var(--accent-primary);
+    color: white;
+}
+
+.tab-badge {
+    background: rgba(255,255,255,0.2);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.75rem;
+}
+
+.tab-btn.active .tab-badge {
+    background: rgba(255,255,255,0.3);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Section Header Actions */
+.section-actions {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.btn-action {
+    padding: 8px 16px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-action.success {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-green);
+}
+
+.btn-action.success:hover {
+    background: var(--accent-green);
+    color: white;
+}
+
+.btn-action.danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--accent-red);
+}
+
+.btn-action.danger:hover {
+    background: var(--accent-red);
+    color: white;
+}
+
+/* Filter Group */
+.filter-group {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.filter-group select {
+    padding: 6px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    cursor: pointer;
+}
+
+/* Ajustements Grid */
+.ajustements-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: var(--space-3);
+}
+
+.ajustement-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    transition: var(--transition);
+}
+
+.ajustement-card:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+
+.ajustement-card.fade-out {
+    opacity: 0;
+    transform: translateX(-20px);
+    transition: all 0.3s;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-2);
+}
+
+.type-badge {
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+}
+
+.type-badge.score {
+    background: rgba(99, 102, 241, 0.2);
+    color: #818cf8;
+}
+
+.type-badge.strategie {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fbbf24;
+}
+
+.date-badge {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+.card-category {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: var(--space-1);
+}
+
+.card-action {
+    font-size: 1rem;
+    color: var(--text-primary);
+    margin-bottom: var(--space-2);
+    line-height: 1.4;
+}
+
+.card-value {
+    font-size: 0.875rem;
+    color: var(--accent-primary);
+    margin-bottom: var(--space-1);
+}
+
+.card-raison {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--accent-primary);
+}
+
+.card-source {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    margin-bottom: var(--space-2);
+}
+
+.card-actions {
+    display: flex;
+    gap: 8px;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-light);
+}
+
+.btn-validate, .btn-reject {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-validate {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-green);
+}
+
+.btn-validate:hover {
+    background: var(--accent-green);
+    color: white;
+}
+
+.btn-reject {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--accent-red);
+}
+
+.btn-reject:hover {
+    background: var(--accent-red);
+    color: white;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 3rem;
+}
+
+.empty-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}
+
+.empty-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}
+
+.empty-text {
+    font-size: 0.9rem;
+    color: var(--text-tertiary);
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s;
+}
+
+.modal-overlay.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+.modal-content {
+    background: var(--bg-primary);
+    border-radius: var(--radius-lg);
+    width: 100%;
+    max-width: 500px;
+    margin: var(--space-3);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    transform: translateY(-20px);
+    transition: transform 0.3s;
+}
+
+.modal-overlay.visible .modal-content {
+    transform: translateY(0);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.125rem;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.modal-close:hover {
+    color: var(--text-primary);
+}
+
+.modal-body {
+    padding: var(--space-3);
+}
+
+.ajustement-preview {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+.preview-category {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.preview-action {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin: 4px 0;
+}
+
+.preview-raison {
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+}
+
+.comment-section label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.comment-section textarea {
+    width: 100%;
+    min-height: 100px;
+    padding: var(--space-2);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    resize: vertical;
+}
+
+.comment-section textarea:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: var(--space-3);
+    border-top: 1px solid var(--border-color);
+}
+
+.btn-cancel, .btn-confirm {
+    padding: 10px 20px;
+    border-radius: var(--radius-sm);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-cancel {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.btn-cancel:hover {
+    background: var(--bg-secondary);
+}
+
+.btn-confirm {
+    border: none;
+}
+
+.btn-confirm.success {
+    background: var(--accent-green);
+    color: white;
+}
+
+.btn-confirm.danger {
+    background: var(--accent-red);
+    color: white;
+}
+
+/* History Table */
+.history-table-wrapper {
+    overflow-x: auto;
+}
+
+.history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.history-table th {
+    text-align: left;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.history-table td {
+    padding: 12px;
+    border-bottom: 1px solid var(--border-light);
+    color: var(--text-primary);
+}
+
+.history-table tr:hover {
+    background: var(--bg-secondary);
+}
+
+.action-cell, .comment-cell {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.status-badge.success {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-green);
+}
+
+.status-badge.danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--accent-red);
+}
+
+.impact-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.impact-badge.success {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-green);
+}
+
+.impact-badge.neutral {
+    background: rgba(107, 114, 128, 0.15);
+    color: var(--text-secondary);
+}
+
+.impact-badge.danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--accent-red);
+}
+
+.impact-badge.pending {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-primary);
+}
+
+/* Impact Section */
+.impact-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.impact-stat-card {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    text-align: center;
+}
+
+.impact-stat-card.success {
+    border-left: 4px solid var(--accent-green);
+}
+
+.impact-stat-card.neutral {
+    border-left: 4px solid var(--text-tertiary);
+}
+
+.impact-stat-card.danger {
+    border-left: 4px solid var(--accent-red);
+}
+
+.impact-stat-card .stat-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.impact-stat-card .stat-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin: 4px 0;
+}
+
+.impact-stat-card .stat-pct {
+    font-size: 0.875rem;
+    color: var(--text-tertiary);
+}
+
+.impact-section-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-2);
+}
+
+.impact-details {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.impact-item {
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    border-left: 4px solid;
+}
+
+.impact-item.success { border-color: var(--accent-green); }
+.impact-item.neutral { border-color: var(--text-tertiary); }
+.impact-item.danger { border-color: var(--accent-red); }
+
+.impact-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.impact-category {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.impact-action {
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: var(--space-2);
+}
+
+.impact-metrics {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+}
+
+.metric {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8125rem;
+}
+
+.metric-label {
+    color: var(--text-tertiary);
+    min-width: 100px;
+}
+
+.metric-before, .metric-after {
+    font-family: monospace;
+}
+
+.metric-arrow {
+    color: var(--text-tertiary);
+}
+
+.metric-diff {
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.metric-diff.positive {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-green);
+}
+
+.metric-diff.negative {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--accent-red);
+}
+
+.impact-comment {
+    margin-top: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-light);
+    font-style: italic;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .ajustements-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .impact-stats {
+        grid-template-columns: 1fr;
+    }
+
+    .tabs-container {
+        width: 100%;
+        overflow-x: auto;
+    }
+
+    .section-header {
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    .section-actions, .filter-group {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+</style>
+{% endblock %}

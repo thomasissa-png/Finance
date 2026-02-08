@@ -1830,7 +1830,8 @@ def init_database():
         ("perf_apres_taux_reussite", "REAL"),
         ("perf_apres_pnl_total", "REAL"),
         ("feedback_date", "DATETIME"),
-        ("feedback_conclusion", "TEXT")
+        ("feedback_conclusion", "TEXT"),
+        ("commentaire_utilisateur", "TEXT")  # Commentaire libre de l'utilisateur
     ]
     for col_nom, col_type in colonnes_feedback:
         try:
@@ -5539,8 +5540,8 @@ def get_ajustements_en_attente():
         print(f"⚠️ Erreur récupération ajustements: {e}")
         return []
 
-def valider_ajustement(id_ajustement, decision, decideur='utilisateur'):
-    """Valide ou rejette un ajustement proposé avec audit trail"""
+def valider_ajustement(id_ajustement, decision, decideur='utilisateur', commentaire=None):
+    """Valide ou rejette un ajustement proposé avec audit trail et commentaire optionnel"""
     maintenant = get_paris_time()
 
     try:
@@ -5558,13 +5559,13 @@ def valider_ajustement(id_ajustement, decision, decideur='utilisateur'):
 
         ajust_dict = dict(row)
 
-        # Mettre à jour le statut
+        # Mettre à jour le statut avec commentaire optionnel
         nouveau_statut = 'valide' if decision else 'rejete'
         cursor.execute('''
             UPDATE ajustements_proposes
-            SET statut = ?, date_decision = ?, decideur = ?
+            SET statut = ?, date_decision = ?, decideur = ?, commentaire_utilisateur = ?
             WHERE id = ?
-        ''', (nouveau_statut, maintenant, decideur, id_ajustement))
+        ''', (nouveau_statut, maintenant, decideur, commentaire, id_ajustement))
 
         # Si validé, appliquer l'ajustement avec audit trail
         if decision:
@@ -6723,6 +6724,15 @@ def journal_actif(symbole):
         logger.error(f"Erreur page journal_actif {symbole}: {e}")
         return f"Erreur de chargement: {e}", 500
 
+@app.route('/ajustements')
+def ajustements():
+    """Page de gestion des ajustements proposés par Claude"""
+    try:
+        return render_template('ajustements.html')
+    except Exception as e:
+        logger.error(f"Erreur page ajustements: {e}")
+        return f"Erreur de chargement: {e}", 500
+
 # ============================================================================
 # ROUTES API
 # ============================================================================
@@ -7863,18 +7873,22 @@ def api_ajustements_proposes():
 
 @app.route('/api/ajustements-proposes/<int:id_ajustement>/valider', methods=['POST'])
 def api_valider_ajustement(id_ajustement):
-    """Valide un ajustement proposé"""
+    """Valide un ajustement proposé avec commentaire optionnel"""
     try:
-        succes, message = valider_ajustement(id_ajustement, decision=True)
+        data = request.get_json(silent=True) or {}
+        commentaire = data.get('commentaire', None)
+        succes, message = valider_ajustement(id_ajustement, decision=True, commentaire=commentaire)
         return jsonify({'success': succes, 'message': message})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/ajustements-proposes/<int:id_ajustement>/rejeter', methods=['POST'])
 def api_rejeter_ajustement(id_ajustement):
-    """Rejette un ajustement proposé"""
+    """Rejette un ajustement proposé avec commentaire optionnel"""
     try:
-        succes, message = valider_ajustement(id_ajustement, decision=False)
+        data = request.get_json(silent=True) or {}
+        commentaire = data.get('commentaire', None)
+        succes, message = valider_ajustement(id_ajustement, decision=False, commentaire=commentaire)
         return jsonify({'success': succes, 'message': message})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
