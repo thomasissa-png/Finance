@@ -7166,10 +7166,14 @@ def api_donnees_marche():
 @app.route('/api/indicateurs/<symbole>')
 def api_indicateurs(symbole):
     """Récupère les indicateurs techniques d'un actif"""
-    indicateurs = calculer_indicateurs_techniques(symbole)
-    if indicateurs:
-        return jsonify({'success': True, 'indicateurs': indicateurs})
-    return jsonify({'success': False, 'error': 'Données non disponibles'})
+    try:
+        indicateurs = calculer_indicateurs_techniques(symbole)
+        if indicateurs:
+            return jsonify({'success': True, 'indicateurs': indicateurs})
+        return jsonify({'success': False, 'error': 'Données non disponibles'})
+    except Exception as e:
+        logger.error(f"Erreur api_indicateurs({symbole}): {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/analyse')
 def api_lancer_analyse():
@@ -7310,30 +7314,42 @@ def api_lancer_analyse():
 @app.route('/api/derniere-analyse')
 def api_derniere_analyse():
     """Récupère la dernière analyse"""
-    analyse = get_derniere_analyse()
-    if analyse:
-        return jsonify({'success': True, 'analyse': analyse})
-    return jsonify({'success': False, 'error': 'Aucune analyse trouvée'})
+    try:
+        analyse = get_derniere_analyse()
+        if analyse:
+            return jsonify({'success': True, 'analyse': analyse})
+        return jsonify({'success': False, 'error': 'Aucune analyse trouvée'})
+    except Exception as e:
+        logger.error(f"Erreur api_derniere_analyse: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/analyses-jour')
 def api_analyses_jour():
     """Récupère toutes les analyses du jour"""
-    analyses = get_analyses_du_jour()
-    return jsonify({
-        'success': True,
-        'date': get_paris_time().strftime('%d/%m/%Y'),
-        'analyses': analyses
-    })
+    try:
+        analyses = get_analyses_du_jour()
+        return jsonify({
+            'success': True,
+            'date': get_paris_time().strftime('%d/%m/%Y'),
+            'analyses': analyses
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_analyses_jour: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/trades-jour')
 def api_trades_jour():
     """Récupère les trades du jour"""
-    trades = get_trades_du_jour()
-    return jsonify({
-        'success': True,
-        'date': get_paris_time().strftime('%d/%m/%Y'),
-        'trades': trades
-    })
+    try:
+        trades = get_trades_du_jour()
+        return jsonify({
+            'success': True,
+            'date': get_paris_time().strftime('%d/%m/%Y'),
+            'trades': trades
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_trades_jour: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/trades/ouverts')
 def api_trades_ouverts():
@@ -7464,13 +7480,17 @@ def api_trades_stats_detaillees():
 @app.route('/api/performances')
 def api_performances():
     """Récupère les performances"""
-    periode = request.args.get('periode', 'semaine')
-    performances = get_performances(periode)
-    return jsonify({
-        'success': True,
-        'periode': periode,
-        'performances': performances
-    })
+    try:
+        periode = request.args.get('periode', 'semaine')
+        performances = get_performances(periode)
+        return jsonify({
+            'success': True,
+            'periode': periode,
+            'performances': performances
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_performances: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/ab-tests')
 def api_ab_tests():
@@ -7552,45 +7572,61 @@ def api_ab_tests():
 @app.route('/api/journal/<symbole>')
 def api_journal(symbole):
     """Récupère le journal d'un actif"""
-    entries = get_journal_actif(symbole)
-    return jsonify({
-        'success': True,
-        'symbole': symbole,
-        'entries': entries
-    })
+    try:
+        entries = get_journal_actif(symbole)
+        return jsonify({
+            'success': True,
+            'symbole': symbole,
+            'entries': entries
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_journal({symbole}): {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/journal', methods=['POST'])
 def api_ajouter_journal():
     """Ajoute une entrée au journal"""
-    data = request.json
-    success = ajouter_entree_journal(
-        data.get('symbole'),
-        data.get('nom_actif'),
-        data.get('type_info'),
-        data.get('titre'),
-        data.get('contenu'),
-        data.get('impact_cours', ''),
-        data.get('importance', 2)
-    )
-    return jsonify({'success': success})
+    try:
+        data = request.json
+        success = ajouter_entree_journal(
+            data.get('symbole'),
+            data.get('nom_actif'),
+            data.get('type_info'),
+            data.get('titre'),
+            data.get('contenu'),
+            data.get('impact_cours', ''),
+            data.get('importance', 2)
+        )
+        return jsonify({'success': success})
+    except Exception as e:
+        logger.error(f"Erreur api_ajouter_journal: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/journaux')
 def api_tous_journaux():
     """Liste tous les actifs avec journal"""
-    actifs = get_tous_journaux()
-    return jsonify({
-        'success': True,
-        'actifs': actifs
-    })
+    try:
+        actifs = get_tous_journaux()
+        return jsonify({
+            'success': True,
+            'actifs': actifs
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_tous_journaux: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/actifs')
 def api_actifs():
     """Liste tous les actifs suivis"""
-    return jsonify({
-        'success': True,
-        'permanents': ACTIFS_PERMANENTS,
-        'rotation': POOL_ROTATION
-    })
+    try:
+        return jsonify({
+            'success': True,
+            'permanents': ACTIFS_PERMANENTS,
+            'rotation': POOL_ROTATION
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_actifs: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/cloture')
 def api_cloture():
@@ -7845,18 +7881,26 @@ def api_journal_quotidien():
 @app.route('/api/journal-quotidien/generer', methods=['POST'])
 def api_generer_journal_quotidien():
     """Force la génération du journal quotidien"""
-    success = enregistrer_journal_quotidien()
-    return jsonify({'success': success})
+    try:
+        success = enregistrer_journal_quotidien()
+        return jsonify({'success': success})
+    except Exception as e:
+        logger.error(f"Erreur api_generer_journal_quotidien: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/historique-opportunites/<symbole>')
 def api_historique_opportunites(symbole):
     """Récupère l'historique des opportunités pour un actif"""
-    trades = get_historique_opportunites(symbole)
-    return jsonify({
-        'success': True,
-        'symbole': symbole,
-        'trades': trades
-    })
+    try:
+        trades = get_historique_opportunites(symbole)
+        return jsonify({
+            'success': True,
+            'symbole': symbole,
+            'trades': trades
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_historique_opportunites({symbole}): {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/stats-evolution')
 def api_stats_evolution():
@@ -7989,17 +8033,25 @@ def api_generer_bilan():
 @app.route('/api/trades/verifier', methods=['POST'])
 def api_verifier_trades():
     """Force la vérification des résultats des trades"""
-    nb = verifier_resultats_trades()
-    return jsonify({'success': True, 'trades_mis_a_jour': nb})
+    try:
+        nb = verifier_resultats_trades()
+        return jsonify({'success': True, 'trades_mis_a_jour': nb})
+    except Exception as e:
+        logger.error(f"Erreur api_verifier_trades: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/trades/cloturer', methods=['POST'])
 def api_cloturer_trades():
     """Force la clôture des trades du jour"""
-    # D'abord vérifier
-    verifier_resultats_trades()
-    # Puis clôturer
-    nb = cloturer_trades_jour()
-    return jsonify({'success': True, 'trades_clotures': nb})
+    try:
+        # D'abord vérifier
+        verifier_resultats_trades()
+        # Puis clôturer
+        nb = cloturer_trades_jour()
+        return jsonify({'success': True, 'trades_clotures': nb})
+    except Exception as e:
+        logger.error(f"Erreur api_cloturer_trades: {e}")
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/evenements-macro')
 def api_evenements_macro():
