@@ -4734,11 +4734,19 @@ def generer_bilan_quotidien():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # Récupérer les trades du jour
+        # Récupérer les trades CONCLUS du jour (exclure trades ouverts pour stats fiables)
         cursor.execute('''
-            SELECT * FROM trades_recommandes WHERE date = ?
+            SELECT * FROM trades_recommandes
+            WHERE date = ? AND resultat IS NOT NULL
         ''', (aujourdhui,))
         trades_jour = [dict(row) for row in cursor.fetchall()]
+
+        # Compter les trades ouverts séparément
+        cursor.execute('''
+            SELECT COUNT(*) FROM trades_recommandes
+            WHERE date = ? AND resultat IS NULL
+        ''', (aujourdhui,))
+        nb_trades_ouverts = cursor.fetchone()[0] or 0
 
         # Récupérer les journaux du jour
         cursor.execute('''
@@ -4751,7 +4759,8 @@ def generer_bilan_quotidien():
         # Préparer les données pour le prompt
         donnees_bilan = {
             'date': str(aujourdhui),
-            'nb_recommandations': len(trades_jour),
+            'nb_trades_conclus': len(trades_jour),
+            'nb_trades_ouverts': nb_trades_ouverts,
             'trades': [{
                 'actif': t['actif'],
                 'direction': t.get('direction', 'LONG'),
@@ -4895,10 +4904,10 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
             categorie = get_categorie_actif(symbole)
             opps = opportunites_jour.get(symbole, [])
 
-            # Récupérer les recommandations analystes (seulement pour les actions)
+            # Note: Les recommandations analystes ne sont pas disponibles via Twelve Data
+            # La fonction recuperer_recommandations_analystes retourne toujours []
+            # On garde le champ vide pour compatibilité future
             recos = []
-            if categorie in ['action_eu', 'action_us']:
-                recos = recuperer_recommandations_analystes(symbole)
 
             # Récupérer volume_relatif depuis les données (si disponible)
             volume_rel = data.get('volume_relatif', data.get('volume_relatif_pct', 0))
@@ -5278,6 +5287,27 @@ def generer_rapport_hebdo():
                 }
             })
 
+        # Récupérer les leçons apprises des bilans quotidiens de la semaine
+        cursor.execute('''
+            SELECT date, lecons_apprises, points_negatifs
+            FROM bilan_quotidien
+            WHERE date >= ? AND date <= ?
+            ORDER BY date
+        ''', (date_debut, date_fin))
+        bilans_semaine = []
+        for row in cursor.fetchall():
+            try:
+                lecons = json.loads(row['lecons_apprises'] or '[]')
+                points_negatifs = json.loads(row['points_negatifs'] or '[]')
+                if lecons or points_negatifs:
+                    bilans_semaine.append({
+                        'date': str(row['date']),
+                        'lecons': lecons[:2],  # Max 2 leçons par jour
+                        'erreurs': points_negatifs[:2]  # Max 2 erreurs par jour
+                    })
+            except json.JSONDecodeError:
+                pass
+
         conn.close()
 
         # Préparer les données pour Claude (incluant les analyses d'indicateurs)
@@ -5304,7 +5334,9 @@ def generer_rapport_hebdo():
             'stats_par_sentiment': stats_par_sentiment,        # Sentiment score
             # Tests A/B en cours
             'tests_ab': stats_ab_tests,
-            'nb_trades_total': len(trades_semaine)
+            'nb_trades_total': len(trades_semaine),
+            # Bilans quotidiens de la semaine (leçons apprises)
+            'bilans_quotidiens': bilans_semaine
         }
 
         donnees_texte = json.dumps(donnees_rapport, ensure_ascii=False, indent=2, default=str)
@@ -5326,6 +5358,7 @@ ANALYSE EN PRIORITÉ:
 8. MULTI-TF: L'alignement des timeframes prédit-il le succès? (stats_par_alignement)
 9. SENTIMENT: Le sentiment score prédit-il correctement la direction? (stats_par_sentiment)
 10. TESTS A/B: Compare les performances des groupes A vs B
+11. BILANS QUOTIDIENS: Les leçons apprises chaque jour (bilans_quotidiens) - éviter les erreurs répétées
 
 RECOMMANDATIONS ATTENDUES:
 - Quels jours/sessions privilégier ou éviter?
@@ -5352,6 +5385,24 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
             return None
 
         if rapport:
+            # Validation et normalisation des champs du rapport
+            # Assurer que tous les champs requis existent avec des valeurs par défaut
+            rapport.setdefault('resume_executif', 'Rapport généré automatiquement')
+            rapport.setdefault('chiffres_cles', {})
+            rapport.setdefault('forces', [])
+            rapport.setdefault('faiblesses', [])
+            rapport.setdefault('patterns_identifies', [])
+            rapport.setdefault('ajustements_recommandes', [])
+            rapport.setdefault('scores_confiance', {})
+            rapport.setdefault('focus_semaine_prochaine', [])
+
+            # Normaliser les scores de confiance (borner 0-100)
+            for cat, data in rapport.get('scores_confiance', {}).items():
+                if isinstance(data, dict) and 'score' in data:
+                    try:
+                        data['score'] = max(0, min(100, int(float(data['score']))))
+                    except (ValueError, TypeError):
+                        data['score'] = 50
             # Sauvegarder le rapport
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
@@ -5403,7 +5454,12 @@ def appliquer_ajustements_dynamiques(ajustements, scores_confiance):
         # Sauvegarder les scores de confiance comme critères
         for categorie, score_data in scores_confiance.items():
             if isinstance(score_data, dict):
-                score = score_data.get('score', 50)
+                # CORRIGÉ: Borner le score entre 0 et 100
+                raw_score = score_data.get('score', 50)
+                try:
+                    score = max(0, min(100, int(float(raw_score))))
+                except (ValueError, TypeError):
+                    score = 50  # Valeur par défaut si conversion échoue
                 tendance = score_data.get('tendance', 'stable')
 
                 # Récupérer la valeur précédente
