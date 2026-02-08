@@ -5457,8 +5457,52 @@ def get_criteres_dynamiques():
         print(f"⚠️ Erreur critères dynamiques: {e}")
         return {'scores_confiance': {}, 'ajustements_recents': []}
 
+def extraire_categorie_ajustement(critere, raison, action):
+    """
+    Extrait une catégorie spécifique d'un ajustement stratégique.
+    CORRIGÉ: Évite la catégorie générique 'trading' pour permettre un feedback précis.
+    """
+    texte = f"{critere} {raison} {action}".lower()
+
+    # Catégories d'actifs
+    if any(mot in texte for mot in ['indice', 'indices', 'cac', 'dax', 'sp500', 's&p', 'nasdaq', 'dow']):
+        return 'indice'
+    if any(mot in texte for mot in ['action_eu', 'actions européennes', 'actions eu', 'lvmh', 'total', 'airbus']):
+        return 'action_eu'
+    if any(mot in texte for mot in ['action_us', 'actions américaines', 'actions us', 'apple', 'tesla', 'nvidia', 'microsoft']):
+        return 'action_us'
+    if any(mot in texte for mot in ['commodit', 'or', 'gold', 'pétrole', 'oil', 'silver', 'argent']):
+        return 'commodite'
+    if any(mot in texte for mot in ['forex', 'eur/usd', 'gbp', 'devise', 'currency']):
+        return 'forex'
+
+    # Catégories temporelles/contextuelles
+    if any(mot in texte for mot in ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi']):
+        return 'timing_jour'
+    if any(mot in texte for mot in ['matin', 'après-midi', 'soir', 'ouverture', 'clôture', 'session']):
+        return 'timing_session'
+    if any(mot in texte for mot in ['news', 'annonce', 'économique', 'fomc', 'nfp', 'inflation']):
+        return 'news_trading'
+
+    # Catégories techniques
+    if any(mot in texte for mot in ['rsi', 'macd', 'indicateur']):
+        return 'indicateurs'
+    if any(mot in texte for mot in ['trailing', 'stop', 'tp', 'take profit']):
+        return 'gestion_position'
+    if any(mot in texte for mot in ['ratio', 'r/r', 'risk', 'reward']):
+        return 'risk_reward'
+    if any(mot in texte for mot in ['conviction', 'confiance', 'score']):
+        return 'conviction'
+
+    # Catégorie par défaut plus spécifique que "trading"
+    return 'strategie_generale'
+
 def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapport_hebdo'):
-    """Sauvegarde les ajustements proposés en attente de validation"""
+    """Sauvegarde les ajustements proposés en attente de validation
+
+    CORRIGÉ: Catégorie extraite du contenu au lieu de 'trading' générique
+    CORRIGÉ: Auto-validation retardée (pas immédiate après création)
+    """
     maintenant = get_paris_time()
 
     try:
@@ -5493,13 +5537,16 @@ def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapp
             action = ajust.get('action', '')
             raison = ajust.get('raison', '')
 
+            # CORRIGÉ: Extraire une catégorie spécifique du contenu
+            categorie = extraire_categorie_ajustement(critere, raison, action)
+
             cursor.execute('''
                 INSERT INTO ajustements_proposes
                 (type_ajustement, categorie, critere, action, valeur_proposee, raison, source, statut, date_proposition)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 'strategie',
-                'trading',
+                categorie,  # CORRIGÉ: Catégorie spécifique au lieu de 'trading'
                 critere,
                 action,
                 '',
@@ -5513,8 +5560,10 @@ def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapp
         conn.close()
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📋 {len(ajustements) + len(scores_confiance)} ajustements proposés en attente de validation")
 
-        # Traitement automatique basé sur l'historique des feedbacks
-        traiter_ajustements_automatiquement()
+        # CORRIGÉ: Auto-validation RETARDÉE - ne pas appeler immédiatement
+        # Le traitement automatique sera fait par le scheduler après un délai
+        # pour laisser à l'utilisateur le temps de review manuellement
+        # traiter_ajustements_automatiquement()  # Désactivé - sera appelé par scheduler
 
     except Exception as e:
         print(f"⚠️ Erreur sauvegarde ajustements: {e}")
@@ -5687,10 +5736,47 @@ def get_historique_ajustements(limite=50):
 # FEEDBACK LOOP - ÉVALUATION DES AJUSTEMENTS
 # ============================================================================
 
+def construire_filtre_feedback(categorie, type_ajustement):
+    """
+    Construit le filtre SQL approprié selon la catégorie de l'ajustement.
+    CORRIGÉ: Gère les catégories d'actifs ET les catégories contextuelles.
+    """
+    # Catégories qui correspondent directement à categorie_actif
+    categories_actifs = ['indice', 'action_eu', 'action_us', 'commodite', 'forex']
+
+    if categorie in categories_actifs:
+        return "categorie_actif = ?", [categorie]
+
+    # Catégories temporelles - filtrer par jour de semaine
+    if categorie == 'timing_jour':
+        return "1=1", []  # Pas de filtre spécifique, compare globalement
+
+    # Catégories liées aux sessions
+    if categorie == 'timing_session':
+        return "session_marche IS NOT NULL", []
+
+    # Catégories liées aux news
+    if categorie == 'news_trading':
+        return "type_setup = 'NEWS'", []
+
+    # Catégories techniques (indicateurs, gestion position, etc.)
+    if categorie in ['indicateurs', 'gestion_position', 'risk_reward', 'conviction']:
+        return "1=1", []  # Compare globalement
+
+    # Score confiance - filtre par catégorie d'actif si c'est une catégorie valide
+    if type_ajustement == 'score_confiance' and categorie in categories_actifs:
+        return "categorie_actif = ?", [categorie]
+
+    # Défaut: pas de filtre spécifique
+    return "1=1", []
+
 def calculer_feedback_ajustement(id_ajustement, jours_evaluation=7):
     """
     Calcule l'impact d'un ajustement en comparant les performances
     avant et après son application.
+
+    CORRIGÉ: Gère les différentes catégories d'ajustements (pas seulement categorie_actif)
+    CORRIGÉ: Exclut les trades ouverts (resultat IS NOT NULL)
     """
     maintenant = get_paris_time()
 
@@ -5726,30 +5812,39 @@ def calculer_feedback_ajustement(id_ajustement, jours_evaluation=7):
         # Période APRÈS l'ajustement (7 jours après ou jusqu'à maintenant)
         date_fin_apres = min(date_application + timedelta(days=jours_evaluation), maintenant.date())
 
-        # Stats AVANT (inclut WIN_FORCE et LOSS_FORCE pour compatibilité)
-        cursor.execute('''
+        # CORRIGÉ: Construire le filtre approprié selon la catégorie
+        categorie = ajust.get('categorie', '')
+        type_ajust = ajust.get('type_ajustement', 'strategie')
+        filtre_sql, filtre_params = construire_filtre_feedback(categorie, type_ajust)
+
+        # Stats AVANT - CORRIGÉ: Exclut trades ouverts (resultat IS NOT NULL)
+        query_avant = f'''
             SELECT
                 COUNT(*) as nb_trades,
                 SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                 SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
-                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total
             FROM trades_recommandes
             WHERE date >= ? AND date < ?
-            AND categorie_actif = ?
-        ''', (date_debut_avant, date_application, ajust.get('categorie')))
+            AND resultat IS NOT NULL
+            AND {filtre_sql}
+        '''
+        cursor.execute(query_avant, (date_debut_avant, date_application, *filtre_params))
         avant = cursor.fetchone()
 
-        # Stats APRÈS (inclut WIN_FORCE et LOSS_FORCE)
-        cursor.execute('''
+        # Stats APRÈS - CORRIGÉ: Exclut trades ouverts (resultat IS NOT NULL)
+        query_apres = f'''
             SELECT
                 COUNT(*) as nb_trades,
                 SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as reussis,
                 SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as stops,
-                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
+                SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
-            AND categorie_actif = ?
-        ''', (date_application, date_fin_apres, ajust.get('categorie')))
+            AND resultat IS NOT NULL
+            AND {filtre_sql}
+        '''
+        cursor.execute(query_apres, (date_application, date_fin_apres, *filtre_params))
         apres = cursor.fetchone()
 
         # Calculer les taux de réussite
@@ -5762,8 +5857,7 @@ def calculer_feedback_ajustement(id_ajustement, jours_evaluation=7):
         pnl_avant = round(avant['pnl_total'] or 0, 2)
         pnl_apres = round(apres['pnl_total'] or 0, 2)
 
-        # CORRIGÉ: Seuil augmenté de 3 à 5 trades pour significativité
-        # Déterminer la conclusion
+        # Déterminer la conclusion (seuil 5 trades pour significativité)
         if apres_conclus < 5:
             conclusion = "INSUFFISANT"
             conclusion_detail = f"Seulement {apres_conclus} trades après ajustement (min 5 requis)"
@@ -5881,20 +5975,26 @@ def get_historique_feedback_categorie(categorie, type_ajustement='strategie'):
         nb_negatifs = sum(1 for r in resultats if r and 'NEGATIF' in r)
         nb_neutres = sum(1 for r in resultats if r and 'NEUTRE' in r)
 
-        # CORRIGÉ: Seuils augmentés de 2 à 5 pour significativité statistique
+        # CORRIGÉ: Seuils harmonisés - minimum 5 feedbacks pour significativité
         total_conclus = nb_positifs + nb_negatifs
-        if total_conclus < 3:
-            recommandation = 'MANUEL'  # Pas assez de données (minimum 3 feedbacks conclus)
+        if total_conclus < 5:
+            # Pas assez de données - toujours validation manuelle
+            recommandation = 'MANUEL'
         elif nb_positifs >= 5 and nb_negatifs == 0:
-            recommandation = 'AUTO_VALIDER'  # Pattern positif fort (5+ sans négatif)
+            # Pattern positif fort (5+ sans aucun négatif)
+            recommandation = 'AUTO_VALIDER'
         elif nb_negatifs >= 5 and nb_positifs == 0:
-            recommandation = 'BLOQUER'  # Circuit breaker (5+ négatifs sans positif)
+            # Circuit breaker (5+ négatifs sans aucun positif)
+            recommandation = 'BLOQUER'
         elif nb_positifs >= 5 and nb_positifs > nb_negatifs * 3:
-            recommandation = 'AUTO_VALIDER'  # Ratio 3:1 positifs (5+ positifs)
+            # Ratio 3:1 en faveur des positifs
+            recommandation = 'AUTO_VALIDER'
         elif nb_negatifs >= 5 and nb_negatifs > nb_positifs * 3:
-            recommandation = 'BLOQUER'  # Ratio 3:1 négatifs (5+ négatifs)
+            # Ratio 3:1 en faveur des négatifs
+            recommandation = 'BLOQUER'
         else:
-            recommandation = 'MANUEL'  # Résultats mitigés ou insuffisants
+            # Résultats mitigés - validation manuelle
+            recommandation = 'MANUEL'
 
         return {
             'nb_positifs': nb_positifs,
@@ -6375,15 +6475,17 @@ def get_criteres_dynamiques_actifs():
             }
 
         # CORRIGÉ: Expiration dynamique des ajustements selon le type
-        # - Actions urgentes (ÉVITER): 7 jours max
-        # - Actions prudentes (RÉDUIRE/FAVORISER): 14 jours max
+        # - Actions urgentes (ÉVITER): 10 jours (permet feedback 7j + marge)
+        # - Actions prudentes (RÉDUIRE/FAVORISER): 21 jours (2 semaines de feedback)
+        # CORRIGÉ: Filtre explicite type_ajustement = 'strategie' pour éviter duplication avec scores
         cursor.execute('''
             SELECT categorie, critere, action, raison, date_decision
             FROM ajustements_proposes
             WHERE statut = 'valide'
+            AND type_ajustement = 'strategie'
             AND (
-                (action = 'ÉVITER' AND date_decision > date('now', '-7 days'))
-                OR (action IN ('RÉDUIRE', 'FAVORISER') AND date_decision > date('now', '-14 days'))
+                (action = 'ÉVITER' AND date_decision > date('now', '-10 days'))
+                OR (action IN ('RÉDUIRE', 'FAVORISER') AND date_decision > date('now', '-21 days'))
             )
         ''')
 
