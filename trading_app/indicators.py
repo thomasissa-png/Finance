@@ -204,18 +204,50 @@ def calculer_indicateurs_complets(symbole):
         else:
             rsi_interpretation = 'NEUTRE'
 
+    # RSI intraday (5min, 100 bougies) — plus pertinent pour scalping
+    rsi_intraday = None
+    rsi_intraday_interpretation = None
+    try:
+        df_intraday_rsi, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=100)
+        if not df_intraday_rsi.empty and len(df_intraday_rsi) > 15:
+            rsi_intraday = calculer_rsi(df_intraday_rsi, periode=14)
+            if rsi_intraday is not None:
+                if rsi_intraday < 30:
+                    rsi_intraday_interpretation = 'SURVENTE'
+                elif rsi_intraday > 70:
+                    rsi_intraday_interpretation = 'SURACHAT'
+                else:
+                    rsi_intraday_interpretation = 'NEUTRE'
+    except Exception:
+        pass  # Pas critique, on garde le RSI daily
+
+    # Volume relatif intraday corrigé:
+    # Compare le volume des dernières bougies au volume moyen historique
+    volume_relatif_intraday = None
+    try:
+        if not df.empty and len(df) >= 20 and 'Volume' in df.columns:
+            volume_moyen_daily = df['Volume'].iloc[-20:].mean()
+            volume_jour = df['Volume'].iloc[-1]
+            if volume_moyen_daily > 0:
+                volume_relatif_intraday = round((volume_jour / volume_moyen_daily) * 100, 1)
+    except Exception:
+        pass
+
     # Calcul des tendances multi-timeframe (H1, H4, Daily)
     tendances = calculer_tendances_multi_tf(symbole)
 
     return {
         'rsi': rsi,
         'rsi_interpretation': rsi_interpretation,
+        'rsi_intraday': rsi_intraday,
+        'rsi_intraday_interpretation': rsi_intraday_interpretation,
         'macd': macd_val,
         'macd_signal': signal_val,
         'macd_histogram': hist_val,
         'macd_interpretation': macd_type,
         'atr': atr_val,
         'atr_pct': atr_pct,
+        'volume_relatif_intraday': volume_relatif_intraday,
         'is_fresh': is_fresh,
         'trend_daily': tendances['trend_daily'],
         'trend_h4': tendances['trend_h4'],
@@ -252,8 +284,11 @@ def enrichir_donnees_avec_indicateurs(donnees_marche):
                 'symbole': symbole,
                 'RSI': indicateurs.get('rsi'),
                 'RSI_signal': indicateurs.get('rsi_interpretation'),
+                'RSI_intraday': indicateurs.get('rsi_intraday'),
+                'RSI_intraday_signal': indicateurs.get('rsi_intraday_interpretation'),
                 'MACD': indicateurs.get('macd_interpretation'),
                 'ATR_pct': indicateurs.get('atr_pct'),
+                'volume_relatif_intraday': indicateurs.get('volume_relatif_intraday'),
                 'trend_daily': indicateurs.get('trend_daily'),
                 'trend_h4': indicateurs.get('trend_h4'),
                 'trend_h1': indicateurs.get('trend_h1'),
@@ -264,7 +299,10 @@ def enrichir_donnees_avec_indicateurs(donnees_marche):
             if nom_actif in donnees_enrichies and isinstance(donnees_enrichies[nom_actif], dict):
                 donnees_enrichies[nom_actif]['rsi'] = indicateurs.get('rsi')
                 donnees_enrichies[nom_actif]['rsi_signal'] = indicateurs.get('rsi_interpretation')
+                donnees_enrichies[nom_actif]['rsi_intraday'] = indicateurs.get('rsi_intraday')
+                donnees_enrichies[nom_actif]['rsi_intraday_signal'] = indicateurs.get('rsi_intraday_interpretation')
                 donnees_enrichies[nom_actif]['macd_signal'] = indicateurs.get('macd_interpretation')
+                donnees_enrichies[nom_actif]['volume_relatif_intraday'] = indicateurs.get('volume_relatif_intraday')
                 donnees_enrichies[nom_actif]['trend_daily'] = indicateurs.get('trend_daily')
                 donnees_enrichies[nom_actif]['trend_h4'] = indicateurs.get('trend_h4')
                 donnees_enrichies[nom_actif]['trend_h1'] = indicateurs.get('trend_h1')

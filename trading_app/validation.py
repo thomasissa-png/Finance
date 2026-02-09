@@ -202,16 +202,34 @@ def valider_opportunite(opp):
         erreurs.append(f"Ratio R:R insuffisant: {ratio_rr:.2f} (minimum {rr_minimum} en régime {regime_marche})")
         return False, None, avertissements, erreurs
 
-    # === VALIDATION OBJECTIF 0.7% ===
+    # === VALIDATION OBJECTIF DYNAMIQUE (ATR × régime VIX) ===
     # Calculer le gain cible en pourcentage
     if direction == 'LONG':
         gain_cible_pct = ((tp1 - entree) / entree) * 100
     else:
         gain_cible_pct = ((entree - tp1) / entree) * 100
 
-    # Avertir si gain cible < 0.7% (objectif minimum day trading)
-    if gain_cible_pct < 0.7:
-        avertissements.append(f"Gain cible faible: {gain_cible_pct:.2f}% < 0.7% objectif")
+    # Seuil adaptatif: proportionnel à l'ATR réelle de l'actif et au régime VIX
+    # En marché calme on peut viser plus (% de l'ATR), en volatile on réduit les attentes
+    FACTEUR_REGIME = {
+        'CALME': 0.30,    # Marché calme: viser 30% de l'ATR daily
+        'NORMAL': 0.35,   # Standard: 35% de l'ATR daily
+        'VOLATILE': 0.25, # Volatile: objectifs réduits, 25% de l'ATR
+        'EXTREME': 0.20   # Extrême: prendre ce qu'on peut, 20% de l'ATR
+    }
+    facteur = FACTEUR_REGIME.get(regime_marche, 0.35)
+
+    atr_pct_seuil = opp.get('atr_pct', 0)
+    if atr_pct_seuil and atr_pct_seuil > 0:
+        seuil_gain_min = max(0.5, atr_pct_seuil * facteur)
+    else:
+        seuil_gain_min = 0.7  # Fallback si ATR indisponible
+
+    if gain_cible_pct < seuil_gain_min:
+        avertissements.append(
+            f"Gain cible faible: {gain_cible_pct:.2f}% < {seuil_gain_min:.2f}% "
+            f"(seuil dynamique: ATR {atr_pct_seuil:.1f}% × {facteur} en régime {regime_marche})"
+        )
 
     # Validation ATR: le gain cible ne doit pas dépasser 1.5x l'ATR daily
     # (sinon le TP est irréaliste pour la volatilité de l'actif)

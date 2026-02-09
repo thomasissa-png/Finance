@@ -27,7 +27,8 @@ RÈGLES DE FILTRAGE:
 INDICATEURS TECHNIQUES (fournis dans les données):
 - ATR%: Average True Range en % du prix - mesure la volatilité. ATR < 1% = ÉVITER
 - Volume Relatif: Volume actuel vs moyenne 20j. > 150% = intérêt institutionnel
-- RSI (0-100): < 30 = survente (potentiel LONG), > 70 = surachat (potentiel SHORT)
+- RSI daily (0-100): < 30 = survente (potentiel LONG), > 70 = surachat (potentiel SHORT)
+- RSI intraday 5min (si disponible): PRIORITAIRE pour les entrées scalping - plus réactif que le RSI daily
 - MACD: BULLISH_CROSS = signal d'achat, BEARISH_CROSS = signal de vente
 - Pivot/Support1/Resistance1: Niveaux techniques clés calculés sur la veille
   - UTILISE support1/resistance1 pour placer tes stops et TP intelligemment

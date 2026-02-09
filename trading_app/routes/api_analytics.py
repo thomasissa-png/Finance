@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request
 
 from ..config import logger, DB_PATH, DB_TIMEOUT, to_python_type
 from ..market_context import get_paris_time
+from ..metrics import calculer_metriques_prediction
 
 bp = Blueprint('api_analytics', __name__)
 
@@ -781,5 +782,34 @@ def api_journal_stats():
         })
     except Exception as e:
         logger.error(f"Erreur api_journal_stats: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@bp.route('/api/metrics')
+def api_metrics():
+    """
+    Endpoint de monitoring des métriques prédictives.
+    Paramètre optionnel: ?jours=30 (défaut 30)
+    Retourne: precision, profit_factor, win_rate par grade, calibration conviction, PnL par régime
+    """
+    try:
+        jours = request.args.get('jours', 30, type=int)
+        jours = min(max(jours, 7), 365)  # Borner entre 7 et 365 jours
+
+        metriques = calculer_metriques_prediction(jours=jours)
+
+        if not metriques:
+            return jsonify({
+                'success': True,
+                'message': 'Pas assez de trades conclus pour calculer les métriques',
+                'metriques': None
+            })
+
+        return jsonify({
+            'success': True,
+            'metriques': metriques
+        })
+    except Exception as e:
+        logger.error(f"Erreur api_metrics: {e}")
         return jsonify({'success': False, 'error': str(e)})
 

@@ -26,6 +26,7 @@ from .validation import extraire_json_claude, valider_structure_analyse
 from .prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_NEWS_ANALYSIS, SYSTEM_PROMPT_CLOTURE
 from .adjustments import generer_instructions_dynamiques, get_criteres_dynamiques
 from .ab_testing import get_instructions_ab_testing
+from .metrics import generer_contexte_metriques_pour_prompt
 
 def analyser_news_trading(headlines):
     """Analyse les headlines d'actualités pour identifier les impacts trading"""
@@ -299,7 +300,10 @@ def analyser_marche_json(donnees):
    Conseil: {contexte_avance['conseil_jour']}
 """
 
-    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR%, Volume Relatif, RSI, MACD, Pivot/Support/Résistance):
+    # Contexte métriques de performance (auto-correction)
+    contexte_metriques = generer_contexte_metriques_pour_prompt(jours=14)
+
+    question = f"""DONNÉES MARCHÉ EN TEMPS RÉEL (avec ATR%, Volume Relatif, RSI daily + intraday, MACD, Pivot/Support/Résistance):
 {donnees_texte}
 
 Heure: {maintenant.strftime('%d/%m/%Y %H:%M')} CET
@@ -308,6 +312,7 @@ Contexte: {marche_type} - {marche_info}
 {contexte_macro}
 {exclusions_atr}
 {contexte_criteres}
+{contexte_metriques}
 
 Analyse le marché et fournis une réponse JSON structurée selon le format demandé.
 RÈGLES IMPÉRATIVES:
@@ -317,7 +322,8 @@ RÈGLES IMPÉRATIVES:
 - ÉVITE les catégories avec score faible (<40)
 - AU MOINS 1 opportunité NEWS TRADING (si conditions favorables)
 - Liste UNIQUEMENT les événements APRÈS {heure_str}
-- UTILISE les indicateurs RSI et MACD fournis pour confirmer tes trades
+- UTILISE les indicateurs RSI (daily ET intraday si disponible) et MACD fournis pour confirmer tes trades
+- RSI_intraday est le RSI 5min (plus réactif pour le scalping) - PRIORITAIRE sur le RSI daily pour les entrées
 - UTILISE les niveaux support1/resistance1 pour placer stop/TP intelligemment
 - RATIO R/R MINIMUM 1:1.5 - justifie ton choix dans ratio_rr_justification
 - ADAPTE tes règles au RÉGIME DE MARCHÉ indiqué (VIX)
