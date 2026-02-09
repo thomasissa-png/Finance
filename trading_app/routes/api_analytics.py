@@ -307,7 +307,7 @@ def api_trades_historique():
             params.append(regime)
 
         if recherche:
-            where_clauses.append('(actif LIKE ? OR symbole LIKE ? OR justification LIKE ?)')
+            where_clauses.append('(actif LIKE ? OR symbole LIKE ? OR ratio_rr_justification LIKE ?)')
             params.extend([f'%{recherche}%', f'%{recherche}%', f'%{recherche}%'])
 
         where_sql = ' AND '.join(where_clauses)
@@ -318,11 +318,12 @@ def api_trades_historique():
         total_count = cursor.fetchone()[0]
 
         # Requête avec projection de colonnes (évite SELECT *)
-        select_cols = '''id, date, timestamp_reco, actif, symbole, direction,
-                         prix_entree, prix_stop, prix_tp1, prix_tp2,
+        select_cols = '''id, date, timestamp_reco, heure_message, actif, symbole, direction,
+                         type_setup, prix_entree, prix_stop, prix_tp1, prix_tp2,
                          resultat, pnl_pct, duree_minutes, categorie_actif,
                          conviction_score, regime_marche, strategie_entree,
-                         statut_intraday, action_recommandee, ratio_rr_justification'''
+                         statut_intraday, action_recommandee, ratio_rr_justification,
+                         trade_grade, grade_setup_score'''
 
         query = f'''SELECT {select_cols} FROM trades_recommandes
                     WHERE {where_sql}
