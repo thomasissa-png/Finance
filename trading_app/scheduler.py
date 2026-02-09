@@ -13,7 +13,7 @@ from .market_context import (
     get_paris_time, get_utc_time_for_paris, get_market_context,
     get_vix_level, get_regime_marche, get_actifs_filtres_atr
 )
-from .validation import valider_opportunite
+from .validation import valider_opportunite, valider_setup_avant_trade
 from .market_data import recuperer_donnees_marche
 from .indicators import enrichir_donnees_avec_indicateurs
 from .analysis import analyser_marche_json, generer_cloture_json
@@ -93,6 +93,19 @@ def executer_analyse_planifiee(eu_only=False):
                     continue
 
                 opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
+
+                # Validation prix réel avant enregistrement
+                prix_entree_prevu = float(opp_validee.get('entree', 0))
+                setup_ok, setup_raison, quote_fraiche = valider_setup_avant_trade(
+                    symbole, opp_validee.get('direction', 'LONG'), prix_entree_prevu, donnees_enrichies
+                )
+                if not setup_ok:
+                    print(f"  ⚠️ [{symbole}] Setup rejeté: {setup_raison}")
+                    rejetes += 1
+                    continue
+                if quote_fraiche:
+                    opp_enrichie['prix_actuel'] = quote_fraiche['prix']
+
                 result = enregistrer_recommandation(opp_enrichie)
                 if result:
                     symboles_traites.add(symbole)
@@ -129,10 +142,46 @@ def executer_cloture_planifiee():
 def executer_journal_fr():
     """Exécute l'enregistrement du journal FR à 18h00"""
     maintenant = get_paris_time()
+    print(f"\n[{maintenant.strftime('%H:%M:%S')} CET] 📓 Journal FR en cours...")
+    is_valide, raison = est_jour_trading_valide(maintenant)
+    if not is_valide:
+        print(f"  ⏭️ Journal ignoré: {raison}")
+        return
+    try:
+        enregistrer_journal_fr()
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Journal FR sauvegardé")
+    except Exception as e:
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Erreur journal FR: {e}")
+        logger.error(f"Erreur journal FR: {e}")
+
+def rattraper_journal_manque():
+    """Rattrapage: si le journal FR de 18h n'a pas été généré (app démarrée après 18h)"""
+    maintenant = get_paris_time()
+    heure = maintenant.hour
+    jour = maintenant.weekday()
+    if jour >= 5 or heure < 18 or heure >= 22:
+        return  # Pas encore l'heure ou weekend
+
     is_valide, _ = est_jour_trading_valide(maintenant)
     if not is_valide:
         return
-    enregistrer_journal_fr()
+
+    # Vérifier si le journal FR existe déjà pour aujourd'hui
+    import sqlite3
+    from .config import DB_PATH
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM journal_quotidien WHERE date = ?", (maintenant.date().isoformat(),))
+    count = cursor.fetchone()[0]
+    conn.close()
+
+    if count == 0:
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📓 Rattrapage journal FR (manqué à 18h)...")
+        try:
+            enregistrer_journal_fr()
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Journal FR rattrapage OK")
+        except Exception as e:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Erreur rattrapage: {e}")
 
 def executer_journal_complet():
     """Exécute l'enregistrement du journal complet + bilan à 22h30"""
@@ -263,6 +312,12 @@ def run_scheduler():
     """Thread robuste pour le scheduler avec gestion d'erreurs"""
     consecutive_errors = 0
     max_consecutive_errors = 3
+
+    # Rattrapage des tâches manquées au démarrage
+    try:
+        rattraper_journal_manque()
+    except Exception as e:
+        logger.error(f"Erreur rattrapage journal: {e}")
 
     while True:
         try:

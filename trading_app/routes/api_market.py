@@ -14,7 +14,7 @@ from ..market_context import (
 from ..market_data import recuperer_donnees_marche, get_twelvedata_time_series, convert_symbol_to_twelvedata, rate_limit_twelvedata
 from ..indicators import calculer_indicateurs_techniques, enrichir_donnees_avec_indicateurs
 from ..analysis import analyser_marche_json, fetch_and_analyze_news
-from ..validation import valider_opportunite
+from ..validation import valider_opportunite, valider_setup_avant_trade
 from ..trades import enregistrer_recommandation, get_trades_du_jour, get_performances, enrichir_opportunite_avec_donnees_marche
 from ..journal import (
     get_derniere_analyse, get_analyses_du_jour, sauvegarder_analyse,
@@ -276,6 +276,20 @@ def api_lancer_analyse():
                     print(f"ℹ️ [{symbole}] Avertissements: {'; '.join(warns)}")
 
                 opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
+
+                # Validation 4: Vérifier prix réel avant enregistrement
+                prix_entree_prevu = float(opp_validee.get('entree', 0))
+                setup_ok, setup_raison, quote_fraiche = valider_setup_avant_trade(
+                    symbole, opp_validee.get('direction', 'LONG'), prix_entree_prevu, donnees_enrichies
+                )
+                if not setup_ok:
+                    print(f"⚠️ [{symbole}] Setup rejeté: {setup_raison}")
+                    opportunites_rejetees += 1
+                    continue
+                # Mettre à jour le prix actuel avec le prix frais
+                if quote_fraiche:
+                    opp_enrichie['prix_actuel'] = quote_fraiche['prix']
+
                 result = enregistrer_recommandation(opp_enrichie)
 
                 if result:

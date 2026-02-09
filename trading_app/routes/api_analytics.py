@@ -323,7 +323,7 @@ def api_trades_historique():
                          resultat, pnl_pct, duree_minutes, categorie_actif,
                          conviction_score, regime_marche, strategie_entree,
                          statut_intraday, action_recommandee, ratio_rr_justification,
-                         trade_grade, grade_setup_score'''
+                         trade_grade, grade_setup_score, prix_sortie, timestamp_sortie'''
 
         query = f'''SELECT {select_cols} FROM trades_recommandes
                     WHERE {where_sql}

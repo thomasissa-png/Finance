@@ -1010,6 +1010,22 @@ async function loadQuickStats() {
         const widget = document.getElementById('quick-stats-widget');
 
         if (data.success) {
+            // Calculer le total de trades conclus (wins+losses) sur toutes les dimensions
+            let totalConclus = 0;
+            if (data.par_conviction) {
+                for (const stat of data.par_conviction) {
+                    totalConclus += (stat.wins || 0) + (stat.losses || 0);
+                }
+            }
+
+            // Masquer la section si pas assez de données
+            const section = document.getElementById('section-quick-stats');
+            if (totalConclus < 10) {
+                section.style.display = 'none';
+                return;
+            }
+            section.style.display = '';
+
             let html = '<div class="quick-stats-container">';
 
             // Stats par conviction
@@ -1415,6 +1431,13 @@ function renderNewsFlashWithImpact(news) {
         newsCountSpan.textContent = 'Aucune news';
         return;
     }
+
+    // Trier par heure décroissante (dernières news en premier)
+    news.sort((a, b) => {
+        const ha = (a.heure || '00:00').replace(':', '');
+        const hb = (b.heure || '00:00').replace(':', '');
+        return parseInt(hb) - parseInt(ha);
+    });
 
     // Stocker toutes les news
     allNewsToday = news;

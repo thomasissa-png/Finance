@@ -224,7 +224,8 @@ def valider_opportunite(opp):
     # Note: Pas de validation volume - trading via turbos (liquidité assurée par market maker)
 
     # === VALIDATION HEURES DE MARCHÉ ===
-    # Avertir si le marché n'est pas ouvert (trades à planifier, pas exécuter immédiatement)
+    # BLOQUANT pour actions EU/US: rejet si marché fermé
+    # Avertissement seul pour forex/commodités (horaires étendus)
     symbole = opp.get('symbole') or opp.get('nom', '')
     if symbole:
         maintenant = get_paris_time()
@@ -233,7 +234,7 @@ def valider_opportunite(opp):
 
         # Weekend: tous les marchés fermés (sauf crypto si implémenté plus tard)
         if jour_semaine >= 5:
-            avertissements.append(f"Weekend: marchés fermés, trade à exécuter lundi")
+            erreurs.append(f"Weekend: marchés fermés")
         else:
             # Déterminer le type de marché
             # Lazy import to avoid circular dependency
@@ -243,18 +244,12 @@ def valider_opportunite(opp):
             if categorie == 'action_eu' or symbole in ['^FCHI', '^GDAXI', '^STOXX50E']:
                 # Euronext/Xetra: 9h00-17h30 Paris
                 if heure_decimal < 9 or heure_decimal >= 17.5:
-                    if heure_decimal >= 8:
-                        avertissements.append(f"Marché EU pré-ouverture: ouverture à 9h00")
-                    elif heure_decimal >= 17.5:
-                        avertissements.append(f"Marché EU fermé: réouverture demain 9h00")
-                    else:
-                        avertissements.append(f"Marché EU fermé (nuit)")
+                    erreurs.append(f"Marché EU fermé ({heure_decimal:.1f}h, ouvert 9h00-17h30)")
                 elif heure_decimal >= 17:
                     avertissements.append(f"Marché EU bientôt fermé: 30min restantes")
 
             elif categorie == 'action_us' or symbole in ['^GSPC', '^IXIC', '^DJI']:
-                # NYSE/NASDAQ: 15h30-22h00 Paris (9:30-16:00 ET, +6h normalement)
-                # Calculer dynamiquement avec pytz
+                # NYSE/NASDAQ: calculer dynamiquement
                 tz_ny = pytz.timezone('America/New_York')
                 now_ny = datetime.now(tz_ny)
                 now_paris = datetime.now(TZ_PARIS)
@@ -266,30 +261,25 @@ def valider_opportunite(opp):
                 us_close = 16 + diff_heures  # 16:00 NY en heure Paris
 
                 if heure_decimal < us_open or heure_decimal >= us_close:
-                    if heure_decimal >= (us_open - 1.5) and heure_decimal < us_open:
-                        avertissements.append(f"Marché US pré-ouverture: ouverture à {us_open:.0f}h30 Paris")
-                    elif heure_decimal >= us_close:
-                        avertissements.append(f"Marché US fermé: réouverture demain {us_open:.0f}h30 Paris")
-                    else:
-                        avertissements.append(f"Marché US fermé (hors heures)")
+                    erreurs.append(f"Marché US fermé ({heure_decimal:.1f}h, ouvert {us_open:.0f}h30-{us_close:.0f}h00 Paris)")
                 elif heure_decimal >= (us_close - 0.5):
                     avertissements.append(f"Marché US bientôt fermé: 30min restantes")
 
             elif categorie == 'forex':
                 # Forex: 24h du dimanche 23h au vendredi 22h Paris
-                # Dimanche: fermé avant 23h
-                if jour_semaine == 6:  # Dimanche
-                    if heure_decimal < 23:
-                        avertissements.append(f"Forex fermé jusqu'à 23h (ouverture Sydney)")
-                # Vendredi: fermeture à 22h
+                if jour_semaine == 6 and heure_decimal < 23:
+                    avertissements.append(f"Forex fermé jusqu'à 23h (ouverture Sydney)")
                 elif jour_semaine == 4 and heure_decimal >= 21:
                     avertissements.append(f"Forex fermeture imminente vendredi 22h")
 
-            # Commodités/Futures: horaires variables, pas de warning systématique
-            # mais attention aux heures de faible liquidité
+            # Commodités/Futures: horaires variables, avertissement seul
             elif categorie == 'commodite' and symbole.endswith('=F'):
                 if heure_decimal < 8 or heure_decimal >= 22:
                     avertissements.append(f"Futures: liquidité réduite hors heures principales")
+
+    # Si des erreurs bloquantes ont été ajoutées (ex: marché fermé), rejeter
+    if erreurs:
+        return False, None, avertissements, erreurs
 
     # Opportunité valide - construire la version corrigée
     opp_valide = opp.copy()
