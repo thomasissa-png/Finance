@@ -251,8 +251,8 @@ def api_trades_historique():
     """Récupère l'historique des trades avec filtres et pagination"""
     try:
         # Paramètres de pagination
-        page = int(request.args.get('page', 0))
-        limit = int(request.args.get('limit', 100))
+        page = request.args.get('page', 0, type=int)
+        limit = request.args.get('limit', 100, type=int)
         limit = min(limit, 500)  # Max 500 par page pour éviter surcharge
         offset = page * limit
 
@@ -525,8 +525,8 @@ def api_journal_search():
         date_to = request.args.get('date_to', '')
         symbole = request.args.get('symbole', '')
         categorie = request.args.get('categorie', '')
-        page = int(request.args.get('page', 0))
-        limit = int(request.args.get('limit', 50))
+        page = request.args.get('page', 0, type=int)
+        limit = request.args.get('limit', 50, type=int)
         limit = min(limit, 200)
         offset = page * limit
 
@@ -628,7 +628,7 @@ def api_journal_stats():
     """Statistiques hebdomadaires et mensuelles du journal"""
     try:
         granularite = request.args.get('granularite', 'semaine')  # semaine, mois
-        limite = int(request.args.get('limite', 12))
+        limite = request.args.get('limite', 12, type=int)
 
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row

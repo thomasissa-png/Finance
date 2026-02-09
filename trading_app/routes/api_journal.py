@@ -298,7 +298,7 @@ def api_news_raw():
 def api_news_historique():
     """Récupère l'historique des news analysées avec navigation par jour"""
     try:
-        jours = int(request.args.get('jours', 7))
+        jours = request.args.get('jours', 7, type=int)
         news = get_news_historique(jours)
 
         # Grouper par date
@@ -332,9 +332,9 @@ def api_journal_quotidien():
     """Récupère le journal quotidien avec navigation par date et pagination"""
     try:
         symbole = request.args.get('symbole')
-        limite = int(request.args.get('limite', 50))
+        limite = request.args.get('limite', 50, type=int)
         limite = min(limite, 200)  # Max 200 entrées
-        page = int(request.args.get('page', 0))
+        page = request.args.get('page', 0, type=int)
         offset = page * limite
         date_from = request.args.get('date_from')
         date_to = request.args.get('date_to')
@@ -395,7 +395,7 @@ def api_stats_evolution():
     """Récupère l'évolution des stats pour le graphique"""
     try:
         granularite = request.args.get('granularite', 'jour')  # jour, semaine, mois
-        limite = int(request.args.get('limite', 30))
+        limite = request.args.get('limite', 30, type=int)
 
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row

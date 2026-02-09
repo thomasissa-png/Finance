@@ -85,6 +85,9 @@ def fetch_and_analyze_news():
             'pageSize': 15
         }
         response = requests.get(url, params=params, timeout=10)
+        if not response.ok:
+            logger.warning(f"NewsAPI HTTP {response.status_code}")
+            return None
         data = response.json()
 
         if data.get('status') == 'ok':

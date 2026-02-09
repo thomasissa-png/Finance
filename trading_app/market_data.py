@@ -290,6 +290,11 @@ def get_twelvedata_time_series(symbole, outputsize=30, interval="1day"):
             params["mic_code"] = mic_code
 
         response = requests.get(url, params=params, timeout=10)
+        if not response.ok:
+            if response.status_code == 429:
+                activate_quota_circuit_breaker()
+            logger.warning(f"Twelve Data {symbole}: HTTP {response.status_code}")
+            return pd.DataFrame(), False
         data = response.json()
 
         if "values" not in data:
@@ -405,6 +410,10 @@ def get_twelvedata_quote(symbole):
             params["mic_code"] = mic_code
 
         response = requests.get(url, params=params, timeout=10)
+        if not response.ok:
+            if response.status_code == 429:
+                activate_quota_circuit_breaker()
+            return None
         data = response.json()
 
         if "close" not in data:
@@ -414,14 +423,14 @@ def get_twelvedata_quote(symbole):
             return None
 
         result = {
-            "price": float(data.get("close", 0)),
-            "open": float(data.get("open", 0)),
-            "high": float(data.get("high", 0)),
-            "low": float(data.get("low", 0)),
-            "previous_close": float(data.get("previous_close", 0)),
-            "change": float(data.get("change", 0)),
-            "percent_change": float(data.get("percent_change", 0)),
-            "volume": int(data.get("volume", 0)) if data.get("volume") else 0
+            "price": float(data.get("close") or 0),
+            "open": float(data.get("open") or 0),
+            "high": float(data.get("high") or 0),
+            "low": float(data.get("low") or 0),
+            "previous_close": float(data.get("previous_close") or 0),
+            "change": float(data.get("change") or 0),
+            "percent_change": float(data.get("percent_change") or 0),
+            "volume": int(data.get("volume") or 0)
         }
 
         # Mettre en cache
@@ -475,6 +484,11 @@ def get_fresh_quote_for_trade(symbole):
             params["mic_code"] = mic_code
 
         response = requests.get(url, params=params, timeout=10)
+        if not response.ok:
+            if response.status_code == 429:
+                activate_quota_circuit_breaker()
+            print(f"⚠️ Fresh quote {symbole}: HTTP {response.status_code}")
+            return None
         data = response.json()
 
         if "close" not in data:
@@ -484,12 +498,12 @@ def get_fresh_quote_for_trade(symbole):
             print(f"⚠️ Fresh quote {symbole}: {error_msg}")
             return None
 
-        price = float(data.get("close", 0))
-        high = float(data.get("high", 0))
-        low = float(data.get("low", 0))
-        open_price = float(data.get("open", 0))
-        prev_close = float(data.get("previous_close", 0))
-        volume = int(data.get("volume", 0)) if data.get("volume") else 0
+        price = float(data.get("close") or 0)
+        high = float(data.get("high") or 0)
+        low = float(data.get("low") or 0)
+        open_price = float(data.get("open") or 0)
+        prev_close = float(data.get("previous_close") or 0)
+        volume = int(data.get("volume") or 0)
 
         # Calculs pour le trading
         spread_pct = ((high - low) / price * 100) if price > 0 else 0
@@ -543,6 +557,11 @@ def _fetch_twelvedata_group(mic_code, symbol_pairs, interval, outputsize):
                 params["mic_code"] = mic_code
 
             response = requests.get(url, params=params, timeout=15)
+            if not response.ok:
+                if response.status_code == 429:
+                    activate_quota_circuit_breaker()
+                logger.warning(f"Twelve Data batch: HTTP {response.status_code}")
+                continue
             data = response.json()
 
             if "values" in data:

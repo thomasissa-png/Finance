@@ -117,7 +117,7 @@ def api_rejeter_tous_ajustements():
 def api_ajustements_historique():
     """Récupère l'historique des ajustements avec audit trail"""
     try:
-        limite = int(request.args.get('limite', 50))
+        limite = request.args.get('limite', 50, type=int)
         historique = get_historique_ajustements(limite)
 
         # Enrichir avec les critères appliqués (audit trail)
@@ -149,7 +149,7 @@ def api_ajustements_historique():
 def api_historique_rapports():
     """Récupère l'historique des rapports hebdomadaires"""
     try:
-        limite = int(request.args.get('limite', 10))
+        limite = request.args.get('limite', 10, type=int)
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
