@@ -768,17 +768,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // Auto-refresh News Flash toutes les 10 minutes
     newsInterval = setInterval(refreshNews, 600000);
 
-    // Auto-refresh Contexte toutes les heures: relit depuis la DB (pas d'appel Claude)
+    // Auto-refresh Contexte toutes les 5 minutes: relit depuis la DB (pas d'appel Claude)
+    // Le scheduler produit les analyses (8h, 9h15, 12h, 15h35, 17h)
+    // Ce timer les récupère rapidement sans coût API
     contextInterval = setInterval(function() {
         const now = new Date();
         const hour = now.getHours();
         const dayOfWeek = now.getDay();
         if (dayOfWeek === 0 || dayOfWeek === 6) return;
         if (hour >= 7 && hour < 23) {
-            console.log('Auto-refresh contexte (lecture DB)...');
             loadLastAnalysis();
         }
-    }, 3600000);
+    }, 300000);  // 5 minutes
 
     // Auto-refresh opportunités validées toutes les 30 secondes
     setInterval(function() {
@@ -831,7 +832,7 @@ document.addEventListener('visibilitychange', function() {
                 if (hour >= 7 && hour < 23) {
                     loadLastAnalysis();
                 }
-            }, 3600000);
+            }, 300000);  // 5 minutes
         }
     }
 });
@@ -1713,7 +1714,10 @@ async function loadLastAnalysis() {
         if (data.success && data.analyse) {
             analysisData = data.analyse;
 
-            // Vérifier fraîcheur (>1h) - afficher un avertissement sans déclencher Claude
+            // Toujours afficher les données existantes
+            renderAnalysis();
+
+            // APRÈS le render: marquer le timestamp comme périmé si >1h
             if (data.analyse.heure && !isWeekend) {
                 const [h, m] = data.analyse.heure.split(':').map(Number);
                 const analyseTime = new Date();
@@ -1721,18 +1725,23 @@ async function loadLastAnalysis() {
                 const diffHours = (now - analyseTime) / (1000 * 60 * 60);
 
                 if (diffHours > 1 && hour >= 7 && hour < 23) {
-                    container.innerHTML = '<li style="color: var(--accent-orange);">⚠️ Contexte de ' + data.analyse.heure + ' — Cliquez sur "Actualiser" pour rafraîchir</li>';
+                    const timeEl = document.getElementById('context-time');
+                    timeEl.innerHTML = data.analyse.heure + ' <span style="color: var(--accent-orange); font-size: 0.85em;">(périmé — Actualisez)</span>';
                 }
             }
-
-            // Toujours afficher les données existantes
-            renderAnalysis();
         } else {
             // Pas d'analyse existante
             if (isWeekend) {
                 container.innerHTML = '<li>📅 Weekend - Marchés fermés. Reprise lundi.</li>';
             } else if (hour >= 7 && hour < 23) {
-                container.innerHTML = '<li>Aucune analyse disponible. Cliquez sur "Actualiser" pour lancer une analyse.</li>';
+                // Démarrage à froid: générer UNE analyse automatiquement
+                // (le scheduler prendra le relais ensuite)
+                if (contextRefreshAttempts < 1) {
+                    container.innerHTML = '<li style="color: var(--accent-orange);">⏳ Première génération du contexte...</li>';
+                    actualiserContexte();
+                } else {
+                    container.innerHTML = '<li>Aucune analyse disponible. Cliquez sur "Actualiser" pour lancer une analyse.</li>';
+                }
             } else {
                 container.innerHTML = '<li>Marchés fermés. Analyse disponible entre 7h et 23h.</li>';
             }
