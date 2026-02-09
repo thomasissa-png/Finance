@@ -93,7 +93,7 @@ NEWS_CACHE_TTL = 300  # 5 minutes
 
 # Cache VIX persistant avec fallback
 VIX_CACHE = {'value': 20.0, 'timestamp': 0, 'source': 'default'}
-VIX_CACHE_TTL = 300  # 5 minutes - VIX change lentement
+VIX_CACHE_TTL = 120  # 2 minutes - plus réactif
 VIX_CACHE_FILE = 'vix_cache.json'  # Persistance entre redémarrages
 
 # Locks pour thread-safety (bugs critiques #1 et #2)
@@ -247,6 +247,13 @@ ACTIFS_PERMANENTS = {
     "GBPUSD=X": "GBP/USD",
     "USDJPY=X": "USD/JPY"
 }
+
+# Actions US individuelles (exclues des analyses/top movers quand marchés US fermés)
+# Note: les indices US (^GSPC, ^IXIC, ^DJI) et le VIX restent car ils ont des futures/pré-market
+SYMBOLES_ACTIONS_US = {"AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "JPM", "XOM", "V"}
+
+# Actifs EU + commodités + forex (pour analyses quand US fermés)
+ACTIFS_HORS_US = {k: v for k, v in ACTIFS_PERMANENTS.items() if k not in SYMBOLES_ACTIONS_US}
 
 POOL_ROTATION = {
     "tech": {"AMD": "AMD", "INTC": "Intel", "ORCL": "Oracle", "CRM": "Salesforce", "ADBE": "Adobe", "CSCO": "Cisco", "NFLX": "Netflix", "PYPL": "PayPal", "QCOM": "Qualcomm"},
@@ -2266,10 +2273,30 @@ def get_vix_level():
     # Essayer Yahoo Finance d'abord (plus fiable pour VIX)
     try:
         vix = yf.Ticker("^VIX")
-        hist = vix.history(period="1d")
+        # Méthode 1: fast_info pour le prix live
+        try:
+            vix_value = float(vix.fast_info['lastPrice'])
+            if vix_value > 0:
+                VIX_CACHE = {'value': vix_value, 'timestamp': time.time(), 'source': 'yahoo_fast'}
+                save_vix_cache()
+                return vix_value
+        except Exception:
+            pass
+        # Méthode 2: intraday 1m pour données récentes
+        try:
+            hist_intra = vix.history(period="1d", interval="1m")
+            if not hist_intra.empty:
+                vix_value = float(hist_intra['Close'].iloc[-1])
+                VIX_CACHE = {'value': vix_value, 'timestamp': time.time(), 'source': 'yahoo_intraday'}
+                save_vix_cache()
+                return vix_value
+        except Exception:
+            pass
+        # Méthode 3: fallback daily close (données de la veille)
+        hist = vix.history(period="5d")
         if not hist.empty:
             vix_value = float(hist['Close'].iloc[-1])
-            VIX_CACHE = {'value': vix_value, 'timestamp': time.time(), 'source': 'yahoo'}
+            VIX_CACHE = {'value': vix_value, 'timestamp': time.time(), 'source': 'yahoo_daily'}
             save_vix_cache()
             return vix_value
     except Exception as e:
@@ -2903,6 +2930,11 @@ def recuperer_donnees_marche(actifs, inclure_indicateurs=True):
 
     if donnees_non_fraiches:
         print(f"⚠️ Données potentiellement obsolètes pour: {', '.join(donnees_non_fraiches[:5])}")
+
+    # Log des actifs manquants (pulse debug)
+    actifs_manquants = [nom for nom in actifs.values() if nom not in donnees]
+    if actifs_manquants:
+        print(f"⚠️ Actifs sans données: {', '.join(actifs_manquants)}")
 
     # Sauvegarder dans le cache haut-niveau
     with TWELVEDATA_FETCH_LOCK:
@@ -7792,18 +7824,26 @@ def api_top_movers():
     try:
         donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
         weekend = is_weekend()
+        market_context, _ = get_market_context()
+
+        # Déterminer si les marchés US sont ouverts
+        us_open = market_context in ("EUROPE_US", "US")
 
         # Trier par variation absolue - FILTRE les données invalides
         movers = []
         for nom, data in donnees.items():
             variation = data.get('variation')
             prix = data.get('prix')
+            symbole = data.get('symbole', '')
             # Skip si données manquantes ou invalides
             if variation is None or prix is None:
                 continue
+            # Exclure actions US individuelles si marchés US fermés
+            if not us_open and symbole in SYMBOLES_ACTIONS_US:
+                continue
             movers.append({
                 'nom': nom,
-                'symbole': data.get('symbole', ''),
+                'symbole': symbole,
                 'prix': prix,
                 'variation': variation
             })
@@ -7815,13 +7855,24 @@ def api_top_movers():
         gainers = [m for m in movers_sorted if m['variation'] > 0][:5]
         losers = [m for m in movers_sorted if m['variation'] < 0][:5]
 
+        # Message contextuel
+        if weekend:
+            msg = "Clôture de vendredi"
+        elif market_context == "FERME":
+            msg = "Données de clôture"
+        elif market_context == "EUROPE":
+            msg = "Marchés EU ouverts (US fermés)"
+        else:
+            msg = None
+
         return jsonify({
             'success': True,
             'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
             'gainers': gainers,
             'losers': losers,
             'weekend': weekend,
-            'message_weekend': "Clôture de vendredi" if weekend else None
+            'market_context': market_context,
+            'message_weekend': msg
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -9112,8 +9163,9 @@ def envoyer_whatsapp(message):
 # TÂCHES PLANIFIÉES
 # ============================================================================
 
-def executer_analyse_planifiee():
-    """Exécute une analyse planifiée"""
+def executer_analyse_planifiee(eu_only=False):
+    """Exécute une analyse planifiée.
+    eu_only=True: exclut les actions US individuelles (avant ouverture US)"""
     maintenant = get_paris_time()
 
     # Vérifier si c'est un jour de trading valide
@@ -9122,10 +9174,12 @@ def executer_analyse_planifiee():
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] ⏭️ Analyse ignorée: {raison}")
         return
 
-    print(f"\n[{maintenant.strftime('%H:%M:%S')} CET] 🚀 Analyse planifiée...")
+    actifs = ACTIFS_HORS_US if eu_only else ACTIFS_PERMANENTS
+    scope = "EU/Commodités/Forex" if eu_only else "Complète"
+    print(f"\n[{maintenant.strftime('%H:%M:%S')} CET] 🚀 Analyse planifiée ({scope})...")
 
     try:
-        donnees = recuperer_donnees_marche(ACTIFS_PERMANENTS)
+        donnees = recuperer_donnees_marche(actifs)
         donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
         analyse = analyser_marche_json(donnees)
 
@@ -9214,11 +9268,17 @@ def executer_rapport_hebdo():
 
 def configurer_schedule():
     """Configure les tâches planifiées"""
-    # Analyses: 8h, 14h30, 17h
-    for heure in ["08:00", "14:30", "17:00"]:
+    # Analyses EU-only (avant ouverture US): 8h, 9h15, 12h
+    for heure in ["08:00", "09:15", "12:00"]:
         heure_utc = get_utc_time_for_paris(heure)
         for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
-            getattr(schedule.every(), jour).at(heure_utc).do(executer_analyse_planifiee)
+            getattr(schedule.every(), jour).at(heure_utc).do(executer_analyse_planifiee, eu_only=True)
+
+    # Analyses complètes (US ouverts): 15h35, 17h
+    for heure in ["15:35", "17:00"]:
+        heure_utc = get_utc_time_for_paris(heure)
+        for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+            getattr(schedule.every(), jour).at(heure_utc).do(executer_analyse_planifiee, eu_only=False)
 
     # Vérification trades: toutes les 30 minutes entre 9h et 22h
     for heure in ["09:30", "10:00", "10:30", "11:00", "11:30", "12:00",
@@ -9327,7 +9387,7 @@ def run_scheduler():
             time.sleep(60)
             continue
 
-        time.sleep(30)
+        time.sleep(15)
 
 # ============================================================================
 # DÉMARRAGE
@@ -9343,7 +9403,7 @@ def start_app():
 ║  📅 {maintenant.strftime('%d/%m/%Y %H:%M:%S')} CET                                  ║
 ║  🌐 URL: http://localhost:5000                                ║
 ║                                                               ║
-║  ⏰ Analyses AUTO: 8h, 14h30, 17h CET                         ║
+║  ⏰ Analyses AUTO: 8h, 9h15, 12h, 15h35, 17h CET              ║
 ║  🌙 Clôture: 22h CET                                          ║
 ║                                                               ║
 ║  📊 Fonctionnalités:                                          ║
@@ -9355,6 +9415,40 @@ def start_app():
     """)
 
     app.run(host='0.0.0.0', port=5000, debug=False)
+
+# ============================================================================
+# RATTRAPAGE ANALYSE AU DÉMARRAGE
+# ============================================================================
+
+def rattrapage_analyse_demarrage():
+    """Si l'app démarre peu après une analyse planifiée, rattraper l'analyse manquée."""
+    try:
+        maintenant = get_paris_time()
+        is_valide, _ = est_jour_trading_valide(maintenant)
+        if not is_valide:
+            return
+
+        heure_decimal = maintenant.hour + maintenant.minute / 60
+
+        # Fenêtres de rattrapage: si on démarre dans les 15 min après une analyse planifiée
+        analyses_planifiees = [
+            (8.0, 8.25, True),      # 08:00-08:15 -> analyse EU-only
+            (9.25, 9.5, True),      # 09:15-09:30 -> analyse EU-only
+            (12.0, 12.25, True),    # 12:00-12:15 -> analyse EU-only
+            (15.583, 15.833, False), # 15:35-15:50 -> analyse complète
+            (17.0, 17.25, False),   # 17:00-17:15 -> analyse complète
+        ]
+
+        for debut, fin, eu_only in analyses_planifiees:
+            if debut <= heure_decimal <= fin:
+                print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔄 Rattrapage analyse planifiée...")
+                if eu_only:
+                    executer_analyse_planifiee(eu_only=True)
+                else:
+                    executer_analyse_planifiee(eu_only=False)
+                return
+    except Exception as e:
+        print(f"⚠️ Erreur rattrapage analyse: {e}")
 
 # ============================================================================
 # PRÉ-CHARGEMENT CACHE AU DÉMARRAGE
@@ -9388,6 +9482,14 @@ scheduler_thread.start()
 # Pré-charger les données en background (dashboard instantané)
 preload_thread = Thread(target=precharger_donnees_marche, daemon=True)
 preload_thread.start()
+
+# Rattrapage d'analyse manquée au démarrage (après un délai pour laisser le cache se remplir)
+def _rattrapage_differe():
+    time.sleep(20)  # Attendre que le préchargement finisse
+    rattrapage_analyse_demarrage()
+
+rattrapage_thread = Thread(target=_rattrapage_differe, daemon=True)
+rattrapage_thread.start()
 
 if __name__ == "__main__":
     start_app()

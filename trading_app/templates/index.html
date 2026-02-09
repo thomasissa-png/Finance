@@ -1601,9 +1601,11 @@ function renderPulseWidget(weekendMsg) {
     const container = document.getElementById('pulse-widget');
     const indices = [
         {key: 'CAC 40', name: 'CAC 40'},
+        {key: 'DAX', name: 'DAX'},
         {key: 'S&P 500', name: 'S&P 500'},
         {key: 'Nasdaq', name: 'Nasdaq'},
         {key: 'Or', name: 'Or'},
+        {key: 'Pétrole Brent', name: 'Brent'},
         {key: 'EUR/USD', name: 'EUR/USD'},
         {key: 'VIX', name: 'VIX'}
     ];
@@ -1616,30 +1618,28 @@ function renderPulseWidget(weekendMsg) {
     }
 
     for (const item of indices) {
-        const d = marketData[item.key];
-        if (d) {
-            const isPositive = d.variation >= 0;
-            const barWidth = Math.min(Math.abs(d.variation) * 15, 100);
-            // CORRIGÉ: Forex réel (EUR/USD, GBP/USD) = 4 décimales
-            // Exclure les métaux (Or, Argent) qui ont des prix élevés
-            const forexPairs = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'EURUSD', 'GBPUSD', 'USDJPY'];
-            const isForex = forexPairs.some(pair => item.key.includes(pair) || item.name === pair);
-            const decimals = isForex ? 4 : 2;
-            const priceFormatted = d.prix ? d.prix.toLocaleString('fr-FR', {minimumFractionDigits: decimals, maximumFractionDigits: decimals}) : '-';
+        const d = marketData ? marketData[item.key] : null;
+        const isPositive = d ? d.variation >= 0 : true;
+        const barWidth = d ? Math.min(Math.abs(d.variation) * 15, 100) : 0;
+        // Forex réel (EUR/USD, GBP/USD) = 4 décimales
+        const forexPairs = ['EUR/USD', 'GBP/USD', 'USD/JPY', 'EURUSD', 'GBPUSD', 'USDJPY'];
+        const isForex = forexPairs.some(pair => item.key.includes(pair) || item.name === pair);
+        const decimals = isForex ? 4 : 2;
+        const priceFormatted = d && d.prix ? d.prix.toLocaleString('fr-FR', {minimumFractionDigits: decimals, maximumFractionDigits: decimals}) : '-';
+        const variationText = d ? `${isPositive ? '+' : ''}${d.variation.toFixed(2)}%` : '-';
 
-            html += `
-                <div class="pulse-item">
-                    <span class="pulse-name">${item.name}</span>
-                    <span class="pulse-price">${priceFormatted}</span>
-                    <div class="pulse-bar-container">
-                        <div class="pulse-bar ${isPositive ? 'positive' : 'negative'}"
-                             style="width: ${barWidth}%"></div>
-                    </div>
-                    <span class="pulse-value ${isPositive ? 'positive' : 'negative'}">
-                        ${isPositive ? '+' : ''}${d.variation.toFixed(2)}%
-                    </span>
-                </div>`;
-        }
+        html += `
+            <div class="pulse-item">
+                <span class="pulse-name">${item.name}</span>
+                <span class="pulse-price">${priceFormatted}</span>
+                <div class="pulse-bar-container">
+                    <div class="pulse-bar ${isPositive ? 'positive' : 'negative'}"
+                         style="width: ${barWidth}%"></div>
+                </div>
+                <span class="pulse-value ${d ? (isPositive ? 'positive' : 'negative') : ''}">
+                    ${variationText}
+                </span>
+            </div>`;
     }
 
     container.innerHTML = html || '<div class="no-data">Données non disponibles</div>';
