@@ -70,9 +70,6 @@ if TwilioClient and os.environ.get("TWILIO_ACCOUNT_SID"):
 # VARIABLES GLOBALES
 # ============================================================================
 
-NEWS_ENVOYEES_AUJOURDHUI = 0
-MAX_NEWS_PAR_JOUR = 3
-DERNIERE_VERIFICATION_DATE = None
 DB_PATH = 'trading.db'
 DB_TIMEOUT = 10.0
 NEWSAPI_KEY = os.environ.get("NEWSAPI_KEY")

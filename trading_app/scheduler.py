@@ -2,12 +2,12 @@
 Tâches planifiées: analyses, vérifications, clôtures, rapports.
 """
 import time
-import os
 from threading import Thread
 
 import schedule
 
-from .config import logger, client_twilio
+from .config import logger
+from .notifications import envoyer_whatsapp
 from .constants import ACTIFS_PERMANENTS, ACTIFS_HORS_US, est_jour_trading_valide
 from .market_context import (
     get_paris_time, get_utc_time_for_paris, get_market_context,
@@ -26,7 +26,7 @@ from .journal import (
     enregistrer_journal_fr, enregistrer_journal_complet,
     generer_rapport_hebdo, sauvegarder_analyse
 )
-from .adjustments import traiter_ajustements_automatiquement
+from .adjustments import traiter_ajustements_automatiquement, evaluer_tous_ajustements_valides
 from .ab_testing import evaluer_tous_ab_tests
 from .database import backup_database
 
@@ -86,8 +86,13 @@ def executer_analyse_planifiee(eu_only=False):
                     rejetes += 1
                     continue
 
-                opp['regime_marche'] = regime_actuel
-                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees_enrichies, indicateurs)
+                # Validation prix, R:R, cohérence direction
+                valide, opp_validee, warns, errs = valider_opportunite(opp)
+                if not valide:
+                    rejetes += 1
+                    continue
+
+                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
                 result = enregistrer_recommandation(opp_enrichie)
                 if result:
                     symboles_traites.add(symbole)
@@ -238,9 +243,8 @@ def configurer_schedule():
     # Les ajustements sont conservés pour analyse dans les rapports hebdo
 
     # Évaluation feedback des ajustements validés: dimanche 19h00
-    # TODO: Implement evaluer_tous_ajustements_valides
-    # heure_feedback_utc = get_utc_time_for_paris("19:00")
-    # schedule.every().sunday.at(heure_feedback_utc).do(evaluer_tous_ajustements_valides)
+    heure_feedback_utc = get_utc_time_for_paris("19:00")
+    schedule.every().sunday.at(heure_feedback_utc).do(evaluer_tous_ajustements_valides)
 
     # Traitement automatique des ajustements en attente: tous les jours à 08h00
     heure_auto_ajust_utc = get_utc_time_for_paris("08:00")
@@ -271,18 +275,7 @@ def run_scheduler():
             # Alerte après plusieurs erreurs consécutives
             if consecutive_errors >= max_consecutive_errors:
                 print(f"🚨 ALERTE CRITIQUE: Scheduler a échoué {consecutive_errors} fois!")
-                # Envoyer notification WhatsApp si configuré
-                try:
-                    twilio_to = os.environ.get('TWILIO_WHATSAPP_TO')
-                    twilio_from = os.environ.get('TWILIO_WHATSAPP_FROM')
-                    if client_twilio and twilio_to and twilio_from:
-                        client_twilio.messages.create(
-                            body=f"🚨 ALERTE TRADING: Scheduler en erreur ({consecutive_errors}x): {str(e)[:100]}",
-                            from_=twilio_from,
-                            to=twilio_to
-                        )
-                except Exception as twilio_err:
-                    print(f"⚠️ Impossible d'envoyer l'alerte: {twilio_err}")
+                envoyer_whatsapp(f"🚨 ALERTE TRADING: Scheduler en erreur ({consecutive_errors}x): {str(e)[:100]}")
 
                 # Cooldown prolongé après alertes
                 time.sleep(120)

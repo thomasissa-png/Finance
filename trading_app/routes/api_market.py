@@ -4,7 +4,7 @@ import json
 import requests
 from flask import Blueprint, jsonify, request
 
-from ..config import TWELVEDATA_API_KEY, NEWSAPI_KEY, logger, DB_PATH, DB_TIMEOUT, to_python_type, NEWS_ENVOYEES_AUJOURDHUI, MAX_NEWS_PAR_JOUR
+from ..config import TWELVEDATA_API_KEY, NEWSAPI_KEY, logger, DB_PATH, DB_TIMEOUT, to_python_type
 from ..constants import ACTIFS_PERMANENTS, ACTIFS_HORS_US, SYMBOLES_ACTIONS_US
 from ..market_context import (
     get_paris_time, get_market_context, get_vix_level, get_regime_marche,
@@ -32,14 +32,24 @@ def api_status():
         maintenant = get_paris_time()
         marche_type, marche_info = get_market_context()
 
+        # Compter les news du jour depuis la DB (remplace le compteur in-memory cassé)
+        news_today = 0
+        try:
+            conn_status = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+            cursor_status = conn_status.cursor()
+            cursor_status.execute("SELECT COUNT(*) FROM alertes_news WHERE date = ?", (maintenant.strftime('%Y-%m-%d'),))
+            news_today = cursor_status.fetchone()[0]
+            conn_status.close()
+        except Exception:
+            pass
+
         return jsonify({
             'status': 'online',
             'datetime': maintenant.strftime('%d/%m/%Y %H:%M:%S'),
             'timezone': 'Europe/Paris',
             'marche': marche_type,
             'marche_info': marche_info,
-            'news_envoyees': NEWS_ENVOYEES_AUJOURDHUI,
-            'max_news': MAX_NEWS_PAR_JOUR,
+            'news_envoyees': news_today,
             'twelvedata_configured': bool(TWELVEDATA_API_KEY)
         })
     except Exception as e:
@@ -256,11 +266,16 @@ def api_lancer_analyse():
                     opportunites_rejetees += 1
                     continue
 
-                # Validation 3: Ratio R:R délégué à valider_opportunite (seuils adaptatifs)
-                # On injecte le régime pour que valider_opportunite utilise le bon seuil
-                opp['regime_marche'] = regime_actuel
+                # Validation 3: Ratio R:R, cohérence prix, heures marché
+                valide, opp_validee, warns, errs = valider_opportunite(opp)
+                if not valide:
+                    print(f"⚠️ [{symbole}] Opportunité rejetée par validation: {'; '.join(errs)}")
+                    opportunites_rejetees += 1
+                    continue
+                if warns:
+                    print(f"ℹ️ [{symbole}] Avertissements: {'; '.join(warns)}")
 
-                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees_enrichies, indicateurs)
+                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
                 result = enregistrer_recommandation(opp_enrichie)
 
                 if result:
