@@ -66,9 +66,7 @@ def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapp
                 score = score_data.get('score', 50)
                 tendance = score_data.get('tendance', 'stable')
 
-                # CORRIGÉ: Normaliser la catégorie pour cohérence avec categorie_actif
-                # Lazy import to avoid circular dependency
-                from .journal import normaliser_categorie
+                # Normaliser la catégorie pour cohérence avec categorie_actif
                 categorie_normalisee = normaliser_categorie(categorie)
 
                 cursor.execute('''

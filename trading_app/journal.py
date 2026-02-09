@@ -1098,62 +1098,14 @@ def appliquer_ajustements_dynamiques(ajustements, scores_confiance):
         print(f"⚠️ Erreur ajustements dynamiques: {e}")
 
 def get_criteres_dynamiques():
-    """Récupère les critères dynamiques actuels pour le SYSTEM_PROMPT"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        # Récupérer les derniers scores de confiance
-        cursor.execute('''
-            SELECT categorie, valeur_actuelle as score, raison as tendance
-            FROM criteres_dynamiques
-            WHERE critere = 'score_confiance'
-            AND date_maj = (SELECT MAX(date_maj) FROM criteres_dynamiques WHERE critere = 'score_confiance')
-        ''')
-        scores = {row['categorie']: {'score': row['score'], 'tendance': row['tendance']}
-                  for row in cursor.fetchall()}
-
-        # Récupérer les derniers ajustements
-        cursor.execute('''
-            SELECT critere, raison
-            FROM criteres_dynamiques
-            WHERE categorie = 'ajustement'
-            AND date_maj >= date('now', '-30 days')
-            ORDER BY date_maj DESC
-        ''')
-        ajustements = [{'critere': row['critere'], 'raison': row['raison']}
-                      for row in cursor.fetchall()]
-
-        conn.close()
-
-        return {
-            'scores_confiance': scores,
-            'ajustements_recents': ajustements
-        }
-    except Exception as e:
-        print(f"⚠️ Erreur critères dynamiques: {e}")
-        return {'scores_confiance': {}, 'ajustements_recents': []}
+    """Récupère les critères dynamiques - délègue à adjustments.py (source unique)"""
+    from .adjustments import get_criteres_dynamiques as _get
+    return _get()
 
 def normaliser_categorie(categorie):
-    """Normalise une catégorie pour correspondre aux catégories standardisées"""
-    mapping = {
-        'indice': 'indice',
-        'action_eu': 'action_eu',
-        'action_us': 'action_us',
-        'commodite': 'commodite',
-        'forex': 'forex',
-        'news_trading': 'news_trading',
-        'technique': 'technique',
-        'strategie_generale': 'strategie_generale',
-        'timing_jour': 'timing_jour',
-        'timing_session': 'timing_session',
-        'indicateurs': 'indicateurs',
-        'gestion_position': 'gestion_position',
-        'risk_reward': 'risk_reward',
-        'conviction': 'conviction'
-    }
-    return mapping.get(categorie.lower(), categorie)
+    """Normalise une catégorie - délègue à adjustments.py (source unique)"""
+    from .adjustments import normaliser_categorie as _norm
+    return _norm(categorie)
 
 def enregistrer_journal_complet():
     """Enregistre le journal complet + bilan (22h30)"""

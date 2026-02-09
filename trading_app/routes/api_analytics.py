@@ -319,10 +319,10 @@ def api_trades_historique():
 
         # Requête avec projection de colonnes (évite SELECT *)
         select_cols = '''id, date, timestamp_reco, actif, symbole, direction,
-                         prix_entree, stop_loss, take_profit_1, take_profit_2,
+                         prix_entree, prix_stop, prix_tp1, prix_tp2,
                          resultat, pnl_pct, duree_minutes, categorie_actif,
                          conviction_score, regime_marche, strategie_entree,
-                         statut_intraday, action_recommandee, justification'''
+                         statut_intraday, action_recommandee, ratio_rr_justification'''
 
         query = f'''SELECT {select_cols} FROM trades_recommandes
                     WHERE {where_sql}

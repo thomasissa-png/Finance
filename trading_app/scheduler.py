@@ -9,7 +9,11 @@ import schedule
 
 from .config import logger, client_twilio
 from .constants import ACTIFS_PERMANENTS, ACTIFS_HORS_US, est_jour_trading_valide
-from .market_context import get_paris_time, get_utc_time_for_paris, get_market_context
+from .market_context import (
+    get_paris_time, get_utc_time_for_paris, get_market_context,
+    get_vix_level, get_regime_marche, get_actifs_filtres_atr
+)
+from .validation import valider_opportunite
 from .market_data import recuperer_donnees_marche
 from .indicators import enrichir_donnees_avec_indicateurs
 from .analysis import analyser_marche_json, generer_cloture_json
@@ -44,17 +48,55 @@ def executer_analyse_planifiee(eu_only=False):
     try:
         donnees = recuperer_donnees_marche(actifs)
         donnees_enrichies = enrichir_donnees_avec_indicateurs(donnees)
-        analyse = analyser_marche_json(donnees)
+        analyse = analyser_marche_json(donnees_enrichies)
 
         if analyse:
             marche_type, _ = get_market_context()
             sauvegarder_analyse('planifiee', analyse, marche_type)
 
-            # Enregistrer les opportunités avec toutes les données (enrichies)
+            # Enregistrer les opportunités avec validation (comme la route API)
             indicateurs = donnees_enrichies.get('indicateurs_calcules', {})
+            vix_actuel = get_vix_level()
+            regime_actuel, _, _ = get_regime_marche(vix_actuel)
+            conviction_min_par_regime = {
+                'CALME': 2, 'NORMAL': 3, 'VOLATILE': 4, 'EXTREME': 5
+            }
+            conviction_min = conviction_min_par_regime.get(regime_actuel, 3)
+            actifs_exclus_atr = set(a['nom'] for a in get_actifs_filtres_atr(donnees_enrichies, seuil_atr_min=1.0))
+            symboles_traites = set()
+            valides, rejetes = 0, 0
+
             for opp in analyse.get('opportunites', []):
-                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees, indicateurs)
-                enregistrer_recommandation(opp_enrichie)
+                symbole = opp.get('symbole', opp.get('actif', 'N/A'))
+                actif_nom = opp.get('actif', '')
+
+                if symbole in symboles_traites:
+                    continue
+                if actif_nom in actifs_exclus_atr or symbole in actifs_exclus_atr:
+                    rejetes += 1
+                    continue
+
+                conviction = opp.get('conviction_score')
+                if conviction is None:
+                    confluence = opp.get('confluence_score', 5)
+                    alignement = opp.get('alignement_tf', 1)
+                    conviction = min(5, max(1, (confluence // 2) + alignement))
+                    opp['conviction_score'] = conviction
+                if conviction < conviction_min:
+                    rejetes += 1
+                    continue
+
+                opp['regime_marche'] = regime_actuel
+                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp, donnees_enrichies, indicateurs)
+                result = enregistrer_recommandation(opp_enrichie)
+                if result:
+                    symboles_traites.add(symbole)
+                    valides += 1
+                else:
+                    rejetes += 1
+
+            if valides > 0 or rejetes > 0:
+                print(f"  📊 Opportunités (régime {regime_actuel}): {valides} validées, {rejetes} rejetées")
 
             print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Analyse sauvegardée")
     except Exception as e:

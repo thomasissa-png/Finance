@@ -24,6 +24,8 @@ from .market_data import recuperer_donnees_marche
 from .indicators import enrichir_donnees_avec_indicateurs
 from .validation import extraire_json_claude, valider_structure_analyse
 from .prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_NEWS_ANALYSIS, SYSTEM_PROMPT_CLOTURE
+from .adjustments import generer_instructions_dynamiques, get_criteres_dynamiques
+from .ab_testing import get_instructions_ab_testing
 
 def analyser_news_trading(headlines):
     """Analyse les headlines d'actualités pour identifier les impacts trading"""
@@ -267,8 +269,6 @@ def analyser_marche_json(donnees):
         exclusions_atr = f"\n\nACTIFS À EXCLURE (ATR < 1%):\n{', '.join(liste_exclus)}"
 
     # Récupérer les critères dynamiques
-    # Lazy import to avoid circular dependency
-    from .journal import get_criteres_dynamiques
     criteres = get_criteres_dynamiques()
     contexte_criteres = ""
     if criteres.get('scores_confiance'):
@@ -327,9 +327,13 @@ RÈGLES IMPÉRATIVES:
 
     try:
         # Générer le prompt système avec les instructions dynamiques et A/B testing
-        # TODO: Implement generer_instructions_dynamiques() and get_instructions_ab_testing()
-        # For now, use the base prompt
+        instructions_dyn = generer_instructions_dynamiques()
+        instructions_ab = get_instructions_ab_testing()
         system_prompt_complet = SYSTEM_PROMPT
+        if instructions_dyn:
+            system_prompt_complet += "\n\n" + instructions_dyn
+        if instructions_ab:
+            system_prompt_complet += "\n\n" + instructions_ab
 
         message = client_anthropic.messages.create(
             model="claude-sonnet-4-20250514",
