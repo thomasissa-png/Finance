@@ -19,7 +19,7 @@ from .market_data import (
     get_twelvedata_intraday, get_twelvedata_quote, get_fresh_quote_for_trade,
     get_twelvedata_time_series
 )
-from .validation import valider_opportunite, analyser_cloture_intraday
+from .validation import analyser_cloture_intraday
 from .ab_testing import get_variante_ab_pour_actif
 
 def enrichir_opportunite_avec_donnees_marche(opportunite, donnees_marche, indicateurs_calcules=None):
@@ -82,29 +82,13 @@ def enregistrer_recommandation(trade_data):
             regime, _, _ = get_regime_marche()
             trade_data['regime_marche'] = regime
 
-        # VALIDATION STRICTE avec la nouvelle fonction
-        valide, opp_validee, avertissements, erreurs = valider_opportunite(trade_data)
-
-        if not valide:
-            # Trade rejeté - logger les erreurs et retourner None
-            symbole = trade_data.get('symbole', trade_data.get('actif', 'N/A'))
-            logger.error(f"❌ Trade REJETÉ [{symbole}]: {'; '.join(erreurs)}")
-            print(f"❌ Trade REJETÉ [{symbole}]: {'; '.join(erreurs)}")
-            if conn:
-                conn.close()
-            return None
-
-        # Logger les avertissements (non bloquants)
-        if avertissements:
-            symbole = trade_data.get('symbole', trade_data.get('actif', 'N/A'))
-            logger.warning(f"⚠️ Trade [{symbole}] avertissements: {'; '.join(avertissements)}")
-
-        # Utiliser les données validées
-        entree = float(opp_validee.get('entree', 0))
-        stop = float(opp_validee.get('stop', 0))
-        tp1 = float(opp_validee.get('tp1', 0))
-        tp2 = float(opp_validee.get('tp2', 0) or 0)
-        direction = opp_validee.get('direction', 'LONG')
+        # NOTE: La validation (valider_opportunite) est faite par l'appelant
+        # (api_market.py / scheduler.py) avant d'appeler cette fonction.
+        entree = float(trade_data.get('entree', 0) or 0)
+        stop = float(trade_data.get('stop', 0) or 0)
+        tp1 = float(trade_data.get('tp1', 0) or 0)
+        tp2 = float(trade_data.get('tp2', 0) or 0)
+        direction = str(trade_data.get('direction', 'LONG')).upper()
 
         # Trouver le symbole et la catégorie
         symbole = trade_data.get('symbole', '')

@@ -348,7 +348,10 @@ def api_trades_ouverts():
         cursor.execute('''
             SELECT id, actif, symbole, direction, prix_entree, prix_stop, prix_tp1, prix_tp2,
                    timestamp_reco, prix_max_atteint, prix_min_atteint, prix_dernier_check,
-                   timestamp_dernier_check, pnl_max, pnl_min, nb_checks
+                   timestamp_dernier_check, pnl_max, pnl_min, nb_checks,
+                   type_setup, catalyseur, duree_estimee, ratio_rr,
+                   atr_pct_reco, volume_relatif_reco, validite_minutes, heure_expiration,
+                   conviction_score, trade_grade, grade_setup_score, heure_message, prix_actuel
             FROM trades_recommandes
             WHERE resultat IS NULL AND symbole IS NOT NULL AND symbole != ''
             ORDER BY timestamp_reco DESC
@@ -358,7 +361,7 @@ def api_trades_ouverts():
         for row in cursor.fetchall():
             trade = dict(row)
             entree = float(trade.get('prix_entree') or 0)
-            prix_actuel = float(trade.get('prix_dernier_check') or entree)
+            prix_actuel = float(trade.get('prix_dernier_check') or trade.get('prix_actuel') or entree)
             direction = trade.get('direction', 'LONG')
 
             if entree > 0:

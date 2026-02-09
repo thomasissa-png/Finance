@@ -381,6 +381,75 @@
     color: white;
 }
 
+/* Trade Grade badges */
+.opp-grade {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-left: 4px;
+}
+.grade-a { background: var(--accent-green); color: white; }
+.grade-b { background: rgba(59, 130, 246, 0.85); color: white; }
+.grade-c { background: var(--accent-orange); color: white; }
+.grade-d { background: var(--accent-red); color: white; }
+
+/* Expiration states */
+.opp-expiration {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    margin-top: 6px;
+}
+.opp-expiration.valid {
+    color: var(--text-tertiary);
+}
+.opp-expiration.expiring {
+    color: var(--accent-orange);
+    font-weight: 600;
+}
+.opp-expiration.expired {
+    color: var(--accent-red);
+    font-weight: 600;
+}
+
+/* PnL display */
+.opp-pnl {
+    font-size: 13px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+.opp-pnl.positive {
+    color: var(--accent-green);
+    background: rgba(34, 197, 94, 0.12);
+}
+.opp-pnl.negative {
+    color: var(--accent-red);
+    background: rgba(239, 68, 68, 0.12);
+}
+
+/* Carte expirée */
+.opp-card.expired {
+    opacity: 0.45;
+    filter: grayscale(0.5);
+    position: relative;
+}
+.opp-card.expired::after {
+    content: 'EXPIRÉ';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-15deg);
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--accent-red);
+    opacity: 0.6;
+    pointer-events: none;
+}
+
 /* Agenda improvements */
 .agenda-item {
     display: flex;
@@ -699,24 +768,28 @@ document.addEventListener('DOMContentLoaded', function() {
     // Auto-refresh News Flash toutes les 10 minutes
     newsInterval = setInterval(refreshNews, 600000);
 
-    // Auto-refresh Contexte toutes les heures entre 7h-23h CET
+    // Auto-refresh Contexte toutes les heures: relit depuis la DB (pas d'appel Claude)
     contextInterval = setInterval(function() {
         const now = new Date();
         const hour = now.getHours();
         const dayOfWeek = now.getDay();
-        // Skip weekend et si déjà en cours
         if (dayOfWeek === 0 || dayOfWeek === 6) return;
-        if (isRefreshingContext) return;
-        // Reset le compteur de tentatives toutes les heures
-        contextRefreshAttempts = 0;
         if (hour >= 7 && hour < 23) {
-            console.log('Auto-refresh contexte horaire...');
-            actualiserContexte();
+            console.log('Auto-refresh contexte (lecture DB)...');
+            loadLastAnalysis();
         }
     }, 3600000);
 
-    // Vérifier immédiatement si le contexte doit être rafraîchi
-    setTimeout(checkAndRefreshContext, 5000);
+    // Auto-refresh opportunités validées toutes les 30 secondes
+    setInterval(function() {
+        const now = new Date();
+        const dayOfWeek = now.getDay();
+        if (dayOfWeek === 0 || dayOfWeek === 6) return;
+        const hour = now.getHours();
+        if (hour >= 7 && hour < 23) {
+            loadValidatedOpportunities();
+        }
+    }, 30000);
 });
 
 // Cleanup des intervals pour éviter memory leak
@@ -755,10 +828,8 @@ document.addEventListener('visibilitychange', function() {
                 const hour = now.getHours();
                 const dayOfWeek = now.getDay();
                 if (dayOfWeek === 0 || dayOfWeek === 6) return;
-                if (isRefreshingContext) return;
-                contextRefreshAttempts = 0;
                 if (hour >= 7 && hour < 23) {
-                    actualiserContexte();
+                    loadLastAnalysis();
                 }
             }, 3600000);
         }
@@ -766,37 +837,17 @@ document.addEventListener('visibilitychange', function() {
 });
 
 async function checkAndRefreshContext() {
-    // Protection anti-boucle
-    if (isRefreshingContext || contextRefreshAttempts >= MAX_REFRESH_ATTEMPTS) return;
-
+    // Au chargement initial: juste lire depuis la DB
+    // L'analyse Claude ne se lance que via le bouton "Actualiser" ou le scheduler
     const now = new Date();
     const hour = now.getHours();
     const dayOfWeek = now.getDay();
 
-    // Skip weekend
     if (dayOfWeek === 0 || dayOfWeek === 6) return;
+    if (hour < 7 || hour >= 23) return;
 
-    if (hour >= 7 && hour < 23) {
-        try {
-            const response = await fetch('/api/derniere-analyse');
-            const data = await response.json();
-
-            if (data.success && data.analyse) {
-                const analyseTime = new Date(data.analyse.timestamp);
-                const diffHours = (now - analyseTime) / (1000 * 60 * 60);
-
-                if (diffHours > 1) {
-                    console.log('Contexte périmé, tentative unique de rafraîchissement...');
-                    actualiserContexte();
-                }
-            } else {
-                // Pas d'analyse, en lancer une
-                actualiserContexte();
-            }
-        } catch (error) {
-            console.error('Erreur vérification contexte:', error);
-        }
-    }
+    // Charger le contexte existant depuis la DB
+    await loadLastAnalysis();
 }
 
 async function actualiserContexte(forceReset = false) {
@@ -840,7 +891,7 @@ async function actualiserContexte(forceReset = false) {
         if (data.success && data.analyse) {
             // Nouvelle analyse générée avec succès
             analysisData = data.analyse;
-            renderAnalysis();
+            renderAnalysis();  // Inclut loadValidatedOpportunities() pour les trades validés
             contextRefreshAttempts = 0;  // Reset le compteur
             return true;
         } else {
@@ -1662,17 +1713,15 @@ async function loadLastAnalysis() {
         if (data.success && data.analyse) {
             analysisData = data.analyse;
 
-            // Vérifier fraîcheur (>1h) mais NE PAS boucler
-            if (data.analyse.heure && !isWeekend && !isRefreshingContext) {
+            // Vérifier fraîcheur (>1h) - afficher un avertissement sans déclencher Claude
+            if (data.analyse.heure && !isWeekend) {
                 const [h, m] = data.analyse.heure.split(':').map(Number);
                 const analyseTime = new Date();
                 analyseTime.setHours(h, m, 0, 0);
                 const diffHours = (now - analyseTime) / (1000 * 60 * 60);
 
-                if (diffHours > 1 && hour >= 7 && hour < 23 && contextRefreshAttempts < MAX_REFRESH_ATTEMPTS) {
-                    container.innerHTML = '<li style="color: var(--accent-orange);">⚠️ Contexte de ' + data.analyse.heure + ' (périmé)</li>';
-                    // Lancer actualisation en arrière-plan SANS rappeler loadLastAnalysis
-                    actualiserContexte();  // Ne pas await, ne pas return
+                if (diffHours > 1 && hour >= 7 && hour < 23) {
+                    container.innerHTML = '<li style="color: var(--accent-orange);">⚠️ Contexte de ' + data.analyse.heure + ' — Cliquez sur "Actualiser" pour rafraîchir</li>';
                 }
             }
 
@@ -1683,13 +1732,7 @@ async function loadLastAnalysis() {
             if (isWeekend) {
                 container.innerHTML = '<li>📅 Weekend - Marchés fermés. Reprise lundi.</li>';
             } else if (hour >= 7 && hour < 23) {
-                // Tenter UNE SEULE FOIS de générer une analyse
-                if (contextRefreshAttempts < MAX_REFRESH_ATTEMPTS) {
-                    container.innerHTML = '<li style="color: var(--accent-orange);">⏳ Génération du contexte...</li>';
-                    actualiserContexte();  // Pas de await pour éviter blocage
-                } else {
-                    container.innerHTML = '<li>Contexte non disponible. Cliquez sur "Actualiser".</li>';
-                }
+                container.innerHTML = '<li>Aucune analyse disponible. Cliquez sur "Actualiser" pour lancer une analyse.</li>';
             } else {
                 container.innerHTML = '<li>Marchés fermés. Analyse disponible entre 7h et 23h.</li>';
             }
@@ -1782,8 +1825,8 @@ function renderAnalysis() {
     // Agenda (événements)
     renderAgenda(contenu.evenements_a_venir || []);
 
-    // Opportunités
-    renderOpportunities(contenu.opportunites || []);
+    // Opportunités: charger les trades VALIDÉS depuis la DB (pas les bruts Claude)
+    loadValidatedOpportunities();
 
     // Zones danger (inclure les actifs exclus ATR)
     let zones = contenu.zones_dangereuses || [];
@@ -1791,6 +1834,43 @@ function renderAnalysis() {
         zones = zones.concat([`Actifs exclus (ATR < 1%): ${contenu.actifs_exclus_atr.join(', ')}`]);
     }
     renderDangerZones(zones);
+}
+
+async function loadValidatedOpportunities() {
+    try {
+        const response = await fetch('/api/trades/ouverts');
+        const data = await response.json();
+
+        if (data.success && data.trades_ouverts && data.trades_ouverts.length > 0) {
+            const opportunities = data.trades_ouverts.map(trade => ({
+                actif: trade.actif,
+                prix_actuel: trade.prix_dernier_check || trade.prix_actuel || trade.prix_entree,
+                direction: trade.direction,
+                entree: trade.prix_entree,
+                stop: trade.prix_stop,
+                tp1: trade.prix_tp1,
+                tp2: trade.prix_tp2,
+                catalyseur: trade.catalyseur,
+                ratio_rr: trade.ratio_rr,
+                duree: trade.duree_estimee,
+                is_news_trading: trade.type_setup === 'NEWS',
+                atr_pct: trade.atr_pct_reco || 0,
+                volume_relatif: trade.volume_relatif_reco || 100,
+                trade_grade: trade.trade_grade,
+                conviction_score: trade.conviction_score,
+                pnl_actuel: trade.pnl_actuel,
+                validite_minutes: trade.validite_minutes || 60,
+                heure_expiration: trade.heure_expiration,
+                timestamp_reco: trade.timestamp_reco,
+                heure_message: trade.heure_message
+            }));
+            renderOpportunities(opportunities);
+        } else {
+            renderOpportunities([]);
+        }
+    } catch (error) {
+        console.error('Erreur chargement opportunités validées:', error);
+    }
 }
 
 function renderContextBullets(contexte) {
@@ -1937,21 +2017,66 @@ function renderOpportunities(opportunities) {
     }
 
     if (!opportunities || opportunities.length === 0) {
-        container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunité en cours</div>';
+        container.innerHTML = '<div class="no-data" style="width: 100%;">Aucune opportunité validée en cours</div>';
         countEl.textContent = '0 opportunité';
         return;
     }
 
-    countEl.textContent = opportunities.length + ' opportunité' + (opportunities.length > 1 ? 's' : '');
+    // Séparer actives et expirées
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
 
+    let activeCount = 0;
     let html = '';
     for (const opp of opportunities) {
         const isNews = opp.is_news_trading;
         const tagClass = isNews ? 'news' : 'tech';
         const tagText = isNews ? 'NEWS' : 'TECH';
-        const cardClass = isNews ? 'news-trading' : '';
+        let cardClass = isNews ? 'news-trading' : '';
         const direction = opp.direction || 'LONG';
         const dirClass = direction === 'SHORT' ? 'short' : 'long';
+
+        // === EXPIRATION ===
+        const validiteMin = opp.validite_minutes || 60;
+        const heureMsg = opp.heure_message || '';
+        let expirationHtml = '';
+        let isExpired = false;
+
+        if (heureMsg) {
+            const parts = heureMsg.split(':').map(Number);
+            const msgMin = parts[0] * 60 + (parts[1] || 0);
+            const expTotalMin = msgMin + validiteMin;
+            const expH = Math.floor(expTotalMin / 60) % 24;
+            const expM = expTotalMin % 60;
+            const expStr = String(expH).padStart(2,'0') + ':' + String(expM).padStart(2,'0');
+            const remainMin = (expH * 60 + expM) - nowMin;
+
+            if (remainMin <= 0) {
+                isExpired = true;
+                expirationHtml = '<div class="opp-expiration expired">SIGNAL EXPIRÉ</div>';
+            } else if (remainMin <= 15) {
+                expirationHtml = `<div class="opp-expiration expiring">⏱ ${remainMin}min restantes</div>`;
+            } else {
+                expirationHtml = `<div class="opp-expiration valid">⏱ Valide jusqu'à ${expStr}</div>`;
+            }
+        }
+
+        if (isExpired) {
+            cardClass += ' expired';
+        } else {
+            activeCount++;
+        }
+
+        // === GRADE ===
+        const grade = opp.trade_grade || '';
+        const gradeColors = {'A': 'grade-a', 'B': 'grade-b', 'C': 'grade-c', 'D': 'grade-d'};
+        const gradeBadge = grade ? `<span class="opp-grade ${gradeColors[grade] || ''}">${grade}</span>` : '';
+
+        // === PNL ===
+        const pnl = opp.pnl_actuel;
+        const pnlHtml = (pnl !== undefined && pnl !== null)
+            ? `<span class="opp-pnl ${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}${Number(pnl).toFixed(2)}%</span>`
+            : '';
 
         // Indicateurs ATR et Volume
         const atrPct = opp.atr_pct || 0;
@@ -1964,8 +2089,9 @@ function renderOpportunities(opportunities) {
         html += `
             <div class="opp-card ${cardClass}">
                 <div class="opp-header">
-                    <span class="opp-asset">${opp.actif || 'N/A'}</span>
+                    <span class="opp-asset">${opp.actif || 'N/A'} ${gradeBadge}</span>
                     <div class="opp-tags">
+                        ${pnlHtml}
                         <span class="opp-tag direction-${dirClass}">${direction}</span>
                         <span class="opp-tag ${tagClass}">${tagText}</span>
                     </div>
@@ -1977,11 +2103,11 @@ function renderOpportunities(opportunities) {
                 <div class="opp-indicators">
                     <div class="indicator atr-indicator ${atrClass}" title="Average True Range - Volatilité moyenne">
                         <span class="indicator-label">ATR</span>
-                        <span class="indicator-value">${atrPct.toFixed(1)}%</span>
+                        <span class="indicator-value">${Number(atrPct).toFixed(1)}%</span>
                     </div>
                     <div class="indicator vol-indicator ${volClass}" title="Volume relatif vs moyenne 20j">
                         <span class="indicator-label">Vol</span>
-                        <span class="indicator-value">${volRel.toFixed(0)}%</span>
+                        <span class="indicator-value">${Number(volRel).toFixed(0)}%</span>
                     </div>
                 </div>
 
@@ -2022,11 +2148,14 @@ function renderOpportunities(opportunities) {
                         R/R: <strong>${opp.ratio_rr || '1:2'}</strong>
                     </div>
                     <div class="opp-timer">
-                        ⏱ ${opp.duree || '1-2h'}
+                        ${expirationHtml || ('⏱ ' + (opp.duree || '1-2h'))}
                     </div>
                 </div>
             </div>`;
     }
+
+    countEl.textContent = activeCount + ' active' + (activeCount > 1 ? 's' : '') +
+        (opportunities.length > activeCount ? ` (${opportunities.length - activeCount} expirée${opportunities.length - activeCount > 1 ? 's' : ''})` : '');
 
     container.innerHTML = html;
 }
