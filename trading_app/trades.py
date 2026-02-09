@@ -73,7 +73,7 @@ def enregistrer_recommandation(trade_data):
     """
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
         maintenant = get_paris_time()
 
@@ -503,7 +503,7 @@ def reevaluer_trades_intraday():
 
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -719,7 +719,7 @@ def cloturer_trades_jour():
 
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -856,7 +856,7 @@ def cloturer_trades_jour():
 def get_trades_du_jour():
     """Récupère les trades du jour"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

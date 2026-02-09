@@ -165,7 +165,7 @@ def api_lancer_analyse():
         # Weekend: pas d'analyse active, retourner synthèse de la semaine
         if weekend:
             # Récupérer le résumé de la semaine dernière
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -355,7 +355,7 @@ def api_trades_jour():
 def api_trades_ouverts():
     """Récupère les trades ouverts avec leur tracking temps réel"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

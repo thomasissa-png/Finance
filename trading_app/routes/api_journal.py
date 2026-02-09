@@ -38,7 +38,7 @@ bp = Blueprint('api_journal', __name__)
 def api_ab_tests():
     """Récupère les tests A/B actifs avec leurs performances"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -470,7 +470,7 @@ def api_bilan_quotidien():
     """Récupère le bilan quotidien"""
     try:
         date_str = request.args.get('date')
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -567,7 +567,7 @@ def api_rapport_hebdo():
     """Récupère le dernier rapport hebdomadaire"""
     try:
         semaine = request.args.get('semaine')
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

@@ -57,7 +57,7 @@ def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapp
     maintenant = get_paris_time()
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         # Sauvegarder les scores de confiance comme propositions
@@ -125,7 +125,7 @@ def sauvegarder_ajustements_proposes(ajustements, scores_confiance, source='rapp
 def get_ajustements_en_attente():
     """Récupère les ajustements en attente de validation"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -148,7 +148,7 @@ def valider_ajustement(id_ajustement, decision, decideur='utilisateur', commenta
     maintenant = get_paris_time()
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row  # Pour accéder aux colonnes par nom
         cursor = conn.cursor()
 
@@ -238,7 +238,7 @@ def _expirer_ajustements_anciens_legacy(jours_max=21):
     date_limite = maintenant - timedelta(days=jours_max)
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         # Marquer comme expirés les ajustements trop anciens
@@ -267,7 +267,7 @@ def _expirer_ajustements_anciens_legacy(jours_max=21):
 def get_historique_ajustements(limite=50):
     """Récupère l'historique complet des ajustements (validés, rejetés, expirés)"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -335,7 +335,7 @@ def calculer_feedback_ajustement(id_ajustement, jours_evaluation=7):
     maintenant = get_paris_time()
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -466,7 +466,7 @@ def calculer_feedback_ajustement(id_ajustement, jours_evaluation=7):
 def evaluer_tous_ajustements_valides():
     """Évalue tous les ajustements validés qui n'ont pas encore de feedback"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -504,7 +504,7 @@ def get_historique_feedback_categorie(categorie, type_ajustement='strategie'):
     CORRIGÉ: Seuils augmentés de 2 à 5 pour significativité statistique.
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -620,7 +620,7 @@ def traiter_ajustements_automatiquement():
 def get_criteres_dynamiques():
     """Récupère les critères dynamiques actuels pour le SYSTEM_PROMPT"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -699,7 +699,7 @@ def get_criteres_dynamiques_actifs():
     CORRIGÉ: Typage explicite des scores en int
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

@@ -10,7 +10,7 @@ from .config import DB_PATH, DB_TIMEOUT, logger
 
 def init_database():
     """Initialise la base de données SQLite complète"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
     cursor = conn.cursor()
 
     # Table des trades recommandés
@@ -321,6 +321,10 @@ def init_database():
     except sqlite3.OperationalError:
         pass  # Colonne existe déjà
 
+    # Activer WAL mode pour meilleures performances en concurrence
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA synchronous = NORMAL")
+
     conn.commit()
     conn.close()
     print("✅ Base de données initialisée")
@@ -330,7 +334,7 @@ def init_database():
 
 def create_database_indexes():
     """Crée les index SQL pour optimiser les performances des requêtes fréquentes"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
     cursor = conn.cursor()
 
     indexes = [
@@ -347,7 +351,7 @@ def create_database_indexes():
         ("idx_trades_ab_test", "trades_recommandes", "ab_test_id"),
         # Index analyses
         ("idx_analyses_date", "analyses", "date"),
-        ("idx_analyses_type", "analyses", "type"),
+        ("idx_analyses_type_analyse", "analyses", "type_analyse"),
         # Index journal_quotidien
         ("idx_journal_date", "journal_quotidien", "date"),
         ("idx_journal_symbole", "journal_quotidien", "symbole"),
@@ -357,6 +361,7 @@ def create_database_indexes():
         ("idx_news_date", "alertes_news", "date"),
         # Index criteres_dynamiques
         ("idx_criteres_date", "criteres_dynamiques", "date_maj"),
+        ("idx_criteres_source", "criteres_dynamiques", "ajustement_source_id"),
         # Index ajustements_proposes
         ("idx_ajustements_statut", "ajustements_proposes", "statut"),
         ("idx_ajustements_date", "ajustements_proposes", "date_proposition"),
@@ -393,7 +398,7 @@ def backup_database():
 
     try:
         # Copie sécurisée (avec flush SQLite)
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # Flush WAL si utilisé
         conn.close()
 

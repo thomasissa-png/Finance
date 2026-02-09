@@ -20,7 +20,7 @@ bp = Blueprint('api_trades', __name__)
 def api_trades_stats_detaillees():
     """Statistiques détaillées des trades avec breakdown par catégorie"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

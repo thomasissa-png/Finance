@@ -168,8 +168,8 @@ def rattraper_journal_manque():
 
     # Vérifier si le journal FR existe déjà pour aujourd'hui
     import sqlite3
-    from .config import DB_PATH
-    conn = sqlite3.connect(DB_PATH)
+    from .config import DB_PATH, DB_TIMEOUT
+    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM journal_quotidien WHERE date = ?", (maintenant.date().isoformat(),))
     count = cursor.fetchone()[0]

@@ -14,7 +14,7 @@ bp = Blueprint('api_analytics', __name__)
 def api_stats_avancees():
     """Récupère les stats avancées pour A/B testing (jour, session, conviction, etc.)"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

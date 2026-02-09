@@ -17,7 +17,7 @@ from .validation import extraire_json_claude
 def ajouter_entree_journal(symbole, nom_actif, type_info, titre, contenu, impact_cours='', importance=2):
     """Ajoute une entrée au journal d'un actif"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
         maintenant = get_paris_time()
 
@@ -47,7 +47,7 @@ def ajouter_entree_journal(symbole, nom_actif, type_info, titre, contenu, impact
 def get_journal_actif(symbole, limite=50):
     """Récupère le journal d'un actif"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -68,7 +68,7 @@ def get_journal_actif(symbole, limite=50):
 def get_tous_journaux():
     """Récupère tous les journaux regroupés par actif"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -313,7 +313,7 @@ def generer_bilan_quotidien():
 
     try:
         # Récupérer les données de la journée
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -379,7 +379,7 @@ Fais un bilan honnête de cette journée de trading. Qu'est-ce qui a fonctionné
             return None
         if bilan:
             # Sauvegarder le bilan
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO bilan_quotidien
@@ -421,7 +421,7 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
         # Récupérer les opportunités du jour pour chaque actif
         opportunites_jour = {}
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute('''
@@ -461,7 +461,7 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
         # Sauvegarder les faits marquants dans la table bilan
         if faits_marquants:
             try:
-                conn_bilan = sqlite3.connect(DB_PATH)
+                conn_bilan = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
                 cursor_bilan = conn_bilan.cursor()
                 cursor_bilan.execute('''
                     INSERT OR REPLACE INTO bilan_quotidien
@@ -479,7 +479,7 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
                 print(f"⚠️ Erreur sauvegarde faits marquants: {e}")
 
         # Enregistrer dans la base
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         for nom, data in donnees.items():
@@ -545,7 +545,7 @@ def generer_rapport_hebdo():
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Génération rapport hebdomadaire...")
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -987,7 +987,7 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
                     except (ValueError, TypeError):
                         data['score'] = 50
             # Sauvegarder le rapport
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO rapports_hebdo
@@ -1033,7 +1033,7 @@ def appliquer_ajustements_dynamiques(ajustements, scores_confiance):
     maintenant = get_paris_time()
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         # Sauvegarder les scores de confiance comme critères
@@ -1197,7 +1197,7 @@ def get_journal_quotidien(symbole=None, limite=30, date_from=None, date_to=None,
 def get_historique_opportunites(symbole):
     """Récupère l'historique des opportunités pour un actif"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -1222,7 +1222,7 @@ def get_historique_opportunites(symbole):
 def sauvegarder_analyse(type_analyse, contenu, contexte=''):
     """Sauvegarde une analyse"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
         maintenant = get_paris_time()
 
@@ -1249,7 +1249,7 @@ def sauvegarder_analyse(type_analyse, contenu, contexte=''):
 def get_derniere_analyse(type_analyse=None):
     """Récupère la dernière analyse"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -1283,7 +1283,7 @@ def get_derniere_analyse(type_analyse=None):
 def get_analyses_du_jour():
     """Récupère toutes les analyses du jour"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

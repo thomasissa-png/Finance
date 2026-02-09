@@ -175,7 +175,7 @@ def sauvegarder_news_analysees(news_list):
     aujourdhui = maintenant.date()
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         for news in news_list:
@@ -210,7 +210,7 @@ def sauvegarder_news_analysees(news_list):
 def get_news_historique(jours=7):
     """Récupère l'historique des news analysées"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

@@ -18,7 +18,7 @@ def _get_ab_tests():
 def init_ab_test_table():
     """Initialise la table pour les tests A/B"""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -66,7 +66,7 @@ def creer_ab_test(nom, description, variante_a, variante_b, actifs_test=None):
         groupe_a = actifs_test[:milieu]
         groupe_b = actifs_test[milieu:]
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -130,7 +130,7 @@ def evaluer_ab_test(test_id, jours_minimum=7):
     maintenant = get_paris_time()
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -314,7 +314,7 @@ def charger_ab_tests_actifs():
     """Charge les tests A/B actifs au démarrage"""
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 

@@ -121,7 +121,7 @@ def api_ajustements_historique():
         historique = get_historique_ajustements(limite)
 
         # Enrichir avec les critères appliqués (audit trail)
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -150,7 +150,7 @@ def api_historique_rapports():
     """Récupère l'historique des rapports hebdomadaires"""
     try:
         limite = request.args.get('limite', 10, type=int)
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
