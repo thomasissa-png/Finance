@@ -943,23 +943,23 @@ function renderTradesTable() {
         };
 
         let html = `
-            <table class="data-table excel-table">
+            <table class="data-table excel-table sortable-table">
                 <thead>
                     <tr class="header-row">
-                        <th>Date</th>
+                        <th class="sortable" onclick="sortMemoireTable(this, 'date')">Date <span class="sort-icon">⇅</span></th>
                         <th>Heure</th>
-                        <th>Actif</th>
-                        <th>Direction</th>
+                        <th class="sortable" onclick="sortMemoireTable(this, 'actif')">Actif <span class="sort-icon">⇅</span></th>
+                        <th class="sortable" onclick="sortMemoireTable(this, 'direction')">Direction <span class="sort-icon">⇅</span></th>
                         <th>Type</th>
                         <th>Catégorie</th>
                         <th>Entrée</th>
                         <th>Stop</th>
                         <th>TP1</th>
                         <th>TP2</th>
-                        <th>Résultat</th>
+                        <th class="sortable" onclick="sortMemoireTable(this, 'resultat')">Résultat <span class="sort-icon">⇅</span></th>
                         <th>Sortie</th>
-                        <th>H.Sortie</th>
-                        <th>PnL</th>
+                        <th>Durée</th>
+                        <th class="sortable" onclick="sortMemoireTable(this, 'pnl_pct')">PnL <span class="sort-icon">⇅</span></th>
                     </tr>
                     <tr class="filter-row">
                         <th></th>
@@ -1011,6 +1011,7 @@ function renderTradesTable() {
                         <th></th>
                         <th></th>
                     </tr>
+
                 </thead>
                 <tbody>`;
 
@@ -1022,6 +1023,19 @@ function renderTradesTable() {
                 '<span class="opp-tag tech">TECH</span>';
             const dirClass = trade.direction === 'LONG' ? 'positive' : 'negative';
             const dirIcon = trade.direction === 'LONG' ? '📈' : '📉';
+
+            // Calculer la durée
+            let dureeText = '-';
+            if (trade.heure_message && trade.timestamp_sortie) {
+                const [hE, mE] = trade.heure_message.split(':').map(Number);
+                const sortieDate = new Date(trade.timestamp_sortie);
+                const entreeMin = hE * 60 + (mE || 0);
+                const sortieMin = sortieDate.getHours() * 60 + sortieDate.getMinutes();
+                const diffMin = sortieMin - entreeMin;
+                if (diffMin > 0) {
+                    dureeText = diffMin >= 60 ? Math.floor(diffMin / 60) + 'h' + (diffMin % 60 > 0 ? (diffMin % 60) + 'm' : '') : diffMin + 'min';
+                }
+            }
 
             html += `
                 <tr>
@@ -1037,7 +1051,7 @@ function renderTradesTable() {
                     <td data-label="TP2" class="mono positive">${trade.prix_tp2 || '-'}</td>
                     <td data-label="Résultat" class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
                     <td data-label="Sortie" class="mono">${trade.prix_sortie || '-'}</td>
-                    <td data-label="H.Sortie">${trade.timestamp_sortie ? new Date(trade.timestamp_sortie).toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}) : '-'}</td>
+                    <td data-label="Durée">${dureeText}</td>
                     <td data-label="PnL" class="${resultClass} mono">
                         ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
                     </td>
@@ -1056,6 +1070,37 @@ function filterTrades() {
     // Réinitialiser les filtres du tableau
     tableFilters = {actif: '', direction: '', type: '', categorie: '', resultat: ''};
     loadTradesHistory();
+}
+
+// ===== TRI COLONNES =====
+let memoireSort = { field: null, asc: true };
+
+function sortMemoireTable(thEl, field) {
+    if (memoireSort.field === field) {
+        memoireSort.asc = !memoireSort.asc;
+    } else {
+        memoireSort.field = field;
+        memoireSort.asc = true;
+    }
+
+    document.querySelectorAll('.sortable-table .sortable').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        th.querySelector('.sort-icon').textContent = '⇅';
+    });
+    thEl.classList.add(memoireSort.asc ? 'sort-asc' : 'sort-desc');
+    thEl.querySelector('.sort-icon').textContent = memoireSort.asc ? '↑' : '↓';
+
+    allTrades.sort((a, b) => {
+        let va = a[field], vb = b[field];
+        if (field === 'pnl_pct') {
+            va = va || 0; vb = vb || 0;
+            return memoireSort.asc ? va - vb : vb - va;
+        }
+        va = (va || '').toString();
+        vb = (vb || '').toString();
+        return memoireSort.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+    renderTradesTable();
 }
 
 </script>

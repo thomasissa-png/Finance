@@ -5,116 +5,22 @@
 {% block content %}
 <div class="trading-desk">
 
-    <!-- TOP BAR: Titre + Bouton Actualiser -->
+    <!-- TOP BAR: Titre + Régime inline + Bouton Actualiser -->
     <div class="page-top-bar">
         <h1 class="page-top-title">Dashboard</h1>
-        <button class="btn-refresh" id="btn-refresh" onclick="actualiserTout()">
+        <div class="topbar-regime" id="topbar-regime">
+            <span class="regime-badge-inline" id="regime-badge-inline"></span>
+        </div>
+        <button class="btn-refresh" id="btn-refresh" onclick="actualiserTout()" title="Raccourci: touche R">
             ⟳ Actualiser
         </button>
     </div>
 
-    <!-- 1. CONTEXTE DU JOUR -->
-    <section class="section">
-        <div class="section-header">
-            <span class="section-icon">📊</span>
-            <h2 class="section-title">Contexte du Jour</h2>
-            <span class="section-meta">Mis à jour : <span id="context-time">--:--</span></span>
-        </div>
-        <div class="section-content">
-            <!-- Pré-market (visible le matin) -->
-            <div class="premarket-section" id="premarket-section">
-                <div class="premarket-header">
-                    <span class="premarket-icon">🌅</span>
-                    <span class="premarket-title">Pré-Market / Overnight</span>
-                </div>
-                <div class="premarket-grid" id="premarket-grid">
-                    <div class="loading">Chargement...</div>
-                </div>
-            </div>
-
-            <ul class="context-bullets" id="context-bullets">
-                <li>Lancez une actualisation pour obtenir le contexte du marché...</li>
-            </ul>
-            <div class="context-tags" id="context-tags"></div>
-        </div>
-    </section>
-
-    <!-- 2. NEWS FLASH avec Navigation Historique -->
-    <section class="section">
-        <div class="section-header">
-            <span class="section-icon">⚡</span>
-            <h2 class="section-title">News Flash Trading</h2>
-            <div class="news-navigation">
-                <button class="nav-arrow-small" onclick="naviguerNews(1)" id="news-prev" title="Plus récentes" disabled>◀</button>
-                <span class="nav-date" id="news-nav-date">Aujourd'hui</span>
-                <button class="nav-arrow-small" onclick="naviguerNews(-1)" id="news-next" title="Plus anciennes">▶</button>
-            </div>
-            <span class="section-meta" id="news-count">Actualités analysées par impact</span>
-        </div>
-        <div class="section-content">
-            <div class="news-flash-list" id="news-flash-list">
-                <div class="news-flash-item">
-                    <span class="news-time">--:--</span>
-                    <div class="news-content">
-                        <span class="news-text">Aucune actualité à fort impact pour le moment</span>
-                    </div>
-                </div>
-            </div>
-            <div class="news-expand-container" id="news-expand-container" style="display: none;">
-                <button class="news-expand-btn" id="news-expand-btn" onclick="toggleNewsExpand()">
-                    <span id="news-expand-icon">▼</span> Voir plus (<span id="news-hidden-count">0</span>)
-                </button>
-            </div>
-        </div>
-    </section>
-
-    <!-- 3. PULSE MARCHÉ + TOP MOVERS -->
-    <div class="grid-2 mb-3">
-        <!-- Pulse Marché -->
-        <section class="section" style="margin-bottom: 0;">
-            <div class="section-header">
-                <span class="section-icon">📈</span>
-                <h2 class="section-title">Pulse Marché</h2>
-                <span class="section-meta" id="pulse-update-time">--:--</span>
-            </div>
-            <div class="section-content">
-                <div class="pulse-widget" id="pulse-widget">
-                    <div class="loading">Chargement...</div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Top Movers -->
-        <section class="section" style="margin-bottom: 0;">
-            <div class="section-header">
-                <span class="section-icon">🔥</span>
-                <h2 class="section-title">Top Movers</h2>
-                <span class="section-meta">Plus fortes variations</span>
-            </div>
-            <div class="section-content">
-                <div class="top-movers-widget" id="top-movers-widget">
-                    <div class="loading">Chargement...</div>
-                </div>
-            </div>
-        </section>
-    </div>
-
-    <!-- RÉGIME MARCHÉ + QUICK STATS -->
-    <div class="grid-2 mb-3">
-        <!-- Widget Régime Marché -->
-        <section class="section" id="section-regime" style="margin-bottom: 0;">
-            <div class="section-header">
-                <span class="section-icon">📊</span>
-                <h2 class="section-title">Régime Marché</h2>
-                <span class="section-meta" id="regime-update-time">--:--</span>
-            </div>
-            <div class="section-content">
-                <div class="regime-widget" id="regime-widget">
-                    <div class="loading">Chargement...</div>
-                </div>
-            </div>
-        </section>
-
+    <!-- Notification non-bloquante (remplace le modal) -->
+    <div class="toast-notification" id="toast-notification" style="display: none;">
+        <div class="toast-spinner"></div>
+        <span class="toast-text" id="toast-status">Actualisation en cours...</span>
+        <button class="toast-close" onclick="closeToast()">&times;</button>
     </div>
 
     <!-- ALERTE MACRO (si événement imminent) -->
@@ -129,22 +35,8 @@
         </div>
     </section>
 
-    <!-- 3bis. AGENDA -->
-    <section class="section">
-        <div class="section-header">
-            <span class="section-icon">📅</span>
-            <h2 class="section-title">Agenda Macro</h2>
-            <span class="section-meta" id="agenda-meta">Événements économiques du jour</span>
-        </div>
-        <div class="section-content">
-            <div class="agenda-list" id="agenda-list">
-                <div class="loading">Chargement...</div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 4. OPPORTUNITÉS ACTIVES -->
-    <section class="section">
+    <!-- 1. OPPORTUNITÉS ACTIVES (en premier : le plus actionnable) -->
+    <section class="section section-highlight">
         <div class="section-header">
             <span class="section-icon">🎯</span>
             <h2 class="section-title">Opportunités Actives</h2>
@@ -157,24 +49,142 @@
         </div>
     </section>
 
-    <!-- 5. ZONES DANGER -->
-    <section class="section">
+    <!-- 2. CONTEXTE + PULSE (2 colonnes) -->
+    <div class="grid-2 mb-3">
+        <!-- Contexte du Jour -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📊</span>
+                <h2 class="section-title">Contexte du Jour</h2>
+                <span class="section-meta">Mis à jour : <span id="context-time">--:--</span></span>
+            </div>
+            <div class="section-content">
+                <div class="premarket-section" id="premarket-section">
+                    <div class="premarket-header">
+                        <span class="premarket-icon">🌅</span>
+                        <span class="premarket-title">Pré-Market / Overnight</span>
+                    </div>
+                    <div class="premarket-grid" id="premarket-grid">
+                        <div class="loading">Chargement...</div>
+                    </div>
+                </div>
+                <ul class="context-bullets" id="context-bullets">
+                    <li>Lancez une actualisation pour obtenir le contexte du marché...</li>
+                </ul>
+                <div class="context-tags" id="context-tags"></div>
+            </div>
+        </section>
+
+        <!-- Pulse Marché -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📈</span>
+                <h2 class="section-title">Pulse Marché</h2>
+                <span class="section-meta" id="pulse-update-time">--:--</span>
+            </div>
+            <div class="section-content">
+                <div class="pulse-widget" id="pulse-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 3. NEWS + AGENDA (2 colonnes) -->
+    <div class="grid-2 mb-3">
+        <!-- News Flash -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">⚡</span>
+                <h2 class="section-title">News Flash</h2>
+                <div class="news-navigation">
+                    <button class="nav-arrow-small" onclick="naviguerNews(1)" id="news-prev" title="Plus récentes" disabled>◀</button>
+                    <span class="nav-date" id="news-nav-date">Aujourd'hui</span>
+                    <button class="nav-arrow-small" onclick="naviguerNews(-1)" id="news-next" title="Plus anciennes">▶</button>
+                </div>
+                <span class="section-meta" id="news-count"></span>
+            </div>
+            <div class="section-content">
+                <div class="news-flash-list" id="news-flash-list">
+                    <div class="news-flash-item">
+                        <span class="news-time">--:--</span>
+                        <div class="news-content">
+                            <span class="news-text">Aucune actualité à fort impact</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="news-expand-container" id="news-expand-container" style="display: none;">
+                    <button class="news-expand-btn" id="news-expand-btn" onclick="toggleNewsExpand()">
+                        <span id="news-expand-icon">▼</span> Voir plus (<span id="news-hidden-count">0</span>)
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Agenda Macro -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📅</span>
+                <h2 class="section-title">Agenda Macro</h2>
+                <span class="section-meta" id="agenda-meta">Événements économiques du jour</span>
+            </div>
+            <div class="section-content">
+                <div class="agenda-list" id="agenda-list">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 4. TOP MOVERS + ZONES DANGER (2 colonnes) -->
+    <div class="grid-2 mb-3">
+        <!-- Top Movers -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">🔥</span>
+                <h2 class="section-title">Top Movers</h2>
+                <span class="section-meta">Plus fortes variations</span>
+            </div>
+            <div class="section-content">
+                <div class="top-movers-widget" id="top-movers-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Zones Danger -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">⚠️</span>
+                <h2 class="section-title">Zones Danger</h2>
+                <span class="section-meta">Points de vigilance</span>
+            </div>
+            <div class="section-content">
+                <div class="danger-list" id="danger-zones">
+                    <div class="danger-item safe">
+                        <span class="danger-icon">✅</span>
+                        <span>Aucune zone critique identifiée</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Régime Marché (détail complet, plus bas) -->
+    <section class="section" id="section-regime">
         <div class="section-header">
-            <span class="section-icon">⚠️</span>
-            <h2 class="section-title">Zones Danger</h2>
-            <span class="section-meta">Points de vigilance</span>
+            <span class="section-icon">📊</span>
+            <h2 class="section-title">Régime Marché</h2>
+            <span class="section-meta" id="regime-update-time">--:--</span>
         </div>
         <div class="section-content">
-            <div class="danger-list" id="danger-zones">
-                <div class="danger-item safe">
-                    <span class="danger-icon">✅</span>
-                    <span>Aucune zone critique identifiée</span>
-                </div>
+            <div class="regime-widget" id="regime-widget">
+                <div class="loading">Chargement...</div>
             </div>
         </div>
     </section>
 
-    <!-- 6. A/B TESTS EN COURS -->
+    <!-- A/B TESTS (caché par défaut, usage interne) -->
     <section class="section" id="section-ab-tests" style="display: none;">
         <div class="section-header">
             <span class="section-icon">🧪</span>
@@ -190,26 +200,74 @@
 
 </div>
 
-<!-- Modal Analyse -->
-<div id="modal-analyse" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>Actualisation en cours</h2>
-            <button class="modal-close" onclick="closeModal()">&times;</button>
-        </div>
-        <div class="modal-body" style="text-align: center;">
-            <div style="width: 48px; height: 48px; border: 3px solid var(--border-color); border-top-color: var(--accent-blue); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 24px;"></div>
-            <p id="modal-status" style="color: var(--text-secondary);">
-                Récupération des données de marché...
-            </p>
-        </div>
-    </div>
-</div>
-
 <style>
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* Toast notification non-bloquante */
+.toast-notification {
+    position: sticky;
+    top: 64px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: var(--shadow-md);
+    animation: slideDown 0.3s ease;
+}
+.toast-notification.toast-success { background: var(--accent-green); }
+.toast-notification.toast-error { background: var(--accent-red); }
+.toast-spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+.toast-text { flex: 1; }
+.toast-close {
+    background: none; border: none; color: white; font-size: 18px;
+    cursor: pointer; padding: 0 4px; opacity: 0.8;
+}
+.toast-close:hover { opacity: 1; }
+@keyframes slideDown { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* Régime inline dans top bar */
+.topbar-regime { flex: 1; text-align: center; }
+.regime-badge-inline {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+.regime-badge-inline.regime-calme { background: var(--accent-green-bg); color: var(--accent-green); }
+.regime-badge-inline.regime-normal { background: rgba(59,130,246,0.1); color: var(--accent-primary); }
+.regime-badge-inline.regime-volatile { background: var(--accent-orange-bg); color: var(--accent-orange); }
+.regime-badge-inline.regime-extreme { background: var(--accent-red-bg); color: var(--accent-red); }
+
+/* Opportunités section mise en avant */
+.section-highlight {
+    border-left: 3px solid var(--accent-primary);
+}
+
+/* News polices agrandies */
+.news-time { font-size: 12px !important; }
+.news-text { font-size: 14px !important; }
+.news-analyse { font-size: 12px !important; }
+.news-actif { font-size: 11px !important; }
+.news-source { font-size: 11px !important; }
+.news-impact-cours { font-size: 12px !important; }
 
 /* Alerte Macro */
 .section-alert {
@@ -752,6 +810,15 @@ async function fetchJSON(url, options = {}, timeoutMs = 15000) {
     }
 }
 
+// Raccourci clavier: R pour actualiser (hors champ texte)
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'r' && !e.ctrlKey && !e.metaKey && !e.altKey &&
+        !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
+        e.preventDefault();
+        actualiserTout();
+    }
+});
+
 // Initialisation
 document.addEventListener('DOMContentLoaded', function() {
     loadAllData();
@@ -971,6 +1038,13 @@ async function loadRegimeMarche() {
                 'US_CLOSE': '🌙',
                 'HORS_SESSION': '💤'
             }[ctx.session_marche] || '📈';
+
+            // Mettre à jour le badge inline dans la topbar
+            const inlineBadge = document.getElementById('regime-badge-inline');
+            if (inlineBadge) {
+                inlineBadge.className = 'regime-badge-inline ' + regimeClass;
+                inlineBadge.textContent = `${regimeIcon} ${ctx.regime_marche} — VIX ${ctx.vix_niveau?.toFixed(1) || '--'}`;
+            }
 
             widget.innerHTML = `
                 <div class="regime-container ${regimeClass}">
@@ -1490,41 +1564,44 @@ function renderTopMovers(gainers, losers, isWeekend, weekendMsg) {
 // ===== ACTUALISER TOUT =====
 async function actualiserTout() {
     const btn = document.getElementById('btn-refresh');
-    const modal = document.getElementById('modal-analyse');
-    const status = document.getElementById('modal-status');
 
     btn.classList.add('loading');
     btn.textContent = '⟳ Actualisation...';
-    modal.classList.add('active');
-    status.textContent = 'Récupération des données de marché...';
+    showToast('Récupération des données de marché...');
 
     try {
-        // Rafraîchir les marchés
         await refreshMarkets();
-        status.textContent = 'Analyse en cours avec Claude...';
+        showToast('Analyse en cours avec Claude...');
 
-        // Lancer l'analyse (forceReset=true car action utilisateur)
         const data = await fetchJSON('/api/analyse', {}, 60000);
 
         if (data.success) {
-            status.textContent = 'Actualisation terminée !';
-            setTimeout(() => {
-                closeModal();
-                loadLastAnalysis();
-            }, 1000);
+            showToast('Actualisation terminée !', 'success');
+            loadLastAnalysis();
+            setTimeout(closeToast, 2000);
         } else {
-            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+            showToast('Erreur: ' + (data.error || 'Inconnue'), 'error');
         }
     } catch (error) {
-        status.textContent = 'Erreur de connexion';
+        showToast('Erreur de connexion', 'error');
     } finally {
         btn.classList.remove('loading');
         btn.textContent = '⟳ Actualiser';
     }
 }
 
-function closeModal() {
-    document.getElementById('modal-analyse').classList.remove('active');
+function showToast(message, type) {
+    const toast = document.getElementById('toast-notification');
+    const text = document.getElementById('toast-status');
+    toast.style.display = 'flex';
+    text.textContent = message;
+    toast.className = 'toast-notification' + (type ? ' toast-' + type : '');
+    // Cacher le spinner pour success/error
+    toast.querySelector('.toast-spinner').style.display = type ? 'none' : 'block';
+}
+
+function closeToast() {
+    document.getElementById('toast-notification').style.display = 'none';
 }
 
 // ===== MARCHÉS =====

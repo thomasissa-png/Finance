@@ -298,11 +298,10 @@
                                 </select>
                             </div>
                             <div class="filter-group">
-                                <label>Statut</label>
+                                <label>Résultat</label>
                                 <select id="filter-statut" onchange="applyTradesFilters()">
                                     <option value="">Tous</option>
                                     <option value="EN_COURS">En cours</option>
-                                    <option value="TP50_ATTEINT">TP50%</option>
                                     <option value="termine">Terminé</option>
                                 </select>
                             </div>
@@ -751,12 +750,12 @@ function renderTradesTable(trades) {
     }
 
     let html = `
-        <table class="trades-table-data trades-enriched">
+        <table class="trades-table-data trades-enriched sortable-table">
             <thead>
                 <tr>
-                    <th>Heure</th>
-                    <th>Actif</th>
-                    <th>Grade</th>
+                    <th class="sortable" data-sort="heure_message" onclick="sortTradesTable(this, 'heure_message')">Heure <span class="sort-icon">⇅</span></th>
+                    <th class="sortable" data-sort="actif" onclick="sortTradesTable(this, 'actif')">Actif <span class="sort-icon">⇅</span></th>
+                    <th class="sortable" data-sort="trade_grade" onclick="sortTradesTable(this, 'trade_grade')">Grade <span class="sort-icon">⇅</span></th>
                     <th>Dir.</th>
                     <th>Conv.</th>
                     <th>Régime</th>
@@ -764,11 +763,10 @@ function renderTradesTable(trades) {
                     <th>Stop</th>
                     <th>TP1</th>
                     <th>TP2</th>
-                    <th>Statut</th>
-                    <th>Résultat</th>
+                    <th class="sortable" data-sort="resultat" onclick="sortTradesTable(this, 'resultat')">Résultat <span class="sort-icon">⇅</span></th>
                     <th>Sortie</th>
-                    <th>H.Sortie</th>
-                    <th>PnL</th>
+                    <th>Durée</th>
+                    <th class="sortable" data-sort="pnl_pct" onclick="sortTradesTable(this, 'pnl_pct')">PnL <span class="sort-icon">⇅</span></th>
                 </tr>
             </thead>
             <tbody>`;
@@ -830,6 +828,19 @@ function renderTradesTable(trades) {
         // Warning pour grade D
         const gradeWarning = grade === 'D' ? ' grade-warning' : '';
 
+        // Calculer la durée
+        let dureeText = '-';
+        if (trade.heure_message && trade.timestamp_sortie) {
+            const [hE, mE] = trade.heure_message.split(':').map(Number);
+            const sortieDate = new Date(trade.timestamp_sortie);
+            const entreeMin = hE * 60 + (mE || 0);
+            const sortieMin = sortieDate.getHours() * 60 + sortieDate.getMinutes();
+            const diffMin = sortieMin - entreeMin;
+            if (diffMin > 0) {
+                dureeText = diffMin >= 60 ? Math.floor(diffMin / 60) + 'h' + (diffMin % 60 > 0 ? (diffMin % 60) + 'm' : '') : diffMin + 'min';
+            }
+        }
+
         html += `
             <tr class="${resultClass}${gradeWarning}"
                 data-grade="${grade}"
@@ -846,10 +857,9 @@ function renderTradesTable(trades) {
                 <td class="${stopModifie}">${stopAffiche || '-'}</td>
                 <td>${trade.prix_tp1 || '-'}</td>
                 <td>${trade.prix_tp2 || '-'}</td>
-                <td><span class="badge-statut">${statutIcon} ${statut.replace('_', ' ')}</span></td>
-                <td>${trade.resultat || 'En cours'}</td>
+                <td>${trade.resultat || '🔄 En cours'}</td>
                 <td class="mono">${trade.prix_sortie || '-'}</td>
-                <td>${trade.timestamp_sortie ? new Date(trade.timestamp_sortie).toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}) : '-'}</td>
+                <td>${dureeText}</td>
                 <td class="${trade.pnl_pct > 0 ? 'positive' : trade.pnl_pct < 0 ? 'negative' : ''}">${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
             </tr>`;
     }
@@ -905,6 +915,41 @@ function clearTradesFilters() {
     document.getElementById('filter-strategie').value = '';
     document.getElementById('filter-statut').value = '';
     renderTradesTable(window.allTrades || []);
+}
+
+// ===== TRI COLONNES =====
+let currentSort = { field: null, asc: true };
+
+function sortTradesTable(thEl, field) {
+    // Toggle direction
+    if (currentSort.field === field) {
+        currentSort.asc = !currentSort.asc;
+    } else {
+        currentSort.field = field;
+        currentSort.asc = true;
+    }
+
+    // Update icons
+    document.querySelectorAll('.sortable-table .sortable').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        th.querySelector('.sort-icon').textContent = '⇅';
+    });
+    thEl.classList.add(currentSort.asc ? 'sort-asc' : 'sort-desc');
+    thEl.querySelector('.sort-icon').textContent = currentSort.asc ? '↑' : '↓';
+
+    // Sort trades
+    const trades = [...(window.allTrades || [])];
+    trades.sort((a, b) => {
+        let va = a[field], vb = b[field];
+        if (field === 'pnl_pct') {
+            va = va || 0; vb = vb || 0;
+            return currentSort.asc ? va - vb : vb - va;
+        }
+        va = (va || '').toString();
+        vb = (vb || '').toString();
+        return currentSort.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+    });
+    renderTradesTable(trades);
 }
 
 // ===== GRADE STATISTICS =====

@@ -18,12 +18,13 @@
     /* Accents */
     --accent-primary: #3B82F6;
     --accent-primary-hover: #2563EB;
+    --accent-blue: #3B82F6;
     --accent-green: #10B981;
     --accent-green-bg: rgba(16, 185, 129, 0.08);
-    --accent-red: #EF4444;
-    --accent-red-bg: rgba(239, 68, 68, 0.08);
-    --accent-orange: #F59E0B;
-    --accent-orange-bg: rgba(245, 158, 11, 0.08);
+    --accent-red: #DC2626;
+    --accent-red-bg: rgba(220, 38, 38, 0.08);
+    --accent-orange: #D97706;
+    --accent-orange-bg: rgba(217, 119, 6, 0.08);
 
     /* Bordures */
     --border-color: #E5E7EB;
@@ -2026,6 +2027,73 @@ body {
     .opp-card { flex: 0 0 280px; }
 
     .journal-layout { grid-template-columns: 1fr; }
+
+    /* Trading page responsive */
+    .trading-page .tabs {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+
+    .trading-page .tab {
+        font-size: 0.75rem;
+        padding: 8px 10px;
+        flex: 1;
+        min-width: 0;
+        text-align: center;
+    }
+
+    .trading-page .header-actions {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .trading-page .live-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .trading-page .bilan-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .trading-page .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .trading-page .grade-stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .trading-page .trades-enriched {
+        font-size: 0.75rem;
+    }
+
+    .trading-page .trades-enriched th,
+    .trading-page .trades-enriched td {
+        padding: 6px 4px;
+        white-space: nowrap;
+    }
+
+    .trading-page .trades-filters {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .trading-page .filter-group {
+        flex: 1;
+        min-width: 120px;
+    }
+
+    /* Horizontal scroll indication for tables */
+    .trades-table {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .page-top-bar, .page-header {
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+    }
 }
 
 /* ============================================================================
@@ -2162,6 +2230,29 @@ body {
 
 .insight-neutral {
     color: var(--text-secondary);
+}
+
+/* ===== SORTABLE TABLE COLUMNS ===== */
+.sortable-table .sortable {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background 0.2s;
+}
+
+.sortable-table .sortable:hover {
+    background: var(--bg-tertiary);
+}
+
+.sortable-table .sort-icon {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-left: 2px;
+}
+
+.sortable-table .sortable.sort-asc .sort-icon,
+.sortable-table .sortable.sort-desc .sort-icon {
+    color: var(--accent-primary);
 }
 
 /* Responsive */
