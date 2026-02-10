@@ -32,7 +32,7 @@ def calculer_metriques_prediction(jours=30):
             SELECT resultat, pnl_pct, trade_grade, conviction_score,
                    grade_setup_score, regime_marche, categorie_actif
             FROM trades_recommandes
-            WHERE date >= ? AND resultat IS NOT NULL
+            WHERE date >= ? AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
         ''', (date_debut,))
 
         rows = cursor.fetchall()

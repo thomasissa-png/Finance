@@ -115,31 +115,38 @@ def executer_analyse_planifiee(eu_only=False):
                     rejetes += 1
                     continue
 
-                # Validation prix, R:R, cohérence direction
-                valide, opp_validee, warns, errs = valider_opportunite(opp)
-                if not valide:
-                    rejetes += 1
-                    continue
+                # Injecter le régime réel pour validation R:R adaptée
+                opp['regime_marche'] = regime_actuel
 
-                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
+                try:
+                    # Validation prix, R:R, cohérence direction
+                    valide, opp_validee, warns, errs = valider_opportunite(opp)
+                    if not valide:
+                        rejetes += 1
+                        continue
 
-                # Validation prix réel avant enregistrement
-                prix_entree_prevu = float(opp_validee.get('entree', 0))
-                setup_ok, setup_raison, quote_fraiche = valider_setup_avant_trade(
-                    symbole, opp_validee.get('direction', 'LONG'), prix_entree_prevu, donnees_enrichies
-                )
-                if not setup_ok:
-                    print(f"  ⚠️ [{symbole}] Setup rejeté: {setup_raison}")
-                    rejetes += 1
-                    continue
-                if quote_fraiche:
-                    opp_enrichie['prix_actuel'] = quote_fraiche['prix']
+                    opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
 
-                result = enregistrer_recommandation(opp_enrichie)
-                if result:
-                    symboles_traites.add(symbole)
-                    valides += 1
-                else:
+                    # Validation prix réel avant enregistrement
+                    prix_entree_prevu = float(opp_validee.get('entree', 0))
+                    setup_ok, setup_raison, quote_fraiche = valider_setup_avant_trade(
+                        symbole, opp_validee.get('direction', 'LONG'), prix_entree_prevu, donnees_enrichies
+                    )
+                    if not setup_ok:
+                        print(f"  ⚠️ [{symbole}] Setup rejeté: {setup_raison}")
+                        rejetes += 1
+                        continue
+                    if quote_fraiche:
+                        opp_enrichie['prix_actuel'] = quote_fraiche['prix']
+
+                    result = enregistrer_recommandation(opp_enrichie)
+                    if result:
+                        symboles_traites.add(symbole)
+                        valides += 1
+                    else:
+                        rejetes += 1
+                except Exception as e:
+                    logger.error(f"Erreur traitement opportunité {symbole}: {e}")
                     rejetes += 1
 
             if valides > 0 or rejetes > 0:

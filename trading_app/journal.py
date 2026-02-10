@@ -320,7 +320,7 @@ def generer_bilan_quotidien():
         # Récupérer les trades CONCLUS du jour (exclure trades ouverts pour stats fiables)
         cursor.execute('''
             SELECT * FROM trades_recommandes
-            WHERE date = ? AND resultat IS NOT NULL
+            WHERE date = ? AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
         ''', (aujourdhui,))
         trades_jour = [dict(row) for row in cursor.fetchall()]
 
@@ -592,7 +592,7 @@ def generer_rapport_hebdo():
                 AVG(CASE WHEN duree_minutes IS NOT NULL THEN duree_minutes END) as duree_moyenne
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
         ''', (date_debut, date_fin))
         stats_globales = dict(cursor.fetchone())
 
@@ -613,7 +613,7 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY date
             ORDER BY pnl DESC
         ''', (date_debut, date_fin))
@@ -627,7 +627,7 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND categorie_actif IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY categorie_actif
         ''', (date_debut, date_fin))
         stats_par_categorie = [dict(row) for row in cursor.fetchall()]
@@ -640,7 +640,7 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND type_setup IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY type_setup
         ''', (date_debut, date_fin))
         stats_par_type = [dict(row) for row in cursor.fetchall()]
@@ -652,7 +652,7 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND heure_entree IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY heure_entree
             ORDER BY heure_entree
         ''', (date_debut, date_fin))
@@ -666,7 +666,7 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND rsi_signal_reco IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY rsi_signal_reco
         ''', (date_debut, date_fin))
         stats_par_rsi = [dict(row) for row in cursor.fetchall()]
@@ -679,7 +679,7 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND macd_signal_reco IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY macd_signal_reco
         ''', (date_debut, date_fin))
         stats_par_macd = [dict(row) for row in cursor.fetchall()]
@@ -692,7 +692,7 @@ def generer_rapport_hebdo():
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND ratio_rr IS NOT NULL AND ratio_rr != ''
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY ratio_rr
         ''', (date_debut, date_fin))
         stats_par_ratio_rr = [dict(row) for row in cursor.fetchall()]
@@ -710,7 +710,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND atr_pct_reco IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY niveau_atr
         ''', (date_debut, date_fin))
         stats_par_atr = [dict(row) for row in cursor.fetchall()]
@@ -725,7 +725,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND jour_semaine IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY jour_semaine
             ORDER BY CASE jour_semaine
                 WHEN 'LUNDI' THEN 1
@@ -745,7 +745,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND session_marche IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY session_marche
         ''', (date_debut, date_fin))
         stats_par_session = [dict(row) for row in cursor.fetchall()]
@@ -758,7 +758,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND conviction_score IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY conviction_score
             ORDER BY conviction_score
         ''', (date_debut, date_fin))
@@ -772,7 +772,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND strategie_entree IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY strategie_entree
         ''', (date_debut, date_fin))
         stats_par_strategie_entree = [dict(row) for row in cursor.fetchall()]
@@ -786,7 +786,7 @@ def generer_rapport_hebdo():
                 AVG(vix_niveau) as vix_moyen
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND regime_marche IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY regime_marche
         ''', (date_debut, date_fin))
         stats_par_regime = [dict(row) for row in cursor.fetchall()]
@@ -800,7 +800,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ?
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY type_stop
         ''', (date_debut, date_fin))
         stats_par_type_stop = [dict(row) for row in cursor.fetchall()]
@@ -813,7 +813,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND alignement_tf IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY alignement_tf
             ORDER BY alignement_tf
         ''', (date_debut, date_fin))
@@ -834,7 +834,7 @@ def generer_rapport_hebdo():
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
             FROM trades_recommandes
             WHERE date >= ? AND date <= ? AND sentiment_score IS NOT NULL
-            AND resultat IS NOT NULL
+            AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             GROUP BY sentiment_bucket
         ''', (date_debut, date_fin))
         stats_par_sentiment = [dict(row) for row in cursor.fetchall()]
@@ -853,7 +853,7 @@ def generer_rapport_hebdo():
                        SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
                 FROM trades_recommandes
                 WHERE ab_test_id = ? AND ab_groupe = 'A' AND date >= ? AND date <= ?
-                AND resultat IS NOT NULL
+                AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             ''', (test_id, date_debut, date_fin))
             stats_a = dict(cursor.fetchone())
 
@@ -864,7 +864,7 @@ def generer_rapport_hebdo():
                        SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl
                 FROM trades_recommandes
                 WHERE ab_test_id = ? AND ab_groupe = 'B' AND date >= ? AND date <= ?
-                AND resultat IS NOT NULL
+                AND resultat IS NOT NULL AND resultat NOT IN ('EXPIRED', 'NON_CONCLU')
             ''', (test_id, date_debut, date_fin))
             stats_b = dict(cursor.fetchone())
 

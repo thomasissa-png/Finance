@@ -935,8 +935,8 @@ def get_performances(periode='semaine'):
             'expires': expires,                    # Trades orphelins auto-expirés
             'en_cours': total - conclus - non_conclus - expires,  # Trades en cours
             'taux_reussite': round((reussis / conclus * 100) if conclus > 0 else 0, 1),
-            'pnl_moyen': round(row[6] or 0, 2),
-            'pnl_total': round(row[7] or 0, 2)
+            'pnl_moyen': round(row[7] or 0, 2),
+            'pnl_total': round(row[8] or 0, 2)
         }
     except Exception as e:
         print(f"⚠️ Erreur performances: {e}")

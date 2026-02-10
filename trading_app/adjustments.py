@@ -638,7 +638,7 @@ def get_criteres_dynamiques():
         cursor.execute('''
             SELECT critere, raison
             FROM criteres_dynamiques
-            WHERE categorie = 'ajustement'
+            WHERE categorie IN ('ajustement', 'ajustement_valide')
             AND date_maj >= date('now', '-30 days')
             ORDER BY date_maj DESC
         ''')

@@ -267,36 +267,43 @@ def api_lancer_analyse():
                     opportunites_rejetees += 1
                     continue
 
-                # Validation 3: Ratio R:R, cohérence prix, heures marché
-                valide, opp_validee, warns, errs = valider_opportunite(opp)
-                if not valide:
-                    print(f"⚠️ [{symbole}] Opportunité rejetée par validation: {'; '.join(errs)}")
-                    opportunites_rejetees += 1
-                    continue
-                if warns:
-                    print(f"ℹ️ [{symbole}] Avertissements: {'; '.join(warns)}")
+                # Injecter le régime réel pour validation R:R adaptée
+                opp['regime_marche'] = regime_actuel
 
-                opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
+                try:
+                    # Validation 3: Ratio R:R, cohérence prix, heures marché
+                    valide, opp_validee, warns, errs = valider_opportunite(opp)
+                    if not valide:
+                        print(f"⚠️ [{symbole}] Opportunité rejetée par validation: {'; '.join(errs)}")
+                        opportunites_rejetees += 1
+                        continue
+                    if warns:
+                        print(f"ℹ️ [{symbole}] Avertissements: {'; '.join(warns)}")
 
-                # Validation 4: Vérifier prix réel avant enregistrement
-                prix_entree_prevu = float(opp_validee.get('entree', 0))
-                setup_ok, setup_raison, quote_fraiche = valider_setup_avant_trade(
-                    symbole, opp_validee.get('direction', 'LONG'), prix_entree_prevu, donnees_enrichies
-                )
-                if not setup_ok:
-                    print(f"⚠️ [{symbole}] Setup rejeté: {setup_raison}")
-                    opportunites_rejetees += 1
-                    continue
-                # Mettre à jour le prix actuel avec le prix frais
-                if quote_fraiche:
-                    opp_enrichie['prix_actuel'] = quote_fraiche['prix']
+                    opp_enrichie = enrichir_opportunite_avec_donnees_marche(opp_validee, donnees_enrichies, indicateurs)
 
-                result = enregistrer_recommandation(opp_enrichie)
+                    # Validation 4: Vérifier prix réel avant enregistrement
+                    prix_entree_prevu = float(opp_validee.get('entree', 0))
+                    setup_ok, setup_raison, quote_fraiche = valider_setup_avant_trade(
+                        symbole, opp_validee.get('direction', 'LONG'), prix_entree_prevu, donnees_enrichies
+                    )
+                    if not setup_ok:
+                        print(f"⚠️ [{symbole}] Setup rejeté: {setup_raison}")
+                        opportunites_rejetees += 1
+                        continue
+                    # Mettre à jour le prix actuel avec le prix frais
+                    if quote_fraiche:
+                        opp_enrichie['prix_actuel'] = quote_fraiche['prix']
 
-                if result:
-                    symboles_traites.add(symbole)
-                    opportunites_valides += 1
-                else:
+                    result = enregistrer_recommandation(opp_enrichie)
+
+                    if result:
+                        symboles_traites.add(symbole)
+                        opportunites_valides += 1
+                    else:
+                        opportunites_rejetees += 1
+                except Exception as e:
+                    logger.error(f"Erreur traitement opportunité {symbole}: {e}")
                     opportunites_rejetees += 1
 
             if opportunites_rejetees > 0 or opportunites_valides > 0:
