@@ -115,19 +115,6 @@
             </div>
         </section>
 
-        <!-- Quick Stats A/B Testing -->
-        <section class="section" id="section-quick-stats" style="margin-bottom: 0;">
-            <div class="section-header">
-                <span class="section-icon">📈</span>
-                <h2 class="section-title">Quick Stats (7j)</h2>
-                <span class="section-meta">Performance par dimension</span>
-            </div>
-            <div class="section-content">
-                <div class="quick-stats-widget" id="quick-stats-widget">
-                    <div class="loading">Chargement...</div>
-                </div>
-            </div>
-        </section>
     </div>
 
     <!-- ALERTE MACRO (si événement imminent) -->
@@ -147,7 +134,7 @@
         <div class="section-header">
             <span class="section-icon">📅</span>
             <h2 class="section-title">Agenda Macro</h2>
-            <span class="section-meta">Événements économiques du jour</span>
+            <span class="section-meta" id="agenda-meta">Événements économiques du jour</span>
         </div>
         <div class="section-content">
             <div class="agenda-list" id="agenda-list">
@@ -717,7 +704,7 @@ let newsInterval = null;
 let contextInterval = null;
 let isRefreshingContext = false;  // Flag anti-boucle infinie
 let contextRefreshAttempts = 0;   // Compteur de tentatives
-const MAX_REFRESH_ATTEMPTS = 2;   // Maximum 2 tentatives par session
+const MAX_REFRESH_ATTEMPTS = 5;   // Maximum 5 tentatives auto par cycle (reset quand analyse fraîche)
 
 // Fonction utilitaire fetch avec retry exponentiel et validation
 async function fetchWithRetry(url, options = {}, maxRetries = 3) {
@@ -942,8 +929,7 @@ async function loadAllData() {
         loadPremarket(),
         loadMacroEvents(),
         loadABTests(),
-        loadRegimeMarche(),
-        loadQuickStats()
+        loadRegimeMarche()
     ]);
 }
 
@@ -1023,132 +1009,6 @@ async function loadRegimeMarche() {
     }
 }
 
-// ===== QUICK STATS A/B TESTING =====
-async function loadQuickStats() {
-    try {
-        const data = await fetchJSON('/api/stats-avancees');
-
-        const widget = document.getElementById('quick-stats-widget');
-
-        if (data.success) {
-            // Calculer le total de trades conclus (wins+losses) sur toutes les dimensions
-            let totalConclus = 0;
-            if (data.par_conviction) {
-                for (const stat of data.par_conviction) {
-                    totalConclus += (stat.wins || 0) + (stat.losses || 0);
-                }
-            }
-
-            // Masquer la section si pas assez de données
-            const section = document.getElementById('section-quick-stats');
-            if (totalConclus < 10) {
-                section.style.display = 'none';
-                return;
-            }
-            section.style.display = '';
-
-            let html = '<div class="quick-stats-container">';
-
-            // Stats par conviction
-            if (data.par_conviction && data.par_conviction.length > 0) {
-                html += '<div class="quick-stats-section">';
-                html += '<div class="quick-stats-title">Par Conviction</div>';
-                for (const stat of data.par_conviction) {
-                    const stars = '⭐'.repeat(stat.conviction_score || 0);
-                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
-                    const conclus = (stat.wins || 0) + (stat.losses || 0);
-                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
-                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
-                    html += `
-                        <div class="quick-stats-row">
-                            <span class="quick-stats-label">${stars || '☆'}</span>
-                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            }
-
-            // Stats par régime
-            if (data.par_regime_marche && data.par_regime_marche.length > 0) {
-                html += '<div class="quick-stats-section">';
-                html += '<div class="quick-stats-title">Par Régime</div>';
-                for (const stat of data.par_regime_marche) {
-                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
-                    const conclus = (stat.wins || 0) + (stat.losses || 0);
-                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
-                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
-                    const regimeIcon = {'CALME': '😌', 'NORMAL': '📊', 'VOLATILE': '⚡', 'EXTREME': '🔥'}[stat.regime_marche] || '📊';
-                    html += `
-                        <div class="quick-stats-row">
-                            <span class="quick-stats-label">${regimeIcon} ${stat.regime_marche || 'N/A'}</span>
-                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            }
-
-            // Stats par stratégie d'entrée
-            if (data.par_strategie_entree && data.par_strategie_entree.length > 0) {
-                html += '<div class="quick-stats-section">';
-                html += '<div class="quick-stats-title">Par Stratégie</div>';
-                for (const stat of data.par_strategie_entree) {
-                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
-                    const conclus = (stat.wins || 0) + (stat.losses || 0);
-                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
-                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
-                    html += `
-                        <div class="quick-stats-row">
-                            <span class="quick-stats-label">${stat.strategie_entree || 'N/A'}</span>
-                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            }
-
-            // Stats par jour de la semaine
-            if (data.par_jour_semaine && data.par_jour_semaine.length > 0) {
-                html += '<div class="quick-stats-section">';
-                html += '<div class="quick-stats-title">Par Jour</div>';
-                for (const stat of data.par_jour_semaine) {
-                    // CORRIGÉ: Utiliser trades conclus (wins+losses) au lieu de nb total
-                    const conclus = (stat.wins || 0) + (stat.losses || 0);
-                    const winRate = conclus > 0 ? Math.round((stat.wins / conclus) * 100) : 0;
-                    const winClass = winRate >= 60 ? 'win-high' : winRate >= 45 ? 'win-medium' : 'win-low';
-                    const jourShort = (stat.jour_semaine || 'N/A').substring(0, 3);
-                    html += `
-                        <div class="quick-stats-row">
-                            <span class="quick-stats-label">${jourShort}</span>
-                            <span class="quick-stats-value ${winClass}">${winRate}%</span>
-                            <span class="quick-stats-count">(${conclus}/${stat.nb})</span>
-                        </div>
-                    `;
-                }
-                html += '</div>';
-            }
-
-            html += '</div>';
-
-            // Message si pas de données
-            if (!data.par_conviction?.length && !data.par_regime_marche?.length) {
-                html = '<div class="no-data">Pas encore de données (nouveaux champs)</div>';
-            }
-
-            widget.innerHTML = html;
-        } else {
-            widget.innerHTML = '<div class="no-data">Données indisponibles</div>';
-        }
-    } catch (error) {
-        console.error('Erreur quick stats:', error);
-        document.getElementById('quick-stats-widget').innerHTML = '<div class="error-message">Erreur de chargement</div>';
-    }
-}
-
 // ===== A/B TESTS =====
 async function loadABTests() {
     try {
@@ -1216,6 +1076,15 @@ async function loadMacroEvents() {
         const data = await fetchJSON('/api/evenements-macro');
 
         if (data.success) {
+            // Afficher le jour dans le header
+            const metaEl = document.getElementById('agenda-meta');
+            if (metaEl && data.datetime) {
+                const jours = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+                const parts = data.datetime.split(' ')[0].split('/'); // dd/MM/yyyy
+                const dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+                metaEl.textContent = `${jours[dateObj.getDay()]} ${parts[0]}/${parts[1]}`;
+            }
+
             // Afficher alerte si événement imminent
             if (data.alerte_imminente && data.evenement_imminent) {
                 showMacroAlert(data.evenement_imminent);
@@ -1758,14 +1627,22 @@ async function loadLastAnalysis() {
             // Toujours afficher les données existantes
             renderAnalysis();
 
-            // APRÈS le render: marquer le timestamp comme périmé si >1h
+            // APRÈS le render: auto-refresh si analyse périmée (>1.5h)
             if (data.analyse.heure && !isWeekend) {
                 const [h, m] = data.analyse.heure.split(':').map(Number);
                 const analyseTime = new Date();
                 analyseTime.setHours(h, m, 0, 0);
                 const diffHours = (now - analyseTime) / (1000 * 60 * 60);
 
-                if (diffHours > 1 && hour >= 7 && hour < 23) {
+                if (diffHours <= 1) {
+                    // Analyse fraîche: réinitialiser le compteur pour le prochain cycle
+                    contextRefreshAttempts = 0;
+                } else if (diffHours > 1.5 && hour >= 7 && hour < 23) {
+                    // Analyse périmée: lancer une mise à jour automatique
+                    const timeEl = document.getElementById('context-time');
+                    timeEl.innerHTML = data.analyse.heure + ' <span style="color: var(--accent-orange); font-size: 0.85em;">(mise à jour auto...)</span>';
+                    actualiserContexte();
+                } else if (diffHours > 1 && hour >= 7 && hour < 23) {
                     const timeEl = document.getElementById('context-time');
                     timeEl.innerHTML = data.analyse.heure + ' <span style="color: var(--accent-orange); font-size: 0.85em;">(périmé — Actualisez)</span>';
                 }

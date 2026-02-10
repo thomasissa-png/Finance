@@ -317,6 +317,42 @@ def analyser_marche_json(donnees):
 
     # === NOUVEAU: Contexte trading avancé (VIX, session, saisonnalité) ===
     contexte_avance = get_contexte_trading_complet()
+
+    # === Calcul du temps de trading restant (EU et US) ===
+    heure_decimal = maintenant.hour + maintenant.minute / 60
+    eu_close = 17.5   # Euronext ferme à 17h30 CET
+    # US close dynamique via pytz (gère DST)
+    import pytz
+    tz_ny = pytz.timezone('America/New_York')
+    now_ny = datetime.now(tz_ny)
+    now_paris = datetime.now(config.TZ_PARIS)
+    diff_h = (now_paris.hour - now_ny.hour) % 24
+    if diff_h > 12:
+        diff_h -= 24
+    us_close = 16 + diff_h  # 16:00 NY en heure Paris
+
+    temps_restant_eu = max(0, eu_close - heure_decimal)
+    temps_restant_us = max(0, us_close - heure_decimal)
+
+    def fmt_heures(h):
+        heures = int(h)
+        minutes = int((h - heures) * 60)
+        if heures > 0 and minutes > 0:
+            return f"{heures}h{minutes:02d}"
+        elif heures > 0:
+            return f"{heures}h"
+        else:
+            return f"{minutes}min"
+
+    contexte_temps_restant = f"""
+⏱️ TEMPS DE TRADING RESTANT (il est {heure_str} CET):
+- Euronext (EU): {'FERMÉ' if temps_restant_eu <= 0 else f'fermeture 17h30 → {fmt_heures(temps_restant_eu)} restantes'}
+- NYSE/NASDAQ (US): {'FERMÉ' if temps_restant_us <= 0 else f'fermeture {int(us_close)}h00 → {fmt_heures(temps_restant_us)} restantes'}
+RÈGLE ABSOLUE: La durée d'une opportunité (validite_minutes, duree) ne doit JAMAIS dépasser le temps de cotation restant du marché de l'actif.
+- Actions EU → max {fmt_heures(temps_restant_eu) if temps_restant_eu > 0 else 'FERMÉ: pas de trade EU'}
+- Actions US, indices US → max {fmt_heures(temps_restant_us) if temps_restant_us > 0 else 'FERMÉ: pas de trade US'}
+- Forex/Commodités: cotation quasi-continue, pas de contrainte horaire stricte"""
+
     contexte_regime = f"""
 === CONTEXTE TRADING AVANCÉ ===
 📊 VIX: {contexte_avance['vix_niveau']:.1f} → Régime: {contexte_avance['regime_marche']}
@@ -324,6 +360,7 @@ def analyser_marche_json(donnees):
    Règles adaptées: {contexte_avance['regles_adaptees']}
 
 ⏰ Session: {contexte_avance['session_marche']} - {contexte_avance['session_description']}
+{contexte_temps_restant}
 
 📅 Jour: {contexte_avance['jour_semaine']}
    Pattern: {contexte_avance['pattern_jour']}
@@ -359,7 +396,8 @@ RÈGLES IMPÉRATIVES:
 - ADAPTE tes règles au RÉGIME DE MARCHÉ indiqué (VIX)
 - INDIQUE pour chaque opportunité: conviction_score (1-5), strategie_entree, validite_minutes, sentiment_score
 - REMPLIS tous les champs multi-timeframe: trend_daily, trend_h4, trend_h1, alignement_tf
-- Pour chaque opportunité: symbole, atr_pct, volume_relatif, rsi, macd_signal, ratio_rr, ratio_rr_justification"""
+- Pour chaque opportunité: symbole, atr_pct, volume_relatif, rsi, macd_signal, ratio_rr, ratio_rr_justification
+- DURÉE vs HORAIRES: Ne propose JAMAIS une opportunité dont la durée/validité dépasse le temps de cotation restant de l'actif (voir TEMPS DE TRADING RESTANT ci-dessus)"""
 
     try:
         # Générer le prompt système avec les instructions dynamiques et A/B testing
