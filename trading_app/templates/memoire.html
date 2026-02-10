@@ -955,7 +955,10 @@ function renderTradesTable() {
                         <th>Entrée</th>
                         <th>Stop</th>
                         <th>TP1</th>
+                        <th>TP2</th>
                         <th>Résultat</th>
+                        <th>Sortie</th>
+                        <th>H.Sortie</th>
                         <th>PnL</th>
                     </tr>
                     <tr class="filter-row">
@@ -992,6 +995,7 @@ function renderTradesTable() {
                         <th></th>
                         <th></th>
                         <th></th>
+                        <th></th>
                         <th>
                             <select class="filter-select" onchange="applyTableFilter('resultat', this.value)">
                                 <option value="">Tous</option>
@@ -1003,6 +1007,8 @@ function renderTradesTable() {
                                 <option value="en_cours" ${tableFilters.resultat === 'en_cours' ? 'selected' : ''}>⏳ En cours</option>
                             </select>
                         </th>
+                        <th></th>
+                        <th></th>
                         <th></th>
                     </tr>
                 </thead>
@@ -1028,7 +1034,10 @@ function renderTradesTable() {
                     <td data-label="Entrée" class="mono">${trade.prix_entree || '-'}</td>
                     <td data-label="Stop" class="mono negative">${trade.prix_stop || '-'}</td>
                     <td data-label="TP1" class="mono positive">${trade.prix_tp1 || '-'}</td>
+                    <td data-label="TP2" class="mono positive">${trade.prix_tp2 || '-'}</td>
                     <td data-label="Résultat" class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
+                    <td data-label="Sortie" class="mono">${trade.prix_sortie || '-'}</td>
+                    <td data-label="H.Sortie">${trade.timestamp_sortie ? new Date(trade.timestamp_sortie).toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}) : '-'}</td>
                     <td data-label="PnL" class="${resultClass} mono">
                         ${trade.pnl_pct ? (trade.pnl_pct >= 0 ? '+' : '') + trade.pnl_pct.toFixed(2) + '%' : '-'}
                     </td>

@@ -763,8 +763,11 @@ function renderTradesTable(trades) {
                     <th>Entrée</th>
                     <th>Stop</th>
                     <th>TP1</th>
+                    <th>TP2</th>
                     <th>Statut</th>
                     <th>Résultat</th>
+                    <th>Sortie</th>
+                    <th>H.Sortie</th>
                     <th>PnL</th>
                 </tr>
             </thead>
@@ -842,8 +845,11 @@ function renderTradesTable(trades) {
                 <td>${trade.prix_entree || '-'}</td>
                 <td class="${stopModifie}">${stopAffiche || '-'}</td>
                 <td>${trade.prix_tp1 || '-'}</td>
+                <td>${trade.prix_tp2 || '-'}</td>
                 <td><span class="badge-statut">${statutIcon} ${statut.replace('_', ' ')}</span></td>
                 <td>${trade.resultat || 'En cours'}</td>
+                <td class="mono">${trade.prix_sortie || '-'}</td>
+                <td>${trade.timestamp_sortie ? new Date(trade.timestamp_sortie).toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}) : '-'}</td>
                 <td class="${trade.pnl_pct > 0 ? 'positive' : trade.pnl_pct < 0 ? 'negative' : ''}">${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
             </tr>`;
     }
