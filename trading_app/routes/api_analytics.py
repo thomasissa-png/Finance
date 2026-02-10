@@ -813,3 +813,22 @@ def api_metrics():
         logger.error(f"Erreur api_metrics: {e}")
         return jsonify({'success': False, 'error': str(e)})
 
+
+@bp.route('/api/kpis-avances')
+def api_kpis_avances():
+    """
+    KPIs quantitatifs professionnels: Sharpe, Sortino, Calmar, Kelly, drawdown.
+    Parametre: ?jours=90 (defaut 90)
+    """
+    try:
+        from ..scripts.kpi_report import calculer_kpis_avances
+        jours = request.args.get('jours', 90, type=int)
+        jours = min(max(jours, 7), 365)
+        kpis = calculer_kpis_avances(jours=jours)
+        # Retirer equity_curve (trop volumineux pour JSON API)
+        kpis_clean = {k: v for k, v in kpis.items() if k != 'equity_curve'}
+        return jsonify({'success': True, 'kpis': kpis_clean})
+    except Exception as e:
+        logger.error(f"Erreur api_kpis_avances: {e}")
+        return jsonify({'success': False, 'error': str(e)})
+

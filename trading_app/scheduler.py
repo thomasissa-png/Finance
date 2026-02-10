@@ -20,7 +20,7 @@ from .analysis import analyser_marche_json, generer_cloture_json
 from .trades import (
     enregistrer_recommandation, verifier_resultats_trades,
     reevaluer_trades_intraday, cloturer_trades_jour,
-    enrichir_opportunite_avec_donnees_marche
+    enrichir_opportunite_avec_donnees_marche, cloturer_trades_orphelins
 )
 from .journal import (
     enregistrer_journal_fr, enregistrer_journal_complet,
@@ -303,6 +303,10 @@ def configurer_schedule():
     heure_ab_eval_utc = get_utc_time_for_paris("18:00")
     schedule.every().sunday.at(heure_ab_eval_utc).do(evaluer_tous_ab_tests)
 
+    # Nettoyage trades orphelins: tous les jours à 07h30 (avant 1ère analyse)
+    heure_orphelins_utc = get_utc_time_for_paris("07:30")
+    schedule.every().day.at(heure_orphelins_utc).do(cloturer_trades_orphelins)
+
     # Backup quotidien de la base de données: tous les jours à 23h00
     heure_backup_utc = get_utc_time_for_paris("23:00")
     schedule.every().day.at(heure_backup_utc).do(backup_database)
@@ -312,6 +316,12 @@ def run_scheduler():
     """Thread robuste pour le scheduler avec gestion d'erreurs"""
     consecutive_errors = 0
     max_consecutive_errors = 3
+
+    # Clôturer les trades orphelins des jours précédents (anti biais de survivant)
+    try:
+        cloturer_trades_orphelins()
+    except Exception as e:
+        logger.error(f"Erreur cloture trades orphelins: {e}")
 
     # Rattrapage des tâches manquées au démarrage
     try:

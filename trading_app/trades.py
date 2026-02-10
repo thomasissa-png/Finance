@@ -898,6 +898,7 @@ def get_performances(periode='semaine'):
                 SUM(CASE WHEN resultat = 'STOP' THEN 1 ELSE 0 END) as stops_naturel,
                 SUM(CASE WHEN resultat = 'LOSS_FORCE' THEN 1 ELSE 0 END) as stops_force,
                 SUM(CASE WHEN resultat = 'NON_CONCLU' THEN 1 ELSE 0 END) as non_conclus,
+                SUM(CASE WHEN resultat = 'EXPIRED' THEN 1 ELSE 0 END) as expires,
                 AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
             FROM trades_recommandes
@@ -913,6 +914,7 @@ def get_performances(periode='semaine'):
         stops_naturel = row[3] or 0
         stops_force = row[4] or 0
         non_conclus = row[5] or 0
+        expires = row[6] or 0
 
         # Totaux combinés (naturels + forcés)
         reussis = reussis_naturel + reussis_force
@@ -930,7 +932,8 @@ def get_performances(periode='semaine'):
             'stops_naturel': stops_naturel,       # STOP
             'stops_force': stops_force,           # LOSS_FORCE (clôture forcée négative)
             'non_conclus': non_conclus,           # Historique (ne devrait plus arriver)
-            'en_cours': total - conclus - non_conclus,  # Trades en cours
+            'expires': expires,                    # Trades orphelins auto-expirés
+            'en_cours': total - conclus - non_conclus - expires,  # Trades en cours
             'taux_reussite': round((reussis / conclus * 100) if conclus > 0 else 0, 1),
             'pnl_moyen': round(row[6] or 0, 2),
             'pnl_total': round(row[7] or 0, 2)
@@ -938,4 +941,57 @@ def get_performances(periode='semaine'):
     except Exception as e:
         print(f"⚠️ Erreur performances: {e}")
         return {'total': 0, 'reussis': 0, 'reussis_naturel': 0, 'reussis_force': 0, 'stops': 0, 'stops_naturel': 0, 'stops_force': 0, 'non_conclus': 0, 'en_cours': 0, 'taux_reussite': 0, 'pnl_moyen': 0, 'pnl_total': 0}
+
+
+def cloturer_trades_orphelins():
+    """
+    Clôture les trades des jours PRÉCÉDENTS restés sans résultat (biais de survivant).
+    Appelée au démarrage et chaque matin avant la première analyse.
+    Marque ces trades comme EXPIRED avec PnL=0 pour ne pas biaiser les statistiques.
+    """
+    maintenant = get_paris_time()
+    aujourdhui = maintenant.strftime('%Y-%m-%d')
+
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT id, actif, symbole, date, prix_entree
+            FROM trades_recommandes
+            WHERE resultat IS NULL AND date < ?
+        ''', (aujourdhui,))
+        orphelins = cursor.fetchall()
+
+        if not orphelins:
+            return 0
+
+        nb = 0
+        for trade in orphelins:
+            cursor.execute('''
+                UPDATE trades_recommandes
+                SET resultat = 'EXPIRED', pnl_pct = 0, prix_sortie = prix_entree,
+                    timestamp_sortie = ?,
+                    notes = COALESCE(notes, '') || ' [AUTO-EXPIRED: trade orphelin]'
+                WHERE id = ?
+            ''', (maintenant.isoformat(), trade['id']))
+            nb += 1
+            logger.warning(
+                f"Trade orphelin cloture: {trade['actif']} ({trade['symbole']}) "
+                f"du {trade['date']} -> EXPIRED"
+            )
+
+        conn.commit()
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] "
+              f"⚠️ {nb} trade(s) orphelin(s) cloture(s) (EXPIRED)")
+        return nb
+
+    except Exception as e:
+        logger.error(f"Erreur cloture trades orphelins: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
 
