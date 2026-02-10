@@ -3,11 +3,12 @@ Journal des actifs, rapports quotidiens/hebdomadaires, stockage analyses.
 """
 import sqlite3
 import json
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
 
-from .config import client_anthropic, logger, DB_PATH, DB_TIMEOUT, to_python_type
+from .config import client_anthropic, logger, DB_PATH, DB_TIMEOUT, to_python_type, PREMARKET_CACHE, PREMARKET_CACHE_TTL
 from .constants import ACTIFS_PERMANENTS, SYMBOLES_ACTIONS_US
 from .market_context import get_paris_time, get_market_context, get_regime_marche
 from .market_data import recuperer_donnees_marche, get_twelvedata_batch
@@ -112,7 +113,12 @@ def get_categorie_actif(symbole):
 
 def recuperer_donnees_premarket():
     """Récupère les données pré-market (futures, overnight gaps)
-    OPTIMISÉ: Utilise BATCH API au lieu d'appels individuels"""
+    OPTIMISÉ: Utilise BATCH API + cache 120s pour éviter les appels répétés"""
+    # Vérifier le cache d'abord
+    now = time.time()
+    if PREMARKET_CACHE['data'] is not None and (now - PREMARKET_CACHE['timestamp']) < PREMARKET_CACHE_TTL:
+        return PREMARKET_CACHE['data']
+
     premarket_symbols = {
         "ES=F": "S&P 500 Futures",
         "NQ=F": "Nasdaq Futures",
@@ -144,6 +150,10 @@ def recuperer_donnees_premarket():
                     }
         except Exception as e:
             print(f"⚠️ Erreur premarket {symbole}: {e}")
+
+    # Mettre à jour le cache
+    PREMARKET_CACHE['data'] = donnees
+    PREMARKET_CACHE['timestamp'] = time.time()
 
     return donnees
 
