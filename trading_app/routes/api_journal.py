@@ -311,9 +311,10 @@ def api_news_historique():
             par_date[date_str].append({
                 'heure': n.get('heure', '--:--'),
                 'headline': n.get('titre', ''),
-                'analyse': n.get('contenu', ''),
+                'analyse': n.get('analyse', n.get('contenu', '')),
                 'impact': n.get('impact', 'faible'),
-                'actifs': n.get('actif', '').split(', ') if n.get('actif') else []
+                'impact_cours': n.get('impact_cours', ''),
+                'actifs': n.get('actifs', []),
             })
 
         # Convertir en liste triée par date

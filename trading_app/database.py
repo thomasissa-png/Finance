@@ -321,6 +321,17 @@ def init_database():
     except sqlite3.OperationalError:
         pass  # Colonne existe déjà
 
+    # Ajouter colonnes pour données news enrichies (impact_cours + actifs JSON)
+    colonnes_news = [
+        ("impact_cours", "TEXT"),
+        ("actifs_json", "TEXT"),
+    ]
+    for col_nom, col_type in colonnes_news:
+        try:
+            cursor.execute(f"ALTER TABLE alertes_news ADD COLUMN {col_nom} {col_type}")
+        except sqlite3.OperationalError:
+            pass
+
     # Activer WAL mode pour meilleures performances en concurrence
     cursor.execute("PRAGMA journal_mode = WAL")
     cursor.execute("PRAGMA synchronous = NORMAL")

@@ -185,13 +185,15 @@ def sauvegarder_news_analysees(news_list):
             ''', (news.get('headline', '')[:200], aujourdhui))
 
             if cursor.fetchone() is None:
-                # Insérer la nouvelle news
                 # Note: Le JSON de Claude utilise 'actifs', pas 'actifs_concernes'
                 actifs_list = news.get('actifs', news.get('actifs_concernes', []))
                 actifs_concernes = ', '.join([a.get('symbole', '') for a in actifs_list])
+                # Sauvegarder le JSON complet des actifs pour le frontend
+                actifs_json = json.dumps(actifs_list, ensure_ascii=False) if actifs_list else None
                 cursor.execute('''
-                    INSERT INTO alertes_news (date, heure, titre, contenu, actif, impact, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO alertes_news
+                    (date, heure, titre, contenu, actif, impact, impact_cours, actifs_json, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     aujourdhui,
                     news.get('heure', '--:--'),
@@ -199,6 +201,8 @@ def sauvegarder_news_analysees(news_list):
                     news.get('analyse', ''),
                     actifs_concernes,
                     news.get('impact', 'faible'),
+                    news.get('impact_cours', ''),
+                    actifs_json,
                     maintenant
                 ))
 
@@ -208,7 +212,7 @@ def sauvegarder_news_analysees(news_list):
         print(f"⚠️ Erreur sauvegarde news: {e}")
 
 def get_news_historique(jours=7):
-    """Récupère l'historique des news analysées"""
+    """Récupère l'historique des news analysées, formaté pour le frontend"""
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -222,7 +226,29 @@ def get_news_historique(jours=7):
             ORDER BY date DESC, timestamp DESC
         ''', (date_limite,))
 
-        news = [dict(row) for row in cursor.fetchall()]
+        news = []
+        for row in cursor.fetchall():
+            item = dict(row)
+            # Reconstruire la structure attendue par le frontend
+            # Le frontend attend 'actifs' (array) et 'impact_cours'
+            if item.get('actifs_json'):
+                try:
+                    item['actifs'] = json.loads(item['actifs_json'])
+                except (json.JSONDecodeError, TypeError):
+                    item['actifs'] = []
+            elif item.get('actif'):
+                # Fallback: reconstruire depuis le champ plat "SYM1, SYM2"
+                symboles = [s.strip() for s in item['actif'].split(',') if s.strip()]
+                item['actifs'] = [{'symbole': s, 'nom': s, 'direction': '', 'impact_estime': ''} for s in symboles]
+            else:
+                item['actifs'] = []
+            # S'assurer que impact_cours existe (même vide)
+            if not item.get('impact_cours'):
+                item['impact_cours'] = ''
+            # Mapper 'contenu' vers 'analyse' (le frontend utilise 'analyse')
+            if 'analyse' not in item and 'contenu' in item:
+                item['analyse'] = item['contenu']
+            news.append(item)
         conn.close()
 
         return news
