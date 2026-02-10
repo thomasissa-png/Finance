@@ -24,6 +24,12 @@ RÈGLES DE FILTRAGE:
 - PRÉCISE TOUJOURS si c'est un LONG ou un SHORT
 - UTILISE les indicateurs techniques fournis (RSI, MACD) pour confirmer tes trades
 
+RÈGLE PRIX ABSOLUE:
+- Le champ "entree" DOIT être le prix actuel RÉEL fourni dans les données (Close/prix_actuel)
+- N'INVENTE JAMAIS de prix: utilise UNIQUEMENT les prix des données fournies
+- Stop et TP sont calculés à partir du prix d'entrée réel (pas un prix théorique)
+- Si le prix fourni ne permet pas un bon setup, NE RECOMMANDE PAS l'actif
+
 INDICATEURS TECHNIQUES (fournis dans les données):
 - ATR%: Average True Range en % du prix - mesure la volatilité. ATR < 1% = ÉVITER
 - Volume Relatif: Volume actuel vs moyenne 20j. > 150% = intérêt institutionnel
