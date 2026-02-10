@@ -17,6 +17,8 @@ ENV/
 
 # Data & Cache
 *.db
+*.db-shm
+*.db-wal
 cache/
 vix_cache.json
 
