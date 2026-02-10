@@ -891,8 +891,18 @@ async function actualiserContexte(forceReset = false) {
 
         if (data.success && data.analyse) {
             // Nouvelle analyse générée avec succès
-            analysisData = data.analyse;
-            renderAnalysis();  // Inclut loadValidatedOpportunities() pour les trades validés
+            // /api/analyse retourne le JSON brut Claude (sans wrapper .contenu)
+            // Normaliser pour que renderAnalysis() fonctionne (attend .contenu)
+            if (data.analyse.contenu) {
+                analysisData = data.analyse;
+            } else {
+                analysisData = {
+                    heure: new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}),
+                    contenu: data.analyse
+                };
+            }
+            renderAnalysis();
+            loadValidatedOpportunities();
             contextRefreshAttempts = 0;  // Reset le compteur
             return true;
         } else {
@@ -914,9 +924,13 @@ async function actualiserContexte(forceReset = false) {
 async function loadAllData() {
     // OPTIMISÉ: Charger toutes les données en parallèle
     // Le weekend est détecté par chaque API côté serveur
+    // IMPORTANT: loadValidatedOpportunities() est chargé INDÉPENDAMMENT
+    // de loadLastAnalysis() pour garantir l'affichage des trades ouverts
+    // même si le rendu de l'analyse échoue
     await Promise.all([
         refreshMarkets(),
         loadLastAnalysis(),
+        loadValidatedOpportunities(),
         refreshNews(),
         loadPremarket(),
         loadMacroEvents(),
@@ -1822,9 +1836,11 @@ function updateDangerZonesFromOpportunities(opportunities) {
 }
 
 function renderAnalysis() {
-    if (!analysisData || !analysisData.contenu) return;
+    if (!analysisData) return;
 
-    const contenu = analysisData.contenu;
+    // Normaliser: si .contenu absent, le JSON est directement l'analyse (réponse /api/analyse)
+    const contenu = analysisData.contenu || analysisData;
+    if (!contenu || !contenu.contexte_marche) return;
 
     // Alerte macro si présente
     if (contenu.alerte_macro) {
