@@ -2,11 +2,13 @@
 Tâches planifiées: analyses, vérifications, clôtures, rapports.
 """
 import time
+import datetime
 from threading import Thread
 
 import schedule
 
 from .config import logger
+from . import config
 from .notifications import envoyer_whatsapp
 from .constants import ACTIFS_PERMANENTS, ACTIFS_HORS_US, est_jour_trading_valide
 from .market_context import (
@@ -29,6 +31,33 @@ from .journal import (
 from .adjustments import traiter_ajustements_automatiquement, evaluer_tous_ajustements_valides
 from .ab_testing import evaluer_tous_ab_tests
 from .database import backup_database
+
+
+def run_pending_safe():
+    """Exécute les jobs planifiés un par un, avec gestion d'erreur PAR JOB.
+
+    Résout le bug critique du module `schedule`: si un job lève une exception,
+    son next_run n'est pas mis à jour et il bloque TOUS les autres jobs
+    indéfiniment. Cette fonction isole chaque job pour que les erreurs
+    d'un job ne bloquent pas les autres.
+    """
+    runnable_jobs = sorted(
+        [job for job in schedule.jobs if job.should_run],
+        key=lambda j: j.next_run
+    )
+    for job in runnable_jobs:
+        try:
+            job.run()
+        except Exception as e:
+            func_name = getattr(job.job_func, '__name__', str(job.job_func))
+            if hasattr(job.job_func, 'func'):
+                func_name = job.job_func.func.__name__
+            logger.error(f"Erreur job '{func_name}': {e}")
+            print(f"⚠️ Scheduler: erreur job '{func_name}': {e}")
+            # Forcer le reschedule pour éviter blocage infini
+            job.last_run = datetime.datetime.now()
+            job._schedule_next_run()
+
 
 def executer_analyse_planifiee(eu_only=False):
     """Exécute une analyse planifiée.
@@ -117,8 +146,11 @@ def executer_analyse_planifiee(eu_only=False):
                 print(f"  📊 Opportunités (régime {regime_actuel}): {valides} validées, {rejetes} rejetées")
 
             print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Analyse sauvegardée")
+            if hasattr(config, 'SCHEDULER_HEALTH'):
+                config.SCHEDULER_HEALTH['last_analysis'] = maintenant.isoformat()
     except Exception as e:
-        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Erreur: {e}")
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Erreur analyse: {e}")
+        logger.error(f"Erreur analyse planifiée: {e}", exc_info=True)
 
 def executer_cloture_planifiee():
     """Exécute la clôture planifiée"""
@@ -204,7 +236,10 @@ def executer_verification_trades():
     is_valide, _ = est_jour_trading_valide(maintenant)
     if not is_valide:
         return
-    verifier_resultats_trades()
+    try:
+        verifier_resultats_trades()
+    except Exception as e:
+        logger.error(f"Erreur vérification trades: {e}")
 
 def executer_reevaluation_intraday():
     """Exécute la réévaluation intraday des trades en cours"""
@@ -212,7 +247,10 @@ def executer_reevaluation_intraday():
     is_valide, _ = est_jour_trading_valide(maintenant)
     if not is_valide:
         return
-    reevaluer_trades_intraday()
+    try:
+        reevaluer_trades_intraday()
+    except Exception as e:
+        logger.error(f"Erreur réévaluation intraday: {e}")
 
 def executer_cloture_trades():
     """Exécute la clôture des trades du jour"""
@@ -220,17 +258,26 @@ def executer_cloture_trades():
     is_valide, _ = est_jour_trading_valide(maintenant)
     if not is_valide:
         return
-    # D'abord vérifier une dernière fois
-    verifier_resultats_trades()
-    # Puis clôturer les trades restants
-    cloturer_trades_jour()
+    try:
+        # D'abord vérifier une dernière fois
+        verifier_resultats_trades()
+    except Exception as e:
+        logger.error(f"Erreur vérification avant clôture: {e}")
+    try:
+        # Puis clôturer les trades restants
+        cloturer_trades_jour()
+    except Exception as e:
+        logger.error(f"Erreur clôture trades: {e}")
 
 def executer_rapport_hebdo():
     """Exécute la génération du rapport hebdomadaire (samedi matin)"""
     maintenant = get_paris_time()
     if maintenant.weekday() != 5:  # 5 = Samedi
         return
-    generer_rapport_hebdo()
+    try:
+        generer_rapport_hebdo()
+    except Exception as e:
+        logger.error(f"Erreur rapport hebdo: {e}")
 
 def configurer_schedule():
     """Configure les tâches planifiées"""
@@ -321,8 +368,15 @@ def configurer_schedule():
 
 def run_scheduler():
     """Thread robuste pour le scheduler avec gestion d'erreurs"""
-    consecutive_errors = 0
-    max_consecutive_errors = 3
+    # Health tracking partagé via config (thread-safe pour lecture)
+    config.SCHEDULER_HEALTH = {
+        'alive': True,
+        'started_at': get_paris_time().isoformat(),
+        'last_heartbeat': None,
+        'last_analysis': None,
+        'total_cycles': 0,
+        'total_errors': 0,
+    }
 
     # Clôturer les trades orphelins des jours précédents (anti biais de survivant)
     try:
@@ -338,25 +392,12 @@ def run_scheduler():
 
     while True:
         try:
-            schedule.run_pending()
-            consecutive_errors = 0  # Reset si succès
+            run_pending_safe()
+            config.SCHEDULER_HEALTH['last_heartbeat'] = get_paris_time().isoformat()
+            config.SCHEDULER_HEALTH['total_cycles'] += 1
         except Exception as e:
-            consecutive_errors += 1
-            logger.error(f"Erreur scheduler (#{consecutive_errors}): {e}")
-
-            # Alerte après plusieurs erreurs consécutives
-            if consecutive_errors >= max_consecutive_errors:
-                print(f"🚨 ALERTE CRITIQUE: Scheduler a échoué {consecutive_errors} fois!")
-                envoyer_whatsapp(f"🚨 ALERTE TRADING: Scheduler en erreur ({consecutive_errors}x): {str(e)[:100]}")
-
-                # Cooldown prolongé après alertes
-                time.sleep(120)
-                consecutive_errors = 0  # Reset après cooldown
-                continue
-
-            # Petit délai avant retry en cas d'erreur
-            time.sleep(60)
-            continue
+            config.SCHEDULER_HEALTH['total_errors'] += 1
+            logger.error(f"Erreur scheduler critique: {e}")
 
         time.sleep(15)
 

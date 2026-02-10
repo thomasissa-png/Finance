@@ -100,6 +100,9 @@ VIX_CACHE_FILE = 'vix_cache.json'
 MARKET_DATA_CACHE = {'data': None, 'timestamp': 0, 'actifs_key': None}
 MARKET_DATA_CACHE_TTL = 60
 
+# Scheduler health tracking (écrit par le thread scheduler, lu par l'API)
+SCHEDULER_HEALTH = {'alive': False, 'started_at': None, 'last_heartbeat': None, 'last_analysis': None, 'total_cycles': 0, 'total_errors': 0}
+
 # Locks thread-safety
 TWELVEDATA_RATE_LOCK = Lock()
 TWELVEDATA_CACHE_LOCK = Lock()

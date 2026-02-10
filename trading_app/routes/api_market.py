@@ -4,7 +4,8 @@ import json
 import requests
 from flask import Blueprint, jsonify, request
 
-from ..config import TWELVEDATA_API_KEY, NEWSAPI_KEY, logger, DB_PATH, DB_TIMEOUT, to_python_type
+from ..config import TWELVEDATA_API_KEY, NEWSAPI_KEY, logger, DB_PATH, DB_TIMEOUT, to_python_type, SCHEDULER_HEALTH
+from .. import config as _config
 from ..constants import ACTIFS_PERMANENTS, ACTIFS_HORS_US, SYMBOLES_ACTIONS_US
 from ..market_context import (
     get_paris_time, get_market_context, get_vix_level, get_regime_marche,
@@ -397,4 +398,49 @@ def api_trades_ouverts():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+
+@bp.route('/api/scheduler-status')
+def api_scheduler_status():
+    """Statut du scheduler pour diagnostic"""
+    import schedule as _schedule
+    health = _config.SCHEDULER_HEALTH
+
+    # Compter les jobs par type
+    jobs_summary = {}
+    for job in _schedule.get_jobs():
+        func_name = getattr(job.job_func, '__name__', '?')
+        if hasattr(job.job_func, 'func'):
+            func_name = job.job_func.func.__name__
+        jobs_summary[func_name] = jobs_summary.get(func_name, 0) + 1
+
+    # Prochains jobs à exécuter
+    upcoming = sorted(
+        [j for j in _schedule.get_jobs() if j.next_run],
+        key=lambda j: j.next_run
+    )[:10]
+    next_jobs = []
+    for j in upcoming:
+        func_name = getattr(j.job_func, '__name__', '?')
+        if hasattr(j.job_func, 'func'):
+            func_name = j.job_func.func.__name__
+        next_jobs.append({
+            'function': func_name,
+            'next_run': j.next_run.strftime('%Y-%m-%d %H:%M'),
+        })
+
+    return jsonify({
+        'success': True,
+        'scheduler': {
+            'alive': health.get('alive', False),
+            'started_at': health.get('started_at'),
+            'last_heartbeat': health.get('last_heartbeat'),
+            'last_analysis': health.get('last_analysis'),
+            'total_cycles': health.get('total_cycles', 0),
+            'total_errors': health.get('total_errors', 0),
+        },
+        'jobs_count': len(_schedule.get_jobs()),
+        'jobs_summary': jobs_summary,
+        'next_10_jobs': next_jobs,
+        'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
+    })
 
