@@ -85,19 +85,18 @@ def fetch_and_analyze_news():
             'pageSize': 15
         }
         response = requests.get(url, params=params, timeout=10)
-        if not response.ok:
-            logger.warning(f"NewsAPI HTTP {response.status_code}")
-            return None
-        data = response.json()
-
-        if data.get('status') == 'ok':
-            for article in data.get('articles', []):
-                articles.append({
-                    'titre': article.get('title', ''),
-                    'source': article.get('source', {}).get('name', 'Inconnu'),
-                    'heure': article.get('publishedAt', ''),
-                    'url': article.get('url', '')
-                })
+        if response.ok:
+            data = response.json()
+            if data.get('status') == 'ok':
+                for article in data.get('articles', []):
+                    articles.append({
+                        'titre': article.get('title', ''),
+                        'source': article.get('source', {}).get('name', 'Inconnu'),
+                        'heure': article.get('publishedAt', ''),
+                        'url': article.get('url', '')
+                    })
+        else:
+            logger.warning(f"NewsAPI FR HTTP {response.status_code}")
 
         # News internationales (pour commodités, géopolitique)
         url_world = "https://newsapi.org/v2/top-headlines"
@@ -108,16 +107,18 @@ def fetch_and_analyze_news():
             'pageSize': 10
         }
         response_world = requests.get(url_world, params=params_world, timeout=10)
-        data_world = response_world.json()
-
-        if data_world.get('status') == 'ok':
-            for article in data_world.get('articles', []):
-                articles.append({
-                    'titre': article.get('title', ''),
-                    'source': article.get('source', {}).get('name', 'Inconnu'),
-                    'heure': article.get('publishedAt', ''),
-                    'url': article.get('url', '')
-                })
+        if response_world.ok:
+            data_world = response_world.json()
+            if data_world.get('status') == 'ok':
+                for article in data_world.get('articles', []):
+                    articles.append({
+                        'titre': article.get('title', ''),
+                        'source': article.get('source', {}).get('name', 'Inconnu'),
+                        'heure': article.get('publishedAt', ''),
+                        'url': article.get('url', '')
+                    })
+        else:
+            logger.warning(f"NewsAPI world HTTP {response_world.status_code}")
 
         if not articles:
             return [], "Aucune news récupérée"
