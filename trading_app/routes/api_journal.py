@@ -8,10 +8,11 @@ from flask import Blueprint, jsonify, request
 import time
 
 from ..config import logger, client_anthropic, DB_PATH, DB_TIMEOUT, to_python_type, TZ_PARIS, NEWSAPI_KEY, NEWS_CACHE, NEWS_CACHE_TTL
-from ..constants import ACTIFS_PERMANENTS, ACTIFS_HORS_US
+from ..constants import ACTIFS_PERMANENTS, ACTIFS_HORS_US, POOL_ROTATION
 from ..market_context import (
     get_paris_time, get_market_context, get_regime_marche,
-    get_evenements_macro_jour, get_actifs_filtres_atr, is_weekend
+    get_evenements_macro_jour, get_actifs_filtres_atr, is_weekend,
+    verifier_proximite_evenement_macro
 )
 from ..market_data import recuperer_donnees_marche
 from ..indicators import enrichir_donnees_avec_indicateurs

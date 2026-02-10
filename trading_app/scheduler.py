@@ -186,10 +186,17 @@ def rattraper_journal_manque():
 def executer_journal_complet():
     """Exécute l'enregistrement du journal complet + bilan à 22h30"""
     maintenant = get_paris_time()
-    is_valide, _ = est_jour_trading_valide(maintenant)
+    print(f"\n[{maintenant.strftime('%H:%M:%S')} CET] 📓 Journal complet 22h30 en cours...")
+    is_valide, raison = est_jour_trading_valide(maintenant)
     if not is_valide:
+        print(f"  ⏭️ Journal complet ignoré: {raison}")
         return
-    enregistrer_journal_complet()
+    try:
+        enregistrer_journal_complet()
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Journal complet 22h30 terminé")
+    except Exception as e:
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Erreur journal complet: {e}")
+        logger.error(f"Erreur journal complet 22h30: {e}", exc_info=True)
 
 def executer_verification_trades():
     """Exécute la vérification des trades"""

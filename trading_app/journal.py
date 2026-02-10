@@ -418,6 +418,20 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
         # Récupérer les données des actifs
         donnees = recuperer_donnees_marche(actifs_a_traiter)
 
+        if not donnees:
+            # Retry une fois après 5 secondes (cache peut avoir expiré)
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ⚠️ Aucune donnée - retry dans 5s...")
+            import time as _time
+            _time.sleep(5)
+            donnees = recuperer_donnees_marche(actifs_a_traiter)
+
+        if not donnees:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ❌ Aucune donnée marché après retry - journal vide")
+            logger.error("enregistrer_journal_quotidien: aucune donnée marché (API down ou marchés fermés)")
+            return False
+
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 {len(donnees)}/{len(actifs_a_traiter)} actifs récupérés pour le journal")
+
         # Récupérer les opportunités du jour pour chaque actif
         opportunites_jour = {}
         try:
@@ -1108,11 +1122,21 @@ def normaliser_categorie(categorie):
     return _norm(categorie)
 
 def enregistrer_journal_complet():
-    """Enregistre le journal complet + bilan (22h30)"""
+    """Enregistre le journal complet + bilan (22h30).
+    Les deux étapes sont indépendantes: si le journal échoue, le bilan s'exécute quand même."""
     # D'abord enregistrer le journal de tous les actifs
-    enregistrer_journal_quotidien()
-    # Puis générer le bilan général
-    generer_bilan_quotidien()
+    try:
+        enregistrer_journal_quotidien()
+    except Exception as e:
+        logger.error(f"Erreur enregistrement journal quotidien dans journal_complet: {e}")
+        print(f"❌ Journal quotidien échoué: {e}")
+
+    # Puis générer le bilan général (indépendant du journal)
+    try:
+        generer_bilan_quotidien()
+    except Exception as e:
+        logger.error(f"Erreur bilan quotidien dans journal_complet: {e}")
+        print(f"❌ Bilan quotidien échoué: {e}")
 
 def get_journal_quotidien(symbole=None, limite=30, date_from=None, date_to=None, offset=0):
     """Récupère le journal quotidien avec navigation par date et pagination"""
