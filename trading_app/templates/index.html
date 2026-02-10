@@ -35,62 +35,31 @@
         </div>
     </section>
 
-    <!-- 1. OPPORTUNITÉS ACTIVES (en premier : le plus actionnable) -->
-    <section class="section section-highlight">
+    <!-- 1. CONTEXTE DU JOUR -->
+    <section class="section">
         <div class="section-header">
-            <span class="section-icon">🎯</span>
-            <h2 class="section-title">Opportunités Actives</h2>
-            <span class="section-meta" id="opp-count">0 opportunités</span>
+            <span class="section-icon">📊</span>
+            <h2 class="section-title">Contexte du Jour</h2>
+            <span class="section-meta">Mis à jour : <span id="context-time">--:--</span></span>
         </div>
         <div class="section-content">
-            <div class="opportunities-scroll" id="opportunities-container">
-                <div class="no-data" style="width: 100%;">Lancez une actualisation pour voir les opportunités</div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 2. CONTEXTE + PULSE (2 colonnes) -->
-    <div class="grid-2 mb-3">
-        <!-- Contexte du Jour -->
-        <section class="section" style="margin-bottom: 0;">
-            <div class="section-header">
-                <span class="section-icon">📊</span>
-                <h2 class="section-title">Contexte du Jour</h2>
-                <span class="section-meta">Mis à jour : <span id="context-time">--:--</span></span>
-            </div>
-            <div class="section-content">
-                <div class="premarket-section" id="premarket-section">
-                    <div class="premarket-header">
-                        <span class="premarket-icon">🌅</span>
-                        <span class="premarket-title">Pré-Market / Overnight</span>
-                    </div>
-                    <div class="premarket-grid" id="premarket-grid">
-                        <div class="loading">Chargement...</div>
-                    </div>
+            <div class="premarket-section" id="premarket-section">
+                <div class="premarket-header">
+                    <span class="premarket-icon">🌅</span>
+                    <span class="premarket-title">Pré-Market / Overnight</span>
                 </div>
-                <ul class="context-bullets" id="context-bullets">
-                    <li>Lancez une actualisation pour obtenir le contexte du marché...</li>
-                </ul>
-                <div class="context-tags" id="context-tags"></div>
-            </div>
-        </section>
-
-        <!-- Pulse Marché -->
-        <section class="section" style="margin-bottom: 0;">
-            <div class="section-header">
-                <span class="section-icon">📈</span>
-                <h2 class="section-title">Pulse Marché</h2>
-                <span class="section-meta" id="pulse-update-time">--:--</span>
-            </div>
-            <div class="section-content">
-                <div class="pulse-widget" id="pulse-widget">
+                <div class="premarket-grid" id="premarket-grid">
                     <div class="loading">Chargement...</div>
                 </div>
             </div>
-        </section>
-    </div>
+            <ul class="context-bullets" id="context-bullets">
+                <li>Lancez une actualisation pour obtenir le contexte du marché...</li>
+            </ul>
+            <div class="context-tags" id="context-tags"></div>
+        </div>
+    </section>
 
-    <!-- 3. NEWS + AGENDA (2 colonnes) -->
+    <!-- 2. NEWS FLASH + 3. PULSE MARCHÉ (2 colonnes) -->
     <div class="grid-2 mb-3">
         <!-- News Flash -->
         <section class="section" style="margin-bottom: 0;">
@@ -121,6 +90,51 @@
             </div>
         </section>
 
+        <!-- Pulse Marché -->
+        <section class="section" style="margin-bottom: 0;">
+            <div class="section-header">
+                <span class="section-icon">📈</span>
+                <h2 class="section-title">Pulse Marché</h2>
+                <span class="section-meta" id="pulse-update-time">--:--</span>
+            </div>
+            <div class="section-content">
+                <div class="pulse-widget" id="pulse-widget">
+                    <div class="loading">Chargement...</div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 4. TOP MOVERS -->
+    <section class="section">
+        <div class="section-header">
+            <span class="section-icon">🔥</span>
+            <h2 class="section-title">Top Movers</h2>
+            <span class="section-meta">Plus fortes variations</span>
+        </div>
+        <div class="section-content">
+            <div class="top-movers-widget" id="top-movers-widget">
+                <div class="loading">Chargement...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 5. OPPORTUNITÉS ACTIVES -->
+    <section class="section section-highlight">
+        <div class="section-header">
+            <span class="section-icon">🎯</span>
+            <h2 class="section-title">Opportunités Actives</h2>
+            <span class="section-meta" id="opp-count">0 opportunités</span>
+        </div>
+        <div class="section-content">
+            <div class="opportunities-scroll" id="opportunities-container">
+                <div class="no-data" style="width: 100%;">Lancez une actualisation pour voir les opportunités</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 6. AGENDA + 7. RÉGIME MARCHÉ (2 colonnes) -->
+    <div class="grid-2 mb-3">
         <!-- Agenda Macro -->
         <section class="section" style="margin-bottom: 0;">
             <div class="section-header">
@@ -134,52 +148,35 @@
                 </div>
             </div>
         </section>
-    </div>
 
-    <!-- 4. TOP MOVERS + ZONES DANGER (2 colonnes) -->
-    <div class="grid-2 mb-3">
-        <!-- Top Movers -->
+        <!-- Régime Marché -->
         <section class="section" style="margin-bottom: 0;">
             <div class="section-header">
-                <span class="section-icon">🔥</span>
-                <h2 class="section-title">Top Movers</h2>
-                <span class="section-meta">Plus fortes variations</span>
+                <span class="section-icon">📊</span>
+                <h2 class="section-title">Régime Marché</h2>
+                <span class="section-meta" id="regime-update-time">--:--</span>
             </div>
             <div class="section-content">
-                <div class="top-movers-widget" id="top-movers-widget">
+                <div class="regime-widget" id="regime-widget">
                     <div class="loading">Chargement...</div>
                 </div>
             </div>
         </section>
-
-        <!-- Zones Danger -->
-        <section class="section" style="margin-bottom: 0;">
-            <div class="section-header">
-                <span class="section-icon">⚠️</span>
-                <h2 class="section-title">Zones Danger</h2>
-                <span class="section-meta">Points de vigilance</span>
-            </div>
-            <div class="section-content">
-                <div class="danger-list" id="danger-zones">
-                    <div class="danger-item safe">
-                        <span class="danger-icon">✅</span>
-                        <span>Aucune zone critique identifiée</span>
-                    </div>
-                </div>
-            </div>
-        </section>
     </div>
 
-    <!-- Régime Marché (détail complet, plus bas) -->
-    <section class="section" id="section-regime">
+    <!-- 8. ZONES DANGEREUSES -->
+    <section class="section">
         <div class="section-header">
-            <span class="section-icon">📊</span>
-            <h2 class="section-title">Régime Marché</h2>
-            <span class="section-meta" id="regime-update-time">--:--</span>
+            <span class="section-icon">⚠️</span>
+            <h2 class="section-title">Zones Danger</h2>
+            <span class="section-meta">Points de vigilance</span>
         </div>
         <div class="section-content">
-            <div class="regime-widget" id="regime-widget">
-                <div class="loading">Chargement...</div>
+            <div class="danger-list" id="danger-zones">
+                <div class="danger-item safe">
+                    <span class="danger-icon">✅</span>
+                    <span>Aucune zone critique identifiée</span>
+                </div>
             </div>
         </div>
     </section>
