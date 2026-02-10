@@ -291,9 +291,10 @@ def api_lancer_analyse():
                         print(f"⚠️ [{symbole}] Setup rejeté: {setup_raison}")
                         opportunites_rejetees += 1
                         continue
-                    # Mettre à jour le prix actuel avec le prix frais
+                    # Utiliser le prix RÉEL du marché comme prix d'entrée (pas le prix suggéré par Claude)
                     if quote_fraiche:
                         opp_enrichie['prix_actuel'] = quote_fraiche['prix']
+                        opp_enrichie['entree'] = quote_fraiche['prix']
 
                     result = enregistrer_recommandation(opp_enrichie)
 

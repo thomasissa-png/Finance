@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 
 import numpy as np
+import pandas as pd
 
 from .config import logger, DB_PATH, DB_TIMEOUT, to_python_type
 from . import config
@@ -388,12 +389,26 @@ def verifier_resultats_trades():
                 )
 
                 if resultat:
+                    # Timestamp de sortie: utiliser l'heure réelle de la bougie de clôture
+                    # (pas l'heure du check qui peut être 30min plus tard)
+                    timestamp_sortie_reel = maintenant
+                    if bougie_cloture is not None:
+                        try:
+                            # bougie_cloture est l'index pandas (datetime du candle 5min)
+                            ts_bougie = pd.Timestamp(bougie_cloture)
+                            if not ts_bougie.tzinfo:
+                                timestamp_sortie_reel = ts_bougie.to_pydatetime()
+                            else:
+                                timestamp_sortie_reel = ts_bougie.to_pydatetime().replace(tzinfo=None)
+                        except Exception:
+                            pass  # Fallback: maintenant
+
                     # Trade terminé - calculer durée
                     duree_minutes = None
                     if trade.get('timestamp_reco'):
                         try:
                             ts_reco = datetime.fromisoformat(trade['timestamp_reco'].replace('Z', '+00:00'))
-                            duree_minutes = int((maintenant.replace(tzinfo=None) - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
+                            duree_minutes = int((timestamp_sortie_reel - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
                         except ValueError:
                             pass
 
@@ -404,7 +419,7 @@ def verifier_resultats_trades():
                             prix_dernier_check = ?, timestamp_dernier_check = ?,
                             pnl_max = ?, pnl_min = ?, nb_checks = ?
                         WHERE id = ?
-                    ''', (resultat, prix_sortie, round(pnl_pct, 2), maintenant,
+                    ''', (resultat, prix_sortie, round(pnl_pct, 2), timestamp_sortie_reel,
                           duree_minutes, round(prix_max_atteint, 4), round(prix_min_atteint, 4),
                           round(prix_actuel, 4), maintenant,
                           round(pnl_max, 2), round(pnl_min, 2), nb_checks,
@@ -453,13 +468,13 @@ def verifier_resultats_trades():
 def analyser_historique_intraday_pour_tp_stop(symbole, direction, entree, stop, tp1, tp2):
     """
     Analyse l'historique intraday complet pour détecter si TP ou Stop a été touché.
-    Retourne: (resultat, prix_sortie, note) ou (None, None, None) si rien touché.
+    Retourne: (resultat, prix_sortie, note, timestamp_bougie) ou (None, None, None, None) si rien touché.
     """
     # Récupérer l'historique intraday complet (5min, 288 bougies = 24h pour trades overnight)
     hist, _ = get_twelvedata_intraday(symbole, interval="5min", outputsize=288)
 
     if hist.empty:
-        return None, None, None
+        return None, None, None, None
 
     # Parcourir chronologiquement pour trouver le premier événement
     for idx, row in hist.iterrows():
@@ -469,25 +484,25 @@ def analyser_historique_intraday_pour_tp_stop(symbole, direction, entree, stop, 
         if direction == 'LONG':
             # Vérifier STOP d'abord (priorité au stop)
             if stop > 0 and low <= stop:
-                return 'STOP', stop, f"Stop touché à {idx}"
+                return 'STOP', stop, f"Stop touché à {idx}", idx
             # Puis TP2
             if tp2 and tp2 > 0 and high >= tp2:
-                return 'TP2', tp2, f"TP2 touché à {idx}"
+                return 'TP2', tp2, f"TP2 touché à {idx}", idx
             # Puis TP1
             if tp1 and tp1 > 0 and high >= tp1:
-                return 'TP1', tp1, f"TP1 touché à {idx}"
+                return 'TP1', tp1, f"TP1 touché à {idx}", idx
         else:  # SHORT
             # Vérifier STOP d'abord
             if stop > 0 and high >= stop:
-                return 'STOP', stop, f"Stop touché à {idx}"
+                return 'STOP', stop, f"Stop touché à {idx}", idx
             # Puis TP2
             if tp2 and tp2 > 0 and low <= tp2:
-                return 'TP2', tp2, f"TP2 touché à {idx}"
+                return 'TP2', tp2, f"TP2 touché à {idx}", idx
             # Puis TP1
             if tp1 and tp1 > 0 and low <= tp1:
-                return 'TP1', tp1, f"TP1 touché à {idx}"
+                return 'TP1', tp1, f"TP1 touché à {idx}", idx
 
-    return None, None, None
+    return None, None, None, None
 
 def reevaluer_trades_intraday():
     """
@@ -747,14 +762,25 @@ def cloturer_trades_jour():
                     continue
 
                 # AMÉLIORATION: Vérifier si TP/Stop a été touché plus tôt dans la journée
-                resultat_historique, prix_historique, note_historique = analyser_historique_intraday_pour_tp_stop(
+                resultat_historique, prix_historique, note_historique, ts_bougie_hist = analyser_historique_intraday_pour_tp_stop(
                     symbole, direction, entree, stop, tp1, tp2
                 )
+
+                # Timestamp de sortie réel (bougie si détecté historiquement, sinon maintenant)
+                timestamp_sortie_reel = maintenant
 
                 if resultat_historique and prix_historique is not None:
                     # TP ou Stop a été touché plus tôt - utiliser ce résultat
                     resultat = resultat_historique
                     prix_sortie = float(prix_historique)
+
+                    # Utiliser l'heure réelle de la bougie comme timestamp de sortie
+                    if ts_bougie_hist is not None:
+                        try:
+                            ts_b = pd.Timestamp(ts_bougie_hist)
+                            timestamp_sortie_reel = ts_b.to_pydatetime().replace(tzinfo=None) if ts_b.tzinfo else ts_b.to_pydatetime()
+                        except Exception:
+                            pass
 
                     if direction == 'LONG':
                         pnl_pct = ((prix_sortie - entree) / entree) * 100
@@ -796,12 +822,12 @@ def cloturer_trades_jour():
 
                     note_cloture = " | Clôture forcée 15min avant fermeture"
 
-                # Calculer la durée
+                # Calculer la durée (basée sur le timestamp réel de sortie)
                 duree_minutes = None
                 if trade.get('timestamp_reco'):
                     try:
                         ts_reco = datetime.fromisoformat(trade['timestamp_reco'].replace('Z', '+00:00'))
-                        duree_minutes = int((maintenant.replace(tzinfo=None) - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
+                        duree_minutes = int((timestamp_sortie_reel - ts_reco.replace(tzinfo=None)).total_seconds() / 60)
                     except ValueError:
                         pass
 
@@ -819,7 +845,7 @@ def cloturer_trades_jour():
                         notes = COALESCE(notes, '') || ?
                     WHERE id = ?
                 ''', (
-                    resultat, round(prix_sortie, 4), round(pnl_pct, 2), maintenant,
+                    resultat, round(prix_sortie, 4), round(pnl_pct, 2), timestamp_sortie_reel,
                     duree_minutes, round(prix_sortie, 4), maintenant,
                     note_cloture,
                     trade['id']

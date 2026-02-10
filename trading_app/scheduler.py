@@ -136,8 +136,10 @@ def executer_analyse_planifiee(eu_only=False):
                         print(f"  ⚠️ [{symbole}] Setup rejeté: {setup_raison}")
                         rejetes += 1
                         continue
+                    # Utiliser le prix RÉEL du marché comme prix d'entrée
                     if quote_fraiche:
                         opp_enrichie['prix_actuel'] = quote_fraiche['prix']
+                        opp_enrichie['entree'] = quote_fraiche['prix']
 
                     result = enregistrer_recommandation(opp_enrichie)
                     if result:
