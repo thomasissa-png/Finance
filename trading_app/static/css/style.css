@@ -1161,6 +1161,54 @@ body {
     padding: var(--space-3);
 }
 
+/* ===== TOAST NOTIFICATION (non-bloquante) ===== */
+.toast-notification {
+    position: sticky;
+    top: 64px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    background: var(--accent-blue, #3B82F6);
+    color: white;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 500;
+    box-shadow: var(--shadow-md);
+    animation: slideDown 0.3s ease;
+}
+
+.toast-notification.toast-success { background: var(--accent-green); }
+.toast-notification.toast-error { background: var(--accent-red); }
+
+.toast-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.toast-close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.2rem;
+    cursor: pointer;
+    opacity: 0.7;
+    padding: 0 4px;
+}
+
+.toast-close:hover { opacity: 1; }
+
+@keyframes slideDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 /* ============================================================================
    PAGE MÉMOIRE
    ============================================================================ */

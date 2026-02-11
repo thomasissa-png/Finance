@@ -288,6 +288,43 @@ def executer_rapport_hebdo():
     except Exception as e:
         logger.error(f"Erreur rapport hebdo: {e}")
 
+def watchdog_analyse_matin():
+    """Watchdog: s'assure qu'il y a au moins une analyse le matin.
+
+    Tourne toutes les 30 min entre 8h et 10h. Si aucune analyse
+    n'existe aujourd'hui, en lance une immédiatement.
+    Cela couvre le cas où le job de 8h00 a échoué silencieusement.
+    """
+    import sqlite3
+    maintenant = get_paris_time()
+    is_valide, _ = est_jour_trading_valide(maintenant)
+    if not is_valide:
+        return
+
+    heure_decimal = maintenant.hour + maintenant.minute / 60
+    # Ne tourne qu'entre 8h et 15h (après, les analyses complètes prennent le relais)
+    if heure_decimal < 8 or heure_decimal > 15:
+        return
+
+    try:
+        conn = sqlite3.connect(config.DB_PATH, timeout=config.DB_TIMEOUT)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM analyses WHERE date = ?",
+            (maintenant.date().isoformat(),)
+        )
+        nb = cursor.fetchone()[0]
+        conn.close()
+
+        if nb == 0:
+            eu_only = heure_decimal < 15.5
+            scope = "EU" if eu_only else "Complète"
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔔 Watchdog: aucune analyse aujourd'hui → lancement ({scope})...")
+            executer_analyse_planifiee(eu_only=eu_only)
+    except Exception as e:
+        logger.error(f"Erreur watchdog analyse: {e}")
+
+
 def configurer_schedule():
     """Configure les tâches planifiées"""
     # Analyses EU-only (avant ouverture US): 8h, 9h15, 12h
@@ -365,6 +402,12 @@ def configurer_schedule():
     # Évaluation des tests A/B: dimanche 18h00
     heure_ab_eval_utc = get_utc_time_for_paris("18:00")
     schedule.every().sunday.at(heure_ab_eval_utc).do(evaluer_tous_ab_tests)
+
+    # Watchdog analyse matin: vérifie toutes les 30 min si une analyse existe
+    for heure in ["08:30", "09:00", "09:45", "10:30", "11:30", "13:00", "14:30"]:
+        heure_utc = get_utc_time_for_paris(heure)
+        for jour in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']:
+            getattr(schedule.every(), jour).at(heure_utc).do(watchdog_analyse_matin)
 
     # Nettoyage trades orphelins: tous les jours à 07h30 (avant 1ère analyse)
     heure_orphelins_utc = get_utc_time_for_paris("07:30")

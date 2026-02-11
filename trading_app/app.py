@@ -56,28 +56,48 @@ register_blueprints(app)
 # ============================================================================
 
 def rattrapage_analyse_demarrage():
-    """Si l'app démarre peu après une analyse planifiée, rattraper l'analyse manquée."""
+    """Vérifie s'il y a déjà une analyse aujourd'hui. Sinon, en lance une.
+
+    Remplace l'ancien système à fenêtre étroite (15 min) par une vérification
+    robuste: si on est en heures de marché et qu'aucune analyse n'existe
+    aujourd'hui, on en lance une immédiatement.
+    """
+    import sqlite3
+    from trading_app.config import DB_PATH, DB_TIMEOUT
+
     try:
         maintenant = get_paris_time()
-        is_valide, _ = est_jour_trading_valide(maintenant)
+        is_valide, raison = est_jour_trading_valide(maintenant)
         if not is_valide:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ⏭️ Rattrapage ignoré: {raison}")
             return
 
         heure_decimal = maintenant.hour + maintenant.minute / 60
 
-        analyses_planifiees = [
-            (8.0, 8.25, True),
-            (9.25, 9.5, True),
-            (12.0, 12.25, True),
-            (15.583, 15.833, False),
-            (17.0, 17.25, False),
-        ]
+        # Pas de rattrapage avant 7h45 ni après 21h
+        if heure_decimal < 7.75 or heure_decimal > 21:
+            return
 
-        for debut, fin, eu_only in analyses_planifiees:
-            if debut <= heure_decimal <= fin:
-                print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔄 Rattrapage analyse planifiée...")
-                executer_analyse_planifiee(eu_only=eu_only)
-                return
+        # Vérifier si une analyse existe déjà aujourd'hui
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM analyses WHERE date = ?",
+            (maintenant.date().isoformat(),)
+        )
+        nb_analyses = cursor.fetchone()[0]
+        conn.close()
+
+        if nb_analyses > 0:
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ {nb_analyses} analyse(s) déjà présente(s) aujourd'hui")
+            return
+
+        # Aucune analyse aujourd'hui → lancer immédiatement
+        # Avant 15h30 (US pas encore ouvert) → EU-only
+        eu_only = heure_decimal < 15.5
+        scope = "EU/Commodités/Forex" if eu_only else "Complète"
+        print(f"[{maintenant.strftime('%H:%M:%S')} CET] 🔄 Aucune analyse aujourd'hui → lancement automatique ({scope})...")
+        executer_analyse_planifiee(eu_only=eu_only)
     except Exception as e:
         print(f"⚠️ Erreur rattrapage analyse: {e}")
 

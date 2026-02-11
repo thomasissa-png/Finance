@@ -330,18 +330,11 @@
     </div>
 </div>
 
-<!-- Modal Analyse -->
-<div id="modal-analyse" class="modal" style="display: none;">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2>&#128640; Analyse en cours...</h2>
-            <button class="modal-close" onclick="closeModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="loading-spinner"></div>
-            <p id="modal-status">Recuperation des donnees...</p>
-        </div>
-    </div>
+<!-- Toast Notification (non-bloquant) -->
+<div class="toast-notification" id="toast-notification" style="display: none;">
+    <div class="toast-spinner"></div>
+    <span class="toast-text" id="toast-status">Analyse en cours...</span>
+    <button class="toast-close" onclick="closeToast()">&times;</button>
 </div>
 {% endblock %}
 
@@ -685,59 +678,71 @@ async function loadClotureData() {
     }
 }
 
-async function lancerAnalyse() {
-    const modal = document.getElementById('modal-analyse');
-    const status = document.getElementById('modal-status');
+function showToast(message, type) {
+    const toast = document.getElementById('toast-notification');
+    const status = document.getElementById('toast-status');
+    const spinner = toast.querySelector('.toast-spinner');
+    toast.style.display = 'flex';
+    toast.className = 'toast-notification' + (type ? ' toast-' + type : '');
+    status.textContent = message;
+    spinner.style.display = type ? 'none' : 'block';
+}
 
-    modal.style.display = 'flex';
-    status.textContent = 'Recuperation des donnees...';
+function closeToast() {
+    document.getElementById('toast-notification').style.display = 'none';
+}
+
+async function fetchWithTimeout(url, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timer);
+        return await response.json();
+    } catch (e) {
+        clearTimeout(timer);
+        if (e.name === 'AbortError') {
+            throw new Error('Timeout - l\'analyse prend trop de temps');
+        }
+        throw e;
+    }
+}
+
+async function lancerAnalyse() {
+    showToast('Analyse en cours (30-60s)...');
 
     try {
-        const response = await fetch('/api/analyse');
-        const data = await response.json();
+        const data = await fetchWithTimeout('/api/analyse', 120000);
 
         if (data.success) {
-            status.textContent = 'Analyse terminee !';
-            setTimeout(() => {
-                closeModal();
-                loadAllData();
-            }, 1500);
+            showToast('Analyse terminée !', 'success');
+            loadAllData();
+            setTimeout(closeToast, 3000);
         } else {
-            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+            showToast('Erreur: ' + (data.error || 'Inconnue'), 'error');
         }
     } catch (error) {
-        status.textContent = 'Erreur de connexion';
+        showToast('Erreur: ' + error.message, 'error');
     }
 }
 
 async function genererCloture() {
-    const modal = document.getElementById('modal-analyse');
-    const status = document.getElementById('modal-status');
-
-    modal.style.display = 'flex';
-    status.textContent = 'Generation du bilan de cloture...';
+    showToast('Génération du bilan de clôture...');
 
     try {
-        const response = await fetch('/api/cloture');
-        const data = await response.json();
+        const data = await fetchWithTimeout('/api/cloture', 120000);
 
         if (data.success) {
-            status.textContent = 'Cloture generee !';
-            setTimeout(() => {
-                closeModal();
-                switchTab('bilan');
-                loadBilanData();
-            }, 1500);
+            showToast('Clôture générée !', 'success');
+            switchTab('bilan');
+            loadBilanData();
+            setTimeout(closeToast, 3000);
         } else {
-            status.textContent = 'Erreur: ' + (data.error || 'Inconnue');
+            showToast('Erreur: ' + (data.error || 'Inconnue'), 'error');
         }
     } catch (error) {
-        status.textContent = 'Erreur de connexion';
+        showToast('Erreur: ' + error.message, 'error');
     }
-}
-
-function closeModal() {
-    document.getElementById('modal-analyse').style.display = 'none';
 }
 
 // ===== TRADES TABLE ENRICHIE =====
