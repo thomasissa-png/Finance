@@ -416,14 +416,15 @@ def get_twelvedata_quote(symbole):
             return None
         data = response.json()
 
-        if "close" not in data:
+        if "close" not in data and "last" not in data:
             error_msg = data.get("message", "")
             if "quota" in error_msg.lower() or "limit" in error_msg.lower():
                 activate_quota_circuit_breaker()
             return None
 
         result = {
-            "price": float(data.get("close") or 0),
+            # "last" = prix temps réel (plan Grow), "close" = clôture veille
+            "price": float(data.get("last") or data.get("close") or 0),
             "open": float(data.get("open") or 0),
             "high": float(data.get("high") or 0),
             "low": float(data.get("low") or 0),
@@ -490,8 +491,10 @@ def get_fresh_quote_for_trade(symbole):
             response = requests.get(url, params=params, timeout=10)
             if response.ok:
                 data = response.json()
-                if "close" in data:
-                    td_price = float(data.get("close") or 0)
+                if "close" in data or "last" in data:
+                    # IMPORTANT: "last" = prix temps réel intraday (plan Grow)
+                    # "close" = clôture veille (PAS le prix actuel!)
+                    td_price = float(data.get("last") or data.get("close") or 0)
                     td_datetime = data.get("datetime", "")
 
                     # Vérifier la fraîcheur: le datetime doit être d'aujourd'hui
