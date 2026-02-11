@@ -267,13 +267,13 @@ def valider_opportunite(opp):
                     avertissements.append(f"Marché EU bientôt fermé: 30min restantes")
 
             elif categorie == 'action_us' or symbole in ['^GSPC', '^IXIC', '^DJI']:
-                # NYSE/NASDAQ: calculer dynamiquement
+                # NYSE/NASDAQ: calculer dynamiquement via offset UTC (robuste DST)
                 tz_ny = pytz.timezone('America/New_York')
                 now_ny = datetime.now(tz_ny)
                 now_paris = datetime.now(TZ_PARIS)
-                diff_heures = (now_paris.hour - now_ny.hour) % 24
-                if diff_heures > 12:
-                    diff_heures -= 24
+                # Utiliser utcoffset() pour un calcul exact même pendant les transitions DST
+                diff_seconds = (now_paris.utcoffset() - now_ny.utcoffset()).total_seconds()
+                diff_heures = diff_seconds / 3600
 
                 us_open = 9.5 + diff_heures  # 9:30 NY en heure Paris
                 us_close = 16 + diff_heures  # 16:00 NY en heure Paris

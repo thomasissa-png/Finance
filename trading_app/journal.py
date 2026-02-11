@@ -17,6 +17,7 @@ from .validation import extraire_json_claude
 
 def ajouter_entree_journal(symbole, nom_actif, type_info, titre, contenu, impact_cours='', importance=2):
     """Ajoute une entrée au journal d'un actif"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
@@ -39,14 +40,17 @@ def ajouter_entree_journal(symbole, nom_actif, type_info, titre, contenu, impact
         ))
 
         conn.commit()
-        conn.close()
         return True
     except Exception as e:
         print(f"⚠️ Erreur ajout journal: {e}")
         return False
+    finally:
+        if conn:
+            conn.close()
 
 def get_journal_actif(symbole, limite=50):
     """Récupère le journal d'un actif"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -60,14 +64,17 @@ def get_journal_actif(symbole, limite=50):
         ''', (symbole, limite))
 
         entries = [dict(row) for row in cursor.fetchall()]
-        conn.close()
         return entries
     except Exception as e:
         print(f"⚠️ Erreur journal: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 def get_tous_journaux():
     """Récupère tous les journaux regroupés par actif"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -83,11 +90,13 @@ def get_tous_journaux():
         ''')
 
         actifs = [dict(row) for row in cursor.fetchall()]
-        conn.close()
         return actifs
     except Exception as e:
         print(f"⚠️ Erreur journaux: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 # ============================================================================
 # CATÉGORIES D'ACTIFS
@@ -321,6 +330,8 @@ def generer_bilan_quotidien():
 
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Génération bilan quotidien...")
 
+    conn = None
+    conn_save = None
     try:
         # Récupérer les données de la journée
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
@@ -348,6 +359,7 @@ def generer_bilan_quotidien():
         journaux_jour = [dict(row) for row in cursor.fetchall()]
 
         conn.close()
+        conn = None
 
         # Préparer les données pour le prompt
         donnees_bilan = {
@@ -389,8 +401,8 @@ Fais un bilan honnête de cette journée de trading. Qu'est-ce qui a fonctionné
             return None
         if bilan:
             # Sauvegarder le bilan
-            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
-            cursor = conn.cursor()
+            conn_save = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+            cursor = conn_save.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO bilan_quotidien
                 (date, contenu, points_positifs, points_negatifs, lecons_apprises, timestamp)
@@ -403,8 +415,7 @@ Fais un bilan honnête de cette journée de trading. Qu'est-ce qui a fonctionné
                 json.dumps(bilan.get('lecons_apprises', []), ensure_ascii=False),
                 maintenant
             ))
-            conn.commit()
-            conn.close()
+            conn_save.commit()
 
             print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Bilan quotidien enregistré")
             return bilan
@@ -412,6 +423,11 @@ Fais un bilan honnête de cette journée de trading. Qu'est-ce qui a fonctionné
     except Exception as e:
         logger.error(f"Erreur bilan quotidien: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
+        if conn_save:
+            conn_save.close()
 
 def enregistrer_journal_quotidien(actifs_a_traiter=None):
     """Enregistre le journal quotidien pour les actifs spécifiés ou tous"""
@@ -444,10 +460,11 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
 
         # Récupérer les opportunités du jour pour chaque actif
         opportunites_jour = {}
+        conn_opps = None
         try:
-            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+            conn_opps = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+            conn_opps.row_factory = sqlite3.Row
+            cursor = conn_opps.cursor()
             cursor.execute('''
                 SELECT actif, symbole, type_setup, prix_entree, prix_tp1, resultat, direction
                 FROM trades_recommandes WHERE date = ?
@@ -463,9 +480,11 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
                     'resultat': row['resultat'],
                     'direction': row['direction']
                 })
-            conn.close()
         except Exception as e:
             print(f"⚠️ Erreur récup opportunités: {e}")
+        finally:
+            if conn_opps:
+                conn_opps.close()
 
         # Préparer les données pour les commentaires AI
         donnees_pour_ia = {}
@@ -484,6 +503,7 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
 
         # Sauvegarder les faits marquants dans la table bilan
         if faits_marquants:
+            conn_bilan = None
             try:
                 conn_bilan = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
                 cursor_bilan = conn_bilan.cursor()
@@ -498,57 +518,63 @@ def enregistrer_journal_quotidien(actifs_a_traiter=None):
                     maintenant
                 ))
                 conn_bilan.commit()
-                conn_bilan.close()
             except Exception as e:
                 print(f"⚠️ Erreur sauvegarde faits marquants: {e}")
+            finally:
+                if conn_bilan:
+                    conn_bilan.close()
 
         # Enregistrer dans la base
-        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
-        cursor = conn.cursor()
+        conn_save = None
+        try:
+            conn_save = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+            cursor = conn_save.cursor()
 
-        for nom, data in donnees.items():
-            symbole = data['symbole']
-            categorie = get_categorie_actif(symbole)
-            opps = opportunites_jour.get(symbole, [])
+            for nom, data in donnees.items():
+                symbole = data['symbole']
+                categorie = get_categorie_actif(symbole)
+                opps = opportunites_jour.get(symbole, [])
 
-            # Note: Les recommandations analystes ne sont pas disponibles via Twelve Data
-            # La fonction recuperer_recommandations_analystes retourne toujours []
-            # On garde le champ vide pour compatibilité future
-            recos = []
+                # Note: Les recommandations analystes ne sont pas disponibles via Twelve Data
+                # La fonction recuperer_recommandations_analystes retourne toujours []
+                # On garde le champ vide pour compatibilité future
+                recos = []
 
-            # Récupérer volume_relatif depuis les données (si disponible)
-            volume_rel = data.get('volume_relatif', data.get('volume_relatif_pct', 0))
-            if not volume_rel and 'indicateurs' in data:
-                volume_rel = data['indicateurs'].get('volume_relatif_pct', 0)
+                # Récupérer volume_relatif depuis les données (si disponible)
+                volume_rel = data.get('volume_relatif', data.get('volume_relatif_pct', 0))
+                if not volume_rel and 'indicateurs' in data:
+                    volume_rel = data['indicateurs'].get('volume_relatif_pct', 0)
 
-            cursor.execute('''
-                INSERT OR REPLACE INTO journal_quotidien
-                (date, symbole, nom_actif, categorie, prix_ouverture, prix_cloture,
-                 prix_max, prix_min, variation_jour, volume_relatif, commentaire_ia,
-                 evenements_jour, opportunites_jour, recommandations_analystes, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                aujourdhui,
-                symbole,
-                nom,
-                categorie,
-                data.get('ouverture', 0),
-                data['prix'],
-                data.get('haut', 0),
-                data.get('bas', 0),
-                data['variation'],
-                volume_rel or 0,  # Volume relatif (% vs moyenne 20j)
-                commentaires.get(symbole, ''),
-                '',  # evenements_jour - TODO: intégrer calendrier économique
-                json.dumps(opps, ensure_ascii=False) if opps else '',
-                json.dumps(recos, ensure_ascii=False) if recos else '',
-                maintenant
-            ))
+                cursor.execute('''
+                    INSERT OR REPLACE INTO journal_quotidien
+                    (date, symbole, nom_actif, categorie, prix_ouverture, prix_cloture,
+                     prix_max, prix_min, variation_jour, volume_relatif, commentaire_ia,
+                     evenements_jour, opportunites_jour, recommandations_analystes, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    aujourdhui,
+                    symbole,
+                    nom,
+                    categorie,
+                    data.get('ouverture', 0),
+                    data['prix'],
+                    data.get('haut', 0),
+                    data.get('bas', 0),
+                    data['variation'],
+                    volume_rel or 0,  # Volume relatif (% vs moyenne 20j)
+                    commentaires.get(symbole, ''),
+                    '',  # evenements_jour - TODO: intégrer calendrier économique
+                    json.dumps(opps, ensure_ascii=False) if opps else '',
+                    json.dumps(recos, ensure_ascii=False) if recos else '',
+                    maintenant
+                ))
 
-        conn.commit()
-        conn.close()
-        print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Journal quotidien enregistré")
-        return True
+            conn_save.commit()
+            print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Journal quotidien enregistré")
+            return True
+        finally:
+            if conn_save:
+                conn_save.close()
     except Exception as e:
         logger.error(f"Erreur journal quotidien: {e}")
         return False
@@ -568,6 +594,8 @@ def generer_rapport_hebdo():
     maintenant = get_paris_time()
     print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📊 Génération rapport hebdomadaire...")
 
+    conn = None
+    conn_save = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -916,6 +944,7 @@ def generer_rapport_hebdo():
                 pass
 
         conn.close()
+        conn = None
 
         # Préparer les données pour Claude (incluant les analyses d'indicateurs)
         donnees_rapport = {
@@ -1011,8 +1040,8 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
                     except (ValueError, TypeError):
                         data['score'] = 50
             # Sauvegarder le rapport
-            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
-            cursor = conn.cursor()
+            conn_save = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+            cursor = conn_save.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO rapports_hebdo
                 (semaine, date_debut, date_fin, resume_executif, chiffres_cles,
@@ -1032,7 +1061,7 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
                 json.dumps(rapport.get('focus_semaine_prochaine', []), ensure_ascii=False),
                 maintenant
             ))
-            conn.commit()
+            conn_save.commit()
 
             # Sauvegarder les ajustements comme propositions (attente validation)
             # Lazy import to avoid circular dependency
@@ -1043,7 +1072,6 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
                 source='rapport_hebdo'
             )
 
-            conn.close()
             print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Rapport hebdomadaire généré (ajustements en attente de validation)")
             return rapport
 
@@ -1051,11 +1079,17 @@ Propose des AJUSTEMENTS PRÉCIS et TESTABLES pour la semaine prochaine."""
     except Exception as e:
         logger.error(f"Erreur rapport hebdo: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
+        if conn_save:
+            conn_save.close()
 
 def appliquer_ajustements_dynamiques(ajustements, scores_confiance):
     """Applique les ajustements dynamiques basés sur le rapport hebdo"""
     maintenant = get_paris_time()
 
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
@@ -1115,11 +1149,13 @@ def appliquer_ajustements_dynamiques(ajustements, scores_confiance):
             ))
 
         conn.commit()
-        conn.close()
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] ✅ Critères dynamiques mis à jour")
 
     except Exception as e:
         print(f"⚠️ Erreur ajustements dynamiques: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def get_criteres_dynamiques():
     """Récupère les critères dynamiques - délègue à adjustments.py (source unique)"""
@@ -1150,6 +1186,7 @@ def enregistrer_journal_complet():
 
 def get_journal_quotidien(symbole=None, limite=30, date_from=None, date_to=None, offset=0):
     """Récupère le journal quotidien avec navigation par date et pagination"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -1213,8 +1250,6 @@ def get_journal_quotidien(symbole=None, limite=30, date_from=None, date_to=None,
 
             entries.append(entry)
 
-        conn.close()
-
         # Log groupé si plusieurs erreurs
         if json_errors:
             print(f"🔴 JOURNAL JSON CORRUPTION: {len(json_errors)} erreurs détectées")
@@ -1227,9 +1262,13 @@ def get_journal_quotidien(symbole=None, limite=30, date_from=None, date_to=None,
     except Exception as e:
         print(f"⚠️ Erreur récup journal quotidien: {e}")
         return {'entries': [], 'total_count': 0, 'json_errors': []}
+    finally:
+        if conn:
+            conn.close()
 
 def get_historique_opportunites(symbole):
     """Récupère l'historique des opportunités pour un actif"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -1243,11 +1282,13 @@ def get_historique_opportunites(symbole):
         ''', (symbole,))
 
         trades = [dict(row) for row in cursor.fetchall()]
-        conn.close()
         return trades
     except Exception as e:
         print(f"⚠️ Erreur historique opportunités: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 # ============================================================================
 # ANALYSES SAUVEGARDÉES
@@ -1255,6 +1296,7 @@ def get_historique_opportunites(symbole):
 
 def sauvegarder_analyse(type_analyse, contenu, contexte=''):
     """Sauvegarde une analyse"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
@@ -1274,14 +1316,17 @@ def sauvegarder_analyse(type_analyse, contenu, contexte=''):
         ))
 
         conn.commit()
-        conn.close()
         return True
     except Exception as e:
         print(f"⚠️ Erreur sauvegarde analyse: {e}")
         return False
+    finally:
+        if conn:
+            conn.close()
 
 def get_derniere_analyse(type_analyse=None):
     """Récupère la dernière analyse"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -1300,7 +1345,6 @@ def get_derniere_analyse(type_analyse=None):
             ''')
 
         row = cursor.fetchone()
-        conn.close()
 
         if row:
             result = dict(row)
@@ -1313,9 +1357,13 @@ def get_derniere_analyse(type_analyse=None):
     except Exception as e:
         print(f"⚠️ Erreur récupération analyse: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
 
 def get_analyses_du_jour():
     """Récupère toutes les analyses du jour"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -1337,11 +1385,13 @@ def get_analyses_du_jour():
                 pass
             analyses.append(a)
 
-        conn.close()
         return analyses
     except Exception as e:
         print(f"⚠️ Erreur analyses jour: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 # ============================================================================
 

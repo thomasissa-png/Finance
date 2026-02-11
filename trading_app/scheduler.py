@@ -251,6 +251,9 @@ def rattraper_journal_manque():
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM journal_quotidien WHERE date = ?", (maintenant.date().isoformat(),))
         count = cursor.fetchone()[0]
+    except Exception as e:
+        logger.error(f"Erreur vérification journal manqué: {e}")
+        return
     finally:
         if conn:
             conn.close()
@@ -369,6 +372,9 @@ def watchdog_analyse_matin():
 
 def configurer_schedule():
     """Configure les tâches planifiées"""
+    # Nettoyer les jobs existants (évite les doublons si Flask reloader)
+    schedule.clear()
+
     # Analyses EU-only (avant ouverture US): 8h, 9h15, 12h
     for heure in ["08:00", "09:15", "12:00"]:
         heure_utc = get_utc_time_for_paris(heure)
@@ -460,6 +466,10 @@ def configurer_schedule():
     schedule.every().day.at(heure_backup_utc).do(backup_database)
     print(f"  ⏰ Backup DB: 23h00 CET ({heure_backup_utc} UTC)")
 
+def _get_current_utc_offset():
+    """Retourne l'offset UTC actuel de Paris (en secondes) pour détecter les changements DST"""
+    return get_paris_time().utcoffset().total_seconds()
+
 def run_scheduler():
     """Thread robuste pour le scheduler avec gestion d'erreurs"""
     # Health tracking partagé via config (thread-safe pour lecture)
@@ -471,6 +481,8 @@ def run_scheduler():
         'total_cycles': 0,
         'total_errors': 0,
     }
+    # Stocker l'offset UTC actuel pour détecter les changements DST
+    _last_utc_offset = _get_current_utc_offset()
 
     # Clôturer les trades orphelins des jours précédents (anti biais de survivant)
     try:
@@ -486,6 +498,14 @@ def run_scheduler():
 
     while True:
         try:
+            # Détecter les changements DST et reconfigurer le schedule
+            current_offset = _get_current_utc_offset()
+            if current_offset != _last_utc_offset:
+                logger.info(f"⏰ Changement DST détecté (offset {_last_utc_offset}s → {current_offset}s), reconfiguration schedule...")
+                print(f"⏰ Changement DST détecté, reconfiguration des horaires...")
+                configurer_schedule()
+                _last_utc_offset = current_offset
+
             run_pending_safe()
             config.SCHEDULER_HEALTH['last_heartbeat'] = get_paris_time().isoformat()
             config.SCHEDULER_HEALTH['total_cycles'] += 1

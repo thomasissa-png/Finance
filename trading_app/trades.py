@@ -964,6 +964,7 @@ def get_performances(periode='semaine'):
                 SUM(CASE WHEN resultat = 'LOSS_FORCE' THEN 1 ELSE 0 END) as stops_force,
                 SUM(CASE WHEN resultat = 'NON_CONCLU' THEN 1 ELSE 0 END) as non_conclus,
                 SUM(CASE WHEN resultat = 'EXPIRED' THEN 1 ELSE 0 END) as expires,
+                SUM(CASE WHEN resultat = 'BREAKEVEN' THEN 1 ELSE 0 END) as breakeven,
                 AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen,
                 SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_total
             FROM trades_recommandes
@@ -979,13 +980,14 @@ def get_performances(periode='semaine'):
         stops_force = row[4] or 0
         non_conclus = row[5] or 0
         expires = row[6] or 0
+        breakeven = row[7] or 0
 
         # Totaux combinés (naturels + forcés)
         reussis = reussis_naturel + reussis_force
         stops = stops_naturel + stops_force
 
-        # Conclus = uniquement les trades avec résultat définitif
-        conclus = reussis + stops
+        # Conclus = uniquement les trades avec résultat définitif (inclut BREAKEVEN)
+        conclus = reussis + stops + breakeven
 
         return {
             'total': total,
@@ -995,16 +997,17 @@ def get_performances(periode='semaine'):
             'stops': stops,
             'stops_naturel': stops_naturel,       # STOP
             'stops_force': stops_force,           # LOSS_FORCE (clôture forcée négative)
+            'breakeven': breakeven,                # BREAKEVEN (ni gain ni perte)
             'non_conclus': non_conclus,           # Historique (ne devrait plus arriver)
             'expires': expires,                    # Trades orphelins auto-expirés
             'en_cours': total - conclus - non_conclus - expires,  # Trades en cours
             'taux_reussite': round((reussis / conclus * 100) if conclus > 0 else 0, 1),
-            'pnl_moyen': round(row[7] or 0, 2),
-            'pnl_total': round(row[8] or 0, 2)
+            'pnl_moyen': round(row[8] or 0, 2),
+            'pnl_total': round(row[9] or 0, 2)
         }
     except Exception as e:
         print(f"⚠️ Erreur performances: {e}")
-        return {'total': 0, 'reussis': 0, 'reussis_naturel': 0, 'reussis_force': 0, 'stops': 0, 'stops_naturel': 0, 'stops_force': 0, 'non_conclus': 0, 'en_cours': 0, 'taux_reussite': 0, 'pnl_moyen': 0, 'pnl_total': 0}
+        return {'total': 0, 'reussis': 0, 'reussis_naturel': 0, 'reussis_force': 0, 'stops': 0, 'stops_naturel': 0, 'stops_force': 0, 'breakeven': 0, 'non_conclus': 0, 'en_cours': 0, 'taux_reussite': 0, 'pnl_moyen': 0, 'pnl_total': 0}
     finally:
         if conn:
             conn.close()

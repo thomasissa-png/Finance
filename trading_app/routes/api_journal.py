@@ -38,6 +38,7 @@ bp = Blueprint('api_journal', __name__)
 @bp.route('/api/ab-tests')
 def api_ab_tests():
     """Récupère les tests A/B actifs avec leurs performances"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -58,10 +59,9 @@ def api_ab_tests():
 
             # Stats groupe A
             if groupe_a:
-                placeholders = ','.join(['?' for _ in groupe_a])
-                cursor.execute(f'''
+                cursor.execute('''
                     SELECT COUNT(*) as total,
-                           SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                           SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                            AVG(pnl_pct) as pnl_moyen,
                            SUM(pnl_pct) as pnl_total
                     FROM trades_recommandes
@@ -79,9 +79,9 @@ def api_ab_tests():
 
             # Stats groupe B
             if groupe_b:
-                cursor.execute(f'''
+                cursor.execute('''
                     SELECT COUNT(*) as total,
-                           SUM(CASE WHEN resultat IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+                           SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                            AVG(pnl_pct) as pnl_moyen,
                            SUM(pnl_pct) as pnl_total
                     FROM trades_recommandes
@@ -97,8 +97,6 @@ def api_ab_tests():
             else:
                 test['stats_groupe_b'] = {'trades': 0, 'win_rate': 0, 'pnl_moyen': 0, 'pnl_total': 0}
 
-        conn.close()
-
         # Séparer tests actifs et terminés
         tests_actifs = [t for t in tests if t['statut'] == 'actif']
         tests_termines = [t for t in tests if t['statut'] != 'actif']
@@ -111,6 +109,9 @@ def api_ab_tests():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+    finally:
+        if conn:
+            conn.close()
 
 @bp.route('/api/journal/<symbole>')
 def api_journal(symbole):

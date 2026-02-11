@@ -22,7 +22,10 @@ def extraire_categorie_ajustement(critere, raison, action):
         return 'action_eu'
     if any(mot in texte for mot in ['action_us', 'actions américaines', 'actions us', 'apple', 'tesla', 'nvidia', 'microsoft']):
         return 'action_us'
-    if any(mot in texte for mot in ['commodit', 'or', 'gold', 'pétrole', 'oil', 'silver', 'argent']):
+    # 'or' vérifié avec word boundary pour éviter faux positifs (forex, score, effort...)
+    if any(mot in texte for mot in ['commodit', 'gold', 'pétrole', 'oil', 'silver', 'argent']):
+        return 'commodite'
+    if ' or ' in f' {texte} ':
         return 'commodite'
     if any(mot in texte for mot in ['forex', 'eur/usd', 'gbp', 'devise', 'currency']):
         return 'forex'

@@ -1,7 +1,7 @@
 """
 Tests anti-régression pour le trading app.
 
-117 tests en 15 groupes couvrant:
+138 tests en 16 groupes couvrant:
 - Bugs réels rencontrés et corrigés
 - Logique métier critique (scheduling, opportunités, performance, journal, self-learning)
 
@@ -1423,6 +1423,194 @@ class TestSelfLearning:
         source = inspect.getsource(valider_ajustement)
         assert 'ajustement_source_id' in source, \
             "RÉGRESSION: valider_ajustement doit tracer l'audit trail"
+
+
+# ============================================================================
+# GROUPE 16: AUDIT LOGIQUE (fuites DB, BREAKEVEN, DST, substring, etc.)
+# ============================================================================
+
+class TestAuditLogique:
+    """Tests de régression pour l'audit logique complet de la plateforme."""
+
+    # --- Fix #1: Fuites DB dans journal.py (conn=None + try/finally) ---
+
+    def test_journal_ajouter_entree_uses_try_finally(self):
+        """ajouter_entree_journal doit utiliser conn=None + try/finally."""
+        from trading_app.journal import ajouter_entree_journal
+        source = inspect.getsource(ajouter_entree_journal)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_get_journal_actif_uses_try_finally(self):
+        """get_journal_actif doit utiliser conn=None + try/finally."""
+        from trading_app.journal import get_journal_actif
+        source = inspect.getsource(get_journal_actif)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_get_tous_journaux_uses_try_finally(self):
+        """get_tous_journaux doit utiliser conn=None + try/finally."""
+        from trading_app.journal import get_tous_journaux
+        source = inspect.getsource(get_tous_journaux)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_sauvegarder_analyse_uses_try_finally(self):
+        """sauvegarder_analyse doit utiliser conn=None + try/finally."""
+        from trading_app.journal import sauvegarder_analyse
+        source = inspect.getsource(sauvegarder_analyse)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_get_derniere_analyse_uses_try_finally(self):
+        """get_derniere_analyse doit utiliser conn=None + try/finally."""
+        from trading_app.journal import get_derniere_analyse
+        source = inspect.getsource(get_derniere_analyse)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_get_analyses_du_jour_uses_try_finally(self):
+        """get_analyses_du_jour doit utiliser conn=None + try/finally."""
+        from trading_app.journal import get_analyses_du_jour
+        source = inspect.getsource(get_analyses_du_jour)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_get_historique_opportunites_uses_try_finally(self):
+        """get_historique_opportunites doit utiliser conn=None + try/finally."""
+        from trading_app.journal import get_historique_opportunites
+        source = inspect.getsource(get_historique_opportunites)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_get_journal_quotidien_uses_try_finally(self):
+        """get_journal_quotidien doit utiliser conn=None + try/finally."""
+        from trading_app.journal import get_journal_quotidien
+        source = inspect.getsource(get_journal_quotidien)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_generer_bilan_uses_try_finally(self):
+        """generer_bilan_quotidien doit utiliser conn=None + try/finally."""
+        from trading_app.journal import generer_bilan_quotidien
+        source = inspect.getsource(generer_bilan_quotidien)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    def test_journal_generer_rapport_hebdo_uses_try_finally(self):
+        """generer_rapport_hebdo doit utiliser conn=None + try/finally."""
+        from trading_app.journal import generer_rapport_hebdo
+        source = inspect.getsource(generer_rapport_hebdo)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    # --- Fix #2: Fuite DB dans database.py init_database() ---
+
+    def test_database_init_uses_try_finally(self):
+        """init_database doit utiliser conn=None + try/finally."""
+        from trading_app.database import init_database
+        source = inspect.getsource(init_database)
+        assert 'conn = None' in source, "RÉGRESSION: doit initialiser conn = None"
+        assert 'finally:' in source, "RÉGRESSION: doit avoir un bloc finally"
+
+    # --- Fix #3: BREAKEVEN compté dans get_performances() ---
+
+    def test_performances_counts_breakeven(self):
+        """get_performances doit compter BREAKEVEN séparément (pas dans en_cours)."""
+        from trading_app.trades import get_performances
+        source = inspect.getsource(get_performances)
+        assert "'BREAKEVEN'" in source, "RÉGRESSION: doit compter BREAKEVEN"
+        assert "'breakeven'" in source, "RÉGRESSION: doit retourner le champ breakeven"
+
+    def test_performances_breakeven_in_conclus(self):
+        """BREAKEVEN doit être inclus dans le calcul de 'conclus'."""
+        from trading_app.trades import get_performances
+        source = inspect.getsource(get_performances)
+        assert 'breakeven' in source, "RÉGRESSION: breakeven doit exister dans la query"
+        # Vérifier que conclus inclut breakeven
+        assert 'stops + breakeven' in source, \
+            "RÉGRESSION: conclus doit inclure breakeven (reussis + stops + breakeven)"
+
+    # --- Fix #4: Colonnes correctes dans api_analytics.py search ---
+
+    def test_journal_search_uses_correct_columns(self):
+        """La recherche journal doit utiliser commentaire_ia (pas commentaire)."""
+        from trading_app.routes.api_analytics import api_journal_search
+        source = inspect.getsource(api_journal_search)
+        assert 'commentaire_ia' in source, \
+            "RÉGRESSION: doit chercher dans commentaire_ia (pas commentaire)"
+        assert 'mouvements_notables' not in source, \
+            "RÉGRESSION: mouvements_notables n'existe pas dans journal_quotidien"
+
+    # --- Fix #5: DST scheduler reconfiguration ---
+
+    def test_scheduler_detects_dst_change(self):
+        """Le scheduler doit détecter les changements DST et reconfigurer."""
+        from trading_app.scheduler import run_scheduler, _get_current_utc_offset
+        source = inspect.getsource(run_scheduler)
+        assert '_get_current_utc_offset' in source, \
+            "RÉGRESSION: doit vérifier l'offset UTC pour détecter les changements DST"
+        assert 'configurer_schedule()' in source, \
+            "RÉGRESSION: doit reconfigurer le schedule si DST change"
+
+    def test_scheduler_clears_before_configure(self):
+        """configurer_schedule doit nettoyer les jobs avant d'en ajouter."""
+        from trading_app.scheduler import configurer_schedule
+        source = inspect.getsource(configurer_schedule)
+        assert 'schedule.clear()' in source, \
+            "RÉGRESSION: doit appeler schedule.clear() pour éviter les doublons"
+
+    # --- Fix #6: Bug substring 'or' dans extraire_categorie_ajustement ---
+
+    def test_categorie_ajustement_or_word_boundary(self):
+        """'or' doit matcher comme mot entier, pas comme substring."""
+        from trading_app.adjustments import extraire_categorie_ajustement
+        # 'or' comme mot entier → commodite
+        assert extraire_categorie_ajustement('', 'acheter or', '') == 'commodite'
+        # 'forex' ne doit PAS matcher 'or'
+        assert extraire_categorie_ajustement('', 'devise eur/usd', '') == 'forex'
+        # 'score' ne doit PAS matcher 'or'
+        assert extraire_categorie_ajustement('', 'confiance élevée', '') == 'conviction'
+
+    # --- Fix #7: WIN_FORCE dans dashboard A/B tests ---
+
+    def test_ab_tests_dashboard_counts_win_force(self):
+        """Le dashboard A/B tests doit compter WIN_FORCE dans les wins."""
+        from trading_app.routes.api_journal import api_ab_tests
+        source = inspect.getsource(api_ab_tests)
+        assert "WIN_FORCE" in source, \
+            "RÉGRESSION: le dashboard A/B doit compter WIN_FORCE dans les wins"
+
+    # --- Fix #8: BREAKEVEN cohérent dans api_analytics ---
+
+    def test_analytics_grade_excludes_breakeven_from_wins(self):
+        """Les stats par grade ne doivent PAS compter BREAKEVEN comme win."""
+        from trading_app.routes.api_analytics import api_stats_detaillees
+        source = inspect.getsource(api_stats_detaillees)
+        # Vérifier qu'aucune requête ne mélange BREAKEVEN avec les wins
+        assert "BREAKEVEN" not in source or "'BREAKEVEN') THEN 1" not in source, \
+            "RÉGRESSION: BREAKEVEN ne doit pas être compté comme win dans les stats"
+
+    # --- Fix #9: rattraper_journal_manque except ---
+
+    def test_rattraper_journal_manque_has_except(self):
+        """rattraper_journal_manque doit avoir un bloc except pour les erreurs DB."""
+        from trading_app.scheduler import rattraper_journal_manque
+        source = inspect.getsource(rattraper_journal_manque)
+        assert 'except Exception' in source, \
+            "RÉGRESSION: rattraper_journal_manque doit attraper les exceptions DB"
+
+    # --- Fix #11: DST utcoffset dans validation.py ---
+
+    def test_validation_us_hours_uses_utcoffset(self):
+        """Le calcul des heures US doit utiliser utcoffset() (pas hour diff)."""
+        from trading_app.validation import valider_opportunite
+        source = inspect.getsource(valider_opportunite)
+        assert 'utcoffset()' in source, \
+            "RÉGRESSION: doit utiliser utcoffset() pour un calcul DST robuste"
+        # Ne doit plus utiliser le pattern fragile (hour - hour) % 24
+        assert '(now_paris.hour - now_ny.hour) % 24' not in source, \
+            "RÉGRESSION: ne doit plus utiliser le pattern hour diff % 24"
 
 
 # ============================================================================

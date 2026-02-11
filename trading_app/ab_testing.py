@@ -60,7 +60,6 @@ def creer_ab_test(nom, description, variante_a, variante_b, actifs_test=None):
         if actifs_test is None:
             actifs_test = list(ACTIFS_PERMANENTS.keys())
 
-        import random
         random.shuffle(actifs_test)
         milieu = len(actifs_test) // 2
         groupe_a = actifs_test[:milieu]

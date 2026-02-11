@@ -558,12 +558,11 @@ def api_journal_search():
             where_clauses.append('''(
                 nom_actif LIKE ? OR
                 symbole LIKE ? OR
-                commentaire LIKE ? OR
-                opportunites_jour LIKE ? OR
-                mouvements_notables LIKE ?
+                commentaire_ia LIKE ? OR
+                opportunites_jour LIKE ?
             )''')
             search_term = f'%{recherche}%'
-            params.extend([search_term] * 5)
+            params.extend([search_term] * 4)
 
         where_sql = ' AND '.join(where_clauses)
 
@@ -743,7 +742,7 @@ def api_journal_stats():
         cursor.execute('''
             SELECT trade_grade,
                    COUNT(*) as nb_trades,
-                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE', 'BREAKEVEN') THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as losses,
                    SUM(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct ELSE 0 END) as pnl_total,
                    AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END) as pnl_moyen

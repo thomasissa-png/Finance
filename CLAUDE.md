@@ -8,7 +8,7 @@
 python -m pytest tests/test_regression.py -v --tb=short
 ```
 
-Les **117 tests** (15 groupes) doivent TOUS passer. Si un test échoue, c'est une régression — corriger AVANT de commit.
+Les **138 tests** (16 groupes) doivent TOUS passer. Si un test échoue, c'est une régression — corriger AVANT de commit.
 
 ### Obligation d'ajout de tests
 
@@ -33,6 +33,7 @@ Les **117 tests** (15 groupes) doivent TOUS passer. Si un test échoue, c'est un
 - `TestPerformanceTracking` — Métriques, transactions atomiques
 - `TestJournal` — Catégorisation, filtres, rapports
 - `TestSelfLearning` — Ajustements, feedback, A/B testing
+- `TestAuditLogique` — Fuites DB, BREAKEVEN, DST, substring 'or', colonnes SQL
 
 ## Architecture
 
