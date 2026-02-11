@@ -1310,30 +1310,47 @@ async function loadNewsHistorique() {
 async function refreshNews() {
     const container = document.getElementById('news-flash-list');
 
-    try {
-        // Afficher état de chargement
-        if (!container.innerHTML.includes('news-flash-item')) {
-            container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⏳</span><div class="news-content"><span class="news-text">Chargement des actualités...</span></div></div>';
-        }
+    // Charger immédiatement depuis le cache localStorage si disponible
+    const cached = localStorage.getItem('newsFlashCache');
+    if (cached) {
+        try {
+            const cachedData = JSON.parse(cached);
+            if (cachedData.news && cachedData.news.length > 0) {
+                renderNewsFlashWithImpact(cachedData.news);
+            }
+        } catch(e) { /* cache invalide, ignorer */ }
+    } else {
+        // Pas de cache: afficher état de chargement
+        container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⏳</span><div class="news-content"><span class="news-text">Chargement des actualités...</span></div></div>';
+    }
 
-        // Charger les news (avec cache côté serveur)
-        const response = await fetch('/api/news');
-        const data = await response.json();
+    try {
+        // Charger les news fraîches (avec timeout de 30s)
+        const data = await fetchJSON('/api/news', {}, 30000);
 
         if (data.success && data.news && data.news.length > 0) {
             renderNewsFlashWithImpact(data.news);
+            // Sauvegarder en cache localStorage
+            localStorage.setItem('newsFlashCache', JSON.stringify({
+                news: data.news,
+                timestamp: Date.now()
+            }));
             // Mettre à jour l'historique en arrière-plan (non bloquant)
             loadNewsHistorique();
             newsIndexJour = 0;
             updateNewsNavigation();
         } else if (data.success && data.articles) {
             renderNewsFlashFromAPI(data.articles);
-        } else {
+        } else if (!cached) {
+            // Seulement afficher "aucune actualité" si pas de cache
             container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">--:--</span><div class="news-content"><span class="news-text">Aucune actualité disponible</span></div></div>';
         }
     } catch (error) {
         console.error('Erreur news:', error);
-        container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⚠️</span><div class="news-content"><span class="news-text">Erreur de chargement des actualités</span></div></div>';
+        // Si pas de cache, afficher erreur
+        if (!cached) {
+            container.innerHTML = '<div class="news-flash-item no-impact"><span class="news-time">⚠️</span><div class="news-content"><span class="news-text">Erreur de chargement des actualités</span></div></div>';
+        }
     }
 }
 

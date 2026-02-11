@@ -1017,6 +1017,39 @@ function renderTradesTable() {
                 </thead>
                 <tbody>`;
 
+        // Fonction pour formater un prix avec le même nombre de décimales que la référence
+        function formatPrix(prix, prixRef) {
+            if (!prix && prix !== 0) return '-';
+            const val = parseFloat(prix);
+            if (isNaN(val)) return '-';
+            // Déterminer les décimales depuis le prix de référence
+            let decimals = 2;
+            if (prixRef) {
+                const refStr = prixRef.toString();
+                const dotIdx = refStr.indexOf('.');
+                if (dotIdx >= 0) {
+                    decimals = refStr.length - dotIdx - 1;
+                } else {
+                    decimals = 0;
+                }
+            }
+            // Clamp entre 0 et 5
+            decimals = Math.min(5, Math.max(0, decimals));
+            return val.toFixed(decimals);
+        }
+
+        // Fonction pour extraire l'heure depuis un timestamp string (sans new Date)
+        function extraireHeure(ts) {
+            if (!ts) return '-';
+            const str = ts.toString();
+            // Chercher le pattern HH:MM:SS ou HH:MM dans le timestamp
+            const match = str.match(/(\d{2}):(\d{2})(:\d{2})?/);
+            if (match) {
+                return match[1] + ':' + match[2];
+            }
+            return '-';
+        }
+
         for (const trade of trades) {
             const resultClass = trade.resultat === 'TP1' || trade.resultat === 'TP2' ? 'positive' :
                                trade.resultat === 'STOP' ? 'negative' : '';
@@ -1026,38 +1059,32 @@ function renderTradesTable() {
             const dirClass = trade.direction === 'LONG' ? 'positive' : 'negative';
             const dirIcon = trade.direction === 'LONG' ? '📈' : '📉';
 
-            // Heure de sortie
-            let heureSortie = '-';
-            if (trade.timestamp_sortie) {
-                try {
-                    const tsStr = trade.timestamp_sortie.toString().replace(' ', 'T');
-                    const sortieDate = new Date(tsStr);
-                    if (!isNaN(sortieDate.getTime())) {
-                        heureSortie = sortieDate.getHours().toString().padStart(2, '0') + ':' +
-                                      sortieDate.getMinutes().toString().padStart(2, '0');
-                    }
-                } catch(e) {}
-            }
+            // Heure de sortie - extraction directe depuis le string (pas de new Date qui change le timezone)
+            const heureSortie = extraireHeure(trade.timestamp_sortie);
+
+            // Prix formatés avec décimales alignées
+            const prixEntreeStr = formatPrix(trade.prix_entree, trade.prix_entree);
+            const prixStopStr = formatPrix(trade.prix_stop, trade.prix_entree);
+            const prixTp1Str = formatPrix(trade.prix_tp1, trade.prix_entree);
+            const prixTp2Str = formatPrix(trade.prix_tp2, trade.prix_entree);
+            const prixSortieStr = formatPrix(trade.prix_sortie, trade.prix_entree);
 
             // Calculer la durée (utilise duree_minutes de la DB si disponible)
             let dureeText = '-';
             if (trade.duree_minutes && trade.duree_minutes > 0) {
                 const dm = trade.duree_minutes;
                 dureeText = dm >= 60 ? Math.floor(dm / 60) + 'h' + (dm % 60 > 0 ? (dm % 60) + 'm' : '') : dm + 'min';
-            } else if (trade.heure_message && trade.timestamp_sortie) {
+            } else if (trade.heure_message && heureSortie !== '-') {
                 try {
                     const [hE, mE] = trade.heure_message.split(':').map(Number);
-                    const tsStr = trade.timestamp_sortie.toString().replace(' ', 'T');
-                    const sortieDate = new Date(tsStr);
-                    if (!isNaN(sortieDate.getTime())) {
-                        const sortieMin = sortieDate.getHours() * 60 + sortieDate.getMinutes();
-                        const entreeMin = hE * 60 + (mE || 0);
-                        const diffMin = sortieMin - entreeMin;
-                        if (diffMin > 0) {
-                            dureeText = diffMin >= 60 ? Math.floor(diffMin / 60) + 'h' + (diffMin % 60 > 0 ? (diffMin % 60) + 'm' : '') : diffMin + 'min';
-                        } else if (diffMin === 0) {
-                            dureeText = '<1min';
-                        }
+                    const [hS, mS] = heureSortie.split(':').map(Number);
+                    const entreeMin = hE * 60 + (mE || 0);
+                    const sortieMin = hS * 60 + (mS || 0);
+                    const diffMin = sortieMin - entreeMin;
+                    if (diffMin > 0) {
+                        dureeText = diffMin >= 60 ? Math.floor(diffMin / 60) + 'h' + (diffMin % 60 > 0 ? (diffMin % 60) + 'm' : '') : diffMin + 'min';
+                    } else if (diffMin === 0) {
+                        dureeText = '<1min';
                     }
                 } catch(e) {}
             }
@@ -1070,12 +1097,12 @@ function renderTradesTable() {
                     <td data-label="Direction" class="${dirClass}">${dirIcon} ${trade.direction || 'LONG'}</td>
                     <td data-label="Type">${typeTag}</td>
                     <td data-label="Catégorie"><span class="cat-badge">${catLabels[trade.categorie_actif] || '-'}</span></td>
-                    <td data-label="Entrée" class="mono">${trade.prix_entree || '-'}</td>
-                    <td data-label="Stop" class="mono negative">${trade.prix_stop || '-'}</td>
-                    <td data-label="TP1" class="mono positive">${trade.prix_tp1 || '-'}</td>
-                    <td data-label="TP2" class="mono positive">${trade.prix_tp2 || '-'}</td>
+                    <td data-label="Entrée" class="mono">${prixEntreeStr}</td>
+                    <td data-label="Stop" class="mono negative">${prixStopStr}</td>
+                    <td data-label="TP1" class="mono positive">${prixTp1Str}</td>
+                    <td data-label="TP2" class="mono positive">${prixTp2Str}</td>
                     <td data-label="Résultat" class="${resultClass}"><strong>${trade.resultat || 'En cours'}</strong></td>
-                    <td data-label="P.Sortie" class="mono">${trade.prix_sortie || '-'}</td>
+                    <td data-label="P.Sortie" class="mono">${prixSortieStr}</td>
                     <td data-label="H.Sortie" class="mono">${heureSortie}</td>
                     <td data-label="Durée">${dureeText}</td>
                     <td data-label="PnL" class="${resultClass} mono">
