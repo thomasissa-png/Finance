@@ -769,7 +769,8 @@ function renderTradesTable(trades) {
                     <th>TP1</th>
                     <th>TP2</th>
                     <th class="sortable" data-sort="resultat" onclick="sortTradesTable(this, 'resultat')">Résultat <span class="sort-icon">⇅</span></th>
-                    <th>Sortie</th>
+                    <th>P.Sortie</th>
+                    <th>H.Sortie</th>
                     <th>Durée</th>
                     <th class="sortable" data-sort="pnl_pct" onclick="sortTradesTable(this, 'pnl_pct')">PnL <span class="sort-icon">⇅</span></th>
                 </tr>
@@ -833,17 +834,41 @@ function renderTradesTable(trades) {
         // Warning pour grade D
         const gradeWarning = grade === 'D' ? ' grade-warning' : '';
 
-        // Calculer la durée
+        // Heure de sortie
+        let heureSortie = '-';
+        if (trade.timestamp_sortie) {
+            try {
+                // Gérer les formats "YYYY-MM-DD HH:MM:SS" et ISO
+                const tsStr = trade.timestamp_sortie.toString().replace(' ', 'T');
+                const sortieDate = new Date(tsStr);
+                if (!isNaN(sortieDate.getTime())) {
+                    heureSortie = sortieDate.getHours().toString().padStart(2, '0') + ':' +
+                                  sortieDate.getMinutes().toString().padStart(2, '0');
+                }
+            } catch(e) {}
+        }
+
+        // Calculer la durée (utilise duree_minutes de la DB si disponible, sinon calcul client)
         let dureeText = '-';
-        if (trade.heure_message && trade.timestamp_sortie) {
-            const [hE, mE] = trade.heure_message.split(':').map(Number);
-            const sortieDate = new Date(trade.timestamp_sortie);
-            const entreeMin = hE * 60 + (mE || 0);
-            const sortieMin = sortieDate.getHours() * 60 + sortieDate.getMinutes();
-            const diffMin = sortieMin - entreeMin;
-            if (diffMin > 0) {
-                dureeText = diffMin >= 60 ? Math.floor(diffMin / 60) + 'h' + (diffMin % 60 > 0 ? (diffMin % 60) + 'm' : '') : diffMin + 'min';
-            }
+        if (trade.duree_minutes && trade.duree_minutes > 0) {
+            const dm = trade.duree_minutes;
+            dureeText = dm >= 60 ? Math.floor(dm / 60) + 'h' + (dm % 60 > 0 ? (dm % 60) + 'm' : '') : dm + 'min';
+        } else if (trade.heure_message && trade.timestamp_sortie) {
+            try {
+                const [hE, mE] = trade.heure_message.split(':').map(Number);
+                const tsStr = trade.timestamp_sortie.toString().replace(' ', 'T');
+                const sortieDate = new Date(tsStr);
+                if (!isNaN(sortieDate.getTime())) {
+                    const sortieMin = sortieDate.getHours() * 60 + sortieDate.getMinutes();
+                    const entreeMin = hE * 60 + (mE || 0);
+                    const diffMin = sortieMin - entreeMin;
+                    if (diffMin > 0) {
+                        dureeText = diffMin >= 60 ? Math.floor(diffMin / 60) + 'h' + (diffMin % 60 > 0 ? (diffMin % 60) + 'm' : '') : diffMin + 'min';
+                    } else if (diffMin === 0) {
+                        dureeText = '<1min';
+                    }
+                }
+            } catch(e) {}
         }
 
         html += `
@@ -864,6 +889,7 @@ function renderTradesTable(trades) {
                 <td>${trade.prix_tp2 || '-'}</td>
                 <td>${trade.resultat || '🔄 En cours'}</td>
                 <td class="mono">${trade.prix_sortie || '-'}</td>
+                <td class="mono">${heureSortie}</td>
                 <td>${dureeText}</td>
                 <td class="${trade.pnl_pct > 0 ? 'positive' : trade.pnl_pct < 0 ? 'negative' : ''}">${trade.pnl_pct ? trade.pnl_pct.toFixed(2) + '%' : '-'}</td>
             </tr>`;

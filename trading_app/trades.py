@@ -239,6 +239,10 @@ def enregistrer_recommandation(trade_data):
 
         logger.info(f"Trade Grade: {symbole} - {grade_result['resume']}")
 
+        # LOG: Tracer le prix d'entrée enregistré (debug prix incorrect)
+        prix_actuel_data = trade_data.get('prix_actuel', 0)
+        print(f"  📝 [{symbole}] Enregistrement: entrée={entree}, prix_actuel={prix_actuel_data}, direction={direction}")
+
         cursor.execute('''
             INSERT INTO trades_recommandes
             (date, heure_message, actif, symbole, type_setup, prix_entree, prix_stop,

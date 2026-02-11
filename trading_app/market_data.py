@@ -459,75 +459,144 @@ def get_fresh_quote_for_trade(symbole):
 
     IMPORTANT pour le trading:
     - Bypasse le cache pour avoir le prix le plus récent possible
-    - Calcule le spread implicite (high-low du jour)
-    - Vérifie la liquidité via le volume
+    - Vérifie que les données sont intraday (pas end-of-day)
+    - Fallback yfinance si TwelveData retourne des données EOD/stale
     - Retourne des données formatées pour la prise de décision
 
     Returns:
         Dict avec prix frais et métriques, ou None si erreur
     """
-    if not TWELVEDATA_API_KEY:
+    from datetime import datetime as _dt
+
+    maintenant = get_paris_time()
+    price = None
+    high = 0
+    low = 0
+    open_price = 0
+    prev_close = 0
+    volume = 0
+    source = None
+
+    # === SOURCE 1: TwelveData /quote (bypass cache) ===
+    if TWELVEDATA_API_KEY and not check_quota_circuit_breaker():
+        rate_limit_twelvedata()
+        try:
+            td_symbol, mic_code = convert_symbol_to_twelvedata(symbole)
+            url = "https://api.twelvedata.com/quote"
+            params = {"symbol": td_symbol, "apikey": TWELVEDATA_API_KEY}
+            if mic_code:
+                params["mic_code"] = mic_code
+
+            response = requests.get(url, params=params, timeout=10)
+            if response.ok:
+                data = response.json()
+                if "close" in data:
+                    td_price = float(data.get("close") or 0)
+                    td_datetime = data.get("datetime", "")
+
+                    # Vérifier la fraîcheur: le datetime doit être d'aujourd'hui
+                    is_today = False
+                    if td_datetime:
+                        try:
+                            # Format "YYYY-MM-DD HH:MM:SS" ou "YYYY-MM-DD"
+                            td_date_str = td_datetime[:10]
+                            is_today = td_date_str == maintenant.strftime('%Y-%m-%d')
+                        except Exception:
+                            pass
+
+                    if is_today and td_price > 0:
+                        price = td_price
+                        high = float(data.get("high") or 0)
+                        low = float(data.get("low") or 0)
+                        open_price = float(data.get("open") or 0)
+                        prev_close = float(data.get("previous_close") or 0)
+                        volume = int(data.get("volume") or 0)
+                        source = "twelvedata"
+                    elif td_price > 0:
+                        # Données d'hier — on va fallback mais garder les OHLV comme référence
+                        high = float(data.get("high") or 0)
+                        low = float(data.get("low") or 0)
+                        open_price = float(data.get("open") or 0)
+                        prev_close = float(data.get("previous_close") or 0)
+                        volume = int(data.get("volume") or 0)
+                        logger.warning(f"Fresh quote {symbole}: TwelveData datetime={td_datetime} (pas aujourd'hui), fallback yfinance")
+                else:
+                    error_msg = data.get("message", "")
+                    if "quota" in error_msg.lower():
+                        activate_quota_circuit_breaker()
+            elif response.status_code == 429:
+                activate_quota_circuit_breaker()
+        except Exception as e:
+            logger.warning(f"TwelveData fresh quote {symbole}: {e}")
+
+    # === SOURCE 2: yfinance fallback (si TwelveData pas frais) ===
+    if price is None or price <= 0:
+        try:
+            ticker = yf.Ticker(symbole)
+            # Récupérer les dernières barres 1min pour un prix réellement actuel
+            hist_1m = ticker.history(period='1d', interval='1m')
+            if not hist_1m.empty:
+                price = float(hist_1m['Close'].iloc[-1])
+                if open_price <= 0:
+                    open_price = float(hist_1m['Open'].iloc[0])
+                if high <= 0:
+                    high = float(hist_1m['High'].max())
+                if low <= 0:
+                    low = float(hist_1m['Low'].min())
+                if volume <= 0:
+                    volume = int(hist_1m['Volume'].sum())
+                if prev_close <= 0:
+                    # Utiliser l'open comme approximation du previous close
+                    prev_close = float(hist_1m['Open'].iloc[0])
+                source = "yfinance_1m"
+                print(f"  📡 [{symbole}] Prix yfinance 1min: {price:.4f} (dernière bougie: {hist_1m.index[-1]})")
+        except Exception as e:
+            logger.warning(f"yfinance fresh quote {symbole}: {e}")
+
+    # === SOURCE 3: yfinance daily (dernier recours) ===
+    if price is None or price <= 0:
+        try:
+            ticker = yf.Ticker(symbole)
+            hist_d = ticker.history(period='2d')
+            if not hist_d.empty:
+                price = float(hist_d['Close'].iloc[-1])
+                if open_price <= 0:
+                    open_price = float(hist_d['Open'].iloc[-1])
+                if high <= 0:
+                    high = float(hist_d['High'].iloc[-1])
+                if low <= 0:
+                    low = float(hist_d['Low'].iloc[-1])
+                source = "yfinance_daily"
+                logger.warning(f"Fresh quote {symbole}: fallback yfinance daily (last resort)")
+        except Exception as e:
+            logger.warning(f"yfinance daily fallback {symbole}: {e}")
+
+    if price is None or price <= 0:
+        print(f"⚠️ Fresh quote {symbole}: aucune source n'a retourné de prix")
         return None
 
-    # Bypass le cache - on veut des données fraîches
-    rate_limit_twelvedata()
+    # Calculs pour le trading
+    spread_pct = ((high - low) / price * 100) if price > 0 and high > 0 and low > 0 else 0
+    variation_jour = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0
+    variation_open = ((price - open_price) / open_price * 100) if open_price > 0 else 0
 
-    try:
-        td_symbol, mic_code = convert_symbol_to_twelvedata(symbole)
+    print(f"  💰 [{symbole}] Prix frais: {price:.4f} (source: {source})")
 
-        url = "https://api.twelvedata.com/quote"
-        params = {
-            "symbol": td_symbol,
-            "apikey": TWELVEDATA_API_KEY
-        }
-        if mic_code:
-            params["mic_code"] = mic_code
-
-        response = requests.get(url, params=params, timeout=10)
-        if not response.ok:
-            if response.status_code == 429:
-                activate_quota_circuit_breaker()
-            print(f"⚠️ Fresh quote {symbole}: HTTP {response.status_code}")
-            return None
-        data = response.json()
-
-        if "close" not in data:
-            error_msg = data.get("message", "")
-            if "quota" in error_msg.lower():
-                activate_quota_circuit_breaker()
-            print(f"⚠️ Fresh quote {symbole}: {error_msg}")
-            return None
-
-        price = float(data.get("close") or 0)
-        high = float(data.get("high") or 0)
-        low = float(data.get("low") or 0)
-        open_price = float(data.get("open") or 0)
-        prev_close = float(data.get("previous_close") or 0)
-        volume = int(data.get("volume") or 0)
-
-        # Calculs pour le trading
-        spread_pct = ((high - low) / price * 100) if price > 0 else 0
-        variation_jour = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0
-        variation_open = ((price - open_price) / open_price * 100) if open_price > 0 else 0
-
-        return {
-            "symbole": symbole,
-            "prix": float(round(price, 4)),
-            "open": float(round(open_price, 4)),
-            "high": float(round(high, 4)),
-            "low": float(round(low, 4)),
-            "previous_close": float(round(prev_close, 4)),
-            "volume": int(volume),
-            "spread_pct": float(round(spread_pct, 2)),  # Volatilité intraday
-            "variation_jour": float(round(variation_jour, 2)),  # % depuis clôture veille
-            "variation_open": float(round(variation_open, 2)),  # % depuis open
-            "timestamp": get_paris_time().isoformat(),
-            "is_fresh": True
-        }
-
-    except Exception as e:
-        print(f"⚠️ Fresh quote error {symbole}: {e}")
-        return None
+    return {
+        "symbole": symbole,
+        "prix": float(round(price, 4)),
+        "open": float(round(open_price, 4)),
+        "high": float(round(high, 4)),
+        "low": float(round(low, 4)),
+        "previous_close": float(round(prev_close, 4)),
+        "volume": int(volume),
+        "spread_pct": float(round(spread_pct, 2)),
+        "variation_jour": float(round(variation_jour, 2)),
+        "variation_open": float(round(variation_open, 2)),
+        "timestamp": maintenant.isoformat(),
+        "source": source,
+        "is_fresh": source in ("twelvedata", "yfinance_1m")
+    }
 
 
 def _fetch_twelvedata_group(mic_code, symbol_pairs, interval, outputsize):

@@ -311,8 +311,11 @@ def api_lancer_analyse():
                         continue
                     # Utiliser le prix RÉEL du marché comme prix d'entrée (pas le prix suggéré par Claude)
                     if quote_fraiche:
+                        ancien_prix = opp_enrichie.get('entree')
                         opp_enrichie['prix_actuel'] = quote_fraiche['prix']
                         opp_enrichie['entree'] = quote_fraiche['prix']
+                        source = quote_fraiche.get('source', '?')
+                        print(f"  💰 [{symbole}] Prix corrigé: {ancien_prix} → {quote_fraiche['prix']} (source: {source})")
 
                     result = enregistrer_recommandation(opp_enrichie)
 
