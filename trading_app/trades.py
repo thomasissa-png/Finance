@@ -71,12 +71,43 @@ def enregistrer_recommandation(trade_data):
 
     CHANGEMENT v2: Validation stricte au lieu d'auto-correction.
     Les trades incohérents sont REJETÉS et loggés, pas corrigés silencieusement.
+
+    CHANGEMENT v3: Déduplication cross-analyses.
+    Rejette un trade si un trade OUVERT (resultat IS NULL) existe déjà
+    aujourd'hui pour le même symbole. Évite les doublons BNP x3.
     """
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
         maintenant = get_paris_time()
+
+        # === DÉDUPLICATION: Vérifier si un trade ouvert existe déjà pour ce symbole aujourd'hui ===
+        symbole_check = trade_data.get('symbole', '')
+        if not symbole_check:
+            # Essayer de résoudre le symbole à partir du nom
+            actif_nom_check = trade_data.get('actif', '')
+            for sym, nom in ACTIFS_PERMANENTS.items():
+                if nom == actif_nom_check:
+                    symbole_check = sym
+                    break
+            if not symbole_check:
+                for pool in POOL_ROTATION.values():
+                    for sym, nom in pool.items():
+                        if nom == actif_nom_check:
+                            symbole_check = sym
+                            break
+
+        if symbole_check:
+            cursor.execute(
+                'SELECT COUNT(*) FROM trades_recommandes WHERE symbole = ? AND resultat IS NULL AND date = ?',
+                (symbole_check, maintenant.date().isoformat())
+            )
+            nb_ouverts = cursor.fetchone()[0]
+            if nb_ouverts > 0:
+                logger.info(f"⚠️ [{symbole_check}] Trade déjà ouvert aujourd'hui — recommandation ignorée (déduplication)")
+                print(f"  ⚠️ [{symbole_check}] Trade déjà ouvert aujourd'hui — recommandation ignorée")
+                return None
 
         # Injecter le régime de marché actuel si non présent (pour validation R:R adaptatif)
         if 'regime_marche' not in trade_data or not trade_data.get('regime_marche'):

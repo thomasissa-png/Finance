@@ -236,11 +236,29 @@ def api_lancer_analyse():
             # Liste des actifs exclus pour validation ATR
             actifs_exclus_atr = set(a['nom'] for a in get_actifs_filtres_atr(donnees_enrichies, seuil_atr_min=1.0))
 
+            # Pré-charger les symboles déjà ouverts aujourd'hui (déduplication cross-analyses)
+            try:
+                conn_dedup = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+                cursor_dedup = conn_dedup.cursor()
+                maintenant_dedup = get_paris_time()
+                cursor_dedup.execute(
+                    'SELECT DISTINCT symbole FROM trades_recommandes WHERE resultat IS NULL AND date = ?',
+                    (maintenant_dedup.date().isoformat(),)
+                )
+                for row in cursor_dedup.fetchall():
+                    if row[0]:
+                        symboles_traites.add(row[0])
+                conn_dedup.close()
+                if symboles_traites:
+                    print(f"  ℹ️ {len(symboles_traites)} symbole(s) déjà ouvert(s): {', '.join(symboles_traites)}")
+            except Exception as e:
+                logger.warning(f"Erreur pré-chargement symboles ouverts: {e}")
+
             for opp in analyse.get('opportunites', []):
                 symbole = opp.get('symbole', opp.get('actif', 'N/A'))
                 actif_nom = opp.get('actif', '')
 
-                # Validation 0: Déduplication - skip si déjà traité
+                # Validation 0: Déduplication - skip si déjà traité (inclut trades déjà ouverts)
                 if symbole in symboles_traites:
                     print(f"⚠️ [{symbole}] Opportunité dupliquée ignorée")
                     continue

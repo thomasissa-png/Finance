@@ -92,7 +92,24 @@ def executer_analyse_planifiee(eu_only=False):
             }
             conviction_min = conviction_min_par_regime.get(regime_actuel, 3)
             actifs_exclus_atr = set(a['nom'] for a in get_actifs_filtres_atr(donnees_enrichies, seuil_atr_min=1.0))
+
+            # Pré-charger les symboles déjà ouverts aujourd'hui (déduplication cross-analyses)
             symboles_traites = set()
+            try:
+                import sqlite3
+                conn_dedup = sqlite3.connect(config.DB_PATH, timeout=config.DB_TIMEOUT)
+                cursor_dedup = conn_dedup.cursor()
+                cursor_dedup.execute(
+                    'SELECT DISTINCT symbole FROM trades_recommandes WHERE resultat IS NULL AND date = ?',
+                    (maintenant.date().isoformat(),)
+                )
+                symboles_traites = set(row[0] for row in cursor_dedup.fetchall() if row[0])
+                conn_dedup.close()
+                if symboles_traites:
+                    print(f"  ℹ️ {len(symboles_traites)} symbole(s) déjà ouvert(s): {', '.join(symboles_traites)}")
+            except Exception as e:
+                logger.warning(f"Erreur pré-chargement symboles ouverts: {e}")
+
             valides, rejetes = 0, 0
 
             for opp in analyse.get('opportunites', []):
