@@ -35,14 +35,17 @@ def api_status():
 
         # Compter les news du jour depuis la DB (remplace le compteur in-memory cassé)
         news_today = 0
+        conn_status = None
         try:
             conn_status = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
             cursor_status = conn_status.cursor()
             cursor_status.execute("SELECT COUNT(*) FROM alertes_news WHERE date = ?", (maintenant.strftime('%Y-%m-%d'),))
             news_today = cursor_status.fetchone()[0]
-            conn_status.close()
         except Exception:
             pass
+        finally:
+            if conn_status:
+                conn_status.close()
 
         return jsonify({
             'status': 'online',
@@ -75,29 +78,32 @@ def api_twelvedata_test():
 
     results = {}
     for name, yahoo_sym in test_symbols.items():
-        td_sym = convert_symbol_to_twelvedata(yahoo_sym)
+        td_symbol, mic_code = convert_symbol_to_twelvedata(yahoo_sym)
         try:
             rate_limit_twelvedata()
             url = "https://api.twelvedata.com/quote"
-            params = {"symbol": td_sym, "apikey": TWELVEDATA_API_KEY}
+            params = {"symbol": td_symbol, "apikey": TWELVEDATA_API_KEY}
+            if mic_code:
+                params["mic_code"] = mic_code
             response = requests.get(url, params=params, timeout=10)
             data = response.json()
 
-            if "close" in data:
+            if "last" in data or "close" in data:
                 results[name] = {
                     "status": "OK",
-                    "symbol_td": td_sym,
-                    "price": data.get("close"),
+                    "symbol_td": td_symbol,
+                    "mic_code": mic_code,
+                    "price": data.get("last") or data.get("close"),
                     "change": data.get("percent_change")
                 }
             else:
                 results[name] = {
                     "status": "ERREUR",
-                    "symbol_td": td_sym,
+                    "symbol_td": td_symbol,
                     "error": data.get("message", "Symbole non trouvé")
                 }
         except Exception as e:
-            results[name] = {"status": "ERREUR", "symbol_td": td_sym, "error": str(e)}
+            results[name] = {"status": "ERREUR", "symbol_td": td_symbol, "error": str(e)}
 
     return jsonify({
         'success': True,
@@ -111,19 +117,22 @@ def api_twelvedata_symbol(symbole):
     if not TWELVEDATA_API_KEY:
         return jsonify({'success': False, 'error': 'TWELVEDATA_API_KEY non configurée'})
 
-    td_sym = convert_symbol_to_twelvedata(symbole)
+    td_symbol, mic_code = convert_symbol_to_twelvedata(symbole)
 
     try:
         rate_limit_twelvedata()
         url = "https://api.twelvedata.com/quote"
-        params = {"symbol": td_sym, "apikey": TWELVEDATA_API_KEY}
+        params = {"symbol": td_symbol, "apikey": TWELVEDATA_API_KEY}
+        if mic_code:
+            params["mic_code"] = mic_code
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
 
         return jsonify({
-            'success': "close" in data,
+            'success': "last" in data or "close" in data,
             'yahoo_symbol': symbole,
-            'twelvedata_symbol': td_sym,
+            'twelvedata_symbol': td_symbol,
+            'mic_code': mic_code,
             'response': data
         })
     except Exception as e:
@@ -166,21 +175,25 @@ def api_lancer_analyse():
         # Weekend: pas d'analyse active, retourner synthèse de la semaine
         if weekend:
             # Récupérer le résumé de la semaine dernière
-            conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+            conn = None
+            try:
+                conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
 
-            # Stats de la semaine écoulée
-            cursor.execute('''
-                SELECT COUNT(*) as total,
-                       SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as gagnants,
-                       SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as perdants,
-                       ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END), 2) as pnl_moyen
-                FROM trades_recommandes
-                WHERE date >= date('now', '-7 days')
-            ''')
-            stats = cursor.fetchone()
-            conn.close()
+                # Stats de la semaine écoulée
+                cursor.execute('''
+                    SELECT COUNT(*) as total,
+                           SUM(CASE WHEN resultat IN ('TP1', 'TP2', 'WIN_FORCE') THEN 1 ELSE 0 END) as gagnants,
+                           SUM(CASE WHEN resultat IN ('STOP', 'LOSS_FORCE') THEN 1 ELSE 0 END) as perdants,
+                           ROUND(AVG(CASE WHEN pnl_pct IS NOT NULL THEN pnl_pct END), 2) as pnl_moyen
+                    FROM trades_recommandes
+                    WHERE date >= date('now', '-7 days')
+                ''')
+                stats = cursor.fetchone()
+            finally:
+                if conn:
+                    conn.close()
 
             analyse_weekend = {
                 'weekend': True,
@@ -237,6 +250,7 @@ def api_lancer_analyse():
             actifs_exclus_atr = set(a['nom'] for a in get_actifs_filtres_atr(donnees_enrichies, seuil_atr_min=1.0))
 
             # Pré-charger les symboles déjà ouverts aujourd'hui (déduplication cross-analyses)
+            conn_dedup = None
             try:
                 conn_dedup = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
                 cursor_dedup = conn_dedup.cursor()
@@ -248,11 +262,13 @@ def api_lancer_analyse():
                 for row in cursor_dedup.fetchall():
                     if row[0]:
                         symboles_traites.add(row[0])
-                conn_dedup.close()
                 if symboles_traites:
                     print(f"  ℹ️ {len(symboles_traites)} symbole(s) déjà ouvert(s): {', '.join(symboles_traites)}")
             except Exception as e:
                 logger.warning(f"Erreur pré-chargement symboles ouverts: {e}")
+            finally:
+                if conn_dedup:
+                    conn_dedup.close()
 
             for opp in analyse.get('opportunites', []):
                 symbole = opp.get('symbole', opp.get('actif', 'N/A'))
@@ -384,6 +400,7 @@ def api_trades_jour():
 @bp.route('/api/trades/ouverts')
 def api_trades_ouverts():
     """Récupère les trades ouverts avec leur tracking temps réel"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -417,8 +434,6 @@ def api_trades_ouverts():
 
             trades.append(trade)
 
-        conn.close()
-
         return jsonify({
             'success': True,
             'datetime': get_paris_time().strftime('%d/%m/%Y %H:%M:%S'),
@@ -427,6 +442,9 @@ def api_trades_ouverts():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+    finally:
+        if conn:
+            conn.close()
 
 @bp.route('/api/scheduler-status')
 def api_scheduler_status():

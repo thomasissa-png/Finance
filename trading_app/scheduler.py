@@ -3,7 +3,7 @@ Tâches planifiées: analyses, vérifications, clôtures, rapports.
 """
 import time
 import datetime
-from threading import Thread
+from threading import Thread, Lock
 
 import schedule
 
@@ -59,9 +59,21 @@ def run_pending_safe():
             job._schedule_next_run()
 
 
+_analyse_lock = Lock()
+
 def executer_analyse_planifiee(eu_only=False):
     """Exécute une analyse planifiée.
     eu_only=True: exclut les actions US individuelles (avant ouverture US)"""
+    if not _analyse_lock.acquire(blocking=False):
+        print(f"[{get_paris_time().strftime('%H:%M:%S')} CET] ⏭️ Analyse déjà en cours, ignorée")
+        return
+    try:
+        _executer_analyse_planifiee_impl(eu_only)
+    finally:
+        _analyse_lock.release()
+
+def _executer_analyse_planifiee_impl(eu_only=False):
+    """Implémentation interne de l'analyse planifiée (protégée par lock)."""
     maintenant = get_paris_time()
 
     # Vérifier si c'est un jour de trading valide
@@ -95,6 +107,7 @@ def executer_analyse_planifiee(eu_only=False):
 
             # Pré-charger les symboles déjà ouverts aujourd'hui (déduplication cross-analyses)
             symboles_traites = set()
+            conn_dedup = None
             try:
                 import sqlite3
                 conn_dedup = sqlite3.connect(config.DB_PATH, timeout=config.DB_TIMEOUT)
@@ -104,11 +117,13 @@ def executer_analyse_planifiee(eu_only=False):
                     (maintenant.date().isoformat(),)
                 )
                 symboles_traites = set(row[0] for row in cursor_dedup.fetchall() if row[0])
-                conn_dedup.close()
                 if symboles_traites:
                     print(f"  ℹ️ {len(symboles_traites)} symbole(s) déjà ouvert(s): {', '.join(symboles_traites)}")
             except Exception as e:
                 logger.warning(f"Erreur pré-chargement symboles ouverts: {e}")
+            finally:
+                if conn_dedup:
+                    conn_dedup.close()
 
             valides, rejetes = 0, 0
 
@@ -230,11 +245,15 @@ def rattraper_journal_manque():
     # Vérifier si le journal FR existe déjà pour aujourd'hui
     import sqlite3
     from .config import DB_PATH, DB_TIMEOUT
-    conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM journal_quotidien WHERE date = ?", (maintenant.date().isoformat(),))
-    count = cursor.fetchone()[0]
-    conn.close()
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM journal_quotidien WHERE date = ?", (maintenant.date().isoformat(),))
+        count = cursor.fetchone()[0]
+    finally:
+        if conn:
+            conn.close()
 
     if count == 0:
         print(f"[{maintenant.strftime('%H:%M:%S')} CET] 📓 Rattrapage journal FR (manqué à 18h)...")
@@ -326,6 +345,7 @@ def watchdog_analyse_matin():
     if heure_decimal < 8 or heure_decimal > 15:
         return
 
+    conn = None
     try:
         conn = sqlite3.connect(config.DB_PATH, timeout=config.DB_TIMEOUT)
         cursor = conn.cursor()
@@ -334,7 +354,6 @@ def watchdog_analyse_matin():
             (maintenant.date().isoformat(),)
         )
         nb = cursor.fetchone()[0]
-        conn.close()
 
         if nb == 0:
             eu_only = heure_decimal < 15.5
@@ -343,6 +362,9 @@ def watchdog_analyse_matin():
             executer_analyse_planifiee(eu_only=eu_only)
     except Exception as e:
         logger.error(f"Erreur watchdog analyse: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 
 def configurer_schedule():

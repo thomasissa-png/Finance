@@ -268,8 +268,8 @@ def enregistrer_recommandation(trade_data):
             'NEWS' if trade_data.get('is_news_trading') else 'TECHNIQUE',
             entree,
             stop,
-            trade_data.get('tp1', 0),
-            trade_data.get('tp2', 0),
+            tp1,
+            tp2,
             trade_data.get('prix_actuel', 0),
             trade_data.get('catalyseur', ''),
             trade_data.get('duree', ''),
@@ -589,9 +589,9 @@ def reevaluer_trades_intraday():
                 if prix_actuel <= 0:
                     continue
 
-                entree = trade.get('prix_entree', 0)
-                stop = trade.get('prix_stop', 0)
-                tp1 = trade.get('prix_tp1', 0)
+                entree = float(trade.get('prix_entree', 0) or 0)
+                stop = float(trade.get('prix_stop', 0) or 0)
+                tp1 = float(trade.get('prix_tp1', 0) or 0)
                 direction = trade.get('direction', 'LONG')
                 conviction = trade.get('conviction_score', 3)
                 trailing_stop_actif = trade.get('trailing_stop', 0)
@@ -916,6 +916,7 @@ def cloturer_trades_jour():
 
 def get_trades_du_jour():
     """Récupère les trades du jour"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -929,14 +930,17 @@ def get_trades_du_jour():
         ''', (aujourdhui,))
 
         trades = [dict(row) for row in cursor.fetchall()]
-        conn.close()
         return trades
     except Exception as e:
         print(f"⚠️ Erreur récupération trades: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 def get_performances(periode='semaine'):
     """Récupère les performances sur une période"""
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=DB_TIMEOUT)
         cursor = conn.cursor()
@@ -967,7 +971,6 @@ def get_performances(periode='semaine'):
         ''', (date_debut,))
 
         row = cursor.fetchone()
-        conn.close()
 
         total = row[0] or 0
         reussis_naturel = row[1] or 0
@@ -1002,6 +1005,9 @@ def get_performances(periode='semaine'):
     except Exception as e:
         print(f"⚠️ Erreur performances: {e}")
         return {'total': 0, 'reussis': 0, 'reussis_naturel': 0, 'reussis_force': 0, 'stops': 0, 'stops_naturel': 0, 'stops_force': 0, 'non_conclus': 0, 'en_cours': 0, 'taux_reussite': 0, 'pnl_moyen': 0, 'pnl_total': 0}
+    finally:
+        if conn:
+            conn.close()
 
 
 def cloturer_trades_orphelins():
