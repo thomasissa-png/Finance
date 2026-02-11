@@ -1,6 +1,6 @@
 # Finance Trading App — Instructions pour Claude
 
-## Règle critique: Tests anti-régression
+## Règle #0: Tests anti-régression OBLIGATOIRES
 
 **AVANT chaque commit**, lancer les tests de régression:
 
@@ -8,9 +8,31 @@
 python -m pytest tests/test_regression.py -v --tb=short
 ```
 
-Les 55 tests doivent TOUS passer. Si un test échoue, c'est une régression — corriger AVANT de commit.
+Les **117 tests** (15 groupes) doivent TOUS passer. Si un test échoue, c'est une régression — corriger AVANT de commit.
 
-**Quand ajouter un test**: chaque fois qu'un nouveau bug est découvert et corrigé, ajouter un test correspondant dans `tests/test_regression.py` dans le groupe approprié (ou créer un nouveau groupe).
+### Obligation d'ajout de tests
+
+**À chaque bug corrigé ou fonctionnalité modifiée**, Claude DOIT:
+1. Ajouter un ou plusieurs tests dans `tests/test_regression.py` dans le groupe approprié
+2. Créer un nouveau groupe si aucun groupe existant ne convient
+3. Vérifier que le test ÉCHOUE avant le fix et PASSE après (TDD)
+
+**Groupes existants** (choisir le bon):
+- `TestEntryPrice` — Prix d'entrée TwelveData
+- `TestTypeConversions` — Conversions float, types DB
+- `TestSymbolConversion` — Symboles TwelveData (tuple)
+- `TestDBConnectionSafety` — Fuites connexion DB
+- `TestValidation` — Validation opportunités, prix, R:R
+- `TestPnLCalculations` — Calculs PnL LONG/SHORT
+- `TestDeduplication` — Anti-doublons trades
+- `TestScheduler` — Scheduler isolation, lock
+- `TestCrossModuleState` — État global inter-modules
+- `TestIntegrationDB` — Tests DB bout en bout
+- `TestScheduling` — Tâches planifiées, time windows
+- `TestOpportunityPipeline` — Parsing, validation, enrichissement
+- `TestPerformanceTracking` — Métriques, transactions atomiques
+- `TestJournal` — Catégorisation, filtres, rapports
+- `TestSelfLearning` — Ajustements, feedback, A/B testing
 
 ## Architecture
 
@@ -20,6 +42,10 @@ Les 55 tests doivent TOUS passer. Si un test échoue, c'est une régression — 
 - `trading_app/market_data.py` — Sources de prix (TwelveData, yfinance)
 - `trading_app/validation.py` — Validation prix, R:R, heures marché
 - `trading_app/scheduler.py` — Tâches planifiées (analyses, vérifications)
+- `trading_app/journal.py` — Journal quotidien, rapports hebdo
+- `trading_app/adjustments.py` — Auto-apprentissage, feedback loop
+- `trading_app/ab_testing.py` — Tests A/B stratégiques
+- `trading_app/database.py` — Init DB, backup, indexes
 - `trading_app/routes/` — 6 modules Blueprint Flask
 
 ## Règles critiques à ne JAMAIS violer
