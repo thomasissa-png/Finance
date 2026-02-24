@@ -235,7 +235,15 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Frontend: Vite dev server ou build statique
 
 ## Tests
-- Framework: pytest (160 tests)
+- Framework: pytest (217 tests)
 - Lancer: `python -m pytest backend/tests/ -v` (depuis la racine du projet)
 - Couvre: config, models, news_scorer, trade_selector, journal, learning, economic_calendar, data_apis, event_scanner
 - v3 tests ajoutés : significance test, compute_adjustment, multiplicative blending, build_performance_summary
+- **test_workflow_e2e.py** (57 tests) : backtest complet du pipeline end-to-end
+  - Phase 1 : scoring formula edge cases (weather vs earnings, stale vs fresh, etc.)
+  - Phase 2 : trade selection (filtering, session, correlation, pre-move, R/R)
+  - Phase 3 : chain reactions (same/inverse/NEUTRAL, dedup)
+  - Phase 4 : journal closure (TP/SL/EXPIRED, PnL, delay tracking, scan trace)
+  - Phase 5 : learning (significance, blending, feedback loop, adjustments applied)
+  - Phase 6 : integration multi-jours (score → select → save → journal → learn)
+  - Phase 7 : resilience erreurs (corrupt files, missing data, empty inputs)
