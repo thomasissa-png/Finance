@@ -9,6 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -110,19 +111,19 @@ async def lifespan(app: FastAPI):
     if _last_scans:
         logger.info("Restored %d cached scan results", len(_last_scans))
 
-    # Schedule scans: 07:50 and 14:30 CET
-    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, timezone="Europe/Paris"), id="europe_scan")
-    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, timezone="Europe/Paris"), id="us_scan")
-    # Event-driven scan: check every 30 min for high-impact signals
+    # Schedule scans: 07:50 and 14:30 CET, weekdays only (markets closed on weekends)
+    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan")
+    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan")
+    # Event-driven scan: check every 30 min for high-impact signals, weekdays only
     bg_scheduler.add_job(
         run_event_check,
-        CronTrigger(minute="*/30", timezone="Europe/Paris"),
+        CronTrigger(minute="*/30", day_of_week="mon-fri", timezone="Europe/Paris"),
         id="event_check",
     )
-    # Daily journal at 22:00 CET — auto-close trades + generate journal
-    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, timezone="Europe/Paris"), id="daily_journal")
+    # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
+    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal")
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50 and 14:30, event check every 30min, journal at 22:00 CET")
+    logger.info("Scheduler started — scans at 07:50 and 14:30, event check every 30min, journal at 22:00 CET (weekdays only)")
     yield
     bg_scheduler.shutdown()
 
@@ -166,9 +167,20 @@ def get_latest_scan(scan_type: str):
     return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectue"})
 
 
+PARIS_TZ = ZoneInfo("Europe/Paris")
+
+
 @app.post("/api/scan/trigger/{scan_type}")
 def trigger_scan(scan_type: str):
     """Manually trigger a scan (with rate-limiting #35)."""
+    # Weekend guard — markets closed
+    now_paris = datetime.now(PARIS_TZ)
+    if now_paris.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        raise HTTPException(
+            status_code=400,
+            detail="Marches fermes le week-end. Scan disponible du lundi au vendredi.",
+        )
+
     # (#35) Rate limiting
     now = time.time()
     last_trigger = _last_trigger_times.get(scan_type, 0)
@@ -336,6 +348,12 @@ def get_calendar(days: int = 7):
 @app.post("/api/scan/event-check")
 def trigger_event_check():
     """Manually trigger an event-driven scan check."""
+    # Weekend guard
+    if datetime.now(PARIS_TZ).weekday() >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Marches fermes le week-end.",
+        )
     result = run_event_check()
     if result is None:
         return {"triggered": False, "reason": "No high-impact signals detected"}

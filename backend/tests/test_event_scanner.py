@@ -125,6 +125,7 @@ def test_should_trigger_outside_hours():
     with patch("backend.app.event_scanner.datetime") as mock_dt:
         mock_now = MagicMock()
         mock_now.hour = 3  # 3 AM
+        mock_now.weekday.return_value = 2  # Wednesday (weekday)
         mock_dt.now.return_value = mock_now
         result, triggers = should_trigger_scan()
     assert result is False

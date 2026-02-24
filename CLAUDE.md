@@ -68,7 +68,8 @@ Module `economic_calendar.py` — bloque les trades avant les evenements macro m
 
 ## Scans Evenementiels (reactifs)
 Module `event_scanner.py` — surveillance continue des feeds early-signal :
-- **Cron** : toutes les 30 minutes pendant les heures de trading (07:00-19:30 CET)
+- **Cron** : toutes les 30 minutes pendant les heures de trading (07:00-19:30 CET), lundi-vendredi
+- **Weekend** : desactive (weekday check dans `should_trigger_scan()` + `day_of_week` dans CronTrigger)
 - **Detection** : mots-cles a fort potentiel dans les titres RSS
   - weather : drought, frost, hurricane, heatwave, flood...
   - supply_chain : pipeline explosion, port closed, canal blocked, embargo...
@@ -146,7 +147,8 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 
 ## Strategie
 - **Type**: Day trading event-driven (news-based), focus edge detection
-- **Scans**: 2/jour — Europe 07:50 CET, US 14:30 CET
+- **Scans**: 2/jour — Europe 07:50 CET, US 14:30 CET, **lundi-vendredi uniquement**
+- **Weekend**: tous les scans, event checks et journal sont desactives samedi-dimanche (marches fermes). Les triggers manuels retournent HTTP 400 le week-end.
 - **Execution**: 0 ou 1 trade par scan
 - **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
@@ -171,7 +173,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - agri: ZC=F, ZW=F, ZS=F
 
 ## Journal quotidien (22h CET)
-- **Scheduler**: job automatique a 22:00 CET chaque jour
+- **Scheduler**: job automatique a 22:00 CET chaque jour ouvrable (lundi-vendredi)
 - **Actions**: ferme tous les trades PENDING, recupere les prix reels du jour (high/low/close via yfinance)
 - **Resultat auto**: TP verifie en priorite (TP > SL quand les deux sont touches le meme jour), puis SL, puis EXPIRED
 - **Dedup**: verifie `(ticker, entry_time)` pour eviter les doublons lors de triggers manuels
@@ -229,13 +231,39 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
 - yfinance, Open-Meteo, CFTC COT et RSS ne necessitent aucune cle
 
+## Performance (optimisations v3.1)
+
+### Backend — Parallelisation I/O
+- **collect_structured_data()** : 6 sources API en parallele (ThreadPoolExecutor, max_workers=6, timeout 45s)
+- **_fetch_market_context()** : 9 appels yfinance en parallele (VIX + indices + trends)
+- **select_trade()** : pre-fetch de tous les prix candidats en parallele avant evaluation
+- **run_daily_journal()** : pre-fetch des prix de cloture en parallele pour tous les trades pending
+- **Claude API** : timeout 60s pour eviter les blocages infinis
+- **Scheduler** : retry immediat (pas de `time.sleep()` qui bloquerait le thread scheduler)
+- **yfinance/feedparser/RSS** : timeouts sur tous les appels reseau (10-30s)
+
+### Backend — Caches
+- **Performance summary** : cache `build_performance_summary()` invalide apres chaque journal
+- **Learning adjustments** : cache invalide apres chaque journal (#26)
+- **CFTC COT CSV** : cache 24h (publie hebdomadairement, inutile de re-telecharger a chaque scan)
+- **Health check yfinance** : cache 5 min (evite de bloquer `/api/health`)
+
+### Frontend — React
+- **React.lazy + Suspense** : code splitting par onglet (Dashboard, Journal, History, Performance)
+- **ErrorBoundary** : capture les erreurs de rendu avec bouton de recovery
+- **Polling intelligent** : Dashboard skip le polling quand l'onglet est masque (`document.hidden`)
+- **Loading states** : tous les onglets affichent un etat de chargement pendant le fetch
+- **useMemo** : grouping/sorting du journal memoize pour eviter les re-calculs
+- **Keys stables** : `timestamp-ticker` au lieu de `key={i}` dans les tables
+- **Preconnect** : `<link rel="preconnect">` pour Google Fonts (gain ~100ms)
+
 ## Deploiement
 - Plateforme cible: Replit
 - Backend: `uvicorn backend.app.main:app`
 - Frontend: Vite dev server ou build statique
 
 ## Tests
-- Framework: pytest (217 tests)
+- Framework: pytest
 - Lancer: `python -m pytest backend/tests/ -v` (depuis la racine du projet)
 - Couvre: config, models, news_scorer, trade_selector, journal, learning, economic_calendar, data_apis, event_scanner
 - v3 tests ajoutés : significance test, compute_adjustment, multiplicative blending, build_performance_summary
@@ -247,3 +275,4 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Phase 5 : learning (significance, blending, feedback loop, adjustments applied)
   - Phase 6 : integration multi-jours (score → select → save → journal → learn)
   - Phase 7 : resilience erreurs (corrupt files, missing data, empty inputs)
+- **test_weekend.py** : verification que scans, event checks et triggers sont bloques le week-end

@@ -133,6 +133,10 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
 
     now = datetime.now(PARIS_TZ)
 
+    # No scans on weekends — markets closed
+    if now.weekday() >= 5:  # 5=Saturday, 6=Sunday
+        return False, []
+
     # Only trigger during trading hours (07:00-19:30 CET)
     # Leave margin before 20:00 close
     if now.hour < 7 or (now.hour >= 19 and now.minute >= 30):
