@@ -55,6 +55,11 @@ export default function TradeCard({ scan, label }) {
           </span>
         </div>
 
+        {t.news_headline && (
+          <div className="catalyst" style={{ color: "var(--text-primary)", fontWeight: 500 }}>
+            {t.news_headline}
+          </div>
+        )}
         <div className="catalyst">{t.catalyst}</div>
 
         <div className="trade-grid">

@@ -41,6 +41,7 @@ class ScoredNews(BaseModel):
     direction: Direction = Direction.NEUTRAL
     impacted_tickers: list[str] = Field(default_factory=list)
     reasoning: str = ""
+    news_category: str = "other"  # earnings, macro, geopolitical, regulatory, m_a, sector, commodity, other
 
     @property
     def total_score(self) -> float:
@@ -55,6 +56,8 @@ class TradeRecommendation(BaseModel):
     asset_name: str
     category: str
     direction: Direction
+    news_headline: str = ""  # Original news title that triggered the trade
+    news_category: str = "other"  # Type of news: earnings, macro, geopolitical, etc.
     catalyst: str
     entry_price: float
     target_price: float
@@ -87,10 +90,12 @@ class JournalEntry(BaseModel):
     scan_type: ScanType
     news_title: str
     news_source: str
+    news_category: str = "other"  # Type of news event
     reasoning: str
     score: float
     ticker: str
     asset_name: str
+    asset_category: str = ""  # actions_europe, forex, commodities, etc.
     direction: Direction
     entry_time: datetime
     entry_price: float

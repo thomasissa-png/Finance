@@ -122,6 +122,9 @@ export default function Journal() {
                       <td className="journal-news-cell">
                         <div className="journal-news-title">{e.news_title}</div>
                         <div className="journal-news-source">{e.news_source}</div>
+                        {e.news_category && e.news_category !== "other" && (
+                          <div className="journal-cat-badge">{e.news_category}</div>
+                        )}
                       </td>
                       <td className="journal-reasoning-cell">{e.reasoning}</td>
                       <td className="journal-score">
@@ -143,6 +146,9 @@ export default function Journal() {
                         <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
                           {e.ticker}
                         </div>
+                        {e.asset_category && (
+                          <div className="journal-cat-badge">{e.asset_category}</div>
+                        )}
                       </td>
                       <td>
                         <span

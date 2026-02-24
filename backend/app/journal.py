@@ -2,8 +2,9 @@
 
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 JOURNAL_FILE = DATA_DIR / "journal.json"
 
-CET = timezone(timedelta(hours=1))
+PARIS_TZ = ZoneInfo("Europe/Paris")
 
 
 def _ensure_journal_file() -> None:
@@ -42,13 +43,19 @@ def _save_journal(entries: list[JournalEntry]) -> None:
     )
 
 
-def _fetch_day_prices(ticker: str) -> tuple[float | None, float | None, float | None]:
-    """Fetch today's high, low, and closing price for a ticker.
+def _fetch_day_prices(ticker: str, date: str | None = None) -> tuple[float | None, float | None, float | None]:
+    """Fetch day's high, low, and closing price for a ticker.
+
+    If date is provided (YYYY-MM-DD), fetches historical prices for that date.
+    Otherwise fetches today's prices.
 
     Returns (day_high, day_low, close).
     """
     try:
-        data = yf.Ticker(ticker).history(period="1d")
+        if date:
+            data = yf.Ticker(ticker).history(start=date, period="2d")
+        else:
+            data = yf.Ticker(ticker).history(period="1d")
         if data.empty:
             return None, None, None
         row = data.iloc[-1]
@@ -66,27 +73,26 @@ def _determine_result(
 ) -> tuple[TradeResult, float | None, float | None]:
     """Determine trade outcome based on day price action.
 
+    TP is checked first (user preference: focus on TP).
     Returns (result, exit_price, pnl_pct).
     """
     if day_high is None or day_low is None or close is None:
         return TradeResult.EXPIRED, close, None
 
     if trade.direction == Direction.LONG:
-        # Check if target was hit (day high reached target)
+        # Check TP first (priority)
         if day_high >= trade.target_price:
             exit_price = trade.target_price
             pnl = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
             return TradeResult.TP_HIT, exit_price, pnl
-        # Check if stop was hit (day low breached stop)
         if day_low <= trade.stop_price:
             exit_price = trade.stop_price
             pnl = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
             return TradeResult.SL_HIT, exit_price, pnl
-        # Neither hit — expired at close
         pnl = round((close - trade.entry_price) / trade.entry_price * 100, 4)
         return TradeResult.EXPIRED, close, pnl
     else:
-        # SHORT
+        # SHORT — TP first
         if day_low <= trade.target_price:
             exit_price = trade.target_price
             pnl = round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
@@ -118,7 +124,7 @@ def run_daily_journal() -> list[dict]:
     Called at 22:00 CET by the scheduler.
     Returns the list of new journal entries as dicts.
     """
-    today = datetime.now(CET).strftime("%Y-%m-%d")
+    today = datetime.now(PARIS_TZ).strftime("%Y-%m-%d")
     logger.info("=== Daily journal for %s ===", today)
 
     trades = load_trades()
@@ -128,16 +134,27 @@ def run_daily_journal() -> list[dict]:
         logger.info("No pending trades to close")
         return []
 
+    # Dedup: check existing journal entries to avoid duplicates
+    existing = load_journal()
+    existing_keys = {(e.ticker, e.entry_time.isoformat() if e.entry_time else "") for e in existing}
+
     new_entries: list[JournalEntry] = []
 
     for trade in pending:
-        # Check if trade is from today
-        trade_date = trade.timestamp.astimezone(CET).strftime("%Y-%m-%d")
+        trade_date = trade.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
+
+        # Skip if already in journal (dedup)
+        trade_key = (trade.ticker, trade.timestamp.isoformat())
+        if trade_key in existing_keys:
+            logger.info("Skipping duplicate journal entry for %s %s", trade.ticker, trade_date)
+            continue
+
         if trade_date != today:
-            # Old trade still pending — force close it too
             logger.info("Force-closing old pending trade: %s from %s", trade.ticker, trade_date)
 
-        day_high, day_low, close = _fetch_day_prices(trade.ticker)
+        # Fetch prices for the correct date (historical if old trade)
+        fetch_date = trade_date if trade_date != today else None
+        day_high, day_low, close = _fetch_day_prices(trade.ticker, date=fetch_date)
         result, exit_price, pnl_pct = _determine_result(trade, day_high, day_low, close)
 
         # Update the trade in the learning system
@@ -150,12 +167,14 @@ def run_daily_journal() -> list[dict]:
         entry = JournalEntry(
             date=trade_date,
             scan_type=trade.scan_type,
-            news_title=trade.catalyst[:200],
+            news_title=trade.news_headline or trade.catalyst[:200],
             news_source=trade.news_sources[0] if trade.news_sources else "—",
+            news_category=trade.news_category,
             reasoning=trade.catalyst,
             score=trade.confidence,
             ticker=trade.ticker,
             asset_name=trade.asset_name,
+            asset_category=trade.category,
             direction=trade.direction,
             entry_time=trade.timestamp,
             entry_price=trade.entry_price,
@@ -175,9 +194,9 @@ def run_daily_journal() -> list[dict]:
         )
 
     # Append to journal file
-    existing = load_journal()
-    existing.extend(new_entries)
-    _save_journal(existing)
+    if new_entries:
+        existing.extend(new_entries)
+        _save_journal(existing)
 
     # Log learning update
     adjustments = compute_learning_adjustments()

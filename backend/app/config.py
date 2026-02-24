@@ -89,6 +89,38 @@ CATEGORIES = {
     "indices": "Indices Boursiers",
 }
 
+# ── Session filtering: which assets are eligible per scan ────────
+# Europe scan: Euronext + EUR/GBP indices + global (metals, forex, commodities)
+# US scan: USD/JPY/HKD/AUD indices + global (metals, forex, commodities)
+EUROPE_INDEX_CURRENCIES = {"EUR", "GBP"}
+US_INDEX_CURRENCIES = {"USD", "JPY", "HKD", "AUD"}
+
+
+def assets_for_session(scan_type_value: str) -> set[str]:
+    """Return the set of tickers eligible for a given scan session."""
+    tickers: set[str] = set()
+    for a in ASSETS:
+        if a.category == "actions_europe":
+            # European stocks: only in Europe scan
+            if scan_type_value == "europe":
+                tickers.add(a.ticker)
+        elif a.category == "indices":
+            # Indices: filter by currency
+            if scan_type_value == "europe" and a.currency in EUROPE_INDEX_CURRENCIES:
+                tickers.add(a.ticker)
+            elif scan_type_value == "us" and a.currency in US_INDEX_CURRENCIES:
+                tickers.add(a.ticker)
+        else:
+            # Metals, forex, commodities: available in both sessions
+            tickers.add(a.ticker)
+    return tickers
+
+
+NEWS_CATEGORIES = [
+    "earnings", "macro", "geopolitical", "regulatory",
+    "m_a", "sector", "commodity", "other",
+]
+
 RSS_FEEDS = [
     "https://feeds.reuters.com/reuters/businessNews",
     "https://feeds.reuters.com/reuters/topNews",

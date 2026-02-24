@@ -18,7 +18,7 @@ from .learning import (
     update_trade_result,
 )
 from .models import ScanType, TradeResult
-from .scheduler import CET, run_scan
+from .scheduler import run_scan
 
 load_dotenv()
 

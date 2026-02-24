@@ -459,6 +459,19 @@ body {
   color: var(--text-muted);
 }
 
+.journal-cat-badge {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 1px 5px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border-radius: 3px;
+  background: var(--bg-card-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
 /* ── Loading / Spinner ───────────────────────────────────────── */
 
 .loading {

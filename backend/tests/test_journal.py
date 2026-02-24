@@ -4,7 +4,7 @@ import json
 import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from backend.app.journal import (
     _build_review,
@@ -29,6 +29,8 @@ def _make_trade(**overrides) -> TradeRecommendation:
         asset_name="LVMH",
         category="actions_europe",
         direction=Direction.LONG,
+        news_headline="LVMH beats earnings estimates",
+        news_category="earnings",
         catalyst="Test catalyst news",
         entry_price=800.0,
         target_price=808.0,
@@ -77,6 +79,13 @@ def test_determine_result_long_expired():
     assert result == TradeResult.EXPIRED
     assert exit_price == 102
     assert pnl == 2.0
+
+
+def test_determine_result_long_tp_priority():
+    """When both TP and SL could be hit in the same day, TP takes priority."""
+    trade = _make_trade(direction=Direction.LONG, entry_price=100, target_price=105, stop_price=97)
+    result, exit_price, pnl = _determine_result(trade, day_high=106, day_low=96, close=101)
+    assert result == TradeResult.TP_HIT  # TP checked first
 
 
 def test_determine_result_short_tp_hit():
@@ -159,12 +168,14 @@ def test_load_journal_with_entry():
     entry = JournalEntry(
         date="2025-01-15",
         scan_type=ScanType.EUROPE,
-        news_title="Test news",
+        news_title="LVMH beats earnings",
         news_source="Reuters",
+        news_category="earnings",
         reasoning="Test reasoning",
         score=75,
         ticker="MC.PA",
         asset_name="LVMH",
+        asset_category="actions_europe",
         direction=Direction.LONG,
         entry_time=datetime.now(timezone.utc),
         entry_price=800.0,
@@ -178,6 +189,8 @@ def test_load_journal_with_entry():
     assert len(entries) == 1
     assert entries[0].ticker == "MC.PA"
     assert entries[0].pnl_pct == 1.2
+    assert entries[0].news_category == "earnings"
+    assert entries[0].asset_category == "actions_europe"
 
 
 # ── run_daily_journal integration test ─────────────────────────
@@ -210,5 +223,37 @@ def test_run_daily_journal_with_pending_trade():
     assert entry["result"] == "TP_HIT"  # day_high 810 > target 808
     assert entry["day_high"] == 810.0
     assert entry["day_low"] == 795.0
-    # Verify learning system was updated
+    assert entry["news_title"] == "LVMH beats earnings estimates"
+    assert entry["news_category"] == "earnings"
+    assert entry["asset_category"] == "actions_europe"
     mock_update.assert_called_once()
+
+
+def test_run_daily_journal_dedup():
+    """Duplicate trades should not create duplicate journal entries."""
+    now = datetime.now(timezone.utc)
+    trade = _make_trade(timestamp=now, result=TradeResult.PENDING)
+
+    # Simulate existing journal entry for same trade
+    existing_entry = JournalEntry(
+        date=now.strftime("%Y-%m-%d"),
+        scan_type=ScanType.EUROPE,
+        news_title="LVMH beats earnings estimates",
+        news_source="Reuters",
+        reasoning="Test",
+        score=75,
+        ticker="MC.PA",
+        asset_name="LVMH",
+        direction=Direction.LONG,
+        entry_time=now,
+        entry_price=800.0,
+        result=TradeResult.TP_HIT,
+    )
+    existing_raw = [existing_entry.model_dump(mode="json")]
+
+    with _with_temp_file(existing_raw, "backend.app.journal.JOURNAL_FILE"), \
+         patch("backend.app.journal.load_trades", return_value=[trade]), \
+         patch("backend.app.journal.compute_learning_adjustments", return_value={}):
+        result = run_daily_journal()
+
+    assert result == []  # Skipped because already in journal

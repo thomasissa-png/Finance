@@ -1,7 +1,7 @@
 """Scheduler: triggers scans at 07:50 and 14:30 CET automatically."""
 
 import logging
-from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 from .learning import compute_learning_adjustments, save_trade
 from .models import ScanType
@@ -11,9 +11,7 @@ from .trade_selector import select_trade
 
 logger = logging.getLogger(__name__)
 
-# CET = UTC+1, CEST = UTC+2. We use a simple offset; in production
-# consider pytz/zoneinfo for proper DST handling.
-CET = timezone(timedelta(hours=1))
+PARIS_TZ = ZoneInfo("Europe/Paris")
 
 
 def run_scan(scan_type: ScanType) -> dict:

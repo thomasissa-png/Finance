@@ -1,8 +1,9 @@
 """Performance tracking and self-learning via historical trade analysis."""
 
+import fcntl
 import json
 import logging
-import os
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +14,9 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 TRADES_FILE = DATA_DIR / "trades.json"
 
+# Temporal decay: half-life in days. A trade from 30 days ago has weight 0.5.
+DECAY_HALF_LIFE_DAYS = 30.0
+
 
 def _ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -20,13 +24,38 @@ def _ensure_data_dir() -> None:
         TRADES_FILE.write_text("[]")
 
 
-def load_trades() -> list[TradeRecommendation]:
-    """Load all historical trades from disk."""
+def _read_json_locked(path: Path) -> list:
+    """Read JSON file with shared lock."""
     _ensure_data_dir()
     try:
-        raw = json.loads(TRADES_FILE.read_text())
+        with open(path, "r") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            try:
+                return json.load(f)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    except (json.JSONDecodeError, FileNotFoundError) as exc:
+        logger.error("Failed to read %s: %s", path, exc)
+        return []
+
+
+def _write_json_locked(path: Path, data: list) -> None:
+    """Write JSON file with exclusive lock."""
+    _ensure_data_dir()
+    with open(path, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            json.dump(data, f, indent=2, default=str)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def load_trades() -> list[TradeRecommendation]:
+    """Load all historical trades from disk."""
+    try:
+        raw = _read_json_locked(TRADES_FILE)
         return [TradeRecommendation(**t) for t in raw]
-    except (json.JSONDecodeError, Exception) as exc:
+    except Exception as exc:
         logger.error("Failed to load trades: %s", exc)
         return []
 
@@ -66,10 +95,17 @@ def update_trade_result(
 
 
 def _write_trades(trades: list[TradeRecommendation]) -> None:
-    _ensure_data_dir()
-    TRADES_FILE.write_text(
-        json.dumps([t.model_dump(mode="json") for t in trades], indent=2, default=str)
+    _write_json_locked(
+        TRADES_FILE,
+        [t.model_dump(mode="json") for t in trades],
     )
+
+
+def _compute_decay_weight(trade_timestamp: datetime) -> float:
+    """Exponential decay weight based on trade age. Recent trades weigh more."""
+    now = datetime.now(timezone.utc)
+    age_days = (now - trade_timestamp).total_seconds() / 86400
+    return math.exp(-0.693 * age_days / DECAY_HALF_LIFE_DAYS)  # ln(2) ~ 0.693
 
 
 def compute_performance() -> PerformanceStats:
@@ -137,8 +173,8 @@ def compute_performance() -> PerformanceStats:
 def compute_learning_adjustments() -> dict[str, float]:
     """Compute per-ticker score multipliers based on historical performance.
 
-    Simple approach: if a ticker historically performs well on news trades,
-    boost its score. If it performs poorly, penalize it.
+    Uses temporal decay: recent trades weigh more than old ones.
+    Also computes per-category adjustments and blends them.
 
     Returns dict of ticker -> multiplier (default 1.0, range 0.5-1.5).
     """
@@ -148,22 +184,59 @@ def compute_learning_adjustments() -> dict[str, float]:
     if len(closed) < 5:
         return {}  # Not enough data to learn from
 
-    ticker_stats: dict[str, list[float]] = {}
+    # ── Per-ticker adjustments (with decay) ──────────────────────
+    ticker_weighted: dict[str, list[tuple[float, float]]] = {}  # ticker -> [(pnl, weight)]
     for t in closed:
         if t.pnl_pct is not None:
-            ticker_stats.setdefault(t.ticker, []).append(t.pnl_pct)
+            w = _compute_decay_weight(t.timestamp)
+            ticker_weighted.setdefault(t.ticker, []).append((t.pnl_pct, w))
 
-    adjustments: dict[str, float] = {}
-    for ticker, pnls in ticker_stats.items():
-        if len(pnls) < 2:
+    ticker_adj: dict[str, float] = {}
+    for ticker, entries in ticker_weighted.items():
+        if len(entries) < 2:
             continue
-        avg = sum(pnls) / len(pnls)
-        win_rate = sum(1 for p in pnls if p > 0) / len(pnls)
+        total_w = sum(w for _, w in entries)
+        if total_w == 0:
+            continue
+        avg = sum(p * w for p, w in entries) / total_w
+        win_rate = sum(w for p, w in entries if p > 0) / total_w
+        mult = 1.0 + (win_rate - 0.5) * 0.5 + min(0.25, max(-0.25, avg / 10))
+        ticker_adj[ticker] = round(max(0.5, min(1.5, mult)), 3)
 
-        # Multiplier: base 1.0, adjusted by win rate and avg pnl
-        # Win rate 70%+ → boost, <40% → penalize
-        multiplier = 1.0 + (win_rate - 0.5) * 0.5 + min(0.25, max(-0.25, avg / 10))
-        adjustments[ticker] = round(max(0.5, min(1.5, multiplier)), 3)
+    # ── Per-category adjustments (with decay) ────────────────────
+    cat_weighted: dict[str, list[tuple[float, float]]] = {}  # category -> [(pnl, weight)]
+    for t in closed:
+        if t.pnl_pct is not None:
+            w = _compute_decay_weight(t.timestamp)
+            cat_weighted.setdefault(t.category, []).append((t.pnl_pct, w))
 
-    logger.info("Learning adjustments for %d tickers", len(adjustments))
+    cat_adj: dict[str, float] = {}
+    for cat, entries in cat_weighted.items():
+        if len(entries) < 3:
+            continue
+        total_w = sum(w for _, w in entries)
+        if total_w == 0:
+            continue
+        avg = sum(p * w for p, w in entries) / total_w
+        win_rate = sum(w for p, w in entries if p > 0) / total_w
+        mult = 1.0 + (win_rate - 0.5) * 0.3 + min(0.15, max(-0.15, avg / 10))
+        cat_adj[cat] = round(max(0.7, min(1.3, mult)), 3)
+
+    # ── Blend: ticker adjustment * category adjustment ───────────
+    from .config import ASSET_BY_TICKER
+    adjustments: dict[str, float] = {}
+    all_tickers = set(ticker_adj.keys())
+    # Also include tickers that have category stats but not enough per-ticker stats
+    for t in closed:
+        if t.ticker not in ticker_adj and t.category in cat_adj:
+            all_tickers.add(t.ticker)
+
+    for ticker in all_tickers:
+        t_mult = ticker_adj.get(ticker, 1.0)
+        asset = ASSET_BY_TICKER.get(ticker)
+        c_mult = cat_adj.get(asset.category, 1.0) if asset else 1.0
+        blended = round(max(0.5, min(1.5, t_mult * c_mult)), 3)
+        adjustments[ticker] = blended
+
+    logger.info("Learning adjustments for %d tickers (%d categories)", len(adjustments), len(cat_adj))
     return adjustments
