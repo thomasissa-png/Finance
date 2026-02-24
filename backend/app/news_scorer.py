@@ -17,6 +17,7 @@ from .config import (
     NEWS_FRESHNESS_PEAK_HOURS,
     NEWS_MAX_AGE_HOURS,
 )
+from .economic_calendar import get_events_context
 from .models import ChainReaction, Direction, NewsItem, ScanType, ScoredNews
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,11 @@ def _build_context_string(market_ctx: dict, scan_type: ScanType) -> str:
         trend_parts.append(f"{name}: 5j={trends['5d']}, 20j={trends['20d']}")
     if trend_parts:
         parts.append("Tendances: " + ", ".join(trend_parts))
+
+    # Economic calendar context
+    cal_ctx = get_events_context()
+    if cal_ctx:
+        parts.append(cal_ctx)
 
     return " | ".join(parts)
 

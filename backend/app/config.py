@@ -246,6 +246,12 @@ EARLY_SIGNAL_FEEDS = [
 
 # ── Source weights: early-signal sources get premium weight ──────
 SOURCE_WEIGHTS: dict[str, float] = {
+    # Phase 0: structured data APIs (premium — donnees chiffrees, pas du texte)
+    "Open-Meteo": 1.15,
+    "open-meteo": 1.15,
+    "CFTC": 1.05,
+    "cftc": 1.05,
+    "Options Flow": 0.95,
     # Phase 1: early-signal (premium — info pas encore pricee)
     "USDA": 1.1,
     "usda": 1.1,

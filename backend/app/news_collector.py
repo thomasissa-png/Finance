@@ -8,6 +8,7 @@ import feedparser
 import yfinance as yf
 
 from .config import ASSETS, DEFAULT_SOURCE_WEIGHT, EARLY_SIGNAL_FEEDS, NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS
+from .data_apis import collect_structured_data
 from .models import NewsItem
 
 logger = logging.getLogger(__name__)
@@ -188,12 +189,20 @@ def _dedup_by_similarity(items: list[NewsItem], threshold: float = 0.6) -> list[
 
 
 def collect_all_news() -> list[NewsItem]:
-    """Aggregate news from all sources, pre-filtered and deduplicated."""
+    """Aggregate news from all sources, pre-filtered and deduplicated.
+
+    Sources (by priority):
+    - Phase 0: Structured data APIs (EIA, Open-Meteo, USDA, GNews, COT, Options)
+    - Phase 1: Early-signal RSS feeds (NOAA, USDA, EIA, gCaptain, etc.)
+    - Phase 2: Yahoo Finance (per-ticker news)
+    - Phase 3: Mainstream RSS (Reuters, CNBC, Investing.com)
+    """
     yf_news = collect_yfinance_news()
     rss_news = collect_rss_news()
     early_news = collect_early_signal_news()
+    structured_news = collect_structured_data()
 
-    all_items = yf_news + rss_news + early_news
+    all_items = structured_news + early_news + yf_news + rss_news
 
     # (#1) Pre-filter old news before sending to Claude
     all_items = _filter_old_news(all_items)
@@ -202,7 +211,7 @@ def collect_all_news() -> list[NewsItem]:
     unique = _dedup_by_similarity(all_items)
 
     logger.info(
-        "Collected %d unique news (%d yfinance, %d rss, %d early-signal, after pre-filter & dedup)",
-        len(unique), len(yf_news), len(rss_news), len(early_news),
+        "Collected %d unique news (%d structured, %d early-signal, %d yfinance, %d rss, after pre-filter & dedup)",
+        len(unique), len(structured_news), len(early_news), len(yf_news), len(rss_news),
     )
     return unique

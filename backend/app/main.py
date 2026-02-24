@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from .backtest import run_backtest, run_parameter_sweep
 from .config import TRIGGER_COOLDOWN_SECONDS
+from .economic_calendar import get_upcoming_events
 from .journal import load_journal, run_daily_journal
 from .learning import (
     compute_learning_adjustments,
@@ -27,7 +28,7 @@ from .learning import (
     update_trade_result,
 )
 from .models import ScanType, TradeResult
-from .scheduler import run_scan
+from .scheduler import run_event_check, run_scan
 
 load_dotenv()
 
@@ -108,10 +109,16 @@ async def lifespan(app: FastAPI):
     # Schedule scans: 07:50 and 14:30 CET
     bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, timezone="Europe/Paris"), id="europe_scan")
     bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, timezone="Europe/Paris"), id="us_scan")
+    # Event-driven scan: check every 30 min for high-impact signals
+    bg_scheduler.add_job(
+        run_event_check,
+        CronTrigger(minute="*/30", timezone="Europe/Paris"),
+        id="event_check",
+    )
     # Daily journal at 22:00 CET — auto-close trades + generate journal
     bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, timezone="Europe/Paris"), id="daily_journal")
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50 and 14:30, journal at 22:00 CET")
+    logger.info("Scheduler started — scans at 07:50 and 14:30, event check every 30min, journal at 22:00 CET")
     yield
     bg_scheduler.shutdown()
 
@@ -302,6 +309,35 @@ def export_journal_csv():
     )
 
 
+# ── Economic calendar endpoints ───────────────────────────────────
+
+
+@app.get("/api/calendar")
+def get_calendar(days: int = 7):
+    """Get upcoming economic events."""
+    events = get_upcoming_events(window_days=days)
+    return [
+        {
+            "name": e.name,
+            "date": e.date.isoformat(),
+            "time_cet": e.time_cet.strftime("%H:%M"),
+            "impact": e.impact,
+            "currency": e.currency,
+            "blocks_trade": e.blocks_trade,
+        }
+        for e in events
+    ]
+
+
+@app.post("/api/scan/event-check")
+def trigger_event_check():
+    """Manually trigger an event-driven scan check."""
+    result = run_event_check()
+    if result is None:
+        return {"triggered": False, "reason": "No high-impact signals detected"}
+    return {"triggered": True, "scan_result": result}
+
+
 # ── (#31) Backtest endpoints ─────────────────────────────────────
 
 
@@ -348,6 +384,11 @@ def health():
     # Check Anthropic API key
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     status["dependencies"]["anthropic_key"] = "configured" if api_key else "missing"
+
+    # Check optional API keys for structured data
+    status["dependencies"]["eia_key"] = "configured" if os.environ.get("EIA_API_KEY") else "not_set (optional)"
+    status["dependencies"]["gnews_key"] = "configured" if os.environ.get("GNEWS_API_KEY") else "not_set (optional)"
+    status["dependencies"]["usda_key"] = "configured" if os.environ.get("USDA_API_KEY") else "not_set (optional)"
 
     # Check data files
     trades_file = DATA_DIR / "trades.json"

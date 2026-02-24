@@ -14,6 +14,7 @@ from .config import (
     TARGET_PERCENT,
     assets_for_session,
 )
+from .economic_calendar import check_event_conflict, get_events_context
 from .models import (
     Direction,
     ScanResult,
@@ -190,6 +191,22 @@ def select_trade(
             has_trade=False,
             reason_no_trade="Aucune news collectee",
             news_analyzed=0,
+            market_context=market_context,
+        )
+
+    # ── Calendar check: block trades near major macro events ──────
+    event_conflict = check_event_conflict()
+    if event_conflict:
+        logger.warning(
+            "TRADE BLOCKED: %s imminent — no edge on macro events",
+            event_conflict.name,
+        )
+        return ScanResult(
+            scan_type=scan_type,
+            timestamp=now,
+            has_trade=False,
+            reason_no_trade=f"Evenement macro imminent: {event_conflict.name} — zero edge, trade bloque",
+            news_analyzed=len(scored_news),
             market_context=market_context,
         )
 

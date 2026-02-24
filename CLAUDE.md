@@ -1,4 +1,4 @@
-# OneShot News Trading System — v2.0 Edge-Detection
+# OneShot News Trading System — v3.0 Full Intelligence Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -19,9 +19,27 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - **Frontend**: React + Vite
 - **Persistence**: `data/trades.json` + `data/journal.json` (flat files, file locking via `fcntl`)
 
-## Data Sources — 3 phases par priorite d'edge
+## Data Sources — 4 phases par priorite d'edge
 
-### Phase 1 : Early-Signal (PRIORITAIRE — info brute, pas encore interpretee)
+### Phase 0 : Structured Data APIs (PRIORITE MAX — donnees chiffrees)
+Module `data_apis.py` — donnees numeriques que Claude peut interpreter precisement :
+- **Open-Meteo** (GRATUIT, no key) : surveillance meteo 8 zones agricoles critiques
+  - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo
+  - Ukraine/Mer Noire (ble), Inde (ble/riz), Golfe du Mexique (petrole offshore)
+  - Asie du Sud-Est (huile palme), Australie (ble)
+  - Alertes : gel, canicule, secheresse (<2mm/7j), vents violents (>100km/h)
+- **EIA API** (cle gratuite `EIA_API_KEY`) : stocks petrole/gaz/distillats hebdo avec chiffres exacts
+- **USDA NASS** (cle gratuite `USDA_API_KEY`) : crop progress, conditions, recoltes
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles
+  - Queries : "drought frost flood crop", "oil sanctions embargo", "port congestion shipping"
+  - "OPEC production cut", "wheat corn harvest", "military strike missile"
+- **CFTC COT** (GRATUIT, no key) : positionnement commerciaux vs speculateurs
+  - Alertes quand positionnement extreme (>20% OI net)
+- **Options Flow** (GRATUIT via yfinance) : put/call ratio extreme, volume spikes
+
+Poids premium : Open-Meteo=1.15, EIA=1.1, USDA=1.1, CFTC=1.05, Options=0.95
+
+### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
 Sources configurees dans `EARLY_SIGNAL_FEEDS` (14 feeds) :
 - **Meteo/Agri** : drought.gov, NOAA CPC, weather.gov (alertes NWS)
 - **USDA/FAO** : rapports recoltes, stocks, previsions mondiales
@@ -29,15 +47,35 @@ Sources configurees dans `EARLY_SIGNAL_FEEDS` (14 feeds) :
 - **Energie** : EIA (stocks petrole/gaz), OilPrice, gCaptain (maritime/shipping)
 - **Banques centrales** : ECB, Federal Reserve, Bank of England (speeches/minutes subtils)
 
-Poids premium : USDA=1.1, NOAA=1.1, EIA=1.1, gCaptain=1.05
-
 ### Phase 2 : Yahoo Finance (yfinance)
-Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API. Collecte parallelisee (ThreadPoolExecutor, 10 workers).
+Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API.
 
 ### Phase 3 : Medias mainstream (info deja traitee par les algos)
 RSS feeds (5 sources) : Reuters, CNBC, Investing.com. Poids reduits : CNBC=0.9, Investing.com=0.7
 
 - **Claude API (Anthropic)**: scoring des news via Sonnet avec tool_use pour structured output + retry exponentiel (max 2 retries). Seul secret requis: `ANTHROPIC_API_KEY`.
+
+## Calendrier Economique
+Module `economic_calendar.py` — bloque les trades avant les evenements macro majeurs :
+- **FOMC** : dates 2025-2026 hardcodees (publies par la Fed)
+- **ECB** : dates 2025-2026 hardcodees
+- **BOE** : dates 2025-2026 hardcodees
+- **NFP** : premier vendredi de chaque mois (genere dynamiquement)
+- **CPI** : ~2eme semaine de chaque mois (approxime)
+- **Fenetre de danger** : 2h avant + 1h apres l'evenement
+- **Action** : si evenement dans la fenetre, le trade est BLOQUE (zero edge sur macro)
+- **Contexte Claude** : les evenements a venir sont injectes dans le prompt
+
+## Scans Evenementiels (reactifs)
+Module `event_scanner.py` — surveillance continue des feeds early-signal :
+- **Cron** : toutes les 30 minutes pendant les heures de trading (07:00-19:30 CET)
+- **Detection** : mots-cles a fort potentiel dans les titres RSS
+  - weather : drought, frost, hurricane, heatwave, flood...
+  - supply_chain : pipeline explosion, port closed, canal blocked, embargo...
+  - geopolitical : military strike, sanctions, nuclear, invasion...
+  - commodity : opec cut, crop failure, stockpile draw, shortage...
+- **Trigger** : si signal detecte → scan complet immediat (respecte cooldown 5min)
+- **Scan type** : avant 14:00 = europe, apres 14:00 = us
 
 ## Scoring — Formule Edge-Weighted (v2.0)
 
@@ -161,8 +199,12 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Schema version: 2
 
 ## Secrets (Replit)
-- Seul secret necessaire: `ANTHROPIC_API_KEY`
-- yfinance et RSS ne necessitent aucune cle
+- **Requis** : `ANTHROPIC_API_KEY`
+- **Optionnels** (gratuits, ameliorent la couverture) :
+  - `EIA_API_KEY` : donnees energie EIA (https://www.eia.gov/opendata/register.php)
+  - `GNEWS_API_KEY` : recherche news ciblee (https://gnews.io/)
+  - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
+- yfinance, Open-Meteo, CFTC COT et RSS ne necessitent aucune cle
 
 ## Deploiement
 - Plateforme cible: Replit
@@ -170,6 +212,6 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Frontend: Vite dev server ou build statique
 
 ## Tests
-- Framework: pytest (107 tests)
-- Lancer: `cd backend && python -m pytest tests/ -v`
-- Couvre: config, models, news_scorer, trade_selector, journal, learning
+- Framework: pytest (150 tests)
+- Lancer: `python -m pytest backend/tests/ -v` (depuis la racine du projet)
+- Couvre: config, models, news_scorer, trade_selector, journal, learning, economic_calendar, data_apis, event_scanner

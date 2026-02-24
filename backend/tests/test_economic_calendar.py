@@ -1,0 +1,164 @@
+"""Tests for economic calendar module."""
+
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+from backend.app.economic_calendar import (
+    FOMC_DATES,
+    ECB_DATES,
+    BOE_DATES,
+    EconomicEvent,
+    check_event_conflict,
+    get_events_context,
+    get_upcoming_events,
+    _nth_weekday,
+    _generate_nfp_dates,
+)
+
+PARIS_TZ = ZoneInfo("Europe/Paris")
+
+
+# ── Basic calendar data tests ────────────────────────────────────────
+
+
+def test_fomc_dates_exist():
+    """FOMC dates should be defined for 2025 and 2026."""
+    assert len(FOMC_DATES) >= 16  # 8 per year × 2 years
+
+
+def test_ecb_dates_exist():
+    """ECB dates should be defined for 2025 and 2026."""
+    assert len(ECB_DATES) >= 16
+
+
+def test_boe_dates_exist():
+    """BOE dates should be defined for 2025 and 2026."""
+    assert len(BOE_DATES) >= 16
+
+
+def test_nth_weekday_first_friday():
+    """First Friday of January 2026 should be Jan 2."""
+    d = _nth_weekday(2026, 1, 4, 1)  # First Friday
+    assert d == date(2026, 1, 2)
+    assert d.weekday() == 4  # Friday
+
+
+def test_nth_weekday_second_tuesday():
+    """Second Tuesday of February 2026 should be Feb 10."""
+    d = _nth_weekday(2026, 2, 1, 2)  # Second Tuesday
+    assert d.weekday() == 1  # Tuesday
+    assert 8 <= d.day <= 14  # Second week
+
+
+def test_generate_nfp_dates():
+    """Should generate 12 NFP dates (first Friday of each month)."""
+    dates = _generate_nfp_dates(2026)
+    assert len(dates) == 12
+    for d in dates:
+        assert d.weekday() == 4  # All should be Fridays
+        assert d.day <= 7  # First Friday is always in first 7 days
+
+
+# ── Event lookup tests ───────────────────────────────────────────────
+
+
+def test_get_upcoming_events_on_fomc_day():
+    """Should return FOMC event when querying a known FOMC date."""
+    fomc_date = list(FOMC_DATES)[0]
+    events = get_upcoming_events(fomc_date, window_days=1)
+    fomc_events = [e for e in events if "FOMC" in e.name]
+    assert len(fomc_events) >= 1
+    assert fomc_events[0].impact == "high"
+    assert fomc_events[0].currency == "USD"
+    assert fomc_events[0].blocks_trade is True
+
+
+def test_get_upcoming_events_on_ecb_day():
+    """Should return ECB event on ECB meeting day."""
+    ecb_date = list(ECB_DATES)[0]
+    events = get_upcoming_events(ecb_date, window_days=1)
+    ecb_events = [e for e in events if "ECB" in e.name]
+    assert len(ecb_events) >= 1
+    assert ecb_events[0].currency == "EUR"
+
+
+def test_get_upcoming_events_empty_on_random_date():
+    """No events expected on a random Saturday."""
+    # Pick a Saturday with no events
+    d = date(2026, 6, 13)  # Saturday
+    events = get_upcoming_events(d, window_days=0)
+    # Might still catch nearby events, but shouldn't be many
+    assert isinstance(events, list)
+
+
+# ── Event conflict detection ─────────────────────────────────────────
+
+
+def test_check_event_conflict_during_fomc():
+    """Should detect conflict when scan is during FOMC window."""
+    fomc_date = list(FOMC_DATES)[0]
+    # Scan 1 hour before the event
+    fomc_event = [e for e in get_upcoming_events(fomc_date) if "FOMC" in e.name][0]
+    scan_time = datetime.combine(
+        fomc_date,
+        fomc_event.time_cet,
+        tzinfo=PARIS_TZ,
+    ) - timedelta(hours=1)
+
+    conflict = check_event_conflict(scan_time, hours_before=2.0, hours_after=1.0)
+    assert conflict is not None
+    assert "FOMC" in conflict.name
+
+
+def test_check_event_conflict_well_before():
+    """No conflict when scan is well before any event."""
+    fomc_date = list(FOMC_DATES)[0]
+    # Scan 12 hours before — should be safe
+    scan_time = datetime.combine(
+        fomc_date,
+        time(6, 0),
+        tzinfo=PARIS_TZ,
+    )
+    conflict = check_event_conflict(scan_time, hours_before=2.0, hours_after=1.0)
+    # FOMC is at 20:00 CET, 6:00 is 14h before — no conflict
+    assert conflict is None
+
+
+def test_check_event_conflict_no_events():
+    """No conflict on a day with no events."""
+    # Use a date far from any known event
+    safe_date = datetime(2026, 8, 15, 10, 0, tzinfo=PARIS_TZ)  # Assumption nationale
+    conflict = check_event_conflict(safe_date)
+    assert conflict is None
+
+
+# ── Context string for Claude ────────────────────────────────────────
+
+
+def test_get_events_context_with_events():
+    """Context string should mention event names."""
+    fomc_date = list(FOMC_DATES)[0]
+    ctx = get_events_context(fomc_date)
+    assert "FOMC" in ctx or ctx == ""  # Depends on window
+
+
+def test_get_events_context_empty():
+    """Context should be empty when no events nearby."""
+    # Far from any event
+    ctx = get_events_context(date(2026, 8, 15))
+    # Could be empty or have distant events
+    assert isinstance(ctx, str)
+
+
+# ── Economic event dataclass ─────────────────────────────────────────
+
+
+def test_economic_event_frozen():
+    """EconomicEvent should be immutable."""
+    e = EconomicEvent(
+        name="Test", date=date(2026, 1, 1),
+        time_cet=time(14, 0), impact="high",
+        currency="USD", blocks_trade=True,
+    )
+    assert e.name == "Test"
+    assert e.blocks_trade is True

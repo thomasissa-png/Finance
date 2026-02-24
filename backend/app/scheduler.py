@@ -1,9 +1,10 @@
-"""Scheduler: triggers scans at 07:50 and 14:30 CET automatically."""
+"""Scheduler: triggers scans at 07:50 and 14:30 CET + event-driven scans every 30 min."""
 
 import logging
 import time
 from zoneinfo import ZoneInfo
 
+from .event_scanner import determine_scan_type, should_trigger_scan
 from .learning import compute_learning_adjustments, save_trade
 from .models import ScanType
 from .news_collector import collect_all_news
@@ -34,6 +35,33 @@ def get_learning_adjustments() -> dict[str, float]:
         _cache_valid = True
         logger.info("Learning cache refreshed: %d adjustments", len(_cached_adjustments))
     return _cached_adjustments
+
+
+def run_event_check() -> dict | None:
+    """Check for high-impact signals and trigger a scan if needed.
+
+    Called every 30 minutes by the scheduler. Only triggers a full scan
+    if high-impact keywords are detected in early-signal feeds.
+    """
+    should_trigger, triggers = should_trigger_scan()
+    if not should_trigger:
+        return None
+
+    logger.info(
+        "EVENT-DRIVEN SCAN: %d high-impact signals detected, triggering scan",
+        len(triggers),
+    )
+
+    scan_type_str = determine_scan_type()
+    scan_type = ScanType(scan_type_str)
+    result = run_scan(scan_type)
+
+    if result.get("has_trade"):
+        logger.info("Event-driven scan produced a trade!")
+    else:
+        logger.info("Event-driven scan: no trade (reason: %s)", result.get("reason_no_trade", "unknown"))
+
+    return result
 
 
 def run_scan(scan_type: ScanType, max_retries: int = 3, existing_trade_ticker: str | None = None) -> dict:
