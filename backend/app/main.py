@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .journal import load_journal, run_daily_journal
 from .learning import (
     compute_learning_adjustments,
     compute_performance,
@@ -43,13 +44,19 @@ def _run_us_scan() -> None:
     _last_scans["us"] = result
 
 
+def _run_daily_journal() -> None:
+    run_daily_journal()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Schedule scans: 07:50 and 14:30 CET
     bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, timezone="Europe/Paris"), id="europe_scan")
     bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, timezone="Europe/Paris"), id="us_scan")
+    # Daily journal at 22:00 CET — auto-close trades + generate journal
+    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, timezone="Europe/Paris"), id="daily_journal")
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50 and 14:30 CET")
+    logger.info("Scheduler started — scans at 07:50 and 14:30, journal at 22:00 CET")
     yield
     bg_scheduler.shutdown()
 
@@ -121,6 +128,26 @@ def get_performance():
 def get_learning():
     """Get current learning adjustments per ticker."""
     return compute_learning_adjustments()
+
+
+@app.get("/api/journal")
+def get_journal():
+    """Get all journal entries."""
+    entries = load_journal()
+    return [e.model_dump(mode="json") for e in entries]
+
+
+@app.get("/api/journal/{date}")
+def get_journal_by_date(date: str):
+    """Get journal entries for a specific date (YYYY-MM-DD)."""
+    entries = load_journal()
+    return [e.model_dump(mode="json") for e in entries if e.date == date]
+
+
+@app.post("/api/journal/trigger")
+def trigger_journal():
+    """Manually trigger the daily journal (for testing)."""
+    return run_daily_journal()
 
 
 @app.get("/api/health")

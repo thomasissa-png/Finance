@@ -81,6 +81,28 @@ class ScanResult(BaseModel):
     news_analyzed: int = 0
 
 
+class JournalEntry(BaseModel):
+    """Daily journal entry for a single trade — generated at 22:00 CET."""
+    date: str  # YYYY-MM-DD
+    scan_type: ScanType
+    news_title: str
+    news_source: str
+    reasoning: str
+    score: float
+    ticker: str
+    asset_name: str
+    direction: Direction
+    entry_time: datetime
+    entry_price: float
+    exit_time: datetime | None = None
+    exit_price: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    result: TradeResult = TradeResult.PENDING
+    pnl_pct: float | None = None
+    review: str = ""  # Post-trade analysis
+
+
 class PerformanceStats(BaseModel):
     """Aggregated performance metrics."""
     total_trades: int = 0

@@ -3,7 +3,7 @@
 ## Architecture
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite
-- **Persistence**: `data/trades.json` (flat file, no DB)
+- **Persistence**: `data/trades.json` + `data/journal.json` (flat files, no DB)
 
 ## Data Sources
 - **Yahoo Finance (yfinance)**: prix temps réel, news par ticker, historique de volatilité. Gratuit, pas de clé API.
@@ -17,6 +17,16 @@
 - **Fenêtres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Clôture**: toutes les positions doivent être fermées avant 20:00 CET. Pas d'overnight.
 - **Univers**: 49 actifs (15 actions Euronext Paris, 4 métaux, 9 forex, 9 commodities, 12 indices)
+
+## Journal quotidien (22h CET)
+- **Scheduler**: job automatique à 22:00 CET chaque jour
+- **Actions**: ferme tous les trades PENDING, récupère les prix réels du jour (high/low/close via yfinance)
+- **Résultat auto**: TP_HIT si le high/low a touché le target, SL_HIT si le stop a été touché, EXPIRED sinon
+- **Persistence**: `data/journal.json` (flat file)
+- **Colonnes**: news, analyse, score, actif, direction, heure/prix entrée, heure/prix sortie, high du jour, résultat, bilan
+- **Learning**: après chaque clôture, les résultats alimentent `compute_learning_adjustments()` pour améliorer les futurs scores
+- **Frontend**: onglet "Journal" avec tableau groupé par date
+- **API**: `GET /api/journal`, `GET /api/journal/{date}`, `POST /api/journal/trigger`
 
 ## Paramètres clés
 - Score minimum: 40/100

@@ -1,10 +1,12 @@
 import React, { useState } from "react";
 import Dashboard from "./components/Dashboard";
+import Journal from "./components/Journal";
 import History from "./components/History";
 import Performance from "./components/Performance";
 
 const TABS = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "journal", label: "Journal" },
   { id: "history", label: "Historique" },
   { id: "performance", label: "Performance" },
 ];
@@ -34,6 +36,7 @@ export default function App() {
       </nav>
 
       {activeTab === "dashboard" && <Dashboard />}
+      {activeTab === "journal" && <Journal />}
       {activeTab === "history" && <History />}
       {activeTab === "performance" && <Performance />}
     </div>
