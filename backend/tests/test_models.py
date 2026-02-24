@@ -53,7 +53,7 @@ def test_trade_recommendation_defaults():
         stop_pct=0.85,
         risk_reward=1.18,
         confidence=75,
-        time_window="09:00 — 13:00",
+        time_window="09:00 — 20:00",
     )
     assert trade.result == TradeResult.PENDING
     assert trade.exit_price is None

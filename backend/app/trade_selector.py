@@ -17,8 +17,8 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 TIME_WINDOWS = {
-    ScanType.EUROPE: "09:00 — 13:00",
-    ScanType.US: "15:30 — 19:30",
+    ScanType.EUROPE: "09:00 — 20:00",
+    ScanType.US: "15:30 — 20:00",
 }
 
 
