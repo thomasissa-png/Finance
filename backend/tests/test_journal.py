@@ -85,7 +85,7 @@ def test_determine_result_long_tp_priority():
     """When both TP and SL could be hit in the same day, TP takes priority."""
     trade = _make_trade(direction=Direction.LONG, entry_price=100, target_price=105, stop_price=97)
     result, exit_price, pnl = _determine_result(trade, day_high=106, day_low=96, close=101)
-    assert result == TradeResult.TP_HIT  # TP checked first
+    assert result == TradeResult.TP_HIT
 
 
 def test_determine_result_short_tp_hit():
@@ -155,6 +155,35 @@ def test_review_expired_none():
     assert "sans mouvement" in review
 
 
+def test_review_with_binary_event():
+    """Binary event warning should appear in review (#24)."""
+    trade = _make_trade(binary_event_warning="Evenement binaire detecte: 'fed' — risque de volatilite extreme")
+    review = _build_review(trade, TradeResult.TP_HIT, 1.5)
+    assert "Objectif atteint" in review
+    assert "binaire" in review.lower()
+
+
+def test_review_with_volume_confirmed():
+    """Volume confirmed should appear in review."""
+    trade = _make_trade(volume_confirmed=True)
+    review = _build_review(trade, TradeResult.TP_HIT, 1.5)
+    assert "Volume confirme" in review
+
+
+def test_review_with_volume_weak():
+    """Weak volume should appear in review."""
+    trade = _make_trade(volume_confirmed=False)
+    review = _build_review(trade, TradeResult.SL_HIT, -0.8)
+    assert "Volume faible" in review
+
+
+def test_review_no_volume_data():
+    """No volume data (None) should not add anything."""
+    trade = _make_trade(volume_confirmed=None)
+    review = _build_review(trade, TradeResult.TP_HIT, 1.5)
+    assert "Volume" not in review
+
+
 # ── load_journal tests ─────────────────────────────────────────
 
 
@@ -193,6 +222,32 @@ def test_load_journal_with_entry():
     assert entries[0].asset_category == "actions_europe"
 
 
+def test_load_journal_with_binary_warning():
+    """Journal entries should preserve binary_event_warning (#24)."""
+    entry = JournalEntry(
+        date="2025-01-15",
+        scan_type=ScanType.EUROPE,
+        news_title="Fed rate decision",
+        news_source="Reuters",
+        news_category="macro",
+        reasoning="Fed expected to raise rates",
+        score=65,
+        ticker="EURUSD=X",
+        asset_name="EUR/USD",
+        asset_category="forex",
+        direction=Direction.SHORT,
+        entry_time=datetime.now(timezone.utc),
+        entry_price=1.08,
+        result=TradeResult.TP_HIT,
+        binary_event_warning="Evenement binaire detecte: 'fed' — risque de volatilite extreme",
+    )
+    raw = [entry.model_dump(mode="json")]
+    with _with_temp_file(raw, "backend.app.journal.JOURNAL_FILE"):
+        entries = load_journal()
+    assert entries[0].binary_event_warning is not None
+    assert "fed" in entries[0].binary_event_warning
+
+
 # ── run_daily_journal integration test ─────────────────────────
 
 
@@ -200,7 +255,8 @@ def test_run_daily_journal_no_pending():
     """No pending trades → empty journal output."""
     with _with_temp_file([], "backend.app.journal.JOURNAL_FILE"), \
          patch("backend.app.journal.load_trades", return_value=[]), \
-         patch("backend.app.journal.compute_learning_adjustments", return_value={}):
+         patch("backend.app.journal.compute_learning_adjustments", return_value={}), \
+         patch("backend.app.journal.invalidate_learning_cache"):
         result = run_daily_journal()
     assert result == []
 
@@ -214,13 +270,14 @@ def test_run_daily_journal_with_pending_trade():
          patch("backend.app.journal.load_trades", return_value=[trade]), \
          patch("backend.app.journal._fetch_day_prices", return_value=(810.0, 795.0, 805.0)), \
          patch("backend.app.journal.update_trade_result") as mock_update, \
-         patch("backend.app.journal.compute_learning_adjustments", return_value={}):
+         patch("backend.app.journal.compute_learning_adjustments", return_value={}), \
+         patch("backend.app.journal.invalidate_learning_cache"):
         result = run_daily_journal()
 
     assert len(result) == 1
     entry = result[0]
     assert entry["ticker"] == "MC.PA"
-    assert entry["result"] == "TP_HIT"  # day_high 810 > target 808
+    assert entry["result"] == "TP_HIT"
     assert entry["day_high"] == 810.0
     assert entry["day_low"] == 795.0
     assert entry["news_title"] == "LVMH beats earnings estimates"
@@ -234,7 +291,6 @@ def test_run_daily_journal_dedup():
     now = datetime.now(timezone.utc)
     trade = _make_trade(timestamp=now, result=TradeResult.PENDING)
 
-    # Simulate existing journal entry for same trade
     existing_entry = JournalEntry(
         date=now.strftime("%Y-%m-%d"),
         scan_type=ScanType.EUROPE,
@@ -253,7 +309,29 @@ def test_run_daily_journal_dedup():
 
     with _with_temp_file(existing_raw, "backend.app.journal.JOURNAL_FILE"), \
          patch("backend.app.journal.load_trades", return_value=[trade]), \
-         patch("backend.app.journal.compute_learning_adjustments", return_value={}):
+         patch("backend.app.journal.compute_learning_adjustments", return_value={}), \
+         patch("backend.app.journal.invalidate_learning_cache"):
         result = run_daily_journal()
 
-    assert result == []  # Skipped because already in journal
+    assert result == []
+
+
+def test_run_daily_journal_binary_event_propagated():
+    """Binary event warning should be propagated to journal entry."""
+    now = datetime.now(timezone.utc)
+    trade = _make_trade(
+        timestamp=now,
+        result=TradeResult.PENDING,
+        binary_event_warning="Evenement binaire detecte: 'fomc'",
+    )
+
+    with _with_temp_file([], "backend.app.journal.JOURNAL_FILE"), \
+         patch("backend.app.journal.load_trades", return_value=[trade]), \
+         patch("backend.app.journal._fetch_day_prices", return_value=(810.0, 795.0, 805.0)), \
+         patch("backend.app.journal.update_trade_result"), \
+         patch("backend.app.journal.compute_learning_adjustments", return_value={}), \
+         patch("backend.app.journal.invalidate_learning_cache"):
+        result = run_daily_journal()
+
+    assert len(result) == 1
+    assert result[0]["binary_event_warning"] == "Evenement binaire detecte: 'fomc'"

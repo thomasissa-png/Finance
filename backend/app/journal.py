@@ -11,6 +11,13 @@ import yfinance as yf
 from .learning import load_trades, update_trade_result, compute_learning_adjustments
 from .models import Direction, JournalEntry, TradeRecommendation, TradeResult
 
+# Module-level function for invalidating learning cache
+# Defined here so tests can patch it at backend.app.journal.invalidate_learning_cache
+def invalidate_learning_cache():
+    """Invalidate learning cache — delegates to scheduler module."""
+    from .scheduler import invalidate_learning_cache as _invalidate
+    _invalidate()
+
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
@@ -107,15 +114,30 @@ def _determine_result(
 
 def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: float | None) -> str:
     """Generate a short post-trade review line."""
+    parts = []
+
     if result == TradeResult.TP_HIT:
-        return f"Objectif atteint. Gain de {pnl_pct:+.2f}%. La these etait correcte."
+        parts.append(f"Objectif atteint. Gain de {pnl_pct:+.2f}%. La these etait correcte.")
     elif result == TradeResult.SL_HIT:
-        return f"Stop touche. Perte de {pnl_pct:+.2f}%. Le marche n'a pas suivi la news."
+        parts.append(f"Stop touche. Perte de {pnl_pct:+.2f}%. Le marche n'a pas suivi la news.")
     elif pnl_pct is not None and pnl_pct > 0:
-        return f"Expire en gain ({pnl_pct:+.2f}%). Mouvement insuffisant pour le TP."
+        parts.append(f"Expire en gain ({pnl_pct:+.2f}%). Mouvement insuffisant pour le TP.")
     elif pnl_pct is not None and pnl_pct < 0:
-        return f"Expire en perte ({pnl_pct:+.2f}%). Mouvement contraire mais SL non touche."
-    return "Expire sans mouvement significatif."
+        parts.append(f"Expire en perte ({pnl_pct:+.2f}%). Mouvement contraire mais SL non touche.")
+    else:
+        parts.append("Expire sans mouvement significatif.")
+
+    # (#24) Add binary event warning if present
+    if trade.binary_event_warning:
+        parts.append(f" [{trade.binary_event_warning}]")
+
+    # Add volume info
+    if trade.volume_confirmed is True:
+        parts.append(" Volume confirme.")
+    elif trade.volume_confirmed is False:
+        parts.append(" Volume faible.")
+
+    return "".join(parts)
 
 
 def run_daily_journal() -> list[dict]:
@@ -185,6 +207,7 @@ def run_daily_journal() -> list[dict]:
             result=result,
             pnl_pct=pnl_pct,
             review=review,
+            binary_event_warning=trade.binary_event_warning,
         )
         new_entries.append(entry)
         logger.info(
@@ -197,6 +220,9 @@ def run_daily_journal() -> list[dict]:
     if new_entries:
         existing.extend(new_entries)
         _save_journal(existing)
+
+    # (#26) Invalidate learning cache after journal
+    invalidate_learning_cache()
 
     # Log learning update
     adjustments = compute_learning_adjustments()

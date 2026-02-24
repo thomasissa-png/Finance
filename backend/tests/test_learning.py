@@ -2,15 +2,20 @@
 
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from backend.app.learning import (
+    _compute_decay_weight,
+    _get_decay_half_life,
     compute_learning_adjustments,
     compute_performance,
+    DECAY_HALF_LIFE_DAYS_HIGH,
+    DECAY_HALF_LIFE_DAYS_LOW,
     load_trades,
     save_trade,
+    TRADES_THRESHOLD_FOR_FAST_DECAY,
     update_trade_result,
 )
 from backend.app.models import (
@@ -103,6 +108,89 @@ def test_learning_adjustments_enough_data():
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         adj = compute_learning_adjustments()
-    # MC.PA should have a positive adjustment (5/6 win rate)
     assert "MC.PA" in adj
     assert adj["MC.PA"] > 1.0
+
+
+# ── New tests for v2.0 learning features ────────────────────────
+
+
+def test_adaptive_decay_half_life_low():
+    """With few trades, half-life should be 45 days (#30)."""
+    assert _get_decay_half_life(10) == DECAY_HALF_LIFE_DAYS_LOW
+    assert _get_decay_half_life(199) == DECAY_HALF_LIFE_DAYS_LOW
+
+
+def test_adaptive_decay_half_life_high():
+    """With many trades, half-life should be 30 days (#30)."""
+    assert _get_decay_half_life(200) == DECAY_HALF_LIFE_DAYS_HIGH
+    assert _get_decay_half_life(500) == DECAY_HALF_LIFE_DAYS_HIGH
+
+
+def test_decay_weight_recent_trade():
+    """A trade from just now should have weight close to 1.0."""
+    now = datetime.now(timezone.utc)
+    w = _compute_decay_weight(now, 30.0)
+    assert 0.99 <= w <= 1.0
+
+
+def test_decay_weight_old_trade():
+    """A trade from 60 days ago should have lower weight with 30-day half-life."""
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    w = _compute_decay_weight(old, 30.0)
+    assert 0.2 <= w <= 0.3
+
+
+def test_decay_weight_half_life():
+    """At exactly one half-life, weight should be ~0.5."""
+    one_hl = datetime.now(timezone.utc) - timedelta(days=30)
+    w = _compute_decay_weight(one_hl, 30.0)
+    assert 0.45 <= w <= 0.55
+
+
+def test_learning_adjustments_bounded():
+    """Adjustments should be bounded to [0.5, 1.5]."""
+    trades = []
+    for i in range(10):
+        trades.append(_make_trade(result=TradeResult.TP_HIT, pnl_pct=5.0))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        adj = compute_learning_adjustments()
+    for ticker, mult in adj.items():
+        assert 0.5 <= mult <= 1.5
+
+
+def test_learning_adjustments_losing_ticker():
+    """A consistently losing ticker should get a lower multiplier."""
+    trades = []
+    for i in range(6):
+        trades.append(_make_trade(result=TradeResult.SL_HIT, pnl_pct=-1.0))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        adj = compute_learning_adjustments()
+    if "MC.PA" in adj:
+        assert adj["MC.PA"] < 1.0
+
+
+def test_performance_by_category():
+    """Performance should break down by category."""
+    t1 = _make_trade(result=TradeResult.TP_HIT, pnl_pct=1.2, category="forex")
+    t2 = _make_trade(result=TradeResult.SL_HIT, pnl_pct=-0.8, category="indices")
+    raw = [t.model_dump(mode="json") for t in [t1, t2]]
+    with _with_temp_trades(raw):
+        stats = compute_performance()
+    assert "forex" in stats.by_category
+    assert "indices" in stats.by_category
+    assert stats.by_category["forex"]["wins"] == 1
+    assert stats.by_category["indices"]["wins"] == 0
+
+
+def test_performance_by_scan_type():
+    """Performance should break down by scan type."""
+    t1 = _make_trade(scan_type=ScanType.EUROPE, result=TradeResult.TP_HIT, pnl_pct=1.0)
+    t2 = _make_trade(scan_type=ScanType.US, result=TradeResult.SL_HIT, pnl_pct=-0.5)
+    raw = [t.model_dump(mode="json") for t in [t1, t2]]
+    with _with_temp_trades(raw):
+        stats = compute_performance()
+    assert "europe" in stats.by_scan_type
+    assert "us" in stats.by_scan_type

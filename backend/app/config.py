@@ -8,10 +8,51 @@ SCAN_TIMES = {
 }
 
 TARGET_PERCENT = 1.0  # Objectif minimum de mouvement en %
-MIN_RISK_REWARD = 1.0  # Ratio risque/rendement minimum
+MIN_RISK_REWARD = 1.3  # Ratio risque/rendement minimum (#20 — ex 1.0)
 NEWS_MAX_AGE_HOURS = 6  # Ignorer les news de plus de 6h
 NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h
-MIN_SCORE_THRESHOLD = 40  # Score minimum pour recommander un trade (sur 100)
+MIN_SCORE_THRESHOLD = 55  # Score minimum pour recommander un trade (#19 — ex 40)
+
+# ── Source reliability weights (#6) ────────────────────────────
+SOURCE_WEIGHTS: dict[str, float] = {
+    "reuters": 1.0,
+    "Reuters": 1.0,
+    "CNBC": 0.9,
+    "cnbc": 0.9,
+    "Investing.com": 0.7,
+    "investing": 0.7,
+    "Yahoo Finance": 0.8,
+}
+DEFAULT_SOURCE_WEIGHT = 0.75
+
+# ── News category multipliers for calibration (#7) ────────────
+NEWS_CATEGORY_MULTIPLIERS: dict[str, dict[str, float]] = {
+    "earnings":      {"target_mult": 1.15, "stop_mult": 1.0},
+    "macro":         {"target_mult": 1.05, "stop_mult": 1.1},
+    "geopolitical":  {"target_mult": 1.0,  "stop_mult": 1.2},
+    "regulatory":    {"target_mult": 0.95, "stop_mult": 1.1},
+    "m_a":           {"target_mult": 1.2,  "stop_mult": 1.0},
+    "sector":        {"target_mult": 1.0,  "stop_mult": 1.0},
+    "commodity":     {"target_mult": 1.05, "stop_mult": 1.05},
+    "other":         {"target_mult": 1.0,  "stop_mult": 1.0},
+}
+
+# ── Correlation groups (#22) ──────────────────────────────────
+CORRELATION_GROUPS: dict[str, list[str]] = {
+    "energy": ["TTE.PA", "CL=F", "BZ=F", "NG=F"],
+    "gold_safe": ["GC=F", "SI=F", "USDCHF=X"],
+    "risk_on_eu": ["^FCHI", "^GDAXI", "^FTSE", "^IBEX", "^FTSEMIB"],
+    "risk_on_us": ["^GSPC", "^DJI", "^IXIC", "^RUT"],
+    "jpy_carry": ["USDJPY=X", "EURJPY=X", "^N225"],
+    "luxury": ["MC.PA", "RMS.PA", "OR.PA"],
+    "agri": ["ZC=F", "ZW=F", "ZS=F"],
+}
+
+# ── Scan trigger cooldown in seconds (#35) ────────────────────
+TRIGGER_COOLDOWN_SECONDS = 300  # 5 minutes entre deux triggers manuels
+
+# ── Schema version (#42) ──────────────────────────────────────
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)

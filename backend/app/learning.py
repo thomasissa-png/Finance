@@ -14,8 +14,10 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 TRADES_FILE = DATA_DIR / "trades.json"
 
-# Temporal decay: half-life in days. A trade from 30 days ago has weight 0.5.
-DECAY_HALF_LIFE_DAYS = 30.0
+# (#30) Adaptive decay: 45 days when < 200 trades, 30 days when >= 200
+DECAY_HALF_LIFE_DAYS_LOW = 45.0   # When < 200 trades
+DECAY_HALF_LIFE_DAYS_HIGH = 30.0  # When >= 200 trades
+TRADES_THRESHOLD_FOR_FAST_DECAY = 200
 
 
 def _ensure_data_dir() -> None:
@@ -101,11 +103,18 @@ def _write_trades(trades: list[TradeRecommendation]) -> None:
     )
 
 
-def _compute_decay_weight(trade_timestamp: datetime) -> float:
+def _get_decay_half_life(n_closed: int) -> float:
+    """Get adaptive decay half-life (#30)."""
+    if n_closed >= TRADES_THRESHOLD_FOR_FAST_DECAY:
+        return DECAY_HALF_LIFE_DAYS_HIGH
+    return DECAY_HALF_LIFE_DAYS_LOW
+
+
+def _compute_decay_weight(trade_timestamp: datetime, half_life: float) -> float:
     """Exponential decay weight based on trade age. Recent trades weigh more."""
     now = datetime.now(timezone.utc)
     age_days = (now - trade_timestamp).total_seconds() / 86400
-    return math.exp(-0.693 * age_days / DECAY_HALF_LIFE_DAYS)  # ln(2) ~ 0.693
+    return math.exp(-0.693 * age_days / half_life)  # ln(2) ~ 0.693
 
 
 def compute_performance() -> PerformanceStats:
@@ -174,7 +183,7 @@ def compute_learning_adjustments() -> dict[str, float]:
     """Compute per-ticker score multipliers based on historical performance.
 
     Uses temporal decay: recent trades weigh more than old ones.
-    Also computes per-category adjustments and blends them.
+    Also computes per-category, per-hour (#28), and per-news_category (#29) adjustments.
 
     Returns dict of ticker -> multiplier (default 1.0, range 0.5-1.5).
     """
@@ -184,11 +193,14 @@ def compute_learning_adjustments() -> dict[str, float]:
     if len(closed) < 5:
         return {}  # Not enough data to learn from
 
+    # (#30) Adaptive decay
+    half_life = _get_decay_half_life(len(closed))
+
     # ── Per-ticker adjustments (with decay) ──────────────────────
     ticker_weighted: dict[str, list[tuple[float, float]]] = {}  # ticker -> [(pnl, weight)]
     for t in closed:
         if t.pnl_pct is not None:
-            w = _compute_decay_weight(t.timestamp)
+            w = _compute_decay_weight(t.timestamp, half_life)
             ticker_weighted.setdefault(t.ticker, []).append((t.pnl_pct, w))
 
     ticker_adj: dict[str, float] = {}
@@ -207,7 +219,7 @@ def compute_learning_adjustments() -> dict[str, float]:
     cat_weighted: dict[str, list[tuple[float, float]]] = {}  # category -> [(pnl, weight)]
     for t in closed:
         if t.pnl_pct is not None:
-            w = _compute_decay_weight(t.timestamp)
+            w = _compute_decay_weight(t.timestamp, half_life)
             cat_weighted.setdefault(t.category, []).append((t.pnl_pct, w))
 
     cat_adj: dict[str, float] = {}
@@ -222,11 +234,47 @@ def compute_learning_adjustments() -> dict[str, float]:
         mult = 1.0 + (win_rate - 0.5) * 0.3 + min(0.15, max(-0.15, avg / 10))
         cat_adj[cat] = round(max(0.7, min(1.3, mult)), 3)
 
-    # ── Blend: ticker adjustment * category adjustment ───────────
+    # ── (#28) Per-hour adjustments ────────────────────────────────
+    hour_weighted: dict[str, list[tuple[float, float]]] = {}  # "europe"/"us" -> [(pnl, weight)]
+    for t in closed:
+        if t.pnl_pct is not None:
+            w = _compute_decay_weight(t.timestamp, half_life)
+            hour_weighted.setdefault(t.scan_type.value, []).append((t.pnl_pct, w))
+
+    hour_adj: dict[str, float] = {}
+    for scan_type, entries in hour_weighted.items():
+        if len(entries) < 3:
+            continue
+        total_w = sum(w for _, w in entries)
+        if total_w == 0:
+            continue
+        win_rate = sum(w for p, w in entries if p > 0) / total_w
+        mult = 1.0 + (win_rate - 0.5) * 0.2
+        hour_adj[scan_type] = round(max(0.8, min(1.2, mult)), 3)
+
+    # ── (#29) Per-news_category adjustments ────────────────────────
+    newscat_weighted: dict[str, list[tuple[float, float]]] = {}
+    for t in closed:
+        if t.pnl_pct is not None and hasattr(t, "news_category"):
+            w = _compute_decay_weight(t.timestamp, half_life)
+            newscat_weighted.setdefault(t.news_category, []).append((t.pnl_pct, w))
+
+    newscat_adj: dict[str, float] = {}
+    for ncat, entries in newscat_weighted.items():
+        if len(entries) < 3:
+            continue
+        total_w = sum(w for _, w in entries)
+        if total_w == 0:
+            continue
+        avg = sum(p * w for p, w in entries) / total_w
+        win_rate = sum(w for p, w in entries if p > 0) / total_w
+        mult = 1.0 + (win_rate - 0.5) * 0.3 + min(0.15, max(-0.15, avg / 10))
+        newscat_adj[ncat] = round(max(0.7, min(1.3, mult)), 3)
+
+    # ── Blend: ticker * asset_cat * news_cat * hour ───────────────
     from .config import ASSET_BY_TICKER
     adjustments: dict[str, float] = {}
     all_tickers = set(ticker_adj.keys())
-    # Also include tickers that have category stats but not enough per-ticker stats
     for t in closed:
         if t.ticker not in ticker_adj and t.category in cat_adj:
             all_tickers.add(t.ticker)
@@ -235,8 +283,28 @@ def compute_learning_adjustments() -> dict[str, float]:
         t_mult = ticker_adj.get(ticker, 1.0)
         asset = ASSET_BY_TICKER.get(ticker)
         c_mult = cat_adj.get(asset.category, 1.0) if asset else 1.0
-        blended = round(max(0.5, min(1.5, t_mult * c_mult)), 3)
-        adjustments[ticker] = blended
 
-    logger.info("Learning adjustments for %d tickers (%d categories)", len(adjustments), len(cat_adj))
+        # (#29) News category blend — average across all news categories seen for this ticker
+        nc_mults = []
+        for t in closed:
+            if t.ticker == ticker and hasattr(t, "news_category") and t.news_category in newscat_adj:
+                nc_mults.append(newscat_adj[t.news_category])
+        nc_mult = sum(nc_mults) / len(nc_mults) if nc_mults else 1.0
+
+        # (#28) Hour blend — use scan type of most recent trade for this ticker
+        h_mult = 1.0
+        recent_scan = None
+        for t in reversed(closed):
+            if t.ticker == ticker:
+                recent_scan = t.scan_type.value
+                break
+        if recent_scan and recent_scan in hour_adj:
+            h_mult = hour_adj[recent_scan]
+
+        # Final blend: 50% ticker, 25% category, 15% news_cat, 10% hour
+        blended = t_mult * 0.5 + c_mult * 0.25 + nc_mult * 0.15 + h_mult * 0.10
+        adjustments[ticker] = round(max(0.5, min(1.5, blended)), 3)
+
+    logger.info("Learning adjustments for %d tickers (%d categories, %d news_cats, %d hours, half_life=%.0fd)",
+                len(adjustments), len(cat_adj), len(newscat_adj), len(hour_adj), half_life)
     return adjustments

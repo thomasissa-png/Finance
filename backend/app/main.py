@@ -1,15 +1,24 @@
 """FastAPI application — backend API for the news trading tool."""
 
+import csv
+import io
+import json
 import logging
+import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
+from .backtest import run_backtest, run_parameter_sweep
+from .config import TRIGGER_COOLDOWN_SECONDS
 from .journal import load_journal, run_daily_journal
 from .learning import (
     compute_learning_adjustments,
@@ -28,20 +37,60 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Store last scan results in memory for fast API access ────────
+# ── (#34) Persist scan cache to disk ──────────────────────────
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+SCANS_CACHE_FILE = DATA_DIR / "last_scans.json"
+
 _last_scans: dict[str, dict] = {}
+
+# (#35) Rate limiting for triggers
+_last_trigger_times: dict[str, float] = {}
+
+
+def _load_scans_cache() -> dict[str, dict]:
+    """Load last scan results from disk (#34)."""
+    try:
+        if SCANS_CACHE_FILE.exists():
+            return json.loads(SCANS_CACHE_FILE.read_text())
+    except (json.JSONDecodeError, Exception) as exc:
+        logger.warning("Failed to load scans cache: %s", exc)
+    return {}
+
+
+def _save_scans_cache(scans: dict[str, dict]) -> None:
+    """Save scan results to disk (#34)."""
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        SCANS_CACHE_FILE.write_text(json.dumps(scans, indent=2, default=str))
+    except Exception as exc:
+        logger.warning("Failed to save scans cache: %s", exc)
+
 
 bg_scheduler = BackgroundScheduler(timezone="Europe/Paris")
 
 
 def _run_europe_scan() -> None:
-    result = run_scan(ScanType.EUROPE)
+    # (#22) Get existing US trade ticker for correlation check
+    existing_ticker = None
+    us_scan = _last_scans.get("us", {})
+    if us_scan.get("has_trade") and us_scan.get("recommendation"):
+        existing_ticker = us_scan["recommendation"].get("ticker")
+
+    result = run_scan(ScanType.EUROPE, existing_trade_ticker=existing_ticker)
     _last_scans["europe"] = result
+    _save_scans_cache(_last_scans)
 
 
 def _run_us_scan() -> None:
-    result = run_scan(ScanType.US)
+    # (#22) Get existing Europe trade ticker for correlation check
+    existing_ticker = None
+    eu_scan = _last_scans.get("europe", {})
+    if eu_scan.get("has_trade") and eu_scan.get("recommendation"):
+        existing_ticker = eu_scan["recommendation"].get("ticker")
+
+    result = run_scan(ScanType.US, existing_trade_ticker=existing_ticker)
     _last_scans["us"] = result
+    _save_scans_cache(_last_scans)
 
 
 def _run_daily_journal() -> None:
@@ -50,6 +99,12 @@ def _run_daily_journal() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _last_scans
+    # (#34) Load cached scans on startup
+    _last_scans = _load_scans_cache()
+    if _last_scans:
+        logger.info("Restored %d cached scan results", len(_last_scans))
+
     # Schedule scans: 07:50 and 14:30 CET
     bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, timezone="Europe/Paris"), id="europe_scan")
     bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, timezone="Europe/Paris"), id="us_scan")
@@ -61,11 +116,25 @@ async def lifespan(app: FastAPI):
     bg_scheduler.shutdown()
 
 
-app = FastAPI(title="OneShot News Trading", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="OneShot News Trading", version="2.0.0", lifespan=lifespan)
+
+# (#36) CORS restriction — localhost + Replit
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+# Add Replit domains if REPL_SLUG is set
+repl_slug = os.environ.get("REPL_SLUG")
+repl_owner = os.environ.get("REPL_OWNER")
+if repl_slug and repl_owner:
+    ALLOWED_ORIGINS.append(f"https://{repl_slug}.{repl_owner}.repl.co")
+    ALLOWED_ORIGINS.append(f"https://{repl_slug}-{repl_owner}.repl.co")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS if repl_slug else ["*"],  # Keep * for local dev
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -83,15 +152,36 @@ def get_latest_scans():
 @app.get("/api/scan/latest/{scan_type}")
 def get_latest_scan(scan_type: str):
     """Get the latest result for a specific scan type."""
-    return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectué"})
+    return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectue"})
 
 
 @app.post("/api/scan/trigger/{scan_type}")
 def trigger_scan(scan_type: str):
-    """Manually trigger a scan (for testing or on-demand use)."""
+    """Manually trigger a scan (with rate-limiting #35)."""
+    # (#35) Rate limiting
+    now = time.time()
+    last_trigger = _last_trigger_times.get(scan_type, 0)
+    if now - last_trigger < TRIGGER_COOLDOWN_SECONDS:
+        remaining = int(TRIGGER_COOLDOWN_SECONDS - (now - last_trigger))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Cooldown actif. Reessayez dans {remaining}s.",
+        )
+
+    _last_trigger_times[scan_type] = now
+
     st = ScanType(scan_type)
-    result = run_scan(st)
+
+    # (#22) Get existing trade ticker from other scan for correlation
+    existing_ticker = None
+    other_scan = "us" if scan_type == "europe" else "europe"
+    other_result = _last_scans.get(other_scan, {})
+    if other_result.get("has_trade") and other_result.get("recommendation"):
+        existing_ticker = other_result["recommendation"].get("ticker")
+
+    result = run_scan(st, existing_trade_ticker=existing_ticker)
     _last_scans[scan_type] = result
+    _save_scans_cache(_last_scans)
     return result
 
 
@@ -150,10 +240,125 @@ def trigger_journal():
     return run_daily_journal()
 
 
+# ── (#38) CSV Export endpoints ────────────────────────────────────
+
+
+@app.get("/api/export/trades")
+def export_trades_csv():
+    """Export all trades as CSV (#38)."""
+    trades = load_trades()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "timestamp", "scan_type", "ticker", "asset_name", "category",
+        "direction", "news_headline", "news_category", "entry_price",
+        "target_price", "stop_price", "target_pct", "stop_pct",
+        "risk_reward", "confidence", "result", "exit_price", "pnl_pct",
+        "binary_event_warning", "volume_confirmed", "pre_move_pct",
+    ])
+    for t in trades:
+        writer.writerow([
+            t.timestamp.isoformat(), t.scan_type.value, t.ticker, t.asset_name,
+            t.category, t.direction.value, t.news_headline, t.news_category,
+            t.entry_price, t.target_price, t.stop_price, t.target_pct, t.stop_pct,
+            t.risk_reward, t.confidence, t.result.value, t.exit_price, t.pnl_pct,
+            t.binary_event_warning, t.volume_confirmed, t.pre_move_pct,
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=trades.csv"},
+    )
+
+
+@app.get("/api/export/journal")
+def export_journal_csv():
+    """Export all journal entries as CSV (#38)."""
+    entries = load_journal()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "date", "scan_type", "news_title", "news_source", "news_category",
+        "score", "ticker", "asset_name", "asset_category", "direction",
+        "entry_time", "entry_price", "exit_time", "exit_price",
+        "day_high", "day_low", "result", "pnl_pct", "review",
+        "binary_event_warning",
+    ])
+    for e in entries:
+        writer.writerow([
+            e.date, e.scan_type.value, e.news_title, e.news_source,
+            e.news_category, e.score, e.ticker, e.asset_name, e.asset_category,
+            e.direction.value, e.entry_time.isoformat() if e.entry_time else "",
+            e.entry_price, e.exit_time.isoformat() if e.exit_time else "",
+            e.exit_price, e.day_high, e.day_low, e.result.value, e.pnl_pct,
+            e.review, e.binary_event_warning,
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=journal.csv"},
+    )
+
+
+# ── (#31) Backtest endpoints ─────────────────────────────────────
+
+
+@app.get("/api/backtest")
+def api_backtest(min_score: int | None = None, min_rr: float | None = None):
+    """Run backtest with optional parameter overrides (#31)."""
+    trades = load_trades()
+    params = {}
+    if min_score is not None:
+        params["min_score"] = min_score
+    if min_rr is not None:
+        params["min_rr"] = min_rr
+    return run_backtest(trades, params if params else None)
+
+
+@app.get("/api/backtest/sweep")
+def api_backtest_sweep():
+    """Run parameter sweep to find optimal settings (#31)."""
+    trades = load_trades()
+    return run_parameter_sweep(trades)
+
+
+# ── (#41) Enhanced health check ──────────────────────────────────
+
+
 @app.get("/api/health")
 def health():
-    return {
+    """Enhanced health check: checks yfinance and API key status (#41)."""
+    status = {
         "status": "ok",
         "time_utc": datetime.now(timezone.utc).isoformat(),
         "scheduled_jobs": [j.id for j in bg_scheduler.get_jobs()],
+        "dependencies": {},
     }
+
+    # Check yfinance
+    try:
+        import yfinance as yf
+        data = yf.Ticker("^GSPC").history(period="1d")
+        status["dependencies"]["yfinance"] = "ok" if not data.empty else "no_data"
+    except Exception as exc:
+        status["dependencies"]["yfinance"] = f"error: {exc}"
+
+    # Check Anthropic API key
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    status["dependencies"]["anthropic_key"] = "configured" if api_key else "missing"
+
+    # Check data files
+    trades_file = DATA_DIR / "trades.json"
+    journal_file = DATA_DIR / "journal.json"
+    status["dependencies"]["trades_file"] = "ok" if trades_file.exists() else "missing"
+    status["dependencies"]["journal_file"] = "ok" if journal_file.exists() else "missing"
+
+    # Overall status
+    if any("error" in str(v) or v == "missing" for v in status["dependencies"].values()
+           if v != "missing"):  # trades/journal files missing is OK on first run
+        if status["dependencies"].get("anthropic_key") == "missing":
+            status["status"] = "degraded"
+
+    return status

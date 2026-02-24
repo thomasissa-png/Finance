@@ -30,6 +30,7 @@ class NewsItem(BaseModel):
     url: str = ""
     published: datetime | None = None
     related_tickers: list[str] = Field(default_factory=list)
+    source_weight: float = 0.75  # (#6) reliability weight of source
 
 
 class ScoredNews(BaseModel):
@@ -45,11 +46,25 @@ class ScoredNews(BaseModel):
 
     @property
     def total_score(self) -> float:
-        return self.surprise * 0.4 + self.freshness * 0.3 + self.directional_clarity * 0.3
+        """Multiplicative score (#3): surprise * freshness_factor * clarity_factor.
+
+        If freshness < 30, score is capped at 20 — stale news is worthless
+        regardless of how surprising it is.
+        """
+        freshness_factor = self.freshness / 100
+        clarity_factor = self.directional_clarity / 100
+        score = self.surprise * freshness_factor * clarity_factor
+        # Stale news cap (#3)
+        if self.freshness < 30:
+            score = min(score, 20)
+        # Apply source reliability weight (#6)
+        score *= self.news.source_weight
+        return round(score, 2)
 
 
 class TradeRecommendation(BaseModel):
     """The single trade output of a scan."""
+    schema_version: int = 2  # (#42)
     scan_type: ScanType
     timestamp: datetime
     ticker: str
@@ -72,6 +87,14 @@ class TradeRecommendation(BaseModel):
     exit_price: float | None = None
     pnl_pct: float | None = None
     closed_at: datetime | None = None
+    # (#4) News déjà pricée detection
+    pre_move_pct: float | None = None  # Movement before scan (vs prev close)
+    # (#13) Gap buffer applied
+    gap_buffer_applied: bool = False
+    # (#24) Binary event warning
+    binary_event_warning: str | None = None
+    # (#10) Volume confirmation
+    volume_confirmed: bool | None = None  # None = no data, True/False = confirmed
 
 
 class ScanResult(BaseModel):
@@ -82,10 +105,13 @@ class ScanResult(BaseModel):
     recommendation: TradeRecommendation | None = None
     reason_no_trade: str = ""
     news_analyzed: int = 0
+    # (#5) Market context included in scoring
+    market_context: dict | None = None
 
 
 class JournalEntry(BaseModel):
     """Daily journal entry for a single trade — generated at 22:00 CET."""
+    schema_version: int = 2  # (#42)
     date: str  # YYYY-MM-DD
     scan_type: ScanType
     news_title: str
@@ -106,6 +132,7 @@ class JournalEntry(BaseModel):
     result: TradeResult = TradeResult.PENDING
     pnl_pct: float | None = None
     review: str = ""  # Post-trade analysis
+    binary_event_warning: str | None = None  # (#24)
 
 
 class PerformanceStats(BaseModel):

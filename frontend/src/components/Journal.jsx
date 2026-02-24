@@ -40,7 +40,6 @@ export default function Journal() {
     try {
       const res = await fetch("/api/journal/trigger", { method: "POST" });
       if (res.ok) {
-        // Reload entries
         const all = await fetch("/api/journal");
         if (all.ok) setEntries(await all.json());
       }
@@ -92,6 +91,9 @@ export default function Journal() {
         >
           {loading ? "Generation..." : "Generer journal (22h)"}
         </button>
+        <a href="/api/export/journal" className="trigger-btn" style={{ textDecoration: "none" }}>
+          Export CSV
+        </a>
       </div>
 
       {sortedDates.map((date) => (
@@ -109,7 +111,7 @@ export default function Journal() {
                   <th>Dir.</th>
                   <th>Entree</th>
                   <th>Sortie</th>
-                  <th>High du jour</th>
+                  <th>High/Low</th>
                   <th>Resultat</th>
                   <th>Bilan</th>
                 </tr>
@@ -199,7 +201,14 @@ export default function Journal() {
                           </div>
                         )}
                       </td>
-                      <td className="journal-review-cell">{e.review}</td>
+                      <td className="journal-review-cell">
+                        {e.review}
+                        {e.binary_event_warning && (
+                          <div className="trade-warning-inline">
+                            {e.binary_event_warning}
+                          </div>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}

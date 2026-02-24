@@ -7,10 +7,18 @@ from datetime import datetime, timezone
 import feedparser
 import yfinance as yf
 
-from .config import ASSETS, RSS_FEEDS
+from .config import ASSETS, DEFAULT_SOURCE_WEIGHT, NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS
 from .models import NewsItem
 
 logger = logging.getLogger(__name__)
+
+
+def _get_source_weight(source: str) -> float:
+    """Return reliability weight for a news source (#6)."""
+    for key, weight in SOURCE_WEIGHTS.items():
+        if key.lower() in source.lower():
+            return weight
+    return DEFAULT_SOURCE_WEIGHT
 
 
 def _fetch_news_for_asset(asset) -> list[NewsItem]:
@@ -29,12 +37,14 @@ def _fetch_news_for_asset(asset) -> list[NewsItem]:
             if pub_ts:
                 published = datetime.fromtimestamp(pub_ts, tz=timezone.utc)
 
+            source = article.get("publisher", "Yahoo Finance")
             items.append(NewsItem(
                 title=title,
-                source=article.get("publisher", "Yahoo Finance"),
+                source=source,
                 url=article.get("link", ""),
                 published=published,
                 related_tickers=[asset.ticker],
+                source_weight=_get_source_weight(source),
             ))
     except Exception as exc:
         logger.warning("yfinance news error for %s: %s", asset.ticker, exc)
@@ -62,6 +72,7 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
     items: list[NewsItem] = []
     try:
         feed = feedparser.parse(feed_url)
+        feed_title = feed.feed.get("title", feed_url)
         for entry in feed.entries[:20]:
             title = entry.get("title", "")
             if not title:
@@ -75,9 +86,10 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
 
             items.append(NewsItem(
                 title=title,
-                source=feed.feed.get("title", feed_url),
+                source=feed_title,
                 url=entry.get("link", ""),
                 published=published,
+                source_weight=_get_source_weight(feed_title),
             ))
     except Exception as exc:
         logger.warning("RSS error for %s: %s", feed_url, exc)
@@ -100,22 +112,72 @@ def collect_rss_news() -> list[NewsItem]:
     return items
 
 
+def _jaccard_similarity(a: str, b: str) -> float:
+    """Jaccard similarity on word sets (#2)."""
+    words_a = set(a.lower().split())
+    words_b = set(b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    union = words_a | words_b
+    return len(intersection) / len(union)
+
+
+def _filter_old_news(items: list[NewsItem]) -> list[NewsItem]:
+    """Pre-filter news older than max age BEFORE sending to Claude (#1)."""
+    now = datetime.now(timezone.utc)
+    filtered = []
+    for item in items:
+        if item.published is not None:
+            age_hours = (now - item.published).total_seconds() / 3600
+            if age_hours > NEWS_MAX_AGE_HOURS:
+                continue
+        filtered.append(item)
+    if len(items) != len(filtered):
+        logger.info("Pre-filtered %d old news (>%dh)", len(items) - len(filtered), NEWS_MAX_AGE_HOURS)
+    return filtered
+
+
+def _dedup_by_similarity(items: list[NewsItem], threshold: float = 0.6) -> list[NewsItem]:
+    """Deduplicate news by Jaccard similarity (#2).
+
+    Keeps the first (highest source weight) version of similar headlines.
+    """
+    # Sort by source_weight desc so we keep higher-quality sources
+    sorted_items = sorted(items, key=lambda x: x.source_weight, reverse=True)
+    unique: list[NewsItem] = []
+    for item in sorted_items:
+        is_dup = False
+        for kept in unique:
+            if _jaccard_similarity(item.title, kept.title) >= threshold:
+                is_dup = True
+                # Merge tickers from duplicate into kept
+                for t in item.related_tickers:
+                    if t not in kept.related_tickers:
+                        kept.related_tickers.append(t)
+                break
+        if not is_dup:
+            unique.append(item)
+    if len(items) != len(unique):
+        logger.info("Deduped %d similar news (Jaccard >= %.1f)", len(items) - len(unique), threshold)
+    return unique
+
+
 def collect_all_news() -> list[NewsItem]:
-    """Aggregate news from all sources, deduplicated."""
+    """Aggregate news from all sources, pre-filtered and deduplicated."""
     yf_news = collect_yfinance_news()
     rss_news = collect_rss_news()
 
     all_items = yf_news + rss_news
-    seen: set[str] = set()
-    unique: list[NewsItem] = []
-    for item in all_items:
-        key = item.title.lower().strip()
-        if key not in seen:
-            seen.add(key)
-            unique.append(item)
+
+    # (#1) Pre-filter old news before sending to Claude
+    all_items = _filter_old_news(all_items)
+
+    # (#2) Smart dedup by Jaccard similarity
+    unique = _dedup_by_similarity(all_items)
 
     logger.info(
-        "Collected %d unique news items (%d yfinance, %d rss)",
+        "Collected %d unique news items (%d yfinance, %d rss, after pre-filter & dedup)",
         len(unique), len(yf_news), len(rss_news),
     )
     return unique

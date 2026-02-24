@@ -13,17 +13,58 @@ from backend.app.models import (
 )
 
 
-def test_scored_news_total_score():
-    news = NewsItem(title="Test", source="test")
+def test_scored_news_total_score_multiplicative():
+    """Score is now multiplicative (#3): surprise * freshness/100 * clarity/100."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
     scored = ScoredNews(
         news=news,
         surprise=80,
-        freshness=60,
+        freshness=100,
         directional_clarity=100,
         direction=Direction.LONG,
     )
-    # 80*0.4 + 60*0.3 + 100*0.3 = 32 + 18 + 30 = 80
+    # 80 * (100/100) * (100/100) * 1.0 = 80
     assert scored.total_score == 80.0
+
+
+def test_scored_news_total_score_freshness_penalty():
+    """Stale news should dramatically reduce score (#3)."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    scored = ScoredNews(
+        news=news,
+        surprise=80,
+        freshness=50,
+        directional_clarity=100,
+        direction=Direction.LONG,
+    )
+    # 80 * (50/100) * (100/100) * 1.0 = 40
+    assert scored.total_score == 40.0
+
+
+def test_scored_news_stale_cap():
+    """When freshness < 30, score is capped at 20 (#3)."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    scored = ScoredNews(
+        news=news,
+        surprise=100,
+        freshness=20,
+        directional_clarity=100,
+        direction=Direction.LONG,
+    )
+    # 100 * (20/100) * (100/100) = 20, but freshness < 30 → capped at 20
+    assert scored.total_score <= 20.0
+
+
+def test_scored_news_source_weight_applied():
+    """Source weight should reduce score for less reliable sources (#6)."""
+    high_weight = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    low_weight = NewsItem(title="Test", source="Blog", source_weight=0.7)
+
+    scored_high = ScoredNews(news=high_weight, surprise=80, freshness=100, directional_clarity=100, direction=Direction.LONG)
+    scored_low = ScoredNews(news=low_weight, surprise=80, freshness=100, directional_clarity=100, direction=Direction.LONG)
+
+    assert scored_high.total_score > scored_low.total_score
+    assert scored_low.total_score == 80.0 * 0.7  # 56
 
 
 def test_scored_news_total_score_zero():
@@ -58,6 +99,10 @@ def test_trade_recommendation_defaults():
     assert trade.result == TradeResult.PENDING
     assert trade.exit_price is None
     assert trade.pnl_pct is None
+    assert trade.schema_version == 2  # (#42)
+    assert trade.pre_move_pct is None  # (#4)
+    assert trade.binary_event_warning is None  # (#24)
+    assert trade.volume_confirmed is None  # (#10)
 
 
 def test_scan_result_no_trade():
@@ -70,6 +115,7 @@ def test_scan_result_no_trade():
     )
     assert result.recommendation is None
     assert result.news_analyzed == 42
+    assert result.market_context is None  # (#5)
 
 
 def test_news_item_defaults():
@@ -77,3 +123,4 @@ def test_news_item_defaults():
     assert item.url == ""
     assert item.published is None
     assert item.related_tickers == []
+    assert item.source_weight == 0.75  # (#6) default weight

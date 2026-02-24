@@ -48,7 +48,12 @@ export default function TradeCard({ scan, label }) {
         <div className="trade-main-row">
           <div>
             <div className="trade-asset">{t.asset_name}</div>
-            <div className="trade-ticker">{t.ticker}</div>
+            <div className="trade-ticker">
+              {t.ticker}
+              {t.news_category && t.news_category !== "other" && (
+                <span className="trade-news-cat-badge">{t.news_category}</span>
+              )}
+            </div>
           </div>
           <span className={`direction-badge ${isLong ? "long" : "short"}`}>
             {isLong ? "LONG" : "SHORT"} {isLong ? "\u2191" : "\u2193"}
@@ -61,6 +66,13 @@ export default function TradeCard({ scan, label }) {
           </div>
         )}
         <div className="catalyst">{t.catalyst}</div>
+
+        {/* (#24) Binary event warning */}
+        {t.binary_event_warning && (
+          <div className="trade-warning">
+            {t.binary_event_warning}
+          </div>
+        )}
 
         <div className="trade-grid">
           <div className="trade-metric">
@@ -97,6 +109,25 @@ export default function TradeCard({ scan, label }) {
             </div>
           </div>
         </div>
+
+        {/* (#10) Volume + (#4) Pre-move info row */}
+        {(t.volume_confirmed != null || t.pre_move_pct != null) && (
+          <div className="trade-info-row">
+            {t.volume_confirmed != null && (
+              <span className={`trade-info-badge ${t.volume_confirmed ? "positive" : "neutral"}`}>
+                Vol: {t.volume_confirmed ? "confirme" : "faible"}
+              </span>
+            )}
+            {t.pre_move_pct != null && (
+              <span className="trade-info-badge neutral">
+                Pre-move: {t.pre_move_pct > 0 ? "+" : ""}{t.pre_move_pct.toFixed(2)}%
+              </span>
+            )}
+            {t.gap_buffer_applied && (
+              <span className="trade-info-badge neutral">Gap buffer</span>
+            )}
+          </div>
+        )}
 
         <div className="confidence-row">
           <span className="confidence-label">Confiance</span>

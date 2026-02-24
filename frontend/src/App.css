@@ -16,6 +16,7 @@
   --red: #ef4444;
   --yellow: #eab308;
   --blue: #3b82f6;
+  --orange: #f97316;
 
   --font-mono: "JetBrains Mono", monospace;
   --font-sans: "Inter", system-ui, sans-serif;
@@ -72,6 +73,8 @@ body {
   gap: 4px;
   margin-bottom: 24px;
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .tab {
@@ -84,6 +87,7 @@ body {
   cursor: pointer;
   border-bottom: 2px solid transparent;
   transition: all 0.15s;
+  white-space: nowrap;
 }
 
 .tab:hover {
@@ -132,6 +136,7 @@ body {
   align-items: center;
   gap: 16px;
   margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
 .trade-asset {
@@ -144,6 +149,22 @@ body {
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.trade-news-cat-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border-radius: 3px;
+  background: rgba(6, 182, 212, 0.1);
+  color: var(--cyan);
+  border: 1px solid rgba(6, 182, 212, 0.2);
 }
 
 .direction-badge {
@@ -175,6 +196,54 @@ body {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-secondary);
+}
+
+/* (#24) Binary event warning */
+.trade-warning {
+  background: rgba(249, 115, 22, 0.1);
+  border: 1px solid rgba(249, 115, 22, 0.3);
+  border-left: 3px solid var(--orange);
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--orange);
+  border-radius: 4px;
+}
+
+.trade-warning-inline {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--orange);
+  font-style: italic;
+}
+
+/* (#10, #4) Trade info badges */
+.trade-info-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.trade-info-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.trade-info-badge.positive {
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--green);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.trade-info-badge.neutral {
+  background: var(--bg-card-hover);
+  color: var(--text-muted);
 }
 
 .trade-grid {
@@ -280,6 +349,7 @@ body {
   display: flex;
   gap: 8px;
   margin-bottom: 24px;
+  flex-wrap: wrap;
 }
 
 .trigger-btn {
@@ -320,6 +390,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 
 .history-table td {
@@ -496,4 +567,155 @@ body {
   border-top-color: var(--cyan);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+/* ── (#39) Responsive Design ─────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .app {
+    padding: 16px 12px;
+  }
+
+  .app-header {
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+  }
+
+  .app-title {
+    font-size: 18px;
+  }
+
+  .tabs {
+    gap: 2px;
+    margin-bottom: 16px;
+  }
+
+  .tab {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  /* Trade card responsive */
+  .trade-card-header {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .trade-card-body {
+    padding: 16px;
+  }
+
+  .trade-asset {
+    font-size: 18px;
+  }
+
+  .trade-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .trade-metric {
+    padding: 8px 4px;
+  }
+
+  .trade-metric-label {
+    font-size: 9px;
+  }
+
+  .trade-metric-value {
+    font-size: 13px;
+  }
+
+  .catalyst {
+    font-size: 13px;
+    padding: 10px 12px;
+  }
+
+  /* Tables: horizontal scroll with all info visible */
+  .history-table,
+  .journal-table {
+    font-size: 11px;
+    min-width: 700px;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 8px 6px;
+  }
+
+  .journal-table th,
+  .journal-table td {
+    padding: 6px 6px;
+  }
+
+  .journal-news-cell {
+    max-width: 140px;
+  }
+
+  .journal-reasoning-cell {
+    max-width: 150px;
+  }
+
+  .journal-review-cell {
+    max-width: 150px;
+  }
+
+  /* Performance grid */
+  .perf-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .perf-card {
+    padding: 12px 8px;
+  }
+
+  .perf-card-value {
+    font-size: 18px;
+  }
+
+  .perf-card-label {
+    font-size: 10px;
+  }
+
+  /* No-trade card */
+  .no-trade {
+    padding: 32px 16px;
+  }
+
+  /* Trigger buttons */
+  .trigger-section {
+    flex-wrap: wrap;
+  }
+
+  .trigger-btn {
+    font-size: 11px;
+    padding: 6px 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .trade-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+  }
+
+  .trade-metric-value {
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .perf-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .confidence-label {
+    min-width: 60px;
+    font-size: 11px;
+  }
+
+  .confidence-value {
+    font-size: 12px;
+  }
 }
