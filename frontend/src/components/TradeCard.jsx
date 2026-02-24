@@ -110,7 +110,42 @@ export default function TradeCard({ scan, label }) {
           </div>
         </div>
 
-        {/* (#10) Volume + (#4) Pre-move info row */}
+        {/* Edge detection info */}
+        {t.edge_score != null && (
+          <div className="trade-edge-row">
+            <span className={`trade-info-badge ${t.edge_score >= 0.4 ? "edge-high" : t.edge_score >= 0.15 ? "edge-mid" : "edge-low"}`}>
+              Edge: {(t.edge_score * 100).toFixed(0)}%
+            </span>
+            {t.transmission_delay != null && (
+              <span className="trade-info-badge neutral">
+                Delai pricing: {t.transmission_delay}/100
+              </span>
+            )}
+            {t.market_awareness != null && (
+              <span className="trade-info-badge neutral">
+                Visibilite: {t.market_awareness}/100
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Chain reactions */}
+        {t.chain_reactions && t.chain_reactions.length > 0 && (
+          <div className="chain-reactions">
+            <div className="chain-reactions-title">Effets de second ordre</div>
+            {t.chain_reactions.map((cr, i) => (
+              <div key={i} className="chain-reaction-item">
+                <span className={`direction-badge ${cr.direction === "LONG" ? "long" : "short"}`} style={{ fontSize: 10, padding: "1px 5px" }}>
+                  {cr.direction}
+                </span>
+                <span className="chain-ticker">{cr.ticker}</span>
+                <span className="chain-reason">{cr.reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Volume + Pre-move info row */}
         {(t.volume_confirmed != null || t.pre_move_pct != null) && (
           <div className="trade-info-row">
             {t.volume_confirmed != null && (

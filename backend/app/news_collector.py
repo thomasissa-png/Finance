@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import feedparser
 import yfinance as yf
 
-from .config import ASSETS, DEFAULT_SOURCE_WEIGHT, NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS
+from .config import ASSETS, DEFAULT_SOURCE_WEIGHT, EARLY_SIGNAL_FEEDS, NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS
 from .models import NewsItem
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,30 @@ def collect_rss_news() -> list[NewsItem]:
     return items
 
 
+def collect_early_signal_news() -> list[NewsItem]:
+    """Fetch news from early-signal feeds (meteo, OSINT, agri, shipping).
+
+    These are Phase 1 sources — raw data before mainstream interpretation.
+    Failures are silently logged (these feeds are best-effort, many may 404).
+    """
+    items: list[NewsItem] = []
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result:
+                    items.extend(result)
+            except Exception as exc:
+                url = futures[future]
+                logger.debug("Early-signal feed unavailable %s: %s", url, exc)
+
+    if items:
+        logger.info("Collected %d early-signal news items", len(items))
+    return items
+
+
 def _jaccard_similarity(a: str, b: str) -> float:
     """Jaccard similarity on word sets (#2)."""
     words_a = set(a.lower().split())
@@ -167,8 +191,9 @@ def collect_all_news() -> list[NewsItem]:
     """Aggregate news from all sources, pre-filtered and deduplicated."""
     yf_news = collect_yfinance_news()
     rss_news = collect_rss_news()
+    early_news = collect_early_signal_news()
 
-    all_items = yf_news + rss_news
+    all_items = yf_news + rss_news + early_news
 
     # (#1) Pre-filter old news before sending to Claude
     all_items = _filter_old_news(all_items)
@@ -177,7 +202,7 @@ def collect_all_news() -> list[NewsItem]:
     unique = _dedup_by_similarity(all_items)
 
     logger.info(
-        "Collected %d unique news items (%d yfinance, %d rss, after pre-filter & dedup)",
-        len(unique), len(yf_news), len(rss_news),
+        "Collected %d unique news (%d yfinance, %d rss, %d early-signal, after pre-filter & dedup)",
+        len(unique), len(yf_news), len(rss_news), len(early_news),
     )
     return unique

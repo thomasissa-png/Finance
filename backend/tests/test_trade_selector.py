@@ -119,10 +119,12 @@ def test_calibrate_trade_rr_varies_with_score():
 def test_calibrate_trade_with_news_category():
     """News category should affect target/stop (#7)."""
     _, _, t_pct_earn, s_pct_earn, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 70, news_category="earnings")
-    _, _, t_pct_geo, s_pct_geo, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 70, news_category="geopolitical")
+    _, _, t_pct_weather, s_pct_weather, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 70, news_category="weather")
 
-    assert t_pct_earn > t_pct_geo
-    assert s_pct_geo > s_pct_earn
+    # Weather should have bigger targets than earnings (our edge is better)
+    assert t_pct_weather > t_pct_earn
+    # Earnings should have wider stops (less conviction)
+    assert s_pct_earn > s_pct_weather
 
 
 def test_calibrate_trade_short_direction():

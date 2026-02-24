@@ -33,32 +33,61 @@ class NewsItem(BaseModel):
     source_weight: float = 0.75  # (#6) reliability weight of source
 
 
+class ChainReaction(BaseModel):
+    """A second-order impact detected from chain reaction analysis."""
+    ticker: str
+    direction: Direction
+    reason: str
+    source_ticker: str  # The primary ticker that triggered this chain
+
+
 class ScoredNews(BaseModel):
     """A news item after LLM scoring."""
     news: NewsItem
     surprise: int = Field(ge=0, le=100)
     freshness: int = Field(ge=0, le=100)
     directional_clarity: int = Field(ge=0, le=100)
+    transmission_delay: int = Field(default=50, ge=0, le=100)  # 0=already priced, 100=nobody saw it
+    market_awareness: int = Field(default=50, ge=0, le=100)    # 0=nobody, 100=everyone
     direction: Direction = Direction.NEUTRAL
     impacted_tickers: list[str] = Field(default_factory=list)
     reasoning: str = ""
-    news_category: str = "other"  # earnings, macro, geopolitical, regulatory, m_a, sector, commodity, other
+    news_category: str = "other"
+    category_score_mult: float = 1.0  # Edge-priority multiplier from config
+    chain_reactions: list[ChainReaction] = Field(default_factory=list)
 
     @property
     def total_score(self) -> float:
-        """Multiplicative score (#3): surprise * freshness_factor * clarity_factor.
+        """Edge-weighted score: surprise * freshness * clarity * edge_factor * category_mult.
 
-        If freshness < 30, score is capped at 20 — stale news is worthless
-        regardless of how surprising it is.
+        La formule privilegie les news NON ENCORE PRICEES :
+        - transmission_delay eleve = le marche n'a pas encore integre -> boost
+        - market_awareness faible = peu de monde a vu -> boost
+        - category_score_mult penalise les earnings/macro, booste commodity/weather
+
+        edge_factor = transmission_delay/100 * (1 - market_awareness/100)
+        Un earnings (delay=5, awareness=95) -> edge_factor = 0.05 * 0.05 = 0.0025
+        Un rapport meteo (delay=80, awareness=10) -> edge_factor = 0.8 * 0.9 = 0.72
         """
         freshness_factor = self.freshness / 100
         clarity_factor = self.directional_clarity / 100
-        score = self.surprise * freshness_factor * clarity_factor
-        # Stale news cap (#3)
+
+        # Edge factor: how much room is left for the market to price this?
+        delay_factor = self.transmission_delay / 100
+        awareness_discount = 1 - (self.market_awareness / 100)
+        edge_factor = delay_factor * awareness_discount
+
+        # Minimum edge floor so even zero-edge news doesn't score exactly 0
+        edge_factor = max(edge_factor, 0.05)
+
+        score = self.surprise * freshness_factor * clarity_factor * edge_factor
+        # Stale news cap
         if self.freshness < 30:
             score = min(score, 20)
         # Apply source reliability weight (#6)
         score *= self.news.source_weight
+        # Apply category edge-priority multiplier
+        score *= self.category_score_mult
         return round(score, 2)
 
 
@@ -95,6 +124,11 @@ class TradeRecommendation(BaseModel):
     binary_event_warning: str | None = None
     # (#10) Volume confirmation
     volume_confirmed: bool | None = None  # None = no data, True/False = confirmed
+    # Edge-detection metrics
+    transmission_delay: int | None = None  # 0=already priced, 100=nobody saw it
+    market_awareness: int | None = None    # 0=nobody, 100=everyone
+    edge_score: float | None = None        # edge_factor used in scoring
+    chain_reactions: list[dict] | None = None  # Second-order impacts detected
 
 
 class ScanResult(BaseModel):

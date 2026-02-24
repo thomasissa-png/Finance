@@ -9,44 +9,93 @@ from datetime import datetime, timezone
 import anthropic
 import yfinance as yf
 
-from .config import ASSETS, NEWS_CATEGORIES, NEWS_FRESHNESS_PEAK_HOURS, NEWS_MAX_AGE_HOURS
-from .models import Direction, NewsItem, ScanType, ScoredNews
+from .config import (
+    ASSETS,
+    CATEGORY_SCORE_MULTIPLIERS,
+    CHAIN_REACTIONS,
+    NEWS_CATEGORIES,
+    NEWS_FRESHNESS_PEAK_HOURS,
+    NEWS_MAX_AGE_HOURS,
+)
+from .models import ChainReaction, Direction, NewsItem, ScanType, ScoredNews
 
 logger = logging.getLogger(__name__)
 
 TICKER_LIST = ", ".join(f"{a.ticker} ({a.name})" for a in ASSETS)
 CATEGORY_LIST = ", ".join(NEWS_CATEGORIES)
 
-SYSTEM_PROMPT = f"""Tu es un analyste expert en news trading avec 20 ans d'experience. Tu evalues l'impact de
-nouvelles financieres sur des actifs specifiques pour du trading intraday.
+SYSTEM_PROMPT = f"""Tu es un speculateur expert en news trading depuis 20 ans, specialise dans la detection
+de DISLOCATIONS NON ENCORE PRICEES par le marche. Ton edge, c'est d'identifier les news qui ne sont
+PAS ENCORE integrees dans les cours — les signaux en avance de phase.
 
 Univers de 49 actifs surveilles :
 {TICKER_LIST}
 
 Pour chaque news, tu dois evaluer :
+
 1. **surprise** (0-100) : A quel point cette information est inattendue par le marche.
-   - 0 = totalement anticipe / sans impact
+   - 0 = totalement anticipe / consensus / sans impact
    - 50 = moderement surprenant
    - 100 = choc total, cygne noir
+
 2. **directional_clarity** (0-100) : A quel point la direction de l'impact est claire.
    - 0 = ambigu, impact dans les deux sens possibles
-   - 100 = direction absolument evidente (hausse OU baisse)
-3. **direction** : "LONG" (haussier pour l'actif), "SHORT" (baissier), ou "NEUTRAL"
-4. **impacted_tickers** : liste des tickers de notre univers les plus directement impactes
-5. **news_category** : categorie de la news parmi : {CATEGORY_LIST}
-6. **reasoning** : explication en 1-2 phrases de ton analyse
+   - 100 = direction absolument evidente
 
-IMPORTANT :
-- Evalue uniquement en fonction de l'impact COURT TERME (intraday, quelques heures)
-- Une news attendue (ex: hausse de taux deja pricee) = surprise faible meme si importante
-- Privilegie les actifs avec l'impact le plus DIRECT (pas indirect ou vague)
-- Si la news ne concerne clairement aucun de nos actifs, mets surprise=0
-- Tiens compte du CONTEXTE DE MARCHE fourni pour ponderer ton analyse (VIX, tendances)"""
+3. **transmission_delay** (0-100) : CRITIQUE — Combien de TEMPS avant que le marche price
+   pleinement cette information ?
+   - 0 = deja price (earnings post-publication, decision de taux attendue, NFP conforme)
+   - 20 = les algos HFT ont deja reagi en millisecondes (CPI, NFP, FOMC decision)
+   - 50 = quelques acteurs ont vu, le gros du marche pas encore (discours secondaire BCE)
+   - 80 = information specialisee, seuls les experts du secteur ont compris l'impact
+         (rapport USDA sur les stocks de ble, alerte secheresse NOAA sur le Midwest)
+   - 100 = personne n'a encore fait le lien avec les actifs concernes
+         (gel au Bresil repere par bulletin meteo local → impact cafe/sucre dans 6-12h)
 
-# (#9) Tool definition for structured output
+4. **market_awareness** (0-100) : Quel % des participants a DEJA VU cette information ?
+   - 0 = personne (bulletin meteo local, rapport technique USDA)
+   - 30 = les specialistes du secteur
+   - 50 = les desk institutionnels
+   - 80 = tous les terminaux Bloomberg
+   - 100 = tout le monde (headline CNN/BBC, trending sur Twitter)
+
+5. **direction** : "LONG", "SHORT", ou "NEUTRAL"
+
+6. **impacted_tickers** : tickers directement impactes de notre univers
+
+7. **news_category** : categorie parmi : {CATEGORY_LIST}
+
+8. **reasoning** : explication en 1-2 phrases — INCLURE l'estimation du delai de pricing
+
+REGLES CRUCIALES — PHILOSOPHIE DU SYSTEME :
+
+- Notre edge est sur les signaux EN AVANCE DE PHASE. On cherche la news que le marche
+  n'a PAS ENCORE pricee, pas celle que tout le monde commente.
+
+- EARNINGS / RESULTATS D'ENTREPRISE : TOUJOURS mettre transmission_delay ≤ 10 et
+  market_awareness ≥ 90. Ces infos sont pricees en pre-market/after-hours par les algos.
+  On n'a ZERO edge dessus sauf profit warning inattendu.
+
+- DECISIONS DE TAUX / NFP / CPI : transmission_delay = 0-5, market_awareness = 100.
+  Les algos reagissent en microsecondes. Ne jamais surestimer notre avantage.
+
+- SIGNAUX PHYSIQUES (meteo, shipping, stocks commodities) : Souvent
+  transmission_delay 60-100 car les traders de commodities physiques sont lents
+  a repercuter sur les futures.
+
+- GEOPOLITIQUE : Evaluer honnêtement — une declaration officielle = deja vue.
+  Un mouvement militaire capte par OSINT = potentiellement en avance de phase.
+
+- EFFETS DE SECOND ORDRE : Si une news impacte un actif A, pense aux impacts
+  indirects sur B et C (ex: gel bresilien → cafe + sucre car memes planteurs).
+  Mets les tickers de second ordre dans impacted_tickers aussi.
+
+- Tiens compte du CONTEXTE DE MARCHE fourni (VIX, tendances) pour ta calibration."""
+
+# (#9) Tool definition for structured output — with edge-detection fields
 SCORING_TOOL = {
     "name": "submit_news_scores",
-    "description": "Submit the analysis scores for each news headline",
+    "description": "Submit the analysis scores for each news headline, including edge-detection metrics",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -58,13 +107,22 @@ SCORING_TOOL = {
                         "index": {"type": "integer", "description": "1-based index of the headline"},
                         "surprise": {"type": "integer", "minimum": 0, "maximum": 100},
                         "directional_clarity": {"type": "integer", "minimum": 0, "maximum": 100},
+                        "transmission_delay": {
+                            "type": "integer", "minimum": 0, "maximum": 100,
+                            "description": "How long before the market fully prices this? 0=already priced, 100=nobody made the link yet",
+                        },
+                        "market_awareness": {
+                            "type": "integer", "minimum": 0, "maximum": 100,
+                            "description": "What % of market participants have already seen this? 0=nobody, 100=everyone",
+                        },
                         "direction": {"type": "string", "enum": ["LONG", "SHORT", "NEUTRAL"]},
                         "impacted_tickers": {"type": "array", "items": {"type": "string"}},
                         "news_category": {"type": "string", "enum": NEWS_CATEGORIES},
                         "reasoning": {"type": "string"},
                     },
-                    "required": ["index", "surprise", "directional_clarity", "direction",
-                                 "impacted_tickers", "news_category", "reasoning"],
+                    "required": ["index", "surprise", "directional_clarity",
+                                 "transmission_delay", "market_awareness",
+                                 "direction", "impacted_tickers", "news_category", "reasoning"],
                 },
             },
         },
@@ -284,15 +342,34 @@ def score_news_batch(
         if news_cat not in NEWS_CATEGORIES:
             news_cat = "other"
 
+        # New edge-detection fields
+        transmission_delay = max(0, min(100, entry.get("transmission_delay", 50)))
+        market_awareness = max(0, min(100, entry.get("market_awareness", 50)))
+
+        # Apply category score multiplier (edge priority)
+        cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
+
+        # Detect chain reactions for impacted tickers
+        impacted = entry.get("impacted_tickers", [])
+        chain_reactions = _detect_chain_reactions(impacted, direction)
+        # Add second-order tickers to impacted list
+        for cr in chain_reactions:
+            if cr.ticker not in impacted:
+                impacted.append(cr.ticker)
+
         scored.append(ScoredNews(
             news=item,
             surprise=max(0, min(100, entry.get("surprise", 0))),
             freshness=freshness,
             directional_clarity=max(0, min(100, entry.get("directional_clarity", 0))),
+            transmission_delay=transmission_delay,
+            market_awareness=market_awareness,
             direction=direction,
-            impacted_tickers=entry.get("impacted_tickers", []),
+            impacted_tickers=impacted,
             reasoning=entry.get("reasoning", ""),
             news_category=news_cat,
+            category_score_mult=cat_mult,
+            chain_reactions=chain_reactions,
         ))
 
     scored.sort(key=lambda s: s.total_score, reverse=True)
@@ -300,3 +377,41 @@ def score_news_batch(
                 len(scored), len(news_items),
                 market_ctx.get("vix", "N/A"), market_ctx.get("regime", "N/A"))
     return scored, market_ctx
+
+
+def _detect_chain_reactions(impacted_tickers: list[str], direction: Direction) -> list[ChainReaction]:
+    """Detect second-order impacts from chain reaction map.
+
+    If news impacts CL=F (oil up), automatically flag TTE.PA (same direction),
+    BZ=F (same direction), etc.
+    """
+    reactions: list[ChainReaction] = []
+    seen = set(impacted_tickers)
+
+    for ticker in impacted_tickers:
+        chains = CHAIN_REACTIONS.get(ticker, [])
+        for chain in chains:
+            target = chain["ticker"]
+            if target in seen:
+                continue
+            seen.add(target)
+
+            # Determine direction for the chain reaction
+            if chain["direction"] == "same":
+                cr_direction = direction
+            elif chain["direction"] == "inverse":
+                cr_direction = Direction.SHORT if direction == Direction.LONG else Direction.LONG
+            else:
+                cr_direction = Direction.NEUTRAL
+
+            reactions.append(ChainReaction(
+                ticker=target,
+                direction=cr_direction,
+                reason=chain["reason"],
+                source_ticker=ticker,
+            ))
+
+    if reactions:
+        logger.info("Chain reactions detected: %s",
+                     ", ".join(f"{cr.source_ticker}->{cr.ticker}" for cr in reactions))
+    return reactions

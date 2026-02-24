@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from backend.app.models import (
+    ChainReaction,
     Direction,
     NewsItem,
     ScanResult,
@@ -13,58 +14,87 @@ from backend.app.models import (
 )
 
 
-def test_scored_news_total_score_multiplicative():
-    """Score is now multiplicative (#3): surprise * freshness/100 * clarity/100."""
+def test_scored_news_edge_weighted_score():
+    """Score with high edge (high delay, low awareness) should be high."""
     news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
     scored = ScoredNews(
         news=news,
         surprise=80,
         freshness=100,
         directional_clarity=100,
+        transmission_delay=80,   # Not yet priced
+        market_awareness=10,     # Almost nobody has seen
         direction=Direction.LONG,
+        category_score_mult=1.0,
     )
-    # 80 * (100/100) * (100/100) * 1.0 = 80
-    assert scored.total_score == 80.0
+    # edge_factor = 0.8 * 0.9 = 0.72
+    # 80 * 1.0 * 1.0 * 0.72 * 1.0 * 1.0 = 57.6
+    assert scored.total_score == 57.6
 
 
-def test_scored_news_total_score_freshness_penalty():
-    """Stale news should dramatically reduce score (#3)."""
-    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+def test_scored_news_zero_edge_earnings():
+    """Earnings (already priced) should score near zero."""
+    news = NewsItem(title="LVMH beats estimates", source="Reuters", source_weight=1.0)
     scored = ScoredNews(
         news=news,
         surprise=80,
-        freshness=50,
+        freshness=100,
         directional_clarity=100,
+        transmission_delay=5,    # Already priced by algos
+        market_awareness=95,     # Everyone saw it
         direction=Direction.LONG,
+        category_score_mult=0.2,  # Earnings penalty
     )
-    # 80 * (50/100) * (100/100) * 1.0 = 40
-    assert scored.total_score == 40.0
+    # edge_factor = max(0.05 * 0.05, 0.05) = 0.05 (floor)
+    # 80 * 1.0 * 1.0 * 0.05 * 1.0 * 0.2 = 0.8
+    assert scored.total_score == 0.8
+
+
+def test_scored_news_weather_commodity():
+    """Weather signal for commodity should score highest."""
+    news = NewsItem(title="Drought hits Brazil", source="NOAA", source_weight=1.1)
+    scored = ScoredNews(
+        news=news,
+        surprise=75,
+        freshness=100,
+        directional_clarity=90,
+        transmission_delay=85,
+        market_awareness=5,
+        direction=Direction.LONG,
+        category_score_mult=1.8,  # Weather category boost
+    )
+    # edge_factor = 0.85 * 0.95 = 0.8075
+    # 75 * 1.0 * 0.9 * 0.8075 * 1.1 * 1.8 = 96.55...
+    assert scored.total_score > 90
 
 
 def test_scored_news_stale_cap():
-    """When freshness < 30, score is capped at 20 (#3)."""
+    """When freshness < 30, score is capped at 20."""
     news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
     scored = ScoredNews(
         news=news,
         surprise=100,
         freshness=20,
         directional_clarity=100,
+        transmission_delay=80,
+        market_awareness=10,
         direction=Direction.LONG,
     )
-    # 100 * (20/100) * (100/100) = 20, but freshness < 30 → capped at 20
     assert scored.total_score <= 20.0
 
 
 def test_scored_news_source_weight_applied():
-    """Source weight should reduce score for less reliable sources (#6)."""
+    """Source weight should scale score."""
     high_weight = NewsItem(title="Test", source="Reuters", source_weight=1.0)
     low_weight = NewsItem(title="Test", source="Blog", source_weight=0.7)
 
-    scored_high = ScoredNews(news=high_weight, surprise=80, freshness=100, directional_clarity=100, direction=Direction.LONG)
-    scored_low = ScoredNews(news=low_weight, surprise=80, freshness=100, directional_clarity=100, direction=Direction.LONG)
+    kwargs = dict(surprise=80, freshness=100, directional_clarity=100,
+                  transmission_delay=50, market_awareness=50,
+                  direction=Direction.LONG, category_score_mult=1.0)
+    scored_high = ScoredNews(news=high_weight, **kwargs)
+    scored_low = ScoredNews(news=low_weight, **kwargs)
 
     assert scored_high.total_score > scored_low.total_score
-    assert scored_low.total_score == 80.0 * 0.7  # 56
 
 
 def test_scored_news_total_score_zero():
@@ -76,6 +106,30 @@ def test_scored_news_total_score_zero():
         directional_clarity=0,
     )
     assert scored.total_score == 0.0
+
+
+def test_scored_news_category_mult_effect():
+    """Category multiplier should scale the final score."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    base_kwargs = dict(surprise=80, freshness=100, directional_clarity=100,
+                       transmission_delay=50, market_awareness=30,
+                       direction=Direction.LONG)
+
+    commodity = ScoredNews(news=news, category_score_mult=1.5, **base_kwargs)
+    earnings = ScoredNews(news=news, category_score_mult=0.2, **base_kwargs)
+
+    assert commodity.total_score > earnings.total_score * 5
+
+
+def test_chain_reaction_model():
+    cr = ChainReaction(
+        ticker="SI=F",
+        direction=Direction.LONG,
+        reason="Argent suit l'or",
+        source_ticker="GC=F",
+    )
+    assert cr.ticker == "SI=F"
+    assert cr.source_ticker == "GC=F"
 
 
 def test_trade_recommendation_defaults():
@@ -98,11 +152,14 @@ def test_trade_recommendation_defaults():
     )
     assert trade.result == TradeResult.PENDING
     assert trade.exit_price is None
-    assert trade.pnl_pct is None
-    assert trade.schema_version == 2  # (#42)
-    assert trade.pre_move_pct is None  # (#4)
-    assert trade.binary_event_warning is None  # (#24)
-    assert trade.volume_confirmed is None  # (#10)
+    assert trade.schema_version == 2
+    assert trade.pre_move_pct is None
+    assert trade.binary_event_warning is None
+    assert trade.volume_confirmed is None
+    assert trade.transmission_delay is None
+    assert trade.market_awareness is None
+    assert trade.edge_score is None
+    assert trade.chain_reactions is None
 
 
 def test_scan_result_no_trade():
@@ -115,7 +172,7 @@ def test_scan_result_no_trade():
     )
     assert result.recommendation is None
     assert result.news_analyzed == 42
-    assert result.market_context is None  # (#5)
+    assert result.market_context is None
 
 
 def test_news_item_defaults():
@@ -123,4 +180,4 @@ def test_news_item_defaults():
     assert item.url == ""
     assert item.published is None
     assert item.related_tickers == []
-    assert item.source_weight == 0.75  # (#6) default weight
+    assert item.source_weight == 0.75

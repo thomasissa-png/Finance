@@ -4,7 +4,10 @@ from backend.app.config import (
     ASSETS,
     ASSET_BY_TICKER,
     CATEGORIES,
+    CATEGORY_SCORE_MULTIPLIERS,
+    CHAIN_REACTIONS,
     CORRELATION_GROUPS,
+    EARLY_SIGNAL_FEEDS,
     MIN_RISK_REWARD,
     MIN_SCORE_THRESHOLD,
     NEWS_CATEGORY_MULTIPLIERS,
@@ -98,7 +101,13 @@ def test_news_category_multipliers():
     assert "earnings" in NEWS_CATEGORY_MULTIPLIERS
     assert "macro" in NEWS_CATEGORY_MULTIPLIERS
     assert "geopolitical" in NEWS_CATEGORY_MULTIPLIERS
-    assert NEWS_CATEGORY_MULTIPLIERS["earnings"]["target_mult"] > 1.0
+    assert "weather" in NEWS_CATEGORY_MULTIPLIERS
+    assert "supply_chain" in NEWS_CATEGORY_MULTIPLIERS
+    # Earnings now have small targets (low conviction), wide stops
+    assert NEWS_CATEGORY_MULTIPLIERS["earnings"]["target_mult"] < 1.0
+    assert NEWS_CATEGORY_MULTIPLIERS["earnings"]["stop_mult"] > 1.0
+    # Weather has large targets (strong conviction)
+    assert NEWS_CATEGORY_MULTIPLIERS["weather"]["target_mult"] > 1.2
     assert NEWS_CATEGORY_MULTIPLIERS["geopolitical"]["stop_mult"] > 1.0
 
 
@@ -118,3 +127,55 @@ def test_trigger_cooldown():
 def test_schema_version():
     """Schema version should be 2 (#42)."""
     assert SCHEMA_VERSION == 2
+
+
+# ── Edge-priority scoring tests ─────────────────────────────────
+
+
+def test_category_score_multipliers_penalize_earnings():
+    """Earnings should be heavily penalized."""
+    assert CATEGORY_SCORE_MULTIPLIERS["earnings"] <= 0.3
+    assert CATEGORY_SCORE_MULTIPLIERS["macro"] <= 0.4
+
+
+def test_category_score_multipliers_boost_weather():
+    """Weather / commodity should be boosted."""
+    assert CATEGORY_SCORE_MULTIPLIERS["weather"] >= 1.5
+    assert CATEGORY_SCORE_MULTIPLIERS["commodity"] >= 1.3
+    assert CATEGORY_SCORE_MULTIPLIERS["supply_chain"] >= 1.3
+
+
+def test_category_score_multipliers_geopolitical():
+    """Geopolitical should have a decent multiplier."""
+    assert CATEGORY_SCORE_MULTIPLIERS["geopolitical"] >= 1.0
+
+
+def test_early_signal_feeds_exist():
+    """Early-signal feeds should be configured."""
+    assert len(EARLY_SIGNAL_FEEDS) >= 10
+    # Should include weather, USDA, geopolitical sources
+    feeds_joined = " ".join(EARLY_SIGNAL_FEEDS)
+    assert "drought" in feeds_joined or "weather" in feeds_joined
+    assert "usda" in feeds_joined.lower() or "fao" in feeds_joined.lower()
+    assert "eia.gov" in feeds_joined
+
+
+def test_source_weights_early_signal_premium():
+    """Early-signal sources should have premium weights."""
+    assert SOURCE_WEIGHTS.get("USDA", 0) >= 1.0
+    assert SOURCE_WEIGHTS.get("NOAA", 0) >= 1.0
+    assert SOURCE_WEIGHTS.get("eia.gov", 0) >= 1.0
+
+
+def test_chain_reactions_defined():
+    """Chain reactions should be defined for key commodities."""
+    assert "CL=F" in CHAIN_REACTIONS  # Oil
+    assert "GC=F" in CHAIN_REACTIONS  # Gold
+    assert "KC=F" in CHAIN_REACTIONS  # Coffee
+    assert "ZC=F" in CHAIN_REACTIONS  # Corn
+    # Oil should trigger TTE.PA
+    oil_chains = [c["ticker"] for c in CHAIN_REACTIONS["CL=F"]]
+    assert "TTE.PA" in oil_chains
+    # Gold should trigger silver
+    gold_chains = [c["ticker"] for c in CHAIN_REACTIONS["GC=F"]]
+    assert "SI=F" in gold_chains

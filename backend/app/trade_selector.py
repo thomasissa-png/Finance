@@ -315,6 +315,13 @@ def select_trade(
             gap_buffer_applied=gap_buffer_applied,
             binary_event_warning=binary_warning,
             volume_confirmed=volume_confirmed,
+            transmission_delay=best_news.transmission_delay,
+            market_awareness=best_news.market_awareness,
+            edge_score=round(
+                (best_news.transmission_delay / 100)
+                * (1 - best_news.market_awareness / 100), 4
+            ),
+            chain_reactions=[cr.model_dump() for cr in best_news.chain_reactions] if best_news.chain_reactions else None,
         )
 
         return ScanResult(

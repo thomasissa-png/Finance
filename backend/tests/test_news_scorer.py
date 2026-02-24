@@ -70,7 +70,7 @@ def test_freshness_linear_decay():
 
 
 def test_scoring_tool_schema():
-    """Verify the tool_use schema is well-formed (#9)."""
+    """Verify the tool_use schema includes edge-detection fields."""
     assert SCORING_TOOL["name"] == "submit_news_scores"
     schema = SCORING_TOOL["input_schema"]
     assert schema["type"] == "object"
@@ -78,6 +78,8 @@ def test_scoring_tool_schema():
     items_schema = schema["properties"]["scores"]["items"]
     assert "surprise" in items_schema["properties"]
     assert "directional_clarity" in items_schema["properties"]
+    assert "transmission_delay" in items_schema["properties"]
+    assert "market_awareness" in items_schema["properties"]
     assert "direction" in items_schema["properties"]
     assert items_schema["properties"]["direction"]["enum"] == ["LONG", "SHORT", "NEUTRAL"]
 
@@ -108,10 +110,13 @@ def test_build_context_string_no_data():
 
 
 def test_scoring_tool_news_categories():
-    """Verify tool schema includes all news categories."""
+    """Verify tool schema includes all news categories including new ones."""
     items_schema = SCORING_TOOL["input_schema"]["properties"]["scores"]["items"]
     news_cat_enum = items_schema["properties"]["news_category"]["enum"]
     assert "earnings" in news_cat_enum
     assert "macro" in news_cat_enum
     assert "geopolitical" in news_cat_enum
+    assert "weather" in news_cat_enum
+    assert "supply_chain" in news_cat_enum
+    assert "central_bank_subtle" in news_cat_enum
     assert "other" in news_cat_enum
