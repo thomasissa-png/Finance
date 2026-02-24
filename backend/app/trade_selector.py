@@ -175,6 +175,28 @@ def _calibrate_trade(
     )
 
 
+def _build_scored_news_log(scored_news: list[ScoredNews]) -> list[dict]:
+    """Build a serializable log of all scored news for journal tracing."""
+    log = []
+    for sn in scored_news:
+        log.append({
+            "title": sn.news.title,
+            "source": sn.news.source,
+            "direction": sn.direction.value,
+            "total_score": sn.total_score,
+            "surprise": sn.surprise,
+            "freshness": sn.freshness,
+            "directional_clarity": sn.directional_clarity,
+            "transmission_delay": sn.transmission_delay,
+            "market_awareness": sn.market_awareness,
+            "news_category": sn.news_category,
+            "category_score_mult": sn.category_score_mult,
+            "impacted_tickers": sn.impacted_tickers,
+            "reasoning": sn.reasoning,
+        })
+    return log
+
+
 def select_trade(
     scored_news: list[ScoredNews],
     scan_type: ScanType,
@@ -183,6 +205,8 @@ def select_trade(
     market_context: dict | None = None,
 ) -> ScanResult:
     """Pick the single best trade from scored news.
+
+    v3: Enriched with full decision trace for journal learning.
 
     Args:
         scored_news: News scored by the LLM, sorted by total_score desc.
@@ -195,6 +219,11 @@ def select_trade(
         ScanResult with either a trade recommendation or a pass.
     """
     now = datetime.now(timezone.utc)
+    adjustments = learning_adjustments or {}
+
+    # Build the full scored news log for journal (all Claude reasoning)
+    all_scored_log = _build_scored_news_log(scored_news) if scored_news else None
+    rejection_log: list[dict] = []
 
     if not scored_news:
         return ScanResult(
@@ -204,6 +233,7 @@ def select_trade(
             reason_no_trade="Aucune news collectee",
             news_analyzed=0,
             market_context=market_context,
+            learning_state=adjustments if adjustments else None,
         )
 
     # ── Calendar check: block trades near major macro events ──────
@@ -220,19 +250,29 @@ def select_trade(
             reason_no_trade=f"Evenement macro imminent: {event_conflict.name} — zero edge, trade bloque",
             news_analyzed=len(scored_news),
             market_context=market_context,
+            all_scored_news=all_scored_log,
+            learning_state=adjustments if adjustments else None,
         )
 
     # Session-eligible tickers
     eligible_tickers = assets_for_session(scan_type.value)
 
     # Apply learning adjustments to scores
-    adjustments = learning_adjustments or {}
     candidates: list[tuple[ScoredNews, float]] = []
 
     for sn in scored_news:
         if sn.direction == Direction.NEUTRAL:
+            rejection_log.append({
+                "title": sn.news.title, "ticker": sn.impacted_tickers[:1],
+                "reason": "Direction NEUTRAL", "score": sn.total_score,
+            })
             continue
         if sn.total_score < MIN_SCORE_THRESHOLD:
+            rejection_log.append({
+                "title": sn.news.title, "ticker": sn.impacted_tickers[:1],
+                "reason": f"Score {sn.total_score:.1f} < seuil {MIN_SCORE_THRESHOLD}",
+                "score": sn.total_score,
+            })
             continue
 
         # Find the best matching ticker from our universe AND eligible for this session
@@ -243,6 +283,11 @@ def select_trade(
                 break
 
         if not best_ticker:
+            rejection_log.append({
+                "title": sn.news.title, "ticker": sn.impacted_tickers[:3],
+                "reason": f"Aucun ticker eligible pour session {scan_type.value}",
+                "score": sn.total_score,
+            })
             continue
 
         # Apply learning multiplier
@@ -260,38 +305,61 @@ def select_trade(
             reason_no_trade="Aucune news avec un score suffisant ou une direction claire",
             news_analyzed=len(scored_news),
             market_context=market_context,
+            all_scored_news=all_scored_log,
+            rejection_log=rejection_log if rejection_log else None,
+            learning_state=adjustments if adjustments else None,
         )
 
+    # Build decision summary — track why we chose the winner
+    decision_parts = [f"{len(candidates)} candidats apres filtrage initial sur {len(scored_news)} news"]
+
     # Try candidates until we find one with a valid price and R/R
-    for best_news, best_score in candidates:
+    for rank, (best_news, best_score) in enumerate(candidates):
         ticker = next(t for t in best_news.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers)
         asset = ASSET_BY_TICKER[ticker]
+        raw_score = best_news.total_score
+        multiplier = adjustments.get(ticker, 1.0)
 
         # (#22) Correlation check
         if _check_correlation(ticker, existing_trade_ticker):
+            reason = f"Correle avec trade existant {existing_trade_ticker}"
             logger.info("Skipping %s: correlated with existing trade %s", ticker, existing_trade_ticker)
+            rejection_log.append({
+                "title": best_news.news.title, "ticker": [ticker],
+                "reason": reason, "score": raw_score, "adjusted_score": best_score,
+            })
             continue
 
         price, avg_range, prev_close, volume_ratio = _get_price_and_range(ticker)
         if price is None:
+            rejection_log.append({
+                "title": best_news.news.title, "ticker": [ticker],
+                "reason": "Prix indisponible (yfinance)", "score": raw_score,
+            })
             continue
 
         # (#4) News déjà pricée detection — direction-aware
-        # Only skip if price already moved IN THE SAME DIRECTION as our trade
-        # A counter-move is actually a better entry, not a reason to skip
         target_move_expected = avg_range * (0.25 + (best_news.total_score / 100) * 0.45)
         pre_move_pct = _detect_pre_move(price, prev_close, target_move_expected)
         if pre_move_pct is not None:
             if best_news.direction == Direction.LONG and pre_move_pct > target_move_expected * 0.8:
-                logger.info("Skipping %s: LONG news already priced (pre-move: +%.2f%%, expected: %.2f%%)",
-                            ticker, pre_move_pct, target_move_expected)
+                reason = f"LONG deja price: pre-move +{pre_move_pct:.2f}% > seuil {target_move_expected * 0.8:.2f}%"
+                logger.info("Skipping %s: %s", ticker, reason)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": [ticker],
+                    "reason": reason, "score": raw_score, "pre_move_pct": pre_move_pct,
+                })
                 continue
             elif best_news.direction == Direction.SHORT and pre_move_pct < -target_move_expected * 0.8:
-                logger.info("Skipping %s: SHORT news already priced (pre-move: %.2f%%, expected: -%.2f%%)",
-                            ticker, pre_move_pct, target_move_expected)
+                reason = f"SHORT deja price: pre-move {pre_move_pct:.2f}% < seuil -{target_move_expected * 0.8:.2f}%"
+                logger.info("Skipping %s: %s", ticker, reason)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": [ticker],
+                    "reason": reason, "score": raw_score, "pre_move_pct": pre_move_pct,
+                })
                 continue
 
-        # (#13) Gap buffer for morning scans — both Europe (07:50) and US (14:30 = US open)
+        # (#13) Gap buffer for morning scans
         gap_buffer_applied = False
         if prev_close is not None:
             gap_pct = abs((price - prev_close) / prev_close * 100) if prev_close > 0 else 0
@@ -305,7 +373,12 @@ def select_trade(
         )
 
         if rr < MIN_RISK_REWARD:
-            logger.info("Skipping %s: R/R %.2f < %.1f", ticker, rr, MIN_RISK_REWARD)
+            reason = f"R/R {rr:.2f} < seuil {MIN_RISK_REWARD}"
+            logger.info("Skipping %s: %s", ticker, reason)
+            rejection_log.append({
+                "title": best_news.news.title, "ticker": [ticker],
+                "reason": reason, "score": raw_score, "risk_reward": rr,
+            })
             continue
 
         confidence = min(100, int(best_score))
@@ -316,7 +389,7 @@ def select_trade(
         # (#10) Volume confirmation (non-blocking)
         volume_confirmed = None
         if volume_ratio is not None:
-            volume_confirmed = volume_ratio > 1.2  # 20% above average
+            volume_confirmed = volume_ratio > 1.2
             if volume_confirmed:
                 logger.info("Volume confirmed for %s: %.1fx average", ticker, volume_ratio)
             else:
@@ -327,6 +400,24 @@ def select_trade(
             entry_vs_prev = abs((price - prev_close) / prev_close * 100) if prev_close > 0 else 0
             if entry_vs_prev > 2.0:
                 logger.warning("Entry price for %s may have significant latency: %.2f%% from prev close", ticker, entry_vs_prev)
+
+        # Build decision summary
+        decision_parts.append(
+            f"SELECTIONNE #{rank+1}: {ticker} {best_news.direction.value} | "
+            f"Score brut Claude={raw_score:.1f}, learning_mult={multiplier:.3f}, "
+            f"score ajuste={best_score:.1f} | "
+            f"News: '{best_news.news.title[:80]}' | "
+            f"Categorie: {best_news.news_category}, edge={best_news.transmission_delay}/{best_news.market_awareness}"
+        )
+        if len(candidates) > 1:
+            runner_up = candidates[1] if rank == 0 else candidates[0]
+            decision_parts.append(
+                f"Alternative proche: score={runner_up[1]:.1f} '{runner_up[0].news.title[:60]}'"
+            )
+
+        # P1-#13: Extract VIX and regime from market_context
+        vix_val = market_context.get("vix") if market_context else None
+        regime_val = market_context.get("regime") if market_context else None
 
         recommendation = TradeRecommendation(
             scan_type=scan_type,
@@ -358,6 +449,16 @@ def select_trade(
                 * (1 - best_news.market_awareness / 100), 4
             ),
             chain_reactions=[cr.model_dump() for cr in best_news.chain_reactions] if best_news.chain_reactions else None,
+            # P0-#4: Raw score decomposition
+            raw_claude_score=round(raw_score, 2),
+            learning_multiplier=round(multiplier, 3),
+            # P1-#13: Contextual features
+            vix_at_trade=vix_val,
+            market_regime=regime_val,
+            day_of_week=now.weekday(),
+            volume_ratio=round(volume_ratio, 2) if volume_ratio is not None else None,
+            # P1-#6: Store predicted transmission delay for later validation
+            predicted_transmission_delay=best_news.transmission_delay,
         )
 
         return ScanResult(
@@ -367,9 +468,14 @@ def select_trade(
             recommendation=recommendation,
             news_analyzed=len(scored_news),
             market_context=market_context,
+            all_scored_news=all_scored_log,
+            rejection_log=rejection_log if rejection_log else None,
+            decision_summary=" | ".join(decision_parts),
+            learning_state=adjustments if adjustments else None,
         )
 
     # All candidates failed price/R/R checks
+    decision_parts.append("AUCUN candidat n'a passe les checks prix/R/R")
     return ScanResult(
         scan_type=scan_type,
         timestamp=now,
@@ -377,4 +483,8 @@ def select_trade(
         reason_no_trade="Impossible de calibrer un trade avec un R/R suffisant",
         news_analyzed=len(scored_news),
         market_context=market_context,
+        all_scored_news=all_scored_log,
+        rejection_log=rejection_log if rejection_log else None,
+        decision_summary=" | ".join(decision_parts),
+        learning_state=adjustments if adjustments else None,
     )

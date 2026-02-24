@@ -4,6 +4,7 @@ import fcntl
 import json
 import logging
 import math
+import statistics
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,6 +77,8 @@ def update_trade_result(
     ticker: str,
     result: TradeResult,
     exit_price: float,
+    actual_pricing_time_hours: float | None = None,
+    delay_accuracy: float | None = None,
 ) -> None:
     """Update a pending trade with its outcome.
 
@@ -93,6 +96,12 @@ def update_trade_result(
                 trade.pnl_pct = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
             else:
                 trade.pnl_pct = round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
+
+            # P1-#6: Store transmission delay accuracy on the trade
+            if actual_pricing_time_hours is not None:
+                trade.actual_pricing_time_hours = actual_pricing_time_hours
+            if delay_accuracy is not None:
+                trade.delay_accuracy = delay_accuracy
 
             _write_trades(trades)
             logger.info("Updated trade %s %s: %s (PnL: %s%%)", ticker, timestamp, result, trade.pnl_pct)
@@ -203,11 +212,63 @@ def compute_performance() -> PerformanceStats:
     )
 
 
+def _is_significant(pnl_values: list[float], min_samples: int = 4) -> bool:
+    """P0-#12: Check if we have enough data for a statistically meaningful adjustment.
+
+    Requires:
+    1. At least min_samples data points
+    2. Standard error small enough that the mean is distinguishable from zero
+       (pseudo t-test: |mean| > stderr, i.e. t > 1.0 — lenient threshold for trading)
+    """
+    if len(pnl_values) < min_samples:
+        return False
+    if len(pnl_values) < 2:
+        return False
+    try:
+        mean = statistics.mean(pnl_values)
+        stdev = statistics.stdev(pnl_values)
+        stderr = stdev / math.sqrt(len(pnl_values))
+        if stderr == 0:
+            return True  # All identical values — signal is clear
+        return abs(mean / stderr) > 1.0
+    except (statistics.StatisticsError, ZeroDivisionError):
+        return False
+
+
+def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float = 0.5,
+                        pnl_cap: float = 0.25, bounds: tuple[float, float] = (0.5, 1.5),
+                        min_significant: int = 4) -> float | None:
+    """Compute a single decay-weighted adjustment with significance check.
+
+    Returns None if not significant, else a multiplier in [bounds].
+    """
+    if len(entries) < 2:
+        return None
+    total_w = sum(w for _, w in entries)
+    if total_w == 0:
+        return None
+
+    # P0-#12: Significance check on raw PnL values
+    pnl_values = [p for p, _ in entries]
+    if not _is_significant(pnl_values, min_samples=min_significant):
+        return None
+
+    avg = sum(p * w for p, w in entries) / total_w
+    win_rate = sum(w for p, w in entries if p > 0) / total_w
+    mult = 1.0 + (win_rate - 0.5) * sensitivity + min(pnl_cap, max(-pnl_cap, avg / 10))
+    lo, hi = bounds
+    return round(max(lo, min(hi, mult)), 3)
+
+
 def compute_learning_adjustments() -> dict[str, float]:
     """Compute per-ticker score multipliers based on historical performance.
 
     Uses temporal decay: recent trades weigh more than old ones.
     Also computes per-category, per-hour (#28), and per-news_category (#29) adjustments.
+
+    v3 changes:
+    - P0-#2: Multiplicative blending instead of additive (signals compound, not average)
+    - P0-#12: Significance test — adjustments only applied when statistically meaningful
 
     Returns dict of ticker -> multiplier (default 1.0, range 0.5-1.5).
     """
@@ -220,8 +281,8 @@ def compute_learning_adjustments() -> dict[str, float]:
     # (#30) Adaptive decay
     half_life = _get_decay_half_life(len(closed))
 
-    # ── Per-ticker adjustments (with decay) ──────────────────────
-    ticker_weighted: dict[str, list[tuple[float, float]]] = {}  # ticker -> [(pnl, weight)]
+    # ── Per-ticker adjustments (with decay + significance) ────────
+    ticker_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
             w = _compute_decay_weight(t.timestamp, half_life)
@@ -229,18 +290,13 @@ def compute_learning_adjustments() -> dict[str, float]:
 
     ticker_adj: dict[str, float] = {}
     for ticker, entries in ticker_weighted.items():
-        if len(entries) < 2:
-            continue
-        total_w = sum(w for _, w in entries)
-        if total_w == 0:
-            continue
-        avg = sum(p * w for p, w in entries) / total_w
-        win_rate = sum(w for p, w in entries if p > 0) / total_w
-        mult = 1.0 + (win_rate - 0.5) * 0.5 + min(0.25, max(-0.25, avg / 10))
-        ticker_adj[ticker] = round(max(0.5, min(1.5, mult)), 3)
+        adj = _compute_adjustment(entries, sensitivity=0.5, pnl_cap=0.25,
+                                  bounds=(0.5, 1.5), min_significant=4)
+        if adj is not None:
+            ticker_adj[ticker] = adj
 
-    # ── Per-category adjustments (with decay) ────────────────────
-    cat_weighted: dict[str, list[tuple[float, float]]] = {}  # category -> [(pnl, weight)]
+    # ── Per-category adjustments (with decay + significance) ──────
+    cat_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
             w = _compute_decay_weight(t.timestamp, half_life)
@@ -248,18 +304,13 @@ def compute_learning_adjustments() -> dict[str, float]:
 
     cat_adj: dict[str, float] = {}
     for cat, entries in cat_weighted.items():
-        if len(entries) < 3:
-            continue
-        total_w = sum(w for _, w in entries)
-        if total_w == 0:
-            continue
-        avg = sum(p * w for p, w in entries) / total_w
-        win_rate = sum(w for p, w in entries if p > 0) / total_w
-        mult = 1.0 + (win_rate - 0.5) * 0.3 + min(0.15, max(-0.15, avg / 10))
-        cat_adj[cat] = round(max(0.7, min(1.3, mult)), 3)
+        adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
+                                  bounds=(0.7, 1.3), min_significant=5)
+        if adj is not None:
+            cat_adj[cat] = adj
 
     # ── (#28) Per-hour adjustments ────────────────────────────────
-    hour_weighted: dict[str, list[tuple[float, float]]] = {}  # "europe"/"us" -> [(pnl, weight)]
+    hour_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
             w = _compute_decay_weight(t.timestamp, half_life)
@@ -267,14 +318,10 @@ def compute_learning_adjustments() -> dict[str, float]:
 
     hour_adj: dict[str, float] = {}
     for scan_type, entries in hour_weighted.items():
-        if len(entries) < 3:
-            continue
-        total_w = sum(w for _, w in entries)
-        if total_w == 0:
-            continue
-        win_rate = sum(w for p, w in entries if p > 0) / total_w
-        mult = 1.0 + (win_rate - 0.5) * 0.2
-        hour_adj[scan_type] = round(max(0.8, min(1.2, mult)), 3)
+        adj = _compute_adjustment(entries, sensitivity=0.2, pnl_cap=0.1,
+                                  bounds=(0.8, 1.2), min_significant=5)
+        if adj is not None:
+            hour_adj[scan_type] = adj
 
     # ── (#29) Per-news_category adjustments ────────────────────────
     newscat_weighted: dict[str, list[tuple[float, float]]] = {}
@@ -285,17 +332,15 @@ def compute_learning_adjustments() -> dict[str, float]:
 
     newscat_adj: dict[str, float] = {}
     for ncat, entries in newscat_weighted.items():
-        if len(entries) < 3:
-            continue
-        total_w = sum(w for _, w in entries)
-        if total_w == 0:
-            continue
-        avg = sum(p * w for p, w in entries) / total_w
-        win_rate = sum(w for p, w in entries if p > 0) / total_w
-        mult = 1.0 + (win_rate - 0.5) * 0.3 + min(0.15, max(-0.15, avg / 10))
-        newscat_adj[ncat] = round(max(0.7, min(1.3, mult)), 3)
+        adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
+                                  bounds=(0.7, 1.3), min_significant=5)
+        if adj is not None:
+            newscat_adj[ncat] = adj
 
-    # ── Blend: ticker * asset_cat * news_cat * hour ───────────────
+    # ── P0-#2: MULTIPLICATIVE blend ───────────────────────────────
+    # Each dimension is an independent signal. Multiplicative blending means
+    # a bad ticker (0.6) on a bad category (0.8) gives 0.48 — real punishment.
+    # Additive would give 0.8 — diluted.
     from .config import ASSET_BY_TICKER
     adjustments: dict[str, float] = {}
     all_tickers = set(ticker_adj.keys())
@@ -325,10 +370,94 @@ def compute_learning_adjustments() -> dict[str, float]:
         if recent_scan and recent_scan in hour_adj:
             h_mult = hour_adj[recent_scan]
 
-        # Final blend: 50% ticker, 25% category, 15% news_cat, 10% hour
-        blended = t_mult * 0.5 + c_mult * 0.25 + nc_mult * 0.15 + h_mult * 0.10
+        # P0-#2: Multiplicative blend — signals compound instead of averaging
+        blended = t_mult * c_mult * nc_mult * h_mult
         adjustments[ticker] = round(max(0.5, min(1.5, blended)), 3)
 
     logger.info("Learning adjustments for %d tickers (%d categories, %d news_cats, %d hours, half_life=%.0fd)",
                 len(adjustments), len(cat_adj), len(newscat_adj), len(hour_adj), half_life)
     return adjustments
+
+
+def build_performance_summary(max_recent: int = 15) -> str:
+    """P1-#1: Build a concise performance summary to inject into Claude's scoring prompt.
+
+    This creates the feedback loop: Claude sees its past performance so it can
+    calibrate better. Focuses on:
+    - Overall win rate and PnL
+    - Best/worst performing news categories
+    - Recent trade outcomes (last N)
+    - Known biases to correct
+
+    Returns empty string if not enough data.
+    """
+    trades = load_trades()
+    closed = [t for t in trades if t.result != TradeResult.PENDING and t.pnl_pct is not None]
+
+    if len(closed) < 5:
+        return ""
+
+    wins = [t for t in closed if t.result == TradeResult.TP_HIT]
+    losses = [t for t in closed if t.result == TradeResult.SL_HIT]
+    expired = [t for t in closed if t.result == TradeResult.EXPIRED]
+    pnls = [t.pnl_pct for t in closed]
+    win_rate = len(wins) / len(closed) * 100
+
+    parts = [
+        f"\n--- HISTORIQUE DE PERFORMANCE (feedback loop) ---",
+        f"Trades clotures: {len(closed)} | Win rate: {win_rate:.0f}% | PnL total: {sum(pnls):+.1f}%",
+    ]
+
+    # Performance by news category
+    by_newscat: dict[str, dict] = {}
+    for t in closed:
+        nc = getattr(t, "news_category", "other")
+        if nc not in by_newscat:
+            by_newscat[nc] = {"wins": 0, "total": 0, "pnl": 0.0}
+        by_newscat[nc]["total"] += 1
+        if t.result == TradeResult.TP_HIT:
+            by_newscat[nc]["wins"] += 1
+        by_newscat[nc]["pnl"] += t.pnl_pct
+
+    if by_newscat:
+        cat_lines = []
+        for nc, stats in sorted(by_newscat.items(), key=lambda x: x[1]["pnl"], reverse=True):
+            if stats["total"] >= 3:
+                wr = stats["wins"] / stats["total"] * 100
+                cat_lines.append(f"  {nc}: {stats['total']} trades, WR={wr:.0f}%, PnL={stats['pnl']:+.1f}%")
+        if cat_lines:
+            parts.append("Par categorie de news (min 3 trades):")
+            parts.extend(cat_lines)
+
+    # Recent trades (last N)
+    recent = sorted(closed, key=lambda t: t.timestamp, reverse=True)[:max_recent]
+    if recent:
+        parts.append(f"Derniers {len(recent)} trades:")
+        for t in recent:
+            nc = getattr(t, "news_category", "?")
+            parts.append(
+                f"  {t.ticker} ({nc}) {t.direction.value} → {t.result.value} {t.pnl_pct:+.2f}%"
+            )
+
+    # Biases detected — transmission_delay accuracy
+    delay_errors = []
+    for t in closed:
+        predicted = getattr(t, "predicted_transmission_delay", None)
+        actual_h = getattr(t, "actual_pricing_time_hours", None)
+        if predicted is not None and actual_h is not None:
+            # Convert actual hours to 0-100 scale (6h = 100)
+            actual_score = min(100, actual_h / 6 * 100)
+            delay_errors.append(predicted - actual_score)
+
+    if len(delay_errors) >= 5:
+        avg_error = statistics.mean(delay_errors)
+        if abs(avg_error) > 10:
+            if avg_error > 0:
+                parts.append(f"BIAIS DETECTE: Tu SURESTIMES le transmission_delay de {avg_error:+.0f} points en moyenne. "
+                             "Les marches pricent PLUS VITE que tu ne le penses. Corrige a la baisse.")
+            else:
+                parts.append(f"BIAIS DETECTE: Tu SOUS-ESTIMES le transmission_delay de {avg_error:+.0f} points en moyenne. "
+                             "Les marches pricent PLUS LENTEMENT que tu ne le penses. Corrige a la hausse.")
+
+    parts.append("--- FIN HISTORIQUE ---")
+    return "\n".join(parts)

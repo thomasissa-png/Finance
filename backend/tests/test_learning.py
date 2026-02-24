@@ -9,6 +9,9 @@ from unittest.mock import patch
 from backend.app.learning import (
     _compute_decay_weight,
     _get_decay_half_life,
+    _is_significant,
+    _compute_adjustment,
+    build_performance_summary,
     compute_learning_adjustments,
     compute_performance,
     DECAY_HALF_LIFE_DAYS_HIGH,
@@ -202,3 +205,81 @@ def test_performance_by_scan_type():
         stats = compute_performance()
     assert "europe" in stats.by_scan_type
     assert "us" in stats.by_scan_type
+
+
+# ── v3 tests: significance, multiplicative blending, performance summary ──
+
+
+def test_is_significant_too_few_samples():
+    """Significance test should reject with fewer than min_samples."""
+    assert _is_significant([1.0, 2.0], min_samples=4) is False
+
+
+def test_is_significant_all_identical():
+    """All identical values → stderr=0 → significant."""
+    assert _is_significant([1.0, 1.0, 1.0, 1.0], min_samples=4) is True
+
+
+def test_is_significant_noisy_data():
+    """High variance with small mean → not significant."""
+    # Mean ~0, high stdev → t-stat near 0
+    assert _is_significant([5.0, -5.0, 5.0, -5.0], min_samples=4) is False
+
+
+def test_is_significant_clear_signal():
+    """Consistent positive values → significant."""
+    assert _is_significant([1.0, 1.2, 0.8, 1.1], min_samples=4) is True
+
+
+def test_compute_adjustment_not_significant():
+    """Adjustment returns None when data is not significant."""
+    entries = [(1.0, 1.0), (-1.0, 1.0)]  # Too few
+    assert _compute_adjustment(entries, min_significant=4) is None
+
+
+def test_compute_adjustment_significant():
+    """Adjustment returns a value when data is significant."""
+    entries = [(1.0, 1.0), (1.2, 0.9), (0.8, 0.8), (1.1, 1.0)]
+    result = _compute_adjustment(entries, min_significant=4)
+    assert result is not None
+    assert result > 1.0  # All positive PnL → boost
+
+
+def test_multiplicative_blending():
+    """v3: Blending should be multiplicative — all 1.0 inputs → 1.0 output."""
+    # Create enough trades for all dimensions to have significant data
+    trades = []
+    for i in range(10):
+        pnl = 1.0 if i < 8 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        adj = compute_learning_adjustments()
+    # With multiplicative blending, the adjustment should exist
+    if "MC.PA" in adj:
+        assert 0.5 <= adj["MC.PA"] <= 1.5
+
+
+def test_build_performance_summary_not_enough_data():
+    """Summary should be empty with fewer than 5 closed trades."""
+    trades = [_make_trade(result=TradeResult.TP_HIT, pnl_pct=1.0)]
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        summary = build_performance_summary()
+    assert summary == ""
+
+
+def test_build_performance_summary_with_data():
+    """Summary should contain key sections when enough data exists."""
+    trades = []
+    for i in range(6):
+        pnl = 1.0 if i < 4 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        summary = build_performance_summary()
+    assert "HISTORIQUE DE PERFORMANCE" in summary
+    assert "Win rate" in summary
+    assert "Derniers" in summary

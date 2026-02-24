@@ -91,7 +91,7 @@ class ScoredNews(BaseModel):
 
 class TradeRecommendation(BaseModel):
     """The single trade output of a scan."""
-    schema_version: int = 2  # (#42)
+    schema_version: int = 3  # (#42) v3: ML learning fields
     scan_type: ScanType
     timestamp: datetime
     ticker: str
@@ -127,6 +127,18 @@ class TradeRecommendation(BaseModel):
     market_awareness: int | None = None    # 0=nobody, 100=everyone
     edge_score: float | None = None        # edge_factor used in scoring
     chain_reactions: list[dict] | None = None  # Second-order impacts detected
+    # ── P0-#4: Raw score decomposition (diagnose Claude vs formula vs learning)
+    raw_claude_score: float | None = None      # Score brut avant learning adjustments
+    learning_multiplier: float | None = None   # Multiplicateur learning appliqué
+    # ── P1-#13: Contextual features at time of trade
+    vix_at_trade: float | None = None
+    market_regime: str | None = None           # calm/normal/elevated/stress
+    day_of_week: int | None = None             # 0=Monday ... 6=Sunday
+    volume_ratio: float | None = None          # Today's volume / 20d avg
+    # ── P1-#6: Transmission delay tracking
+    predicted_transmission_delay: int | None = None  # Claude's estimate at scoring time
+    actual_pricing_time_hours: float | None = None   # Measured: hours from trade to TP/SL
+    delay_accuracy: float | None = None              # Difference predicted vs actual
 
 
 class ScanResult(BaseModel):
@@ -139,11 +151,16 @@ class ScanResult(BaseModel):
     news_analyzed: int = 0
     # (#5) Market context included in scoring
     market_context: dict | None = None
+    # ── Journal enrichment: full decision trace
+    all_scored_news: list[dict] | None = None        # All news scored by Claude with scores
+    rejection_log: list[dict] | None = None           # Why each candidate was rejected
+    decision_summary: str | None = None               # Why this trade was chosen over others
+    learning_state: dict | None = None                # Learning adjustments at time of scan
 
 
 class JournalEntry(BaseModel):
     """Daily journal entry for a single trade — generated at 22:00 CET."""
-    schema_version: int = 2  # (#42)
+    schema_version: int = 3  # (#42) v3: ML learning fields
     date: str  # YYYY-MM-DD
     scan_type: ScanType
     news_title: str
@@ -165,6 +182,20 @@ class JournalEntry(BaseModel):
     pnl_pct: float | None = None
     review: str = ""  # Post-trade analysis
     binary_event_warning: str | None = None  # (#24)
+    # ── v3: Full decision trace
+    raw_claude_score: float | None = None       # Score brut Claude avant learning
+    learning_multiplier: float | None = None    # Multiplicateur learning appliqué
+    all_scored_news: list[dict] | None = None   # Toutes les news scorées (Claude reasoning)
+    rejection_log: list[dict] | None = None     # Pourquoi les autres candidats ont été rejetés
+    decision_summary: str | None = None         # Résumé de la décision de sélection
+    learning_state: dict | None = None          # État du learning au moment du scan
+    # ── P1-#13: Contextual features
+    vix_at_trade: float | None = None
+    market_regime: str | None = None
+    # ── P1-#6: Transmission delay accuracy
+    predicted_transmission_delay: int | None = None
+    actual_pricing_time_hours: float | None = None
+    delay_accuracy: float | None = None
 
 
 class PerformanceStats(BaseModel):

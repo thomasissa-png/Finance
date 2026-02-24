@@ -18,6 +18,7 @@ from .config import (
     NEWS_MAX_AGE_HOURS,
 )
 from .economic_calendar import get_events_context
+from .learning import build_performance_summary
 from .models import ChainReaction, Direction, NewsItem, ScanType, ScoredNews
 
 logger = logging.getLogger(__name__)
@@ -235,6 +236,11 @@ def _build_context_string(market_ctx: dict, scan_type: ScanType) -> str:
     cal_ctx = get_events_context()
     if cal_ctx:
         parts.append(cal_ctx)
+
+    # P1-#1: Performance feedback loop — Claude sees its past results
+    perf_summary = build_performance_summary()
+    if perf_summary:
+        parts.append(perf_summary)
 
     return " | ".join(parts)
 

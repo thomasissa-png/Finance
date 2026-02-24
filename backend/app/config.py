@@ -113,7 +113,7 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
 TRIGGER_COOLDOWN_SECONDS = 300  # 5 minutes entre deux triggers manuels
 
 # ── Schema version (#42) ──────────────────────────────────────
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # v3: ML learning improvements
 
 
 @dataclass(frozen=True)

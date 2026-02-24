@@ -140,6 +140,17 @@ def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: floa
     return "".join(parts)
 
 
+def _load_scan_decision_data() -> dict[str, dict]:
+    """Load cached scan results to extract decision trace for journal entries."""
+    scans_file = DATA_DIR / "last_scans.json"
+    try:
+        if scans_file.exists():
+            return json.loads(scans_file.read_text())
+    except (json.JSONDecodeError, Exception) as exc:
+        logger.warning("Failed to load scans cache for journal: %s", exc)
+    return {}
+
+
 def run_daily_journal() -> list[dict]:
     """Main job: close all pending trades, generate journal entries for today.
 
@@ -160,6 +171,9 @@ def run_daily_journal() -> list[dict]:
     existing = load_journal()
     existing_keys = {(e.ticker, e.entry_time.isoformat() if e.entry_time else "") for e in existing}
 
+    # Load scan-level decision data for enriching journal entries
+    scan_data = _load_scan_decision_data()
+
     new_entries: list[JournalEntry] = []
 
     for trade in pending:
@@ -179,9 +193,29 @@ def run_daily_journal() -> list[dict]:
         day_high, day_low, close = _fetch_day_prices(trade.ticker, date=fetch_date)
         result, exit_price, pnl_pct = _determine_result(trade, day_high, day_low, close)
 
-        # Update the trade in the learning system
+        # P1-#6: Compute actual pricing time and delay accuracy
+        actual_pricing_hours = None
+        delay_accuracy = None
+        if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and trade.closed_at:
+            actual_pricing_hours = round(
+                (trade.closed_at - trade.timestamp).total_seconds() / 3600, 2
+            )
+        elif result in (TradeResult.TP_HIT, TradeResult.SL_HIT):
+            # Estimate: assume hit happened during trading day (~8h window for day trading)
+            actual_pricing_hours = 8.0  # conservative default
+
+        if trade.predicted_transmission_delay is not None and actual_pricing_hours is not None:
+            # Convert actual hours to 0-100 scale (6h = 100)
+            actual_delay_score = min(100, actual_pricing_hours / 6 * 100)
+            delay_accuracy = round(trade.predicted_transmission_delay - actual_delay_score, 1)
+
+        # Update the trade in the learning system (with P1-#6 delay accuracy)
         if exit_price is not None:
-            update_trade_result(trade.timestamp, trade.ticker, result, exit_price)
+            update_trade_result(
+                trade.timestamp, trade.ticker, result, exit_price,
+                actual_pricing_time_hours=actual_pricing_hours,
+                delay_accuracy=delay_accuracy,
+            )
 
         now = datetime.now(timezone.utc)
         review = _build_review(trade, result, pnl_pct)
@@ -208,12 +242,27 @@ def run_daily_journal() -> list[dict]:
             pnl_pct=pnl_pct,
             review=review,
             binary_event_warning=trade.binary_event_warning,
+            # v3: Score decomposition
+            raw_claude_score=trade.raw_claude_score,
+            learning_multiplier=trade.learning_multiplier,
+            # v3: Contextual features
+            vix_at_trade=trade.vix_at_trade,
+            market_regime=trade.market_regime,
+            # v3: Transmission delay tracking (P1-#6)
+            predicted_transmission_delay=trade.predicted_transmission_delay,
+            actual_pricing_time_hours=actual_pricing_hours,
+            delay_accuracy=delay_accuracy,
+            # v3: Scan-level decision trace (from cached scan results)
+            all_scored_news=scan_data.get(trade.scan_type.value, {}).get("all_scored_news"),
+            rejection_log=scan_data.get(trade.scan_type.value, {}).get("rejection_log"),
+            decision_summary=scan_data.get(trade.scan_type.value, {}).get("decision_summary"),
+            learning_state=scan_data.get(trade.scan_type.value, {}).get("learning_state"),
         )
         new_entries.append(entry)
         logger.info(
-            "Journal: %s %s %s → %s (PnL: %s%%)",
+            "Journal: %s %s %s → %s (PnL: %s%%, delay_accuracy: %s)",
             trade.direction.value, trade.ticker, trade.asset_name,
-            result.value, pnl_pct,
+            result.value, pnl_pct, delay_accuracy,
         )
 
     # Append to journal file

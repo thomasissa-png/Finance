@@ -152,7 +152,7 @@ def test_trade_recommendation_defaults():
     )
     assert trade.result == TradeResult.PENDING
     assert trade.exit_price is None
-    assert trade.schema_version == 2
+    assert trade.schema_version == 3
     assert trade.pre_move_pct is None
     assert trade.binary_event_warning is None
     assert trade.volume_confirmed is None
@@ -160,6 +160,13 @@ def test_trade_recommendation_defaults():
     assert trade.market_awareness is None
     assert trade.edge_score is None
     assert trade.chain_reactions is None
+    # v3 fields
+    assert trade.raw_claude_score is None
+    assert trade.learning_multiplier is None
+    assert trade.vix_at_trade is None
+    assert trade.market_regime is None
+    assert trade.day_of_week is None
+    assert trade.predicted_transmission_delay is None
 
 
 def test_scan_result_no_trade():

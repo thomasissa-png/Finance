@@ -125,8 +125,8 @@ def test_trigger_cooldown():
 
 
 def test_schema_version():
-    """Schema version should be 2 (#42)."""
-    assert SCHEMA_VERSION == 2
+    """Schema version should be 3 (v3: ML learning improvements)."""
+    assert SCHEMA_VERSION == 3
 
 
 # ── Edge-priority scoring tests ─────────────────────────────────
