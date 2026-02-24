@@ -391,7 +391,11 @@ def build_performance_summary(max_recent: int = 15) -> str:
 
     Returns empty string if not enough data.
     """
-    trades = load_trades()
+    try:
+        trades = load_trades()
+    except Exception as exc:
+        logger.warning("build_performance_summary: failed to load trades: %s", exc)
+        return ""
     closed = [t for t in trades if t.result != TradeResult.PENDING and t.pnl_pct is not None]
 
     if len(closed) < 5:
@@ -401,7 +405,7 @@ def build_performance_summary(max_recent: int = 15) -> str:
     losses = [t for t in closed if t.result == TradeResult.SL_HIT]
     expired = [t for t in closed if t.result == TradeResult.EXPIRED]
     pnls = [t.pnl_pct for t in closed]
-    win_rate = len(wins) / len(closed) * 100
+    win_rate = len(wins) / len(closed) * 100 if closed else 0
 
     parts = [
         f"\n--- HISTORIQUE DE PERFORMANCE (feedback loop) ---",

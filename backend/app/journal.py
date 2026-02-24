@@ -140,12 +140,36 @@ def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: floa
     return "".join(parts)
 
 
+def _extract_scan_trace(scan_data: dict, scan_type_value: str) -> dict:
+    """Safely extract scan-level decision trace fields for a JournalEntry.
+
+    Returns a dict of kwargs safe to unpack into JournalEntry().
+    Handles corrupt/missing/wrong-type cache data gracefully.
+    """
+    entry = scan_data.get(scan_type_value)
+    if not isinstance(entry, dict):
+        return {}
+    return {
+        "all_scored_news": entry.get("all_scored_news"),
+        "rejection_log": entry.get("rejection_log"),
+        "decision_summary": entry.get("decision_summary"),
+        "learning_state": entry.get("learning_state"),
+    }
+
+
 def _load_scan_decision_data() -> dict[str, dict]:
-    """Load cached scan results to extract decision trace for journal entries."""
+    """Load cached scan results to extract decision trace for journal entries.
+
+    Returns a dict keyed by scan type ("europe"/"us"), with safe fallback
+    to empty dict if the file is missing, corrupt, or has unexpected format.
+    """
     scans_file = DATA_DIR / "last_scans.json"
     try:
         if scans_file.exists():
-            return json.loads(scans_file.read_text())
+            data = json.loads(scans_file.read_text())
+            if isinstance(data, dict):
+                return data
+            logger.warning("Scan cache has unexpected type %s, ignoring", type(data).__name__)
     except (json.JSONDecodeError, Exception) as exc:
         logger.warning("Failed to load scans cache for journal: %s", exc)
     return {}
@@ -253,10 +277,7 @@ def run_daily_journal() -> list[dict]:
             actual_pricing_time_hours=actual_pricing_hours,
             delay_accuracy=delay_accuracy,
             # v3: Scan-level decision trace (from cached scan results)
-            all_scored_news=scan_data.get(trade.scan_type.value, {}).get("all_scored_news"),
-            rejection_log=scan_data.get(trade.scan_type.value, {}).get("rejection_log"),
-            decision_summary=scan_data.get(trade.scan_type.value, {}).get("decision_summary"),
-            learning_state=scan_data.get(trade.scan_type.value, {}).get("learning_state"),
+            **_extract_scan_trace(scan_data, trade.scan_type.value),
         )
         new_entries.append(entry)
         logger.info(

@@ -182,21 +182,44 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **Learning**: apres chaque cloture, les resultats alimentent `compute_learning_adjustments()`
 - **Frontend**: onglet "Journal" avec tableau groupe par date, badges categorie news et actif
 - **API**: `GET /api/journal`, `GET /api/journal/{date}`, `POST /api/journal/trigger`
+- **Decision trace** (v3): chaque entree journal stocke le raisonnement complet :
+  - `all_scored_news` : toutes les news scorees par Claude avec scores et reasoning
+  - `rejection_log` : pourquoi chaque candidat a ete rejete (NEUTRAL, score bas, correle, deja price, R/R)
+  - `decision_summary` : pourquoi ce trade a ete selectionne plutot que les alternatives
+  - `learning_state` : etat des ajustements learning au moment du scan
+  - `raw_claude_score` / `learning_multiplier` : decomposition du score
+  - `vix_at_trade` / `market_regime` : contexte marche au moment du trade
+  - `predicted_transmission_delay` / `actual_pricing_time_hours` / `delay_accuracy` : tracking precision
 
-## Learning adaptatif
-- **Par ticker**: ajustement 0.5-1.5 base sur l'historique de resultats
-- **Par categorie**: ajustement 0.7-1.3 base sur la performance de la categorie d'actif
-- **Blending**: 60% ticker + 40% categorie, borne a [0.5, 1.5]
-- **Decay temporel**: demi-vie de 30 jours — les trades recents comptent plus que les anciens
+## Learning adaptatif (v3.0)
+- **Par ticker**: ajustement 0.5-1.5 base sur l'historique de resultats (min 4 trades significatifs)
+- **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades significatifs)
+- **Par categorie de news**: ajustement 0.7-1.3 (min 5 trades significatifs)
+- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades significatifs)
+- **Blending multiplicatif** (v3): `ticker * cat * newscat * hour`, borne a [0.5, 1.5]
+  - Avant v3 : blending additif (signaux dilues). Maintenant les signaux se composent.
+  - Ex: mauvais ticker (0.6) * mauvaise categorie (0.8) = 0.48 (punition reelle)
+- **Significance test** (v3): pseudo t-test (`|mean/stderr| > 1.0`) avant d'appliquer un ajustement
+  - Evite les faux signaux sur echantillons trop petits ou trop bruyants
+- **Decay temporel adaptatif**: demi-vie 45j (peu de trades) → 30j (beaucoup de trades)
+  - Transition graduelle entre 50 et 200 trades clotures
+- **Feedback loop Claude** (v3): `build_performance_summary()` injecte dans le prompt :
+  - Win rate global et par categorie de news
+  - Derniers 15 trades (ticker, direction, resultat, PnL)
+  - Detection de biais transmission_delay (surestime/sous-estime)
+- **Score decomposition** (v3): chaque trade stocke `raw_claude_score` et `learning_multiplier`
+  pour diagnostiquer si un echec vient de Claude ou du learning
 - **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour acces concurrent sur aux fichiers JSON
 
-## Parametres cles (v2.0)
+## Parametres cles (v3.0)
 - Score minimum: 55/100 (releve de 40 — filtre plus strict)
 - Ratio risque/rendement minimum: 1.3 (releve de 1.0)
 - Freshness peak: < 2h
 - News max age: 6h
 - Trigger cooldown: 300s (5 min entre deux triggers manuels)
-- Schema version: 2
+- Schema version: 3
+- Learning min trades: 5 (global), 4 (par ticker), 5 (par categorie/news_cat/session)
+- Learning significance: t-stat > 1.0 requis avant d'appliquer un ajustement
 
 ## Secrets (Replit)
 - **Requis** : `ANTHROPIC_API_KEY`
@@ -212,6 +235,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Frontend: Vite dev server ou build statique
 
 ## Tests
-- Framework: pytest (150 tests)
+- Framework: pytest (160 tests)
 - Lancer: `python -m pytest backend/tests/ -v` (depuis la racine du projet)
 - Couvre: config, models, news_scorer, trade_selector, journal, learning, economic_calendar, data_apis, event_scanner
+- v3 tests ajoutés : significance test, compute_adjustment, multiplicative blending, build_performance_summary
