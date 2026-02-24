@@ -99,12 +99,12 @@ Module `event_scanner.py` — surveillance continue des feeds early-signal :
 
 ### Formule de score
 ```
-edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.05)
+edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.01)
 score = surprise * (freshness/100) * (clarity/100) * edge_factor * source_weight * category_score_mult
 ```
 
 **Exemples concrets :**
-- Earnings Apple (delay=5, awareness=95) → edge_factor = 0.05*0.05 = 0.0025 (floor 0.05) → score ecrase
+- Earnings Apple (delay=5, awareness=95) → edge_factor = 0.05*0.05 = 0.0025 (floor 0.01) → score ecrase
 - Rapport NOAA secheresse (delay=80, awareness=10) → edge_factor = 0.8*0.9 = 0.72 → score booste
 - Gel Bresil cafe (delay=90, awareness=5) → edge_factor = 0.9*0.95 = 0.855 → score maximal
 
@@ -114,13 +114,13 @@ earnings:           0.2   # Quasi zero-edge — deja price en pre-market
 macro:              0.3   # Algos HFT dominent — aucun avantage
 m_a:                0.5   # Fort si rumeur, rarement en avance de phase
 central_bank_subtle: 0.6  # Speeches secondaires — edge faible
-other:              0.7
-regulatory:         0.8   # Depend du timing
+other:              0.6   # Defaut conservateur
+regulatory:         0.6   # Generalement telegraphe, faible edge
 sector:             1.2   # Liens indirects = edge reel
 geopolitical:       1.3   # Fort edge si signal early
 commodity:          1.5   # Edge max — signaux physiques
 supply_chain:       1.6   # Disruptions logistiques — delai long
-weather:            1.8   # Edge maximal — marche met 2-12h a pricer
+weather:            1.6   # Fort edge mais faux-positifs possibles sur previsions
 ```
 
 ### News Category Multipliers (calibration R/R)

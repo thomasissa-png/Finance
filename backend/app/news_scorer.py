@@ -428,7 +428,10 @@ def _detect_chain_reactions(impacted_tickers: list[str], direction: Direction) -
             seen.add(target)
 
             # Determine direction for the chain reaction
-            if chain["direction"] == "same":
+            # NEUTRAL source → chain stays NEUTRAL (inverse of NEUTRAL is still NEUTRAL)
+            if direction == Direction.NEUTRAL:
+                cr_direction = Direction.NEUTRAL
+            elif chain["direction"] == "same":
                 cr_direction = direction
             elif chain["direction"] == "inverse":
                 cr_direction = Direction.SHORT if direction == Direction.LONG else Direction.LONG

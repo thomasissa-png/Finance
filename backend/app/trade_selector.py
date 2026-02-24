@@ -339,7 +339,15 @@ def select_trade(
             continue
 
         # (#4) News déjà pricée detection — direction-aware
-        target_move_expected = avg_range * (0.25 + (best_news.total_score / 100) * 0.45)
+        # Use same volatility-regime factors as _calibrate_trade to avoid
+        # false rejections on low-vol (forex) or false passes on high-vol (NG)
+        if avg_range < 1.0:
+            _pre_factor = 0.35 + (best_news.total_score / 100) * 0.55
+        elif avg_range > 5.0:
+            _pre_factor = 0.15 + (best_news.total_score / 100) * 0.30
+        else:
+            _pre_factor = 0.25 + (best_news.total_score / 100) * 0.45
+        target_move_expected = avg_range * _pre_factor
         pre_move_pct = _detect_pre_move(price, prev_close, target_move_expected)
         if pre_move_pct is not None:
             if best_news.direction == Direction.LONG and pre_move_pct > target_move_expected * 0.8:

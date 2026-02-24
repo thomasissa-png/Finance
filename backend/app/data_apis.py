@@ -274,10 +274,14 @@ def fetch_weather_alerts() -> list[NewsItem]:
             wind_maxs = daily.get("wind_speed_10m_max", [])
 
             # Split into past (first 7) and forecast (last 7)
+            # Keep raw slices for correct date indexing, filtered for min/max
             past_precip = [p for p in precip_sums[:7] if p is not None]
-            forecast_temp_mins = [t for t in temp_mins[7:] if t is not None]
-            forecast_temp_maxs = [t for t in temp_maxs[7:] if t is not None]
-            forecast_wind = [w for w in wind_maxs[7:] if w is not None]
+            raw_forecast_temp_mins = temp_mins[7:]
+            raw_forecast_temp_maxs = temp_maxs[7:]
+            raw_forecast_wind = wind_maxs[7:]
+            forecast_temp_mins = [t for t in raw_forecast_temp_mins if t is not None]
+            forecast_temp_maxs = [t for t in raw_forecast_temp_maxs if t is not None]
+            forecast_wind = [w for w in raw_forecast_wind if w is not None]
 
             in_season = _is_growing_season(zone)
 
@@ -285,7 +289,13 @@ def fetch_weather_alerts() -> list[NewsItem]:
             if in_season and forecast_temp_mins and zone["frost_threshold"] > -100:
                 min_forecast = min(forecast_temp_mins)
                 if min_forecast <= zone["frost_threshold"]:
-                    frost_date = dates[7 + forecast_temp_mins.index(min_forecast)] if len(dates) > 7 else "prochains jours"
+                    # Find date using raw (unfiltered) list to preserve index alignment
+                    frost_date = "prochains jours"
+                    if len(dates) > 7:
+                        for i, val in enumerate(raw_forecast_temp_mins):
+                            if val is not None and val == min_forecast:
+                                frost_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
+                                break
                     title = (
                         f"[METEO ALERTE] Gel prevu a {zone['name']}: {min_forecast:.1f}°C "
                         f"le {frost_date} (seuil critique: {zone['frost_threshold']}°C) — "
@@ -304,7 +314,12 @@ def fetch_weather_alerts() -> list[NewsItem]:
             if in_season and forecast_temp_maxs and zone["heat_threshold"] < 100:
                 max_forecast = max(forecast_temp_maxs)
                 if max_forecast >= zone["heat_threshold"]:
-                    heat_date = dates[7 + forecast_temp_maxs.index(max_forecast)] if len(dates) > 7 else "prochains jours"
+                    heat_date = "prochains jours"
+                    if len(dates) > 7:
+                        for i, val in enumerate(raw_forecast_temp_maxs):
+                            if val is not None and val == max_forecast:
+                                heat_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
+                                break
                     title = (
                         f"[METEO ALERTE] Canicule prevue a {zone['name']}: {max_forecast:.1f}°C "
                         f"le {heat_date} (seuil: {zone['heat_threshold']}°C) — "
