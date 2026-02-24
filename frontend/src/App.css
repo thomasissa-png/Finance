@@ -17,6 +17,7 @@
   --yellow: #eab308;
   --blue: #3b82f6;
   --orange: #f97316;
+  --purple: #a855f7;
 
   --font-mono: "JetBrains Mono", monospace;
   --font-sans: "Inter", system-ui, sans-serif;
@@ -35,6 +36,27 @@ body {
   min-height: 100vh;
 }
 
+/* (D15) Focus-visible accessibility */
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* (D11) Fade-in animation for tab content */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tab-content {
+  animation: fadeIn 0.2s ease-out;
+}
+
 /* ── Layout ──────────────────────────────────────────────────── */
 
 .app {
@@ -43,6 +65,7 @@ body {
   padding: 24px 16px;
 }
 
+/* (D1) Header with live status */
 .app-header {
   display: flex;
   align-items: center;
@@ -66,7 +89,38 @@ body {
   font-family: var(--font-mono);
 }
 
-/* ── Tabs ────────────────────────────────────────────────────── */
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.online {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+}
+
+.status-dot.offline {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+.status-dot.weekend {
+  background: var(--yellow);
+  box-shadow: 0 0 6px rgba(234, 179, 8, 0.4);
+}
+
+/* ── Tabs (D2) ──────────────────────────────────────────────── */
 
 .tabs {
   display: flex;
@@ -75,6 +129,9 @@ body {
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* (D18) Scroll fade indicators */
+  mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
 }
 
 .tab {
@@ -88,6 +145,7 @@ body {
   border-bottom: 2px solid transparent;
   transition: all 0.15s;
   white-space: nowrap;
+  position: relative;
 }
 
 .tab:hover {
@@ -97,6 +155,17 @@ body {
 .tab.active {
   color: var(--cyan);
   border-bottom-color: var(--cyan);
+  background: rgba(6, 182, 212, 0.05);
+}
+
+.tab-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cyan);
 }
 
 /* ── Trade Card ──────────────────────────────────────────────── */
@@ -186,6 +255,15 @@ body {
   background: rgba(239, 68, 68, 0.15);
   color: var(--red);
   border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* (D5) News headline — distinct from catalyst */
+.trade-headline {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  line-height: 1.5;
 }
 
 .catalyst {
@@ -343,7 +421,7 @@ body {
 .trade-metric-value.red { color: var(--red); }
 .trade-metric-value.cyan { color: var(--cyan); }
 
-/* Confidence bar */
+/* (D10) Confidence bar — thicker */
 .confidence-row {
   display: flex;
   align-items: center;
@@ -359,15 +437,15 @@ body {
 
 .confidence-bar {
   flex: 1;
-  height: 8px;
+  height: 10px;
   background: var(--bg-primary);
-  border-radius: 4px;
+  border-radius: 5px;
   overflow: hidden;
 }
 
 .confidence-fill {
   height: 100%;
-  border-radius: 4px;
+  border-radius: 5px;
   transition: width 0.5s ease;
 }
 
@@ -379,7 +457,7 @@ body {
   text-align: right;
 }
 
-/* ── No Trade / Waiting ──────────────────────────────────────── */
+/* ── No Trade / Waiting (D4, D13) ──────────────────────────── */
 
 .no-trade {
   text-align: center;
@@ -390,30 +468,75 @@ body {
 }
 
 .no-trade-icon {
-  font-size: 36px;
+  font-size: 28px;
   margin-bottom: 12px;
-  opacity: 0.5;
+  opacity: 0.4;
+  font-family: var(--font-mono);
 }
 
 .no-trade-title {
   font-family: var(--font-mono);
-  font-size: 16px;
+  font-size: 15px;
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
 
 .no-trade-reason {
-  font-size: 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.no-trade-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.no-trade-tag {
+  display: inline-block;
+  padding: 3px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border-radius: 4px;
+  background: var(--bg-card-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+/* ── (D3) Next scan status bar ─────────────────────────────── */
+
+.scan-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   color: var(--text-muted);
 }
 
-/* ── Trigger Button ──────────────────────────────────────────── */
+.scan-status-bar .status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* ── Trigger Button (D6, D17) ──────────────────────────────── */
 
 .trigger-section {
   display: flex;
   gap: 8px;
   margin-bottom: 24px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .trigger-btn {
@@ -437,7 +560,86 @@ body {
   cursor: not-allowed;
 }
 
-/* ── History Table ───────────────────────────────────────────── */
+/* (D6) Colored scan buttons */
+.trigger-btn.europe {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--blue);
+}
+
+.trigger-btn.europe:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.trigger-btn.us {
+  background: rgba(168, 85, 247, 0.1);
+  border-color: rgba(168, 85, 247, 0.3);
+  color: var(--purple);
+}
+
+.trigger-btn.us:hover {
+  background: rgba(168, 85, 247, 0.2);
+}
+
+/* (D17) Export button — outline style */
+.trigger-btn.export {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.trigger-btn.export:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-secondary);
+}
+
+/* (D6) Toast notifications */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  padding: 12px 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  animation: toastIn 0.25s ease-out, toastOut 0.25s ease-in 2.75s forwards;
+  max-width: 320px;
+  border-left: 3px solid var(--cyan);
+}
+
+.toast.success {
+  border-left-color: var(--green);
+}
+
+.toast.error {
+  border-left-color: var(--red);
+}
+
+.toast.warning {
+  border-left-color: var(--yellow);
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toastOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* ── History Table (D7) ───────────────────────────────────── */
 
 .history-table {
   width: 100%;
@@ -458,20 +660,27 @@ body {
 }
 
 .history-table td {
-  padding: 10px 12px;
+  padding: 12px 12px;
   border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
+}
+
+/* (D7) Zebra striping */
+.history-table tbody tr:nth-child(even) td {
+  background: rgba(17, 24, 39, 0.5);
 }
 
 .history-table tr:hover td {
   background: var(--bg-card-hover);
 }
 
+/* (D16) Result badges — more visible */
 .result-badge {
-  padding: 2px 8px;
-  border-radius: 3px;
-  font-size: 11px;
-  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
 .result-badge.tp { background: rgba(34, 197, 94, 0.15); color: var(--green); }
@@ -479,12 +688,43 @@ body {
 .result-badge.expired { background: rgba(234, 179, 8, 0.15); color: var(--yellow); }
 .result-badge.pending { background: rgba(59, 130, 246, 0.15); color: var(--blue); }
 
-/* ── Performance Stats ───────────────────────────────────────── */
+/* (D14) Flat P&L for near-zero values */
+.pnl-flat {
+  color: var(--text-muted) !important;
+}
 
+/* ── Performance Stats (D9) ───────────────────────────────── */
+
+/* Primary KPIs — larger */
+.perf-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.perf-card-primary {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+}
+
+.perf-card-primary .perf-card-value {
+  font-size: 32px;
+}
+
+.perf-card-primary .perf-card-label {
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+/* Secondary stats — smaller grid */
 .perf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
   margin-bottom: 24px;
 }
 
@@ -492,23 +732,24 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 16px;
+  padding: 14px 12px;
   text-align: center;
 }
 
 .perf-card-value {
   font-family: var(--font-mono);
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 700;
   margin-bottom: 4px;
 }
 
 .perf-card-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
-/* ── Journal Table ───────────────────────────────────────────── */
+/* ── Journal Table (D7) ───────────────────────────────────── */
 
 .journal-day {
   margin-bottom: 32px;
@@ -547,6 +788,11 @@ body {
   border-bottom: 1px solid var(--border);
   color: var(--text-secondary);
   vertical-align: top;
+}
+
+/* (D7) Zebra striping */
+.journal-table tbody tr:nth-child(even) td {
+  background: rgba(17, 24, 39, 0.5);
 }
 
 .journal-table tr:hover td {
@@ -607,6 +853,50 @@ body {
   border: 1px solid var(--border);
 }
 
+/* (D8) Journal mobile card layout */
+.journal-mobile-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.journal-mobile-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 8px;
+}
+
+.journal-mobile-card-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.journal-mobile-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.journal-mobile-review {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 /* ── Loading / Spinner ───────────────────────────────────────── */
 
 .loading {
@@ -643,6 +933,9 @@ body {
   .app-header {
     margin-bottom: 20px;
     padding-bottom: 12px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
   }
 
   .app-title {
@@ -725,7 +1018,33 @@ body {
     max-width: 150px;
   }
 
+  /* (D8) Journal: show cards instead of table on mobile */
+  .journal-desktop-table {
+    display: none;
+  }
+
+  .journal-mobile-list {
+    display: block;
+  }
+
   /* Performance grid */
+  .perf-kpi-row {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .perf-card-primary {
+    padding: 14px 8px;
+  }
+
+  .perf-card-primary .perf-card-value {
+    font-size: 22px;
+  }
+
+  .perf-card-primary .perf-card-label {
+    font-size: 11px;
+  }
+
   .perf-grid {
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
@@ -757,6 +1076,22 @@ body {
     font-size: 11px;
     padding: 6px 12px;
   }
+
+  /* Toast mobile */
+  .toast-container {
+    bottom: 16px;
+    right: 16px;
+    left: 16px;
+  }
+
+  .toast {
+    max-width: 100%;
+  }
+}
+
+/* On desktop, hide mobile journal cards and show table */
+.journal-mobile-list {
+  display: none;
 }
 
 @media (max-width: 480px) {
@@ -768,6 +1103,10 @@ body {
   .trade-metric-value {
     font-size: 12px;
     word-break: break-all;
+  }
+
+  .perf-kpi-row {
+    grid-template-columns: 1fr 1fr 1fr;
   }
 
   .perf-grid {

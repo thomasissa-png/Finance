@@ -17,6 +17,21 @@ function formatDate(iso) {
   });
 }
 
+// (D14) P&L color with flat for near-zero
+function pnlClass(val) {
+  if (val == null) return "";
+  if (Math.abs(val) < 0.05) return "pnl-flat";
+  return "";
+}
+
+function pnlColor(val) {
+  if (val == null) return "var(--text-muted)";
+  if (Math.abs(val) < 0.05) return undefined; // handled by pnl-flat class
+  if (val > 0) return "var(--green)";
+  if (val < 0) return "var(--red)";
+  return "var(--text-muted)";
+}
+
 export default function History() {
   const [trades, setTrades] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -42,9 +57,14 @@ export default function History() {
     return (
       <div className="no-trade">
         <div className="no-trade-icon">—</div>
+        {/* (D13) Personalized empty state */}
         <div className="no-trade-title">Aucun trade enregistre</div>
         <div className="no-trade-reason">
           Les trades apparaitront ici apres le premier scan.
+        </div>
+        <div className="no-trade-meta">
+          <span className="no-trade-tag">Scans : 07:50 + 14:30 CET</span>
+          <span className="no-trade-tag">Lun-Ven uniquement</span>
         </div>
       </div>
     );
@@ -53,7 +73,8 @@ export default function History() {
   return (
     <div>
       <div className="trigger-section">
-        <a href="/api/export/trades" className="trigger-btn" style={{ textDecoration: "none" }}>
+        {/* (D17) Export button — outline style */}
+        <a href="/api/export/trades" className="trigger-btn export" style={{ textDecoration: "none" }}>
           Export CSV
         </a>
       </div>
@@ -114,13 +135,9 @@ export default function History() {
                       <span className={`result-badge ${r.cls}`}>{r.label}</span>
                     </td>
                     <td
+                      className={pnlClass(t.pnl_pct)}
                       style={{
-                        color:
-                          t.pnl_pct > 0
-                            ? "var(--green)"
-                            : t.pnl_pct < 0
-                              ? "var(--red)"
-                              : "var(--text-muted)",
+                        color: pnlColor(t.pnl_pct),
                         fontWeight: 600,
                       }}
                     >

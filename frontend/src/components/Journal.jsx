@@ -24,6 +24,15 @@ function formatDate(iso) {
   });
 }
 
+// (D14) P&L color with flat for near-zero
+function pnlColor(val) {
+  if (val == null) return "var(--text-muted)";
+  if (Math.abs(val) < 0.05) return "var(--text-muted)";
+  if (val > 0) return "var(--green)";
+  if (val < 0) return "var(--red)";
+  return "var(--text-muted)";
+}
+
 export default function Journal() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -94,9 +103,14 @@ export default function Journal() {
         </div>
         <div className="no-trade">
           <div className="no-trade-icon">--</div>
+          {/* (D13) Personalized empty state */}
           <div className="no-trade-title">Aucune entree de journal</div>
           <div className="no-trade-reason">
-            Le journal est genere automatiquement a 22h00 CET chaque jour.
+            Le journal est genere automatiquement a 22h00 CET chaque jour ouvre.
+          </div>
+          <div className="no-trade-meta">
+            <span className="no-trade-tag">Auto : 22h00 CET</span>
+            <span className="no-trade-tag">Lun-Ven</span>
           </div>
         </div>
       </div>
@@ -113,7 +127,8 @@ export default function Journal() {
         >
           {loading ? "Generation..." : "Generer journal (22h)"}
         </button>
-        <a href="/api/export/journal" className="trigger-btn" style={{ textDecoration: "none" }}>
+        {/* (D17) Export button — outline style */}
+        <a href="/api/export/journal" className="trigger-btn export" style={{ textDecoration: "none" }}>
           Export CSV
         </a>
       </div>
@@ -122,7 +137,8 @@ export default function Journal() {
         <div key={date} className="journal-day">
           <div className="journal-date-header">{formatDate(date + "T00:00:00")}</div>
 
-          <div style={{ overflowX: "auto" }}>
+          {/* Desktop table (D8) */}
+          <div className="journal-desktop-table" style={{ overflowX: "auto" }}>
             <table className="journal-table">
               <thead>
                 <tr>
@@ -206,16 +222,12 @@ export default function Journal() {
                         <span className={`result-badge ${r.cls}`}>{r.label}</span>
                         {e.pnl_pct != null && (
                           <div
+                            className={Math.abs(e.pnl_pct) < 0.05 ? "pnl-flat" : ""}
                             style={{
                               marginTop: 4,
                               fontWeight: 600,
                               fontSize: 12,
-                              color:
-                                e.pnl_pct > 0
-                                  ? "var(--green)"
-                                  : e.pnl_pct < 0
-                                    ? "var(--red)"
-                                    : "var(--text-muted)",
+                              color: pnlColor(e.pnl_pct),
                             }}
                           >
                             {e.pnl_pct > 0 ? "+" : ""}
@@ -236,6 +248,79 @@ export default function Journal() {
                 })}
               </tbody>
             </table>
+          </div>
+
+          {/* (D8) Mobile card layout — shown only on small screens */}
+          <div className="journal-mobile-list">
+            {byDate[date].map((e) => {
+              const r = RESULT_LABELS[e.result] || RESULT_LABELS.PENDING;
+              return (
+                <div key={`m-${e.entry_time}-${e.ticker}`} className="journal-mobile-card">
+                  <div className="journal-mobile-card-header">
+                    <div>
+                      <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        {e.asset_name}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        {e.ticker}
+                        {e.news_category && e.news_category !== "other" && (
+                          <span className="journal-cat-badge" style={{ marginLeft: 6 }}>
+                            {e.news_category}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span
+                        className={`direction-badge ${e.direction === "LONG" ? "long" : "short"}`}
+                        style={{ fontSize: 10, padding: "2px 6px" }}
+                      >
+                        {e.direction}
+                      </span>
+                      <span className={`result-badge ${r.cls}`}>{r.label}</span>
+                    </div>
+                  </div>
+                  <div className="journal-mobile-card-body">
+                    <div>
+                      <div className="journal-mobile-label">Entree</div>
+                      <div style={{ color: "var(--cyan)" }}>{e.entry_price}</div>
+                    </div>
+                    <div>
+                      <div className="journal-mobile-label">Sortie</div>
+                      <div>{e.exit_price ?? "--"}</div>
+                    </div>
+                    <div>
+                      <div className="journal-mobile-label">Score</div>
+                      <div style={{
+                        color: e.score >= 70 ? "var(--green)" : e.score >= 50 ? "var(--yellow)" : "var(--red)",
+                        fontWeight: 700,
+                      }}>
+                        {e.score}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="journal-mobile-label">P&L</div>
+                      <div style={{
+                        color: pnlColor(e.pnl_pct),
+                        fontWeight: 600,
+                      }}>
+                        {e.pnl_pct != null ? `${e.pnl_pct > 0 ? "+" : ""}${e.pnl_pct}%` : "--"}
+                      </div>
+                    </div>
+                    {(e.review || e.news_title) && (
+                      <div className="journal-mobile-review">
+                        {e.news_title && (
+                          <div style={{ color: "var(--text-secondary)", marginBottom: 4 }}>
+                            {e.news_title}
+                          </div>
+                        )}
+                        {e.review}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}

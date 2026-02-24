@@ -26,9 +26,15 @@ export default function TradeCard({ scan, label }) {
         <div className="no-trade-icon">—</div>
         <div className="no-trade-title">Pas de trade</div>
         <div className="no-trade-reason">{reason}</div>
+        {/* (D4+D13) Personalized empty state with meta info */}
         {analyzed > 0 && (
-          <div className="no-trade-reason" style={{ marginTop: 8 }}>
-            {analyzed} news analysees
+          <div className="no-trade-meta">
+            <span className="no-trade-tag">{analyzed} news analysees</span>
+            {scan?.scan_type && (
+              <span className="no-trade-tag">
+                {scan.scan_type === "europe" ? "Session Europe" : "Session US"}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -60,10 +66,9 @@ export default function TradeCard({ scan, label }) {
           </span>
         </div>
 
+        {/* (D5) News headline — visually distinct from catalyst */}
         {t.news_headline && (
-          <div className="catalyst" style={{ color: "var(--text-primary)", fontWeight: 500 }}>
-            {t.news_headline}
-          </div>
+          <div className="trade-headline">{t.news_headline}</div>
         )}
         <div className="catalyst">{t.catalyst}</div>
 

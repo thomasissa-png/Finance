@@ -25,9 +25,14 @@ export default function Performance() {
     return (
       <div className="no-trade">
         <div className="no-trade-icon">—</div>
+        {/* (D13) Personalized empty state */}
         <div className="no-trade-title">Pas encore de donnees</div>
         <div className="no-trade-reason">
           Les statistiques apparaitront apres la cloture des premiers trades.
+        </div>
+        <div className="no-trade-meta">
+          <span className="no-trade-tag">Journal auto : 22h CET</span>
+          <span className="no-trade-tag">Min. 1 trade cloture</span>
         </div>
       </div>
     );
@@ -42,14 +47,9 @@ export default function Performance() {
 
   return (
     <div>
-      <div className="perf-grid">
-        <div className="perf-card">
-          <div className="perf-card-value" style={{ color: "var(--cyan)" }}>
-            {stats.total_trades}
-          </div>
-          <div className="perf-card-label">Trades total</div>
-        </div>
-        <div className="perf-card">
+      {/* (D9) Primary KPIs — 3 prominent cards */}
+      <div className="perf-kpi-row">
+        <div className="perf-card-primary">
           <div
             className="perf-card-value"
             style={{
@@ -65,13 +65,23 @@ export default function Performance() {
           </div>
           <div className="perf-card-label">Win rate</div>
         </div>
-        <div className="perf-card">
+        <div className="perf-card-primary">
           <div className="perf-card-value" style={{ color: pnlColor }}>
             {stats.total_pnl_pct > 0 ? "+" : ""}
             {stats.total_pnl_pct}%
           </div>
           <div className="perf-card-label">P&L cumule</div>
         </div>
+        <div className="perf-card-primary">
+          <div className="perf-card-value" style={{ color: "var(--cyan)" }}>
+            {stats.total_trades}
+          </div>
+          <div className="perf-card-label">Trades total</div>
+        </div>
+      </div>
+
+      {/* Secondary stats */}
+      <div className="perf-grid">
         <div className="perf-card">
           <div className="perf-card-value" style={{ color: "var(--green)" }}>
             {stats.best_trade_pnl > 0 ? "+" : ""}
