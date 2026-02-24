@@ -77,13 +77,11 @@ class ScoredNews(BaseModel):
         awareness_discount = 1 - (self.market_awareness / 100)
         edge_factor = delay_factor * awareness_discount
 
-        # Minimum edge floor so even zero-edge news doesn't score exactly 0
-        edge_factor = max(edge_factor, 0.05)
+        # Floor at 0.01 — low enough to crush zero-edge news (earnings/macro)
+        # but not exactly 0 to avoid total blackout
+        edge_factor = max(edge_factor, 0.01)
 
         score = self.surprise * freshness_factor * clarity_factor * edge_factor
-        # Stale news cap
-        if self.freshness < 30:
-            score = min(score, 20)
         # Apply source reliability weight (#6)
         score *= self.news.source_weight
         # Apply category edge-priority multiplier

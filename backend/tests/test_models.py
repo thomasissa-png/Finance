@@ -45,9 +45,9 @@ def test_scored_news_zero_edge_earnings():
         direction=Direction.LONG,
         category_score_mult=0.2,  # Earnings penalty
     )
-    # edge_factor = max(0.05 * 0.05, 0.05) = 0.05 (floor)
-    # 80 * 1.0 * 1.0 * 0.05 * 1.0 * 0.2 = 0.8
-    assert scored.total_score == 0.8
+    # edge_factor = max(0.05 * 0.05, 0.01) = 0.01 (floor)
+    # 80 * 1.0 * 1.0 * 0.01 * 1.0 * 0.2 = 0.16
+    assert scored.total_score == 0.16
 
 
 def test_scored_news_weather_commodity():

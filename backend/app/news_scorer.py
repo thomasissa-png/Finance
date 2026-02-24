@@ -133,7 +133,12 @@ SCORING_TOOL = {
 
 
 def _compute_freshness(published: datetime | None) -> int:
-    """Score freshness: 100 if < peak hours, 0 if > max age, linear between."""
+    """Score freshness: 100 if < peak hours, floor of 5 for old news (not 0).
+
+    Old news that happens to have high transmission_delay (physical signals)
+    should NOT be crushed to 0 — the edge_factor handles that separately.
+    Floor of 5 preserves residual value for slow-moving dislocations.
+    """
     if published is None:
         return 50  # Unknown age — neutral score
 
@@ -145,11 +150,12 @@ def _compute_freshness(published: datetime | None) -> int:
     if age_hours <= NEWS_FRESHNESS_PEAK_HOURS:
         return 100
     if age_hours >= NEWS_MAX_AGE_HOURS:
-        return 0
+        return 5  # Floor: slow signals retain residual value
 
-    # Linear decay between peak and max
+    # Linear decay between peak and max, floor at 5
     remaining = NEWS_MAX_AGE_HOURS - NEWS_FRESHNESS_PEAK_HOURS
-    return int(100 * (1 - (age_hours - NEWS_FRESHNESS_PEAK_HOURS) / remaining))
+    raw = 100 * (1 - (age_hours - NEWS_FRESHNESS_PEAK_HOURS) / remaining)
+    return max(5, int(raw))
 
 
 def _fetch_market_context() -> dict:
@@ -351,6 +357,19 @@ def score_news_batch(
         # New edge-detection fields
         transmission_delay = max(0, min(100, entry.get("transmission_delay", 50)))
         market_awareness = max(0, min(100, entry.get("market_awareness", 50)))
+
+        # Hard rejection: earnings/macro with unrealistic transmission_delay
+        # These are ALWAYS priced instantly by algos — Claude sometimes overestimates delay
+        if news_cat == "earnings" and transmission_delay > 15:
+            logger.info("Earnings hard-cap: forcing transmission_delay %d -> 5 for '%s'",
+                        transmission_delay, item.title[:60])
+            transmission_delay = 5
+            market_awareness = max(market_awareness, 90)
+        elif news_cat == "macro" and transmission_delay > 20:
+            logger.info("Macro hard-cap: forcing transmission_delay %d -> 10 for '%s'",
+                        transmission_delay, item.title[:60])
+            transmission_delay = 10
+            market_awareness = max(market_awareness, 85)
 
         # Apply category score multiplier (edge priority)
         cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)

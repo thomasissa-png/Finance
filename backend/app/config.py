@@ -23,14 +23,14 @@ CATEGORY_SCORE_MULTIPLIERS: dict[str, float] = {
     "earnings":      0.2,   # Quasi zero-edge — deja price en pre-market
     "macro":         0.3,   # Algos HFT dominent — on n'a aucun avantage
     "geopolitical":  1.3,   # Fort edge si signal early — delai de pricing 1-6h
-    "regulatory":    0.8,   # Edge moyen — depend du timing
+    "regulatory":    0.6,   # Generalement telegraphe, faible edge
     "m_a":           0.5,   # Fort si rumeur, mais rarement en avance de phase
     "sector":        1.2,   # Liens indirects = edge reel — le marche connecte lentement
     "commodity":     1.5,   # Edge max — signaux physiques (meteo, shipping, stocks)
-    "weather":       1.8,   # Edge maximal — le marche met 2-12h a pricer
+    "weather":       1.6,   # Fort edge mais faux-positifs possibles sur previsions
     "supply_chain":  1.6,   # Disruptions logistiques — delai de pricing long
     "central_bank_subtle": 0.6,  # Speeches/minutes secondaires — edge faible mais non nul
-    "other":         0.7,
+    "other":         0.6,
 }
 
 # ── News category multipliers for calibration (#7) ────────────
@@ -69,18 +69,29 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
         {"ticker": "NG=F", "direction": "same", "reason": "Energie correle"},
     ],
     "BZ=F":  [{"ticker": "CL=F", "direction": "same", "reason": "WTI correle au Brent"}],
+    "NG=F":  [
+        {"ticker": "CL=F", "direction": "same", "reason": "Energie correle — substitution gaz/petrole"},
+        {"ticker": "TTE.PA", "direction": "same", "reason": "Producteur gaz majeur"},
+    ],
     # Metaux / safe haven
     "GC=F":  [
         {"ticker": "SI=F", "direction": "same", "reason": "Argent suit l'or"},
         {"ticker": "USDCHF=X", "direction": "inverse", "reason": "CHF safe haven correle a l'or"},
+        {"ticker": "EURUSD=X", "direction": "same", "reason": "Or monte = dollar faiblit = EUR/USD monte"},
     ],
     # Agriculture — memes zones de production
     "ZC=F":  [
         {"ticker": "ZS=F", "direction": "same", "reason": "Soja meme zone de production (Midwest)"},
         {"ticker": "ZW=F", "direction": "same", "reason": "Rotation des cultures — memes terres"},
     ],
+    "ZW=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Rotation cultures — prix ble tire mais"},
+    ],
     "KC=F":  [
         {"ticker": "SB=F", "direction": "same", "reason": "Memes planteurs bresil — sucre et cafe"},
+    ],
+    "SB=F":  [
+        {"ticker": "KC=F", "direction": "same", "reason": "Memes zones bresiliennes — cafe et sucre"},
     ],
     # Geopolitique Moyen-Orient
     "USDJPY=X": [
@@ -247,8 +258,8 @@ EARLY_SIGNAL_FEEDS = [
 # ── Source weights: early-signal sources get premium weight ──────
 SOURCE_WEIGHTS: dict[str, float] = {
     # Phase 0: structured data APIs (premium — donnees chiffrees, pas du texte)
-    "Open-Meteo": 1.15,
-    "open-meteo": 1.15,
+    "Open-Meteo": 1.2,
+    "open-meteo": 1.2,
     "CFTC": 1.05,
     "cftc": 1.05,
     "Options Flow": 0.95,
@@ -260,8 +271,8 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "NOAA": 1.1,
     "drought.gov": 1.1,
     "weather.gov": 1.1,
-    "EIA": 1.1,
-    "eia.gov": 1.1,
+    "EIA": 1.15,
+    "eia.gov": 1.15,
     "IAEA": 1.05,
     "iaea.org": 1.05,
     "State Department": 1.0,
@@ -276,9 +287,9 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "gcaptain": 1.05,
     "OilPrice": 1.0,
     "oilprice": 1.0,
-    # Phase 3: mainstream (info deja traitee)
-    "reuters": 1.0,
-    "Reuters": 1.0,
+    # Phase 3: mainstream (info deja traitee — poids reduits)
+    "reuters": 0.85,
+    "Reuters": 0.85,
     "CNBC": 0.9,
     "cnbc": 0.9,
     "Investing.com": 0.7,

@@ -13,9 +13,10 @@ from backend.app.learning import (
     compute_performance,
     DECAY_HALF_LIFE_DAYS_HIGH,
     DECAY_HALF_LIFE_DAYS_LOW,
+    DECAY_TRANSITION_START,
+    DECAY_TRANSITION_END,
     load_trades,
     save_trade,
-    TRADES_THRESHOLD_FOR_FAST_DECAY,
     update_trade_result,
 )
 from backend.app.models import (
@@ -118,13 +119,20 @@ def test_learning_adjustments_enough_data():
 def test_adaptive_decay_half_life_low():
     """With few trades, half-life should be 45 days (#30)."""
     assert _get_decay_half_life(10) == DECAY_HALF_LIFE_DAYS_LOW
-    assert _get_decay_half_life(199) == DECAY_HALF_LIFE_DAYS_LOW
+    assert _get_decay_half_life(DECAY_TRANSITION_START) == DECAY_HALF_LIFE_DAYS_LOW
 
 
 def test_adaptive_decay_half_life_high():
     """With many trades, half-life should be 30 days (#30)."""
-    assert _get_decay_half_life(200) == DECAY_HALF_LIFE_DAYS_HIGH
+    assert _get_decay_half_life(DECAY_TRANSITION_END) == DECAY_HALF_LIFE_DAYS_HIGH
     assert _get_decay_half_life(500) == DECAY_HALF_LIFE_DAYS_HIGH
+
+
+def test_adaptive_decay_half_life_gradual():
+    """Midway between transition start/end, half-life should be interpolated (#30)."""
+    mid = (DECAY_TRANSITION_START + DECAY_TRANSITION_END) // 2
+    hl = _get_decay_half_life(mid)
+    assert DECAY_HALF_LIFE_DAYS_HIGH < hl < DECAY_HALF_LIFE_DAYS_LOW
 
 
 def test_decay_weight_recent_trade():

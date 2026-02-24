@@ -25,8 +25,7 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
         "drought", "frost", "freeze", "hurricane", "typhoon", "cyclone",
         "flood", "flooding", "heatwave", "heat wave", "wildfire",
         "secheresse", "gel", "inondation", "canicule", "ouragan",
-        "blizzard", "tornado", "severe weather", "crop damage",
-        "el nino", "la nina", "monsoon failure",
+        "blizzard", "tornado", "severe weather",
     ],
     "supply_chain": [
         "port closed", "port congestion", "canal blocked", "shipping disruption",

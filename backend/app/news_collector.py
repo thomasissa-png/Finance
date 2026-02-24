@@ -163,7 +163,7 @@ def _filter_old_news(items: list[NewsItem]) -> list[NewsItem]:
     return filtered
 
 
-def _dedup_by_similarity(items: list[NewsItem], threshold: float = 0.6) -> list[NewsItem]:
+def _dedup_by_similarity(items: list[NewsItem], threshold: float = 0.75) -> list[NewsItem]:
     """Deduplicate news by Jaccard similarity (#2).
 
     Keeps the first (highest source weight) version of similar headlines.

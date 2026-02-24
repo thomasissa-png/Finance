@@ -14,10 +14,11 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 TRADES_FILE = DATA_DIR / "trades.json"
 
-# (#30) Adaptive decay: 45 days when < 200 trades, 30 days when >= 200
-DECAY_HALF_LIFE_DAYS_LOW = 45.0   # When < 200 trades
-DECAY_HALF_LIFE_DAYS_HIGH = 30.0  # When >= 200 trades
-TRADES_THRESHOLD_FOR_FAST_DECAY = 200
+# (#30) Adaptive decay: gradual transition from 45 to 30 days
+DECAY_HALF_LIFE_DAYS_LOW = 45.0   # When few trades
+DECAY_HALF_LIFE_DAYS_HIGH = 30.0  # When many trades
+DECAY_TRANSITION_START = 50       # Start transitioning at 50 closed trades
+DECAY_TRANSITION_END = 200        # Fully transitioned at 200 closed trades
 
 
 def _ensure_data_dir() -> None:
@@ -76,7 +77,11 @@ def update_trade_result(
     result: TradeResult,
     exit_price: float,
 ) -> None:
-    """Update a pending trade with its outcome."""
+    """Update a pending trade with its outcome.
+
+    Also signals that the learning cache should be invalidated,
+    so the next scan picks up the updated performance data.
+    """
     trades = load_trades()
     for trade in trades:
         if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
@@ -91,9 +96,20 @@ def update_trade_result(
 
             _write_trades(trades)
             logger.info("Updated trade %s %s: %s (PnL: %s%%)", ticker, timestamp, result, trade.pnl_pct)
+            # Signal cache invalidation — imported lazily to avoid circular imports
+            _signal_learning_cache_invalidation()
             return
 
     logger.warning("Trade not found for update: %s %s", ticker, timestamp)
+
+
+def _signal_learning_cache_invalidation() -> None:
+    """Invalidate the scheduler's learning cache after a trade closes."""
+    try:
+        from .scheduler import invalidate_learning_cache
+        invalidate_learning_cache()
+    except ImportError:
+        pass  # Module not loaded yet (e.g., during testing)
 
 
 def _write_trades(trades: list[TradeRecommendation]) -> None:
@@ -104,10 +120,18 @@ def _write_trades(trades: list[TradeRecommendation]) -> None:
 
 
 def _get_decay_half_life(n_closed: int) -> float:
-    """Get adaptive decay half-life (#30)."""
-    if n_closed >= TRADES_THRESHOLD_FOR_FAST_DECAY:
+    """Get adaptive decay half-life (#30).
+
+    Gradual transition from 45d to 30d between 50 and 200 closed trades.
+    Avoids abrupt behavior change at a single threshold.
+    """
+    if n_closed <= DECAY_TRANSITION_START:
+        return DECAY_HALF_LIFE_DAYS_LOW
+    if n_closed >= DECAY_TRANSITION_END:
         return DECAY_HALF_LIFE_DAYS_HIGH
-    return DECAY_HALF_LIFE_DAYS_LOW
+    # Linear interpolation between start and end
+    progress = (n_closed - DECAY_TRANSITION_START) / (DECAY_TRANSITION_END - DECAY_TRANSITION_START)
+    return DECAY_HALF_LIFE_DAYS_LOW + progress * (DECAY_HALF_LIFE_DAYS_HIGH - DECAY_HALF_LIFE_DAYS_LOW)
 
 
 def _compute_decay_weight(trade_timestamp: datetime, half_life: float) -> float:

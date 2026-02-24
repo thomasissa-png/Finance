@@ -170,8 +170,8 @@ def test_check_binary_event_not_found():
 def test_check_binary_event_various_keywords():
     assert _check_binary_event("FOMC meeting", "") is not None
     assert _check_binary_event("NFP data", "") is not None
-    assert _check_binary_event("OPEC meeting", "") is not None
     assert _check_binary_event("ECB rate decision", "") is not None
+    assert _check_binary_event("fed rate hike", "") is not None
 
 
 def test_check_correlation_no_existing():

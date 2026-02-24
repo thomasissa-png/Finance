@@ -105,7 +105,7 @@ def test_check_event_conflict_during_fomc():
         tzinfo=PARIS_TZ,
     ) - timedelta(hours=1)
 
-    conflict = check_event_conflict(scan_time, hours_before=2.0, hours_after=1.0)
+    conflict = check_event_conflict(scan_time)
     assert conflict is not None
     assert "FOMC" in conflict.name
 
@@ -119,7 +119,7 @@ def test_check_event_conflict_well_before():
         time(6, 0),
         tzinfo=PARIS_TZ,
     )
-    conflict = check_event_conflict(scan_time, hours_before=2.0, hours_after=1.0)
+    conflict = check_event_conflict(scan_time)
     # FOMC is at 20:00 CET, 6:00 is 14h before — no conflict
     assert conflict is None
 

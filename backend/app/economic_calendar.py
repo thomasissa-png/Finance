@@ -24,6 +24,8 @@ class EconomicEvent:
     impact: str  # "high", "medium"
     currency: str  # "USD", "EUR", "GBP", "JPY", "ALL"
     blocks_trade: bool = True  # If True, no trade within the window
+    hours_before: float = 2.0  # Danger window: hours BEFORE event
+    hours_after: float = 1.0   # Danger window: hours AFTER event
 
 
 # ── FOMC meeting dates 2025-2026 (published by the Fed) ──────────────
@@ -89,18 +91,21 @@ def _generate_nfp_dates(year: int) -> list[date]:
     return dates
 
 
-def _generate_cpi_dates(year: int) -> list[date]:
-    """US CPI is typically released around the 10th-13th of each month at 08:30 ET.
-
-    We approximate as the second Tuesday or Wednesday — exact dates vary.
-    Using a conservative window: 10th-14th of each month.
-    """
-    dates = []
-    for month in range(1, 13):
-        # Approximate: 2nd week, Tuesday-Thursday
-        d = _nth_weekday(year, month, 1, 2)  # Second Tuesday
-        dates.append(d)
-    return dates
+# ── US CPI release dates (from BLS schedule) ─────────────────────────
+# Hardcoded because BLS publishes exact dates — algorithmic approximation is off by 5+ days
+CPI_DATES_2025 = [
+    date(2025, 1, 15), date(2025, 2, 12), date(2025, 3, 12),
+    date(2025, 4, 10), date(2025, 5, 13), date(2025, 6, 11),
+    date(2025, 7, 11), date(2025, 8, 12), date(2025, 9, 10),
+    date(2025, 10, 14), date(2025, 11, 12), date(2025, 12, 10),
+]
+CPI_DATES_2026 = [
+    date(2026, 1, 14), date(2026, 2, 11), date(2026, 3, 11),
+    date(2026, 4, 14), date(2026, 5, 12), date(2026, 6, 10),
+    date(2026, 7, 14), date(2026, 8, 12), date(2026, 9, 15),
+    date(2026, 10, 13), date(2026, 11, 12), date(2026, 12, 10),
+]
+CPI_DATES = set(CPI_DATES_2025 + CPI_DATES_2026)
 
 
 def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -> list[EconomicEvent]:
@@ -115,7 +120,7 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
     window_start = target_date - timedelta(days=1)
     window_end = target_date + timedelta(days=window_days)
 
-    # FOMC
+    # FOMC — rate decisions: widest window (2h before, 2h after)
     for d in FOMC_DATES:
         if window_start <= d <= window_end:
             events.append(EconomicEvent(
@@ -125,9 +130,11 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 impact="high",
                 currency="USD",
                 blocks_trade=True,
+                hours_before=2.0,
+                hours_after=2.0,  # Follow-through trading post-FOMC
             ))
 
-    # ECB
+    # ECB — rate decisions: wide window
     for d in ECB_DATES:
         if window_start <= d <= window_end:
             events.append(EconomicEvent(
@@ -137,9 +144,11 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 impact="high",
                 currency="EUR",
                 blocks_trade=True,
+                hours_before=2.0,
+                hours_after=1.5,
             ))
 
-    # BOE
+    # BOE — rate decisions
     for d in BOE_DATES:
         if window_start <= d <= window_end:
             events.append(EconomicEvent(
@@ -149,9 +158,11 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 impact="high",
                 currency="GBP",
                 blocks_trade=True,
+                hours_before=2.0,
+                hours_after=1.5,
             ))
 
-    # NFP — first Friday of each month
+    # NFP — data release: fast repricing, tighter window
     for year in (target_date.year - 1, target_date.year, target_date.year + 1):
         for d in _generate_nfp_dates(year):
             if window_start <= d <= window_end:
@@ -162,20 +173,23 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                     impact="high",
                     currency="USD",
                     blocks_trade=True,
+                    hours_before=1.0,
+                    hours_after=1.0,
                 ))
 
-    # CPI — ~2nd week of month
-    for year in (target_date.year - 1, target_date.year, target_date.year + 1):
-        for d in _generate_cpi_dates(year):
-            if window_start <= d <= window_end:
-                events.append(EconomicEvent(
-                    name="US CPI Release",
-                    date=d,
-                    time_cet=time(14, 30),
-                    impact="high",
-                    currency="USD",
-                    blocks_trade=True,
-                ))
+    # CPI — hardcoded BLS dates, data release: fast repricing
+    for d in CPI_DATES:
+        if window_start <= d <= window_end:
+            events.append(EconomicEvent(
+                name="US CPI Release",
+                date=d,
+                time_cet=time(14, 30),
+                impact="high",
+                currency="USD",
+                blocks_trade=True,
+                hours_before=1.0,
+                hours_after=1.0,
+            ))
 
     events.sort(key=lambda e: (e.date, e.time_cet))
     return events
@@ -183,16 +197,14 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
 
 def check_event_conflict(
     scan_datetime: datetime | None = None,
-    hours_before: float = 2.0,
-    hours_after: float = 1.0,
 ) -> EconomicEvent | None:
     """Check if a major economic event is within the danger window.
 
     Returns the conflicting event if found, None otherwise.
 
-    The danger window is:
-    - hours_before BEFORE the event (market positioning, no edge)
-    - hours_after AFTER the event (algos already repriced)
+    Each event type has its own window (hours_before/hours_after)
+    set when the event is created. FOMC gets the widest window,
+    data releases (NFP/CPI) get tighter windows.
     """
     if scan_datetime is None:
         scan_datetime = datetime.now(PARIS_TZ)
@@ -210,8 +222,8 @@ def check_event_conflict(
 
         event_dt = datetime.combine(event.date, event.time_cet, tzinfo=PARIS_TZ)
 
-        window_start = event_dt - timedelta(hours=hours_before)
-        window_end = event_dt + timedelta(hours=hours_after)
+        window_start = event_dt - timedelta(hours=event.hours_before)
+        window_end = event_dt + timedelta(hours=event.hours_after)
 
         if window_start <= scan_dt_paris <= window_end:
             logger.warning(

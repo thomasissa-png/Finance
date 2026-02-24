@@ -69,6 +69,11 @@ def fetch_eia_data() -> list[NewsItem]:
 
             data = resp.json()
 
+            # Check for API error in response body
+            if data.get("error"):
+                logger.debug("EIA API returned error for %s: %s", series_id, data["error"])
+                continue
+
             # Parse v1 response format
             series_data = None
             if "series" in data and data["series"]:
@@ -131,6 +136,8 @@ def fetch_eia_data() -> list[NewsItem]:
 # https://open-meteo.com/
 
 # Critical agricultural zones with their commodity impacts
+# growing_months: months when crops are vulnerable (frost/heat matter)
+# drought_threshold_mm: zone-specific 7-day precipitation threshold
 AGRICULTURAL_ZONES: list[dict[str, Any]] = [
     {
         "name": "US Midwest Corn Belt",
@@ -138,16 +145,20 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "tickers": ["ZC=F", "ZS=F", "ZW=F"],
         "crops": "mais, soja, ble",
         "frost_threshold": -2,  # °C — late frost kills crops
-        "heat_threshold": 38,   # °C — heat stress on crops
-        "drought_note": "secheresse critique si precipitation < 2mm sur 7 jours",
+        "heat_threshold": 35,   # °C — corn silking stress starts at 35°C
+        "growing_months": [4, 5, 6, 7, 8, 9, 10],  # Apr-Oct
+        "drought_threshold_mm": 10.0,  # 10mm/7d during growing season
+        "drought_note": "secheresse critique pendant la saison de croissance",
     },
     {
         "name": "Brazil Minas Gerais (Coffee/Sugar)",
         "lat": -21.0, "lon": -44.0,
         "tickers": ["KC=F", "SB=F"],
         "crops": "cafe, sucre",
-        "frost_threshold": 0,   # Any frost kills coffee plants
+        "frost_threshold": 2,   # Coffee damage starts below 2°C
         "heat_threshold": 40,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Year-round (perennial)
+        "drought_threshold_mm": 5.0,
         "drought_note": "secheresse = stress hydrique cafe",
     },
     {
@@ -155,8 +166,10 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "lat": -22.5, "lon": -47.5,
         "tickers": ["SB=F", "KC=F"],
         "crops": "sucre, ethanol, cafe",
-        "frost_threshold": 0,
+        "frost_threshold": 2,
         "heat_threshold": 40,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "drought_threshold_mm": 5.0,
         "drought_note": "impacts recolte sucre",
     },
     {
@@ -164,8 +177,10 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "lat": 49.0, "lon": 32.0,
         "tickers": ["ZW=F", "ZC=F"],
         "crops": "ble, mais",
-        "frost_threshold": -15,  # Winter wheat can handle cold
+        "frost_threshold": -20,  # Winter wheat hardened, extreme cold needed
         "heat_threshold": 35,
+        "growing_months": [3, 4, 5, 6, 7, 8, 9, 10, 11],  # Mar-Nov
+        "drought_threshold_mm": 8.0,
         "drought_note": "Mer Noire = 25% export ble mondial",
     },
     {
@@ -175,6 +190,8 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "ble, riz",
         "frost_threshold": 0,
         "heat_threshold": 42,   # India heatwaves kill wheat
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],  # Almost year-round
+        "drought_threshold_mm": 5.0,
         "drought_note": "mousson faible = crise alimentaire",
     },
     {
@@ -184,6 +201,8 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "petrole offshore, gaz",
         "frost_threshold": -999,  # Not relevant
         "heat_threshold": 999,
+        "growing_months": [6, 7, 8, 9, 10, 11],  # Hurricane season Jun-Nov
+        "drought_threshold_mm": -1,  # Drought not relevant for offshore
         "drought_note": "ouragans = arret production offshore",
     },
     {
@@ -193,6 +212,8 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "huile de palme, riz",
         "frost_threshold": -999,
         "heat_threshold": 40,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "drought_threshold_mm": 15.0,  # Tropical — needs more rain
         "drought_note": "El Nino = secheresse palmiers",
     },
     {
@@ -202,9 +223,17 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "ble",
         "frost_threshold": -5,
         "heat_threshold": 42,
+        "growing_months": [4, 5, 6, 7, 8, 9, 10, 11],  # Apr-Nov (Southern hemisphere)
+        "drought_threshold_mm": 5.0,
         "drought_note": "secheresse = export reduction",
     },
 ]
+
+
+def _is_growing_season(zone: dict[str, Any]) -> bool:
+    """Check if the current month is within the zone's growing season."""
+    current_month = datetime.now(timezone.utc).month
+    return current_month in zone.get("growing_months", range(1, 13))
 
 
 def fetch_weather_alerts() -> list[NewsItem]:
@@ -212,6 +241,8 @@ def fetch_weather_alerts() -> list[NewsItem]:
 
     Checks for: frost, extreme heat, drought (low precipitation),
     and wind extremes (hurricanes for Gulf).
+    Frost/heat alerts are only generated during the growing season.
+    Drought thresholds are zone-specific.
     """
     items: list[NewsItem] = []
 
@@ -246,11 +277,12 @@ def fetch_weather_alerts() -> list[NewsItem]:
             past_precip = [p for p in precip_sums[:7] if p is not None]
             forecast_temp_mins = [t for t in temp_mins[7:] if t is not None]
             forecast_temp_maxs = [t for t in temp_maxs[7:] if t is not None]
-            forecast_precip = [p for p in precip_sums[7:] if p is not None]
             forecast_wind = [w for w in wind_maxs[7:] if w is not None]
 
-            # ── Check 1: Frost alert ─────────────────────────────
-            if forecast_temp_mins and zone["frost_threshold"] > -100:
+            in_season = _is_growing_season(zone)
+
+            # ── Check 1: Frost alert (only during growing season) ──
+            if in_season and forecast_temp_mins and zone["frost_threshold"] > -100:
                 min_forecast = min(forecast_temp_mins)
                 if min_forecast <= zone["frost_threshold"]:
                     frost_date = dates[7 + forecast_temp_mins.index(min_forecast)] if len(dates) > 7 else "prochains jours"
@@ -268,8 +300,8 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         source_weight=1.15,
                     ))
 
-            # ── Check 2: Heat stress alert ───────────────────────
-            if forecast_temp_maxs and zone["heat_threshold"] < 100:
+            # ── Check 2: Heat stress alert (only during growing season) ──
+            if in_season and forecast_temp_maxs and zone["heat_threshold"] < 100:
                 max_forecast = max(forecast_temp_maxs)
                 if max_forecast >= zone["heat_threshold"]:
                     heat_date = dates[7 + forecast_temp_maxs.index(max_forecast)] if len(dates) > 7 else "prochains jours"
@@ -287,13 +319,15 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         source_weight=1.15,
                     ))
 
-            # ── Check 3: Drought alert (low precipitation) ──────
-            if past_precip:
+            # ── Check 3: Drought alert (zone-specific threshold) ──
+            drought_threshold = zone.get("drought_threshold_mm", 10.0)
+            if in_season and past_precip and drought_threshold > 0:
                 total_precip_7d = sum(past_precip)
-                if total_precip_7d < 2.0:  # Less than 2mm in 7 days = drought
+                if total_precip_7d < drought_threshold:
                     title = (
                         f"[METEO ALERTE] Secheresse a {zone['name']}: "
-                        f"seulement {total_precip_7d:.1f}mm sur 7 jours — "
+                        f"seulement {total_precip_7d:.1f}mm sur 7 jours "
+                        f"(seuil: {drought_threshold}mm) — "
                         f"{zone['drought_note']} — cultures: {zone['crops']}"
                     )
                     items.append(NewsItem(
@@ -305,7 +339,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         source_weight=1.15,
                     ))
 
-            # ── Check 4: Hurricane-force winds (Gulf, SE Asia) ──
+            # ── Check 4: Hurricane-force winds (always active for relevant zones) ──
             if forecast_wind:
                 max_wind = max(forecast_wind)
                 if max_wind >= 100:  # 100 km/h = tropical storm force
@@ -339,10 +373,16 @@ def fetch_weather_alerts() -> list[NewsItem]:
 # Env var: GNEWS_API_KEY
 
 # Targeted queries aligned with our edge categories
+# Split by specificity: frost and drought are separate (different commodities)
 GNEWS_QUERIES: list[dict[str, Any]] = [
     {
-        "q": "drought OR frost OR flood crop",
-        "tickers": [],  # Claude will infer
+        "q": "frost freeze crop damage agriculture",
+        "tickers": ["KC=F", "ZC=F", "ZW=F"],
+        "category": "weather",
+    },
+    {
+        "q": "drought harvest failure crop loss",
+        "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "weather",
     },
     {
@@ -758,7 +798,8 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
             pc_ratio = total_put_vol / total_call_vol if total_call_vol > 0 else 999
 
             # Alert on extreme put/call ratios
-            if pc_ratio > 2.0:
+            # Threshold 3.0 for EU equities (P/C > 2.0 is common on LVMH etc.)
+            if pc_ratio > 3.0:
                 title = (
                     f"[OPTIONS] {name} ({ticker}) — Put/Call ratio extreme: {pc_ratio:.1f} "
                     f"(puts: {total_put_vol}, calls: {total_call_vol}) — "
@@ -772,7 +813,7 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     related_tickers=[ticker],
                     source_weight=0.95,
                 ))
-            elif pc_ratio < 0.3 and total_call_vol > 1000:
+            elif pc_ratio < 0.25 and total_call_vol > 2000:
                 title = (
                     f"[OPTIONS] {name} ({ticker}) — Activite calls inhabituelle: P/C ratio {pc_ratio:.2f} "
                     f"(calls: {total_call_vol}, puts: {total_put_vol}) — "

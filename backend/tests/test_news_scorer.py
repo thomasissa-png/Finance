@@ -31,7 +31,7 @@ def test_freshness_four_hours_ago():
 
 def test_freshness_too_old():
     old = datetime.now(timezone.utc) - timedelta(hours=7)
-    assert _compute_freshness(old) == 0
+    assert _compute_freshness(old) == 5  # Floor at 5 for residual slow-transmission value
 
 
 def test_freshness_none():
@@ -46,7 +46,7 @@ def test_freshness_exactly_at_peak():
 
 def test_freshness_exactly_at_max():
     at_max = datetime.now(timezone.utc) - timedelta(hours=6)
-    assert _compute_freshness(at_max) == 0
+    assert _compute_freshness(at_max) == 5  # Floor at 5 for residual slow-transmission value
 
 
 def test_freshness_future_time():

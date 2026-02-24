@@ -30,11 +30,13 @@ TIME_WINDOWS = {
     ScanType.US: "15:30 — 20:00",
 }
 
-# (#24) Binary event keywords
+# (#24) Binary event keywords — only truly binary decisions
+# Note: the calendar system already blocks trades near these events.
+# This is a secondary safety net for news that slips through.
 BINARY_EVENT_KEYWORDS = [
-    "fed ", "bce ", "ecb ", "fomc", "nfp", "non-farm", "payrolls",
-    "rate decision", "taux directeur", "politique monetaire",
-    "jackson hole", "g7", "g20", "opec",
+    "fomc", "nfp", "non-farm", "payrolls",
+    "rate decision", "taux directeur",
+    "ecb rate", "boe rate", "fed rate",
 ]
 
 
@@ -133,12 +135,22 @@ def _calibrate_trade(
 
     Returns (target_price, stop_price, target_pct, stop_pct, risk_reward).
     """
-    # Target: score-weighted fraction of ATR
-    score_factor = 0.25 + (score / 100) * 0.45
+    # Target: score-weighted fraction of ATR, scaled by volatility regime
+    # Low-vol assets (forex, large indices): wider factor to overcome slippage
+    # High-vol assets (NG, small-cap): tighter to stay realistic for day trading
+    if avg_range < 1.0:
+        score_factor = 0.35 + (score / 100) * 0.55
+        stop_fraction = 0.5
+    elif avg_range > 5.0:
+        score_factor = 0.15 + (score / 100) * 0.30
+        stop_fraction = 0.3
+    else:
+        score_factor = 0.25 + (score / 100) * 0.45
+        stop_fraction = 0.4
     target_move_pct = max(TARGET_PERCENT, avg_range * score_factor)
 
-    # Stop: fixed 40% of ATR, independent of target
-    stop_move_pct = max(TARGET_PERCENT * 0.7, avg_range * 0.4)
+    # Stop: fraction of ATR adapted to volatility, independent of target
+    stop_move_pct = max(TARGET_PERCENT * 0.7, avg_range * stop_fraction)
 
     # (#7) Apply news category multipliers
     cat_mults = NEWS_CATEGORY_MULTIPLIERS.get(news_category, {"target_mult": 1.0, "stop_mult": 1.0})
@@ -264,17 +276,24 @@ def select_trade(
         if price is None:
             continue
 
-        # (#4) News déjà pricée detection
+        # (#4) News déjà pricée detection — direction-aware
+        # Only skip if price already moved IN THE SAME DIRECTION as our trade
+        # A counter-move is actually a better entry, not a reason to skip
         target_move_expected = avg_range * (0.25 + (best_news.total_score / 100) * 0.45)
         pre_move_pct = _detect_pre_move(price, prev_close, target_move_expected)
-        if pre_move_pct is not None and abs(pre_move_pct) > target_move_expected * 0.5:
-            logger.info("Skipping %s: news deja pricee (pre-move: %.2f%%, expected: %.2f%%)",
-                        ticker, pre_move_pct, target_move_expected)
-            continue
+        if pre_move_pct is not None:
+            if best_news.direction == Direction.LONG and pre_move_pct > target_move_expected * 0.8:
+                logger.info("Skipping %s: LONG news already priced (pre-move: +%.2f%%, expected: %.2f%%)",
+                            ticker, pre_move_pct, target_move_expected)
+                continue
+            elif best_news.direction == Direction.SHORT and pre_move_pct < -target_move_expected * 0.8:
+                logger.info("Skipping %s: SHORT news already priced (pre-move: %.2f%%, expected: -%.2f%%)",
+                            ticker, pre_move_pct, target_move_expected)
+                continue
 
-        # (#13) Gap buffer for morning scans
+        # (#13) Gap buffer for morning scans — both Europe (07:50) and US (14:30 = US open)
         gap_buffer_applied = False
-        if scan_type == ScanType.EUROPE and prev_close is not None:
+        if prev_close is not None:
             gap_pct = abs((price - prev_close) / prev_close * 100) if prev_close > 0 else 0
             if gap_pct > 0.5:
                 gap_buffer_applied = True

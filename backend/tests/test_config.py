@@ -89,8 +89,8 @@ def test_min_risk_reward():
 
 def test_source_weights_known_sources():
     """Source weights should be defined for major sources (#6)."""
-    assert SOURCE_WEIGHTS["reuters"] == 1.0
-    assert SOURCE_WEIGHTS["Reuters"] == 1.0
+    assert SOURCE_WEIGHTS["reuters"] == 0.85
+    assert SOURCE_WEIGHTS["Reuters"] == 0.85
     assert SOURCE_WEIGHTS["CNBC"] == 0.9
     assert SOURCE_WEIGHTS["Investing.com"] == 0.7
     assert SOURCE_WEIGHTS["Yahoo Finance"] == 0.8
