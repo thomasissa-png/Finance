@@ -379,18 +379,28 @@ def compute_learning_adjustments() -> dict[str, float]:
     return adjustments
 
 
+# ── Cached performance summary (invalidated with learning cache) ────
+_cached_perf_summary: str | None = None
+
+
+def invalidate_perf_summary_cache() -> None:
+    """Invalidate the performance summary cache. Called after daily journal."""
+    global _cached_perf_summary
+    _cached_perf_summary = None
+
+
 def build_performance_summary(max_recent: int = 15) -> str:
     """P1-#1: Build a concise performance summary to inject into Claude's scoring prompt.
 
     This creates the feedback loop: Claude sees its past performance so it can
-    calibrate better. Focuses on:
-    - Overall win rate and PnL
-    - Best/worst performing news categories
-    - Recent trade outcomes (last N)
-    - Known biases to correct
+    calibrate better. Cached to avoid re-reading trades.json on every scan.
 
     Returns empty string if not enough data.
     """
+    global _cached_perf_summary
+    if _cached_perf_summary is not None:
+        return _cached_perf_summary
+
     try:
         trades = load_trades()
     except Exception as exc:
@@ -464,4 +474,6 @@ def build_performance_summary(max_recent: int = 15) -> str:
                              "Les marches pricent PLUS LENTEMENT que tu ne le penses. Corrige a la hausse.")
 
     parts.append("--- FIN HISTORIQUE ---")
-    return "\n".join(parts)
+    result = "\n".join(parts)
+    _cached_perf_summary = result
+    return result

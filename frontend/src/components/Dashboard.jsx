@@ -6,6 +6,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState({});
 
   const fetchScans = useCallback(async () => {
+    // (F2) Skip polling when tab is not visible
+    if (document.hidden) return;
     try {
       const res = await fetch("/api/scan/latest");
       if (res.ok) {

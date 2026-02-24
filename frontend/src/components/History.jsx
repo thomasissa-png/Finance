@@ -19,13 +19,24 @@ function formatDate(iso) {
 
 export default function History() {
   const [trades, setTrades] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     fetch("/api/trades")
       .then((r) => (r.ok ? r.json() : []))
       .then(setTrades)
-      .catch(() => setTrades([]));
+      .catch(() => setTrades([]))
+      .finally(() => setIsLoading(false));
   }, []);
+
+  if (isLoading) {
+    return (
+      <div className="no-trade">
+        <div className="no-trade-icon">...</div>
+        <div className="no-trade-title">Chargement...</div>
+      </div>
+    );
+  }
 
   if (trades.length === 0) {
     return (
@@ -67,10 +78,10 @@ export default function History() {
             {trades
               .slice()
               .reverse()
-              .map((t, i) => {
+              .map((t) => {
                 const r = RESULT_LABELS[t.result] || RESULT_LABELS.PENDING;
                 return (
-                  <tr key={i}>
+                  <tr key={`${t.timestamp}-${t.ticker}`}>
                     <td>{formatDate(t.timestamp)}</td>
                     <td>{t.scan_type === "europe" ? "EU" : "US"}</td>
                     <td>

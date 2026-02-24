@@ -313,6 +313,26 @@ def select_trade(
     # Build decision summary — track why we chose the winner
     decision_parts = [f"{len(candidates)} candidats apres filtrage initial sur {len(scored_news)} news"]
 
+    # Pre-fetch prices for all candidate tickers in parallel to avoid sequential yfinance calls
+    from concurrent.futures import ThreadPoolExecutor
+    candidate_tickers = set()
+    for sn, _ in candidates:
+        for t in sn.impacted_tickers:
+            if t in ASSET_BY_TICKER and t in eligible_tickers:
+                candidate_tickers.add(t)
+                break
+
+    price_cache: dict[str, tuple] = {}
+    with ThreadPoolExecutor(max_workers=min(5, len(candidate_tickers) or 1)) as executor:
+        futures = {executor.submit(_get_price_and_range, t): t for t in candidate_tickers}
+        for future in futures:
+            ticker_key = futures[future]
+            try:
+                price_cache[ticker_key] = future.result(timeout=15)
+            except Exception as exc:
+                logger.debug("Price pre-fetch failed for %s: %s", ticker_key, exc)
+                price_cache[ticker_key] = (None, 1.5, None, None)
+
     # Try candidates until we find one with a valid price and R/R
     for rank, (best_news, best_score) in enumerate(candidates):
         ticker = next(t for t in best_news.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers)
@@ -330,7 +350,7 @@ def select_trade(
             })
             continue
 
-        price, avg_range, prev_close, volume_ratio = _get_price_and_range(ticker)
+        price, avg_range, prev_close, volume_ratio = price_cache.get(ticker, (None, 1.5, None, None))
         if price is None:
             rejection_log.append({
                 "title": best_news.news.title, "ticker": [ticker],

@@ -47,6 +47,10 @@ _last_scans: dict[str, dict] = {}
 # (#35) Rate limiting for triggers
 _last_trigger_times: dict[str, float] = {}
 
+# Health check yfinance cache (5 min TTL)
+_health_yf_cache: str = "unchecked"
+_health_yf_ts: float = 0.0
+
 
 def _load_scans_cache() -> dict[str, dict]:
     """Load last scan results from disk (#34)."""
@@ -373,13 +377,18 @@ def health():
         "dependencies": {},
     }
 
-    # Check yfinance
-    try:
-        import yfinance as yf
-        data = yf.Ticker("^GSPC").history(period="1d")
-        status["dependencies"]["yfinance"] = "ok" if not data.empty else "no_data"
-    except Exception as exc:
-        status["dependencies"]["yfinance"] = f"error: {exc}"
+    # Check yfinance (cached 5 min to avoid blocking on every health check)
+    global _health_yf_cache, _health_yf_ts
+    now_ts = time.time()
+    if now_ts - _health_yf_ts > 300:  # 5 min TTL
+        try:
+            import yfinance as yf
+            data = yf.Ticker("^GSPC").history(period="1d")
+            _health_yf_cache = "ok" if not data.empty else "no_data"
+        except Exception as exc:
+            _health_yf_cache = f"error: {exc}"
+        _health_yf_ts = now_ts
+    status["dependencies"]["yfinance"] = _health_yf_cache
 
     # Check Anthropic API key
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")

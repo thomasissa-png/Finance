@@ -34,6 +34,7 @@ from backend.app.learning import (
     build_performance_summary,
     compute_learning_adjustments,
     compute_performance,
+    invalidate_perf_summary_cache,
     load_trades,
     save_trade,
     update_trade_result,
@@ -601,6 +602,7 @@ class TestLearningPipeline:
 
     def test_performance_summary_content(self):
         """Performance summary should include key sections."""
+        invalidate_perf_summary_cache()
         trades = self._make_closed_trades(5, 3)
         raw = [t.model_dump(mode="json") for t in trades]
         with _with_temp_trades(raw):
@@ -612,6 +614,7 @@ class TestLearningPipeline:
 
     def test_performance_summary_empty_when_insufficient(self):
         """Summary should be empty with < 5 closed trades."""
+        invalidate_perf_summary_cache()
         trades = self._make_closed_trades(2, 1)
         raw = [t.model_dump(mode="json") for t in trades]
         with _with_temp_trades(raw):
@@ -828,6 +831,7 @@ class TestErrorResilience:
 
     def test_corrupt_trades_file_doesnt_crash_summary(self):
         """If load_trades fails, build_performance_summary returns empty."""
+        invalidate_perf_summary_cache()
         with patch("backend.app.learning.load_trades",
                    side_effect=Exception("corrupt file")):
             summary = build_performance_summary()

@@ -1,7 +1,6 @@
 """Scheduler: triggers scans at 07:50 and 14:30 CET + event-driven scans every 30 min."""
 
 import logging
-import time
 from zoneinfo import ZoneInfo
 
 from .event_scanner import determine_scan_type, should_trigger_scan
@@ -64,10 +63,11 @@ def run_event_check() -> dict | None:
     return result
 
 
-def run_scan(scan_type: ScanType, max_retries: int = 3, existing_trade_ticker: str | None = None) -> dict:
+def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: str | None = None) -> dict:
     """Execute a full scan pipeline: collect → score → select → save.
 
-    Retries up to max_retries times with exponential backoff (#37).
+    Retries up to max_retries times. No sleep between retries to avoid blocking
+    the scheduler thread (which would cause other scheduled jobs to be missed).
     Returns the ScanResult as a dict.
     """
     for attempt in range(max_retries + 1):
@@ -122,9 +122,7 @@ def run_scan(scan_type: ScanType, max_retries: int = 3, existing_trade_ticker: s
             logger.error("Scan %s failed (attempt %d/%d): %s",
                          scan_type.value, attempt + 1, max_retries + 1, exc)
             if attempt < max_retries:
-                wait = 2 ** (attempt + 1)
-                logger.info("Retrying in %ds...", wait)
-                time.sleep(wait)
+                logger.info("Retrying immediately (attempt %d)...", attempt + 2)
             else:
                 logger.error("All %d attempts failed for %s scan", max_retries + 1, scan_type.value)
                 return {

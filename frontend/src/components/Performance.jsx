@@ -2,13 +2,24 @@ import React, { useEffect, useState } from "react";
 
 export default function Performance() {
   const [stats, setStats] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     fetch("/api/performance")
       .then((r) => (r.ok ? r.json() : null))
       .then(setStats)
-      .catch(() => setStats(null));
+      .catch(() => setStats(null))
+      .finally(() => setIsLoading(false));
   }, []);
+
+  if (isLoading) {
+    return (
+      <div className="no-trade">
+        <div className="no-trade-icon">...</div>
+        <div className="no-trade-title">Chargement...</div>
+      </div>
+    );
+  }
 
   if (!stats || stats.total_trades === 0) {
     return (

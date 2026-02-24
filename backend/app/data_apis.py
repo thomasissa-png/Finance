@@ -7,6 +7,7 @@ All APIs are free-tier and optional (env var keys).
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -613,6 +614,35 @@ COT_CODES: dict[str, dict[str, str]] = {
 }
 
 
+# (N2) CFTC COT CSV cache — published weekly, no need to re-download every scan
+_cot_cache_lines: list[str] = []
+_cot_cache_ts: float = 0.0
+COT_CACHE_TTL = 86400  # 24 hours
+
+
+def _fetch_cot_csv_lines() -> list[str]:
+    """Fetch CFTC COT CSV lines with 24h cache (N2)."""
+    global _cot_cache_lines, _cot_cache_ts
+    if _cot_cache_lines and (time.time() - _cot_cache_ts) < COT_CACHE_TTL:
+        return _cot_cache_lines
+
+    current_year = datetime.now(timezone.utc).year
+    url = f"https://www.cftc.gov/dea/newcot/deacom{current_year}.txt"
+    resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+    if resp.status_code != 200:
+        url = "https://www.cftc.gov/dea/newcot/deacom.txt"
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+
+    if resp.status_code != 200:
+        logger.debug("COT data not available: %d", resp.status_code)
+        return []
+
+    lines = resp.text.strip().split("\n")
+    _cot_cache_lines = lines
+    _cot_cache_ts = time.time()
+    return lines
+
+
 def fetch_cot_data() -> list[NewsItem]:
     """Fetch latest COT positioning data from CFTC.
 
@@ -623,24 +653,7 @@ def fetch_cot_data() -> list[NewsItem]:
     items: list[NewsItem] = []
 
     try:
-        # CFTC publishes COT data as CSV — we use the short format
-        # The Quandl/Nasdaq Data Link provides free access
-        current_year = datetime.now(timezone.utc).year
-        url = (
-            f"https://www.cftc.gov/dea/newcot/deacom{current_year}.txt"
-        )
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        if resp.status_code != 200:
-            # Try previous year's file format
-            url = f"https://www.cftc.gov/dea/newcot/deacom.txt"
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-
-        if resp.status_code != 200:
-            logger.debug("COT data not available: %d", resp.status_code)
-            return []
-
-        # Parse CSV — format is: Market_and_Exchange_Names, As_of_Date_In_Form_YYMMDD, ...
-        lines = resp.text.strip().split("\n")
+        lines = _fetch_cot_csv_lines()
         if len(lines) < 2:
             return []
 
@@ -873,29 +886,32 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
 
 
 def collect_structured_data() -> list[NewsItem]:
-    """Collect all structured data from APIs.
+    """Collect all structured data from APIs in parallel.
 
     Each source is best-effort — failures don't block the scan.
+    Sources are fetched concurrently to minimize total collection time.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     all_items: list[NewsItem] = []
+    sources = [
+        ("weather", fetch_weather_alerts),
+        ("eia", fetch_eia_data),
+        ("gnews", fetch_gnews_targeted),
+        ("usda", fetch_usda_crop_data),
+        ("cot", fetch_cot_data),
+        ("options", fetch_options_unusual_activity),
+    ]
 
-    # Weather alerts (free, no key needed — always run)
-    all_items.extend(fetch_weather_alerts())
-
-    # EIA energy data (needs EIA_API_KEY)
-    all_items.extend(fetch_eia_data())
-
-    # GNews targeted search (needs GNEWS_API_KEY)
-    all_items.extend(fetch_gnews_targeted())
-
-    # USDA crop data (needs USDA_API_KEY)
-    all_items.extend(fetch_usda_crop_data())
-
-    # COT positioning (free, no key)
-    all_items.extend(fetch_cot_data())
-
-    # Options unusual activity (free via yfinance)
-    all_items.extend(fetch_options_unusual_activity())
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {executor.submit(fn): name for name, fn in sources}
+        for future in as_completed(futures):
+            source_name = futures[future]
+            try:
+                items = future.result(timeout=45)
+                all_items.extend(items)
+            except Exception as exc:
+                logger.warning("Structured data source '%s' failed: %s", source_name, exc)
 
     if all_items:
         logger.info("Total structured data collected: %d items", len(all_items))

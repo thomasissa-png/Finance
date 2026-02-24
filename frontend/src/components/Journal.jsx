@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 
 const RESULT_LABELS = {
   TP_HIT: { label: "TP", cls: "tp" },
@@ -27,12 +27,14 @@ function formatDate(iso) {
 export default function Journal() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     fetch("/api/journal")
       .then((r) => (r.ok ? r.json() : []))
       .then(setEntries)
-      .catch(() => setEntries([]));
+      .catch(() => setEntries([]))
+      .finally(() => setIsLoading(false));
   }, []);
 
   const triggerJournal = async () => {
@@ -50,13 +52,33 @@ export default function Journal() {
     }
   };
 
-  // Group entries by date
-  const byDate = {};
-  entries.forEach((e) => {
-    if (!byDate[e.date]) byDate[e.date] = [];
-    byDate[e.date].push(e);
-  });
-  const sortedDates = Object.keys(byDate).sort().reverse();
+  // (F6) Memoize grouping and sorting to avoid re-computing on every render
+  const sortedDates = useMemo(() => {
+    const byDate = {};
+    entries.forEach((e) => {
+      if (!byDate[e.date]) byDate[e.date] = [];
+      byDate[e.date].push(e);
+    });
+    return Object.keys(byDate).sort().reverse();
+  }, [entries]);
+
+  const byDate = useMemo(() => {
+    const grouped = {};
+    entries.forEach((e) => {
+      if (!grouped[e.date]) grouped[e.date] = [];
+      grouped[e.date].push(e);
+    });
+    return grouped;
+  }, [entries]);
+
+  if (isLoading) {
+    return (
+      <div className="no-trade">
+        <div className="no-trade-icon">...</div>
+        <div className="no-trade-title">Chargement...</div>
+      </div>
+    );
+  }
 
   if (entries.length === 0) {
     return (
@@ -117,10 +139,10 @@ export default function Journal() {
                 </tr>
               </thead>
               <tbody>
-                {byDate[date].map((e, i) => {
+                {byDate[date].map((e) => {
                   const r = RESULT_LABELS[e.result] || RESULT_LABELS.PENDING;
                   return (
-                    <tr key={i}>
+                    <tr key={`${e.entry_time}-${e.ticker}`}>
                       <td className="journal-news-cell">
                         <div className="journal-news-title">{e.news_title}</div>
                         <div className="journal-news-source">{e.news_source}</div>

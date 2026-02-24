@@ -14,9 +14,11 @@ from .models import Direction, JournalEntry, TradeRecommendation, TradeResult
 # Module-level function for invalidating learning cache
 # Defined here so tests can patch it at backend.app.journal.invalidate_learning_cache
 def invalidate_learning_cache():
-    """Invalidate learning cache — delegates to scheduler module."""
+    """Invalidate learning and performance summary caches — delegates to scheduler module."""
     from .scheduler import invalidate_learning_cache as _invalidate
+    from .learning import invalidate_perf_summary_cache
     _invalidate()
+    invalidate_perf_summary_cache()
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +202,33 @@ def run_daily_journal() -> list[dict]:
 
     new_entries: list[JournalEntry] = []
 
+    # (I7) Pre-fetch all day prices in parallel to speed up journal closure
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    price_tasks: dict[tuple[str, str | None], TradeRecommendation] = {}
+    for trade in pending:
+        trade_date = trade.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
+        trade_key = (trade.ticker, trade.timestamp.isoformat())
+        if trade_key in existing_keys:
+            continue
+        fetch_date = trade_date if trade_date != today else None
+        price_tasks[(trade.ticker, fetch_date)] = trade
+
+    price_cache: dict[tuple[str, str | None], tuple[float | None, float | None, float | None]] = {}
+    if price_tasks:
+        with ThreadPoolExecutor(max_workers=min(5, len(price_tasks))) as executor:
+            futures = {
+                executor.submit(_fetch_day_prices, ticker, date): (ticker, date)
+                for ticker, date in price_tasks
+            }
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    price_cache[key] = future.result(timeout=15)
+                except Exception as exc:
+                    logger.warning("Parallel price fetch failed for %s: %s", key[0], exc)
+                    price_cache[key] = (None, None, None)
+
     for trade in pending:
         trade_date = trade.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
 
@@ -212,9 +241,9 @@ def run_daily_journal() -> list[dict]:
         if trade_date != today:
             logger.info("Force-closing old pending trade: %s from %s", trade.ticker, trade_date)
 
-        # Fetch prices for the correct date (historical if old trade)
+        # Use pre-fetched prices from parallel cache
         fetch_date = trade_date if trade_date != today else None
-        day_high, day_low, close = _fetch_day_prices(trade.ticker, date=fetch_date)
+        day_high, day_low, close = price_cache.get((trade.ticker, fetch_date), (None, None, None))
         result, exit_price, pnl_pct = _determine_result(trade, day_high, day_low, close)
 
         # P1-#6: Compute actual pricing time and delay accuracy

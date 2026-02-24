@@ -58,12 +58,12 @@ def collect_yfinance_news() -> list[NewsItem]:
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(_fetch_news_for_asset, asset): asset for asset in ASSETS}
-        for future in as_completed(futures):
+        for future in as_completed(futures, timeout=30):
             try:
-                items.extend(future.result())
+                items.extend(future.result(timeout=10))
             except Exception as exc:
                 asset = futures[future]
-                logger.warning("Thread failed for %s: %s", asset.ticker, exc)
+                logger.debug("yfinance news timeout/error for %s: %s", asset.ticker, exc)
 
     return items
 
@@ -103,12 +103,12 @@ def collect_rss_news() -> list[NewsItem]:
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
-        for future in as_completed(futures):
+        for future in as_completed(futures, timeout=20):
             try:
-                items.extend(future.result())
+                items.extend(future.result(timeout=10))
             except Exception as exc:
                 url = futures[future]
-                logger.warning("RSS thread failed for %s: %s", url, exc)
+                logger.debug("RSS feed timeout/error for %s: %s", url, exc)
 
     return items
 
@@ -123,9 +123,9 @@ def collect_early_signal_news() -> list[NewsItem]:
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
-        for future in as_completed(futures):
+        for future in as_completed(futures, timeout=20):
             try:
-                result = future.result()
+                result = future.result(timeout=10)
                 if result:
                     items.extend(result)
             except Exception as exc:

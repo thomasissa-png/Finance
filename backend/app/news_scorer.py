@@ -160,44 +160,81 @@ def _compute_freshness(published: datetime | None) -> int:
 
 
 def _fetch_market_context() -> dict:
-    """Fetch current market context: VIX, major index changes, regime (#5, #8)."""
+    """Fetch current market context: VIX, major index changes, regime (#5, #8).
+
+    All yfinance calls are parallelized to minimize latency.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     context = {"vix": None, "regime": "normal", "indices": {}, "trends": {}}
+
+    def _fetch_vix():
+        data = yf.Ticker("^VIX").history(period="2d")
+        if not data.empty:
+            return round(float(data["Close"].iloc[-1]), 1)
+        return None
+
+    def _fetch_index_change(ticker):
+        data = yf.Ticker(ticker).history(period="2d")
+        if len(data) >= 2:
+            prev = float(data["Close"].iloc[-2])
+            curr = float(data["Close"].iloc[-1])
+            return round((curr - prev) / prev * 100, 2)
+        return None
+
+    def _fetch_trend(ticker):
+        data = yf.Ticker(ticker).history(period="25d")
+        if len(data) >= 20:
+            close_now = float(data["Close"].iloc[-1])
+            close_5d = float(data["Close"].iloc[-5])
+            close_20d = float(data["Close"].iloc[0])
+            trend_5d = "haussier" if close_now > close_5d * 1.005 else ("baissier" if close_now < close_5d * 0.995 else "neutre")
+            trend_20d = "haussier" if close_now > close_20d * 1.01 else ("baissier" if close_now < close_20d * 0.99 else "neutre")
+            return {"5d": trend_5d, "20d": trend_20d}
+        return None
+
     try:
-        # VIX
-        vix_data = yf.Ticker("^VIX").history(period="2d")
-        if not vix_data.empty:
-            context["vix"] = round(float(vix_data["Close"].iloc[-1]), 1)
-            if context["vix"] >= 30:
-                context["regime"] = "stress"
-            elif context["vix"] >= 20:
-                context["regime"] = "elevated"
-            elif context["vix"] <= 13:
-                context["regime"] = "calm"
+        indices = [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("^DJI", "DowJones")]
+        trends = [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("GC=F", "Or"), ("CL=F", "WTI"), ("EURUSD=X", "EURUSD")]
 
-        # Major index daily changes
-        for ticker, name in [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("^DJI", "DowJones")]:
+        with ThreadPoolExecutor(max_workers=9) as executor:
+            vix_future = executor.submit(_fetch_vix)
+            idx_futures = {executor.submit(_fetch_index_change, t): name for t, name in indices}
+            trend_futures = {executor.submit(_fetch_trend, t): name for t, name in trends}
+
+            # VIX
             try:
-                data = yf.Ticker(ticker).history(period="2d")
-                if len(data) >= 2:
-                    prev = float(data["Close"].iloc[-2])
-                    curr = float(data["Close"].iloc[-1])
-                    context["indices"][name] = round((curr - prev) / prev * 100, 2)
+                vix_val = vix_future.result(timeout=15)
+                if vix_val is not None:
+                    context["vix"] = vix_val
+                    if vix_val >= 30:
+                        context["regime"] = "stress"
+                    elif vix_val >= 20:
+                        context["regime"] = "elevated"
+                    elif vix_val <= 13:
+                        context["regime"] = "calm"
             except Exception:
                 pass
 
-        # (#8) Multi-timeframe trends (5d and 20d) for major assets
-        for ticker, name in [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("GC=F", "Or"), ("CL=F", "WTI"), ("EURUSD=X", "EURUSD")]:
-            try:
-                data = yf.Ticker(ticker).history(period="25d")
-                if len(data) >= 20:
-                    close_now = float(data["Close"].iloc[-1])
-                    close_5d = float(data["Close"].iloc[-5])
-                    close_20d = float(data["Close"].iloc[0])
-                    trend_5d = "haussier" if close_now > close_5d * 1.005 else ("baissier" if close_now < close_5d * 0.995 else "neutre")
-                    trend_20d = "haussier" if close_now > close_20d * 1.01 else ("baissier" if close_now < close_20d * 0.99 else "neutre")
-                    context["trends"][name] = {"5d": trend_5d, "20d": trend_20d}
-            except Exception:
-                pass
+            # Indices
+            for future in as_completed(idx_futures, timeout=15):
+                name = idx_futures[future]
+                try:
+                    val = future.result(timeout=1)
+                    if val is not None:
+                        context["indices"][name] = val
+                except Exception:
+                    pass
+
+            # Trends
+            for future in as_completed(trend_futures, timeout=15):
+                name = trend_futures[future]
+                try:
+                    val = future.result(timeout=1)
+                    if val is not None:
+                        context["trends"][name] = val
+                except Exception:
+                    pass
 
     except Exception as exc:
         logger.warning("Failed to fetch market context: %s", exc)
@@ -266,6 +303,7 @@ Headlines :
                 messages=[{"role": "user", "content": user_message}],
                 tools=[SCORING_TOOL],
                 tool_choice={"type": "tool", "name": "submit_news_scores"},
+                timeout=60.0,  # 60s hard timeout — prevents scan stall if API hangs
             )
 
             # (#9) Extract structured tool_use response
