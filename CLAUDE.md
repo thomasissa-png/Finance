@@ -22,7 +22,7 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 ## Data Sources — 4 phases par priorite d'edge
 
 ### Phase 0 : Structured Data APIs (PRIORITE MAX — donnees chiffrees)
-Module `data_apis.py` — donnees numeriques que Claude peut interpreter precisement :
+Module `data_apis.py` — 8 sources de donnees numeriques que Claude peut interpreter precisement :
 - **Open-Meteo** (GRATUIT, no key) : surveillance meteo 8 zones agricoles critiques
   - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo
   - Ukraine/Mer Noire (ble), Inde (ble/riz), Golfe du Mexique (petrole offshore)
@@ -30,25 +30,38 @@ Module `data_apis.py` — donnees numeriques que Claude peut interpreter precise
   - Alertes : gel, canicule, secheresse (<2mm/7j), vents violents (>100km/h)
 - **EIA API** (cle gratuite `EIA_API_KEY`) : stocks petrole/gaz/distillats hebdo avec chiffres exacts
 - **USDA NASS** (cle gratuite `USDA_API_KEY`) : crop progress, conditions, recoltes
-- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles
-  - Queries : "drought frost flood crop", "oil sanctions embargo", "port congestion shipping"
-  - "OPEC production cut", "wheat corn harvest", "military strike missile"
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 15 queries
+  - Originales : "drought frost flood crop", "oil sanctions embargo", "port congestion shipping"
+  - "OPEC production cut", "wheat corn harvest", "military strike missile", "copper mine strike"
+  - Nouvelles : "natural gas storage Europe TTF LNG", "palm oil export Indonesia Malaysia"
+  - "China import commodity soybean", "Baltic dry index shipping freight"
+  - "coffee frost Brazil Minas Gerais", "hurricane tropical storm Gulf Mexico"
 - **CFTC COT** (GRATUIT, no key) : positionnement commerciaux vs speculateurs
   - Alertes quand positionnement extreme (>20% OI net)
 - **Options Flow** (GRATUIT via yfinance) : put/call ratio extreme, volume spikes
+  - EU equities : TTE.PA, MC.PA, BNP.PA, SAN.PA, AI.PA (seuil P/C > 3.0)
+  - US ETFs : SPY, QQQ, USO, GLD, SLV, CORN, WEAT (seuil P/C > 1.5)
+  - Mappage ETF→tickers : SPY→^GSPC, USO→CL=F/BZ=F, GLD→GC=F, CORN→ZC=F, WEAT→ZW=F
+- **NASA EONET** (GRATUIT, no key) : Earth Observatory Natural Events Tracker
+  - Evenements : tempetes, feux de foret, volcans, inondations, seismes
+  - Mappage categories→tickers : storms→CL=F/NG=F, wildfires→ZW=F/ZC=F, volcanoes→GC=F
+  - Retry automatique sur 503 (serveur sous charge)
+- **GIE AGSI** (cle gratuite `GIE_AGSI_API_KEY`) : stockage gaz europeen
+  - Niveaux en % : alerte si < 30% (critique bas) ou > 90% (tres haut)
+  - Impact : NG=F (gaz naturel)
 
-Poids premium : Open-Meteo=1.15, EIA=1.1, USDA=1.1, CFTC=1.05, Options=0.95
+Poids premium : Open-Meteo=1.15, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.1, CFTC=1.05, Options=0.95
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
-Sources configurees dans `EARLY_SIGNAL_FEEDS` (17 feeds — verifie et corrige) :
-- **Meteo/Agri** : NCEI (climat/precipitation), SPC (orages/tornades), NWS (alertes nationales), api.weather.gov (ATOM alerts CAP v1.2)
-- **USDA/FAO** : NASS reports + news (recoltes, stocks, previsions), FAO newsroom
-- **Geopolitique** : State Department (press releases), IAEA (pressalerts — nucleaire/sanctions)
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (18 feeds — verifie 2026-02-25) :
+- **Meteo/Agri** : NCEI (climat), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique)
+- **USDA/FAO** : NASS reports (recoltes, stocks), FAO newsroom
+- **Geopolitique/Defense** : Defense.gov (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
 - **Energie** : EIA Today in Energy, OilPrice
-- **Maritime** : gCaptain (intermittent 403), MarineLink, Maritime Executive (backups pour resilience)
+- **Maritime/Shipping** : gCaptain, MarineLink, Maritime Executive, Splash247 (ports, containers, BDI)
 - **Banques centrales** : ECB, Federal Reserve, Bank of England (speeches)
 
-**Feeds remplaces** (404/DNS dead) : drought.gov→NCEI+SPC, weather.gov alerts→api.weather.gov ATOM, CPC NCEP→NWS, usda.gov→NASS, fao.org→FAO newsroom, iaea.org/feeds/press-releases→pressalerts
+**Feeds remplaces** : State Dept (mort, PNG)→Defense.gov, USDA NASS News (stale sept 2025)→supprime
 
 ### Phase 2 : Yahoo Finance (yfinance)
 Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API.
@@ -74,11 +87,11 @@ Module `economic_calendar.py` — bloque les trades avant les evenements macro m
 Module `event_scanner.py` — surveillance continue des feeds early-signal :
 - **Cron** : toutes les 30 minutes pendant les heures de trading (07:00-19:30 CET), lundi-vendredi
 - **Weekend** : desactive (weekday check dans `should_trigger_scan()` + `day_of_week` dans CronTrigger)
-- **Detection** : mots-cles a fort potentiel dans les titres RSS
-  - weather : drought, frost, hurricane, heatwave, flood...
-  - supply_chain : pipeline explosion, port closed, canal blocked, embargo...
-  - geopolitical : military strike, sanctions, nuclear, invasion...
-  - commodity : opec cut, crop failure, stockpile draw, shortage...
+- **Detection** : mots-cles a fort potentiel dans les titres RSS (v3.1 — elargi)
+  - weather : drought, frost, hurricane, typhoon, tropical storm, el nino, la nina, wildfire, volcanic eruption, earthquake, monsoon failure, record heat/cold...
+  - supply_chain : pipeline explosion, port closed, canal blocked, embargo, container shortage, baltic dry, freight rate surge, vessel grounding, lng terminal, strategic reserve...
+  - geopolitical : military strike, sanctions, nuclear, invasion, carrier strike group, no-fly zone, military buildup, arms deal...
+  - commodity : opec cut, crop failure, stockpile draw, shortage, gas storage, ttf price, palm oil export, coffee frost, china import, wheat export ban...
 - **Trigger** : si signal detecte → scan complet immediat (respecte cooldown 5min)
 - **Scan type** : avant 14:00 = europe, apres 14:00 = us
 
@@ -242,14 +255,15 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **Requis** : `ANTHROPIC_API_KEY`
 - **Optionnels** (gratuits, ameliorent la couverture) :
   - `EIA_API_KEY` : donnees energie EIA (https://www.eia.gov/opendata/register.php)
-  - `GNEWS_API_KEY` : recherche news ciblee (https://gnews.io/)
+  - `GNEWS_API_KEY` : recherche news ciblee — 15 queries (https://gnews.io/)
   - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
-- yfinance, Open-Meteo, CFTC COT et RSS ne necessitent aucune cle
+  - `GIE_AGSI_API_KEY` : stockage gaz europeen (https://agsi.gie.eu/ — inscription gratuite)
+- yfinance, Open-Meteo, CFTC COT, NASA EONET et RSS ne necessitent aucune cle
 
 ## Performance (optimisations v3.1)
 
 ### Backend — Parallelisation I/O
-- **collect_structured_data()** : 6 sources API en parallele (ThreadPoolExecutor, max_workers=6, timeout 45s)
+- **collect_structured_data()** : 8 sources API en parallele (ThreadPoolExecutor, max_workers=8, timeout 45s)
 - **collect_all_news()** : 4 sources (structured, early-signal, yfinance, rss) en parallele
 - **_fetch_market_context()** : 9 appels yfinance en parallele (VIX + indices + trends)
 - **select_trade()** : pre-fetch de tous les prix candidats en parallele avant evaluation

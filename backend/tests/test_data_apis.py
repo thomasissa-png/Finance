@@ -211,7 +211,9 @@ def test_collect_structured_data_returns_list():
          patch("backend.app.data_apis.fetch_gnews_targeted", return_value=[]), \
          patch("backend.app.data_apis.fetch_usda_crop_data", return_value=[]), \
          patch("backend.app.data_apis.fetch_cot_data", return_value=[]), \
-         patch("backend.app.data_apis.fetch_options_unusual_activity", return_value=[]):
+         patch("backend.app.data_apis.fetch_options_unusual_activity", return_value=[]), \
+         patch("backend.app.data_apis.fetch_nasa_eonet_events", return_value=[]), \
+         patch("backend.app.data_apis.fetch_gie_agsi_data", return_value=[]):
         result = collect_structured_data()
     assert isinstance(result, list)
     assert len(result) == 0

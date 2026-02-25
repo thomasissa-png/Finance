@@ -436,6 +436,37 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "tickers": ["HG=F"],
         "category": "supply_chain",
     },
+    # ── New queries added for broader coverage ──
+    {
+        "q": "natural gas storage Europe TTF LNG",
+        "tickers": ["NG=F"],
+        "category": "commodity",
+    },
+    {
+        "q": "palm oil export Indonesia Malaysia MPOB",
+        "tickers": ["ZS=F"],  # Soy as proxy for vegetable oils
+        "category": "commodity",
+    },
+    {
+        "q": "China import commodity soybean iron ore",
+        "tickers": ["ZS=F", "HG=F"],
+        "category": "commodity",
+    },
+    {
+        "q": "Baltic dry index shipping freight rate",
+        "tickers": ["HG=F"],  # BDI = proxy industrial activity
+        "category": "supply_chain",
+    },
+    {
+        "q": "coffee frost Brazil Minas Gerais cold wave",
+        "tickers": ["KC=F", "SB=F"],
+        "category": "weather",
+    },
+    {
+        "q": "hurricane tropical storm Gulf Mexico offshore oil",
+        "tickers": ["CL=F", "NG=F"],
+        "category": "weather",
+    },
 ]
 
 
@@ -783,13 +814,34 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
     """
     import yfinance as yf
 
-    # Only check equity tickers and major ETFs with liquid options
+    # Equity tickers + US ETFs with liquid options for broad coverage
     options_tickers = {
+        # EU equities
         "TTE.PA": "TotalEnergies",
         "MC.PA": "LVMH",
         "BNP.PA": "BNP Paribas",
         "SAN.PA": "Sanofi",
         "AI.PA": "Air Liquide",
+        # US index ETFs — smart money positioning
+        "SPY": "S&P 500 ETF",
+        "QQQ": "Nasdaq 100 ETF",
+        # Commodity ETFs — physical market signals
+        "USO": "US Oil Fund (WTI proxy)",
+        "GLD": "Gold ETF",
+        "SLV": "Silver ETF",
+        "CORN": "Corn ETF (Teucrium)",
+        "WEAT": "Wheat ETF (Teucrium)",
+    }
+
+    # Map ETF options tickers to our tracked universe tickers
+    etf_to_tracked: dict[str, list[str]] = {
+        "SPY": ["^GSPC"],
+        "QQQ": ["^IXIC"],
+        "USO": ["CL=F", "BZ=F"],
+        "GLD": ["GC=F"],
+        "SLV": ["SI=F"],
+        "CORN": ["ZC=F"],
+        "WEAT": ["ZW=F"],
     }
 
     items: list[NewsItem] = []
@@ -823,11 +875,17 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
             if total_vol == 0:
                 continue
 
+            # Use tracked tickers for ETFs, otherwise the ticker itself
+            related = etf_to_tracked.get(ticker, [ticker])
+
             pc_ratio = total_put_vol / total_call_vol if total_call_vol > 0 else 999
 
             # Alert on extreme put/call ratios
             # Threshold 3.0 for EU equities (P/C > 2.0 is common on LVMH etc.)
-            if pc_ratio > 3.0:
+            # Threshold 1.5 for US ETFs (more liquid, lower baseline P/C)
+            is_us_etf = ticker in etf_to_tracked
+            pc_threshold = 1.5 if is_us_etf else 3.0
+            if pc_ratio > pc_threshold:
                 title = (
                     f"[OPTIONS] {name} ({ticker}) — Put/Call ratio extreme: {pc_ratio:.1f} "
                     f"(puts: {total_put_vol}, calls: {total_call_vol}) — "
@@ -838,10 +896,10 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     source="Options Flow",
                     url="",
                     published=datetime.now(timezone.utc),
-                    related_tickers=[ticker],
+                    related_tickers=related,
                     source_weight=0.95,
                 ))
-            elif pc_ratio < 0.25 and total_call_vol > 2000:
+            elif pc_ratio < 0.25 and total_call_vol > (500 if is_us_etf else 2000):
                 title = (
                     f"[OPTIONS] {name} ({ticker}) — Activite calls inhabituelle: P/C ratio {pc_ratio:.2f} "
                     f"(calls: {total_call_vol}, puts: {total_put_vol}) — "
@@ -852,7 +910,7 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     source="Options Flow",
                     url="",
                     published=datetime.now(timezone.utc),
-                    related_tickers=[ticker],
+                    related_tickers=related,
                     source_weight=0.95,
                 ))
 
@@ -868,7 +926,7 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     source="Options Flow",
                     url="",
                     published=datetime.now(timezone.utc),
-                    related_tickers=[ticker],
+                    related_tickers=related,
                     source_weight=0.95,
                 ))
 
@@ -877,6 +935,197 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
 
     if items:
         logger.info("Detected %d unusual options activities", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 7. NASA EONET — Earth Observatory Natural Event Tracker
+# ═══════════════════════════════════════════════════════════════════════
+# Free, no API key needed. Tracks wildfires, severe storms, volcanoes, etc.
+# https://eonet.gsfc.nasa.gov/
+
+# Map EONET event categories to commodity tickers
+EONET_CATEGORY_MAP: dict[str, dict] = {
+    "severeStorms": {
+        "tickers": ["CL=F", "NG=F"],
+        "label": "Tempete severe",
+    },
+    "wildfires": {
+        "tickers": ["ZW=F", "ZC=F"],
+        "label": "Feu de foret",
+    },
+    "volcanoes": {
+        "tickers": ["GC=F"],  # Volcanic disruptions → safe haven
+        "label": "Eruption volcanique",
+    },
+    "floods": {
+        "tickers": ["ZW=F", "ZC=F", "ZS=F"],
+        "label": "Inondation",
+    },
+    "drought": {
+        "tickers": ["ZC=F", "ZW=F", "ZS=F", "KC=F"],
+        "label": "Secheresse",
+    },
+    "earthquakes": {
+        "tickers": ["GC=F", "CL=F"],  # Disruption + safe haven
+        "label": "Seisme",
+    },
+}
+
+
+def fetch_nasa_eonet_events() -> list[NewsItem]:
+    """Fetch recent natural events from NASA EONET.
+
+    Returns significant natural events (storms, wildfires, volcanoes, etc.)
+    that could impact commodities and energy markets.
+    """
+    items: list[NewsItem] = []
+
+    try:
+        url = "https://eonet.gsfc.nasa.gov/api/v3/events"
+        params = {"days": 3, "status": "open", "limit": 20}
+        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+
+        # EONET sometimes returns 503 under load — retry once
+        if resp.status_code == 503:
+            time.sleep(2)
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+
+        if resp.status_code != 200:
+            logger.debug("NASA EONET API error: %d", resp.status_code)
+            return []
+
+        data = resp.json()
+        events = data.get("events", [])
+
+        for event in events:
+            title_raw = event.get("title", "")
+            if not title_raw:
+                continue
+
+            # Match category
+            categories = event.get("categories", [])
+            matched_tickers: list[str] = []
+            label = "Evenement naturel"
+            for cat in categories:
+                cat_id = cat.get("id", "")
+                if cat_id in EONET_CATEGORY_MAP:
+                    mapping = EONET_CATEGORY_MAP[cat_id]
+                    matched_tickers.extend(mapping["tickers"])
+                    label = mapping["label"]
+
+            if not matched_tickers:
+                continue  # Skip categories we don't trade
+
+            # Get location info if available
+            geometry = event.get("geometry", [])
+            location_str = ""
+            if geometry:
+                coords = geometry[-1].get("coordinates", [])
+                if len(coords) >= 2:
+                    location_str = f" (lat {coords[1]:.1f}, lon {coords[0]:.1f})"
+
+            title = f"[NASA EONET] {label}: {title_raw}{location_str}"
+
+            items.append(NewsItem(
+                title=title,
+                source="NASA EONET",
+                url=event.get("link", "https://eonet.gsfc.nasa.gov/"),
+                published=datetime.now(timezone.utc),
+                related_tickers=list(set(matched_tickers)),
+                source_weight=1.1,
+            ))
+
+    except Exception as exc:
+        logger.debug("NASA EONET fetch error: %s", exc)
+
+    if items:
+        logger.info("Fetched %d NASA EONET natural events", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. GIE AGSI — European Gas Storage Inventory
+# ═══════════════════════════════════════════════════════════════════════
+# Free API key required: https://agsi.gie.eu/
+# Env var: GIE_AGSI_API_KEY
+# Provides EU aggregate gas storage levels — critical for NG=F and energy
+
+
+def fetch_gie_agsi_data() -> list[NewsItem]:
+    """Fetch European gas storage data from GIE AGSI.
+
+    Gas storage levels are a key driver of European energy prices.
+    Extreme levels (very high = bearish NG, very low = bullish NG)
+    provide directional signals.
+    """
+    api_key = os.environ.get("GIE_AGSI_API_KEY", "")
+    if not api_key:
+        logger.debug("GIE_AGSI_API_KEY not set — skipping EU gas storage data")
+        return []
+
+    items: list[NewsItem] = []
+
+    try:
+        url = "https://agsi.gie.eu/api/data/eu"
+        headers = {"x-key": api_key}
+        resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+
+        if resp.status_code != 200:
+            logger.debug("GIE AGSI API error: %d", resp.status_code)
+            return []
+
+        data = resp.json()
+        # API returns a list of daily entries, most recent first
+        entries = data.get("data", data) if isinstance(data, dict) else data
+        if not entries or not isinstance(entries, list):
+            return []
+
+        latest = entries[0] if entries else None
+        if not latest:
+            return []
+
+        full_pct = latest.get("full", latest.get("gasInStorage_pct"))
+        injection = latest.get("injection", latest.get("netWithdrawal"))
+        gas_date = latest.get("gasDayStart", latest.get("date", ""))
+
+        if full_pct is not None:
+            full_pct = float(full_pct)
+            alert = ""
+            if full_pct < 30:
+                alert = "CRITIQUE BAS"
+            elif full_pct < 50:
+                alert = "BAS"
+            elif full_pct > 90:
+                alert = "TRES HAUT"
+            elif full_pct > 80:
+                alert = "HAUT"
+
+            injection_str = ""
+            if injection is not None:
+                inj_val = float(injection)
+                injection_str = f", injection nette: {inj_val:+.2f} TWh/j"
+
+            title = (
+                f"[GIE AGSI] Stockage gaz EU: {full_pct:.1f}% plein"
+                f"{' — niveau ' + alert if alert else ''}"
+                f"{injection_str} (date: {gas_date})"
+            )
+
+            items.append(NewsItem(
+                title=title,
+                source="GIE AGSI",
+                url="https://agsi.gie.eu/",
+                published=datetime.now(timezone.utc),
+                related_tickers=["NG=F"],
+                source_weight=1.1,
+            ))
+
+    except Exception as exc:
+        logger.debug("GIE AGSI fetch error: %s", exc)
+
+    if items:
+        logger.info("Fetched GIE AGSI EU gas storage data")
     return items
 
 
@@ -901,9 +1150,11 @@ def collect_structured_data() -> list[NewsItem]:
         ("usda", fetch_usda_crop_data),
         ("cot", fetch_cot_data),
         ("options", fetch_options_unusual_activity),
+        ("eonet", fetch_nasa_eonet_events),
+        ("agsi", fetch_gie_agsi_data),
     ]
 
-    executor = ThreadPoolExecutor(max_workers=6)
+    executor = ThreadPoolExecutor(max_workers=8)
     futures = {executor.submit(fn): name for name, fn in sources}
     try:
         for future in as_completed(futures, timeout=50):

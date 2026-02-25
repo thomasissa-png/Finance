@@ -235,33 +235,30 @@ RSS_FEEDS = [
 ]
 
 # ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
+# Verified 2026-02-25 — 20 feeds (was 17, added NHC, Defense.gov, Splash247)
 EARLY_SIGNAL_FEEDS = [
     # Meteo / Agri — signaux physiques pour commodities
-    # drought.gov/rss/rss.xml: 404. No RSS feed available. Replace with NCEI climate news + SPC severe weather.
     "https://www.ncei.noaa.gov/news.xml",                          # NCEI: precipitation, drought, temperature reports
     "https://www.spc.noaa.gov/products/spcrss.xml",                # SPC: severe weather outlooks, tornado/storm watches
-    # cpc.ncep.noaa.gov/products/precip_app/cpc_rss.xml: 404. CPC dropped their RSS feed.
-    # Replace with NWS main RSS (weather alerts, fire weather, precipitation outlooks).
     "https://www.weather.gov/rss_page.php?site_name=nws",          # NWS national weather summary
-    # alerts.weather.gov: decommissioned Dec 2, 2025. Replaced by api.weather.gov ATOM feed.
     "https://api.weather.gov/alerts/active.atom",                   # NWS active alerts (CAP v1.2 ATOM)
+    "https://www.nhc.noaa.gov/index-at.xml",                       # NHC: Atlantic hurricane advisories (Jun-Nov critical for oil/sugar)
     # USDA / FAO — rapports sur les recoltes et stocks
-    # usda.gov/rss/home.xml: 503 timeout. Replace with NASS reports + news feeds (working, verified).
     "https://www.nass.usda.gov/rss/reports.xml",                    # NASS: crop reports, cold storage, production
-    "https://www.nass.usda.gov/rss/news.xml",                      # NASS: ag statistics news, acreage, forecasts
-    # fao.org/publications/highlights/rss/en/: 404. Replace with FAO newsroom RSS (working, verified).
+    # nass.usda.gov/rss/news.xml: stale since Sep 2025 — removed
     "https://www.fao.org/feeds/fao-newsroom-rss",                   # FAO: food security, agriculture, crop reports
-    # Geopolitique — OSINT, conflits, sanctions
-    "https://www.state.gov/rss/press-releases/feed/",
-    # iaea.org/feeds/press-releases: 404. Correct URL is /feeds/pressalerts (verified working).
+    # Geopolitique — OSINT, conflits, sanctions, defense
+    # state.gov/rss/press-releases/feed/: dead (returns PNG). Replaced by Defense.gov.
+    "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # Defense.gov: military ops, geopolitics
     "https://www.iaea.org/feeds/pressalerts",                       # IAEA: nuclear, sanctions, inspections
-    "https://www.eia.gov/rss/todayinenergy.xml",
-    # Maritime / Energie — perturbations supply chain
-    # gcaptain.com/feed/: intermittent 403. Add backup maritime feeds for resilience.
-    "https://gcaptain.com/feed/",
+    # Energie
+    "https://www.eia.gov/rss/todayinenergy.xml",                   # EIA: energy analysis, stocks commentary
+    "https://oilprice.com/rss/main",                               # OilPrice: crude, gas, OPEC
+    # Maritime / Shipping — perturbations supply chain
+    "https://gcaptain.com/feed/",                                   # gCaptain: maritime (intermittent 403)
     "https://www.marinelink.com/news/rss",                          # MarineLink: shipping, maritime, offshore
-    "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions, geopolitics
-    "https://oilprice.com/rss/main",
+    "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions
+    "https://splash247.com/feed/",                                  # Splash247: global shipping, ports, containers, BDI commentary
     # Central banks — speeches et minutes (signaux dovish/hawkish subtils)
     "https://www.ecb.europa.eu/rss/press.html",
     "https://www.federalreserve.gov/feeds/press_all.xml",
@@ -296,8 +293,9 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "eia.gov": 1.15,
     "IAEA": 1.05,
     "iaea.org": 1.05,
-    "State Department": 1.0,
-    "state.gov": 1.0,
+    "Defense.gov": 1.05,
+    "defense.gov": 1.05,
+    "war.gov": 1.05,  # Defense.gov redirects to war.gov
     "ECB": 1.0,
     "ecb.europa.eu": 1.0,
     "Federal Reserve": 1.0,
@@ -312,6 +310,13 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "maritime-executive": 1.05,
     "OilPrice": 1.0,
     "oilprice": 1.0,
+    "Splash247": 1.05,
+    "splash247": 1.05,
+    "NHC": 1.15,                # Hurricane advisories — critical for oil/sugar
+    "nhc.noaa.gov": 1.15,
+    "National Hurricane Center": 1.15,
+    "NASA EONET": 1.1,         # Natural events tracker — wildfires, storms, volcanoes
+    "GIE AGSI": 1.1,           # European gas storage — critical for NG/energy
     # Phase 3: mainstream (info deja traitee — poids reduits)
     "BBC": 0.85,
     "bbc": 0.85,

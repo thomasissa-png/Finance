@@ -33,6 +33,14 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
         "flood", "flooding", "heatwave", "heat wave", "wildfire",
         "secheresse", "gel", "inondation", "canicule", "ouragan",
         "blizzard", "tornado", "severe weather",
+        # NHC / tropical storm specifics
+        "tropical storm", "tropical depression", "hurricane warning",
+        "storm surge", "category 4", "category 5",
+        # Agricultural weather
+        "crop damage", "crop destruction", "el nino", "la nina",
+        "monsoon failure", "record heat", "record cold",
+        # Volcanic / seismic
+        "volcanic eruption", "eruption", "earthquake",
     ],
     "supply_chain": [
         "port closed", "port congestion", "canal blocked", "shipping disruption",
@@ -40,6 +48,12 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
         "mine collapse", "mine strike", "production halt", "supply disruption",
         "export ban", "export restriction", "embargo",
         "suez", "panama canal", "strait of hormuz", "bab el-mandeb",
+        # Shipping / freight
+        "container shortage", "freight rate surge", "baltic dry",
+        "vessel grounding", "ship collision", "maritime accident",
+        "lng terminal", "lng tanker", "gas pipeline",
+        # Storage / inventory
+        "storage capacity", "tank farm", "strategic reserve",
     ],
     "geopolitical": [
         "military strike", "missile attack", "air strike", "invasion",
@@ -47,12 +61,22 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
         "coup", "regime change", "border clash", "war declaration",
         "ceasefire", "peace deal", "troops deployed", "naval blockade",
         "drone attack", "terrorist attack",
+        # Defense / military
+        "military buildup", "military deployment", "carrier strike group",
+        "no-fly zone", "military exercise", "arms deal",
     ],
     "commodity": [
         "opec cut", "opec+ cut", "production cut", "output reduction",
         "crop failure", "harvest failure", "stockpile draw", "inventory draw",
         "record low stocks", "supply shortage", "shortage",
         "record export", "export surge", "demand surge",
+        # Gas / LNG
+        "gas storage", "ttf price", "lng shortage", "gas injection",
+        # Agricultural / palm oil / coffee
+        "palm oil export", "coffee frost", "sugar crop",
+        "soybean import", "wheat export ban", "corn harvest delay",
+        # China demand
+        "china import", "china commodity", "china stockpile",
     ],
 }
 
