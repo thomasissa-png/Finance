@@ -35,7 +35,7 @@ class ErrorBoundary extends React.Component {
           <div className="no-trade-icon">!</div>
           <div className="no-trade-title">Erreur de rendu</div>
           <div className="no-trade-reason">
-            {this.state.error?.message || "Une erreur inattendue est survenue."}
+            {this.state.error?.message || "Une erreur inattendue est survenue"}
           </div>
           <button
             className="trigger-btn"
@@ -63,12 +63,12 @@ function getHeaderStatus() {
   const now = new Date();
   const day = now.getDay(); // 0=Sunday, 6=Saturday
   if (day === 0 || day === 6) {
-    return { cls: "weekend", text: "Marches fermes" };
+    return { cls: "weekend", text: "Marchés fermés" };
   }
   // Paris-ish approximation: trading hours 07:00-20:00 CET
   const hour = now.getHours();
   if (hour >= 7 && hour < 20) {
-    return { cls: "online", text: "Marches ouverts" };
+    return { cls: "online", text: "Marchés ouverts" };
   }
   return { cls: "offline", text: "Hors session" };
 }

@@ -58,12 +58,12 @@ export default function History() {
       <div className="no-trade">
         <div className="no-trade-icon">—</div>
         {/* (D13) Personalized empty state */}
-        <div className="no-trade-title">Aucun trade enregistre</div>
+        <div className="no-trade-title">Aucun trade enregistré</div>
         <div className="no-trade-reason">
-          Les trades apparaitront ici apres le premier scan.
+          Les trades apparaîtront ici après le premier scan.
         </div>
         <div className="no-trade-meta">
-          <span className="no-trade-tag">Scans : 07:50 + 14:30 CET</span>
+          <span className="no-trade-tag">Scans : 07:50, 11:15, 14:50, 17:00 CET</span>
           <span className="no-trade-tag">Lun-Ven uniquement</span>
         </div>
       </div>
@@ -86,12 +86,12 @@ export default function History() {
               <th>Scan</th>
               <th>Actif</th>
               <th>Dir.</th>
-              <th>Entree</th>
+              <th>Entrée</th>
               <th>Objectif</th>
               <th>Stop</th>
               <th>R/R</th>
               <th>Conf.</th>
-              <th>Resultat</th>
+              <th>Résultat</th>
               <th>P&L</th>
             </tr>
           </thead>
@@ -104,7 +104,7 @@ export default function History() {
                 return (
                   <tr key={`${t.timestamp}-${t.ticker}`}>
                     <td>{formatDate(t.timestamp)}</td>
-                    <td>{t.scan_type === "europe" ? "EU" : "US"}</td>
+                    <td>{t.scan_type === "europe" ? "Europe" : "US"}</td>
                     <td>
                       <div>
                         {t.asset_name}{" "}
@@ -114,7 +114,7 @@ export default function History() {
                       </div>
                       {t.binary_event_warning && (
                         <div className="trade-warning-inline" style={{ fontSize: 10 }}>
-                          Evt. binaire
+                          Évt. binaire
                         </div>
                       )}
                     </td>

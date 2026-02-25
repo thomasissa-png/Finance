@@ -94,9 +94,9 @@ export default function Dashboard() {
         const result = await res.json();
         setScans((prev) => ({ ...prev, [scanType]: result }));
         if (result.has_trade) {
-          addToast(`Trade detecte : ${result.recommendation?.ticker}`, "success");
+          addToast(`Trade détecté : ${result.recommendation?.ticker}`, "success");
         } else {
-          addToast(`Scan ${scanType} termine — pas de trade`, "warning");
+          addToast(`Scan ${scanType} terminé — pas de trade`, "warning");
         }
       } else {
         const err = await res.json().catch(() => ({}));
@@ -104,7 +104,7 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error("Trigger failed:", err);
-      addToast("Erreur reseau", "error");
+      addToast("Erreur réseau", "error");
     } finally {
       setLoading((prev) => ({ ...prev, [scanType]: false }));
     }

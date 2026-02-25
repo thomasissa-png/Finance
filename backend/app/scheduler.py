@@ -84,7 +84,7 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
                 return {
                     "scan_type": scan_type.value,
                     "has_trade": False,
-                    "reason_no_trade": "Aucune news collectee",
+                    "reason_no_trade": "Aucune news collectée",
                     "news_analyzed": 0,
                 }
 
@@ -150,13 +150,13 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
                 return {
                     "scan_type": scan_type.value,
                     "has_trade": False,
-                    "reason_no_trade": f"Scan echoue apres {max_retries + 1} tentatives: {exc}",
+                    "reason_no_trade": f"Scan échoué après {max_retries + 1} tentatives: {exc}",
                     "news_analyzed": 0,
                 }
 
     return {
         "scan_type": scan_type.value,
         "has_trade": False,
-        "reason_no_trade": "Echec inattendu",
+        "reason_no_trade": "Échec inattendu",
         "news_analyzed": 0,
     }

@@ -29,7 +29,7 @@ export default function TradeCard({ scan, label }) {
         {/* (D4+D13) Personalized empty state with meta info */}
         {analyzed > 0 && (
           <div className="no-trade-meta">
-            <span className="no-trade-tag">{analyzed} news analysees</span>
+            <span className="no-trade-tag">{analyzed} news analysées</span>
             {scan?.scan_type && (
               <span className="no-trade-tag">
                 {scan.scan_type === "europe" ? "Session Europe" : "Session US"}
@@ -81,7 +81,7 @@ export default function TradeCard({ scan, label }) {
 
         <div className="trade-grid">
           <div className="trade-metric">
-            <div className="trade-metric-label">Entree</div>
+            <div className="trade-metric-label">Entrée</div>
             <div className="trade-metric-value cyan">{t.entry_price}</div>
           </div>
           <div className="trade-metric">
@@ -104,7 +104,7 @@ export default function TradeCard({ scan, label }) {
             <div className="trade-metric-value cyan">{t.risk_reward}</div>
           </div>
           <div className="trade-metric">
-            <div className="trade-metric-label">Fenetre</div>
+            <div className="trade-metric-label">Fenêtre</div>
             <div className="trade-metric-value">{t.time_window}</div>
           </div>
           <div className="trade-metric">
@@ -123,12 +123,12 @@ export default function TradeCard({ scan, label }) {
             </span>
             {t.transmission_delay != null && (
               <span className="trade-info-badge neutral">
-                Delai pricing: {t.transmission_delay}/100
+                Délai pricing: {t.transmission_delay}/100
               </span>
             )}
             {t.market_awareness != null && (
               <span className="trade-info-badge neutral">
-                Visibilite: {t.market_awareness}/100
+                Visibilité: {t.market_awareness}/100
               </span>
             )}
           </div>
@@ -155,7 +155,7 @@ export default function TradeCard({ scan, label }) {
           <div className="trade-info-row">
             {t.volume_confirmed != null && (
               <span className={`trade-info-badge ${t.volume_confirmed ? "positive" : "neutral"}`}>
-                Vol: {t.volume_confirmed ? "confirme" : "faible"}
+                Vol: {t.volume_confirmed ? "confirmé" : "faible"}
               </span>
             )}
             {t.pre_move_pct != null && (

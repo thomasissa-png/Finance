@@ -185,7 +185,7 @@ def get_latest_scans():
 @app.get("/api/scan/latest/{scan_type}")
 def get_latest_scan(scan_type: str):
     """Get the latest result for a specific scan type."""
-    return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectue"})
+    return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectué"})
 
 
 PARIS_TZ = ZoneInfo("Europe/Paris")
@@ -207,7 +207,7 @@ def _run_triggered_scan(scan_type: str, st: ScanType, existing_ticker: list[str]
         _last_scans[scan_type] = {
             "scan_type": scan_type,
             "has_trade": False,
-            "reason_no_trade": f"Scan echoue: {exc}",
+            "reason_no_trade": f"Scan échoué : {exc}",
             "news_analyzed": 0,
         }
         _save_scans_cache(_last_scans)
@@ -225,7 +225,7 @@ def trigger_scan(scan_type: str):
     if now_paris.weekday() >= 5:  # 5=Saturday, 6=Sunday
         raise HTTPException(
             status_code=400,
-            detail="Marches fermes le week-end. Scan disponible du lundi au vendredi.",
+            detail="Marchés fermés le week-end. Scan disponible du lundi au vendredi.",
         )
 
     # (#35) Rate limiting
@@ -404,7 +404,7 @@ def trigger_event_check():
     if datetime.now(PARIS_TZ).weekday() >= 5:
         raise HTTPException(
             status_code=400,
-            detail="Marches fermes le week-end.",
+            detail="Marchés fermés le week-end.",
         )
     result = run_event_check()
     if result is None:

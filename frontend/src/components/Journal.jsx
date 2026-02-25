@@ -98,15 +98,15 @@ export default function Journal() {
             onClick={triggerJournal}
             disabled={loading}
           >
-            {loading ? "Generation..." : "Generer journal (22h)"}
+            {loading ? "Génération..." : "Générer journal (22h)"}
           </button>
         </div>
         <div className="no-trade">
           <div className="no-trade-icon">--</div>
           {/* (D13) Personalized empty state */}
-          <div className="no-trade-title">Aucune entree de journal</div>
+          <div className="no-trade-title">Aucune entrée de journal</div>
           <div className="no-trade-reason">
-            Le journal est genere automatiquement a 22h00 CET chaque jour ouvre.
+            Le journal est généré automatiquement à 22h00 CET chaque jour ouvré.
           </div>
           <div className="no-trade-meta">
             <span className="no-trade-tag">Auto : 22h00 CET</span>
@@ -125,7 +125,7 @@ export default function Journal() {
           onClick={triggerJournal}
           disabled={loading}
         >
-          {loading ? "Generation..." : "Generer journal (22h)"}
+          {loading ? "Génération..." : "Générer journal (22h)"}
         </button>
         {/* (D17) Export button — outline style */}
         <a href="/api/export/journal" className="trigger-btn export" style={{ textDecoration: "none" }}>
@@ -147,10 +147,10 @@ export default function Journal() {
                   <th>Score</th>
                   <th>Actif</th>
                   <th>Dir.</th>
-                  <th>Entree</th>
+                  <th>Entrée</th>
                   <th>Sortie</th>
                   <th>High/Low</th>
-                  <th>Resultat</th>
+                  <th>Résultat</th>
                   <th>Bilan</th>
                 </tr>
               </thead>
@@ -282,7 +282,7 @@ export default function Journal() {
                   </div>
                   <div className="journal-mobile-card-body">
                     <div>
-                      <div className="journal-mobile-label">Entree</div>
+                      <div className="journal-mobile-label">Entrée</div>
                       <div style={{ color: "var(--cyan)" }}>{e.entry_price}</div>
                     </div>
                     <div>

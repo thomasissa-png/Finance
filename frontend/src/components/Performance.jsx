@@ -26,13 +26,13 @@ export default function Performance() {
       <div className="no-trade">
         <div className="no-trade-icon">—</div>
         {/* (D13) Personalized empty state */}
-        <div className="no-trade-title">Pas encore de donnees</div>
+        <div className="no-trade-title">Pas encore de données</div>
         <div className="no-trade-reason">
-          Les statistiques apparaitront apres la cloture des premiers trades.
+          Les statistiques apparaîtront après la clôture des premiers trades.
         </div>
         <div className="no-trade-meta">
           <span className="no-trade-tag">Journal auto : 22h CET</span>
-          <span className="no-trade-tag">Min. 1 trade cloture</span>
+          <span className="no-trade-tag">Min. 1 trade clôturé</span>
         </div>
       </div>
     );
@@ -70,7 +70,7 @@ export default function Performance() {
             {stats.total_pnl_pct > 0 ? "+" : ""}
             {stats.total_pnl_pct}%
           </div>
-          <div className="perf-card-label">P&L cumule</div>
+          <div className="perf-card-label">P&L cumulé</div>
         </div>
         <div className="perf-card-primary">
           <div className="perf-card-value" style={{ color: "var(--cyan)" }}>
@@ -130,15 +130,15 @@ export default function Performance() {
               marginBottom: 12,
             }}
           >
-            Par categorie
+            Par catégorie
           </h3>
           <table className="history-table">
             <thead>
               <tr>
-                <th>Categorie</th>
+                <th>Catégorie</th>
                 <th>Trades</th>
                 <th>Win rate</th>
-                <th>P&L cumule</th>
+                <th>P&L cumulé</th>
               </tr>
             </thead>
             <tbody>
@@ -195,13 +195,13 @@ export default function Performance() {
                 <th>Session</th>
                 <th>Trades</th>
                 <th>Win rate</th>
-                <th>P&L cumule</th>
+                <th>P&L cumulé</th>
               </tr>
             </thead>
             <tbody>
               {Object.entries(stats.by_scan_type).map(([st, data]) => (
                 <tr key={st}>
-                  <td>{st === "europe" ? "Europe (07:50)" : "US (14:30)"}</td>
+                  <td>{st === "europe" ? "Europe" : "US"}</td>
                   <td>{data.total}</td>
                   <td>{data.win_rate}%</td>
                   <td
