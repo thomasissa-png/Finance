@@ -25,6 +25,14 @@ _RSS_HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
 
+# Category-specific cooldowns (seconds) — geopolitical escalates fast, weather is slower
+CATEGORY_COOLDOWNS: dict[str, int] = {
+    "geopolitical": 60,     # 1 min — wars/strikes escalate in seconds
+    "supply_chain": 120,    # 2 min — port closures, pipeline attacks develop fast
+    "commodity": 300,       # 5 min — commodity data is periodic
+    "weather": 300,         # 5 min — weather evolves slowly
+}
+
 # ── High-impact keywords that trigger immediate scans ─────────────
 # Organized by category with associated weight
 HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
@@ -80,14 +88,28 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
+# Keywords that warrant IMMEDIATE scan (confirmed high-impact events)
+# vs keywords that are informational (should trigger but with lower urgency)
+HIGH_PRIORITY_KEYWORDS: set[str] = {
+    # Confirmed events with clear directional impact
+    "hurricane warning", "category 4", "category 5", "storm surge",
+    "pipeline explosion", "port closed", "canal blocked", "refinery fire",
+    "military strike", "missile attack", "air strike", "invasion",
+    "sanctions imposed", "nuclear test", "naval blockade",
+    "crop failure", "harvest failure", "production halt", "export ban",
+    "drought", "frost", "freeze", "wildfire",
+    "opec cut", "opec+ cut",
+}
+
 # Flatten for quick lookup
 ALL_KEYWORDS: list[tuple[str, str]] = []
 for category, keywords in HIGH_IMPACT_KEYWORDS.items():
     for kw in keywords:
         ALL_KEYWORDS.append((kw.lower(), category))
 
-# Track last trigger time to respect cooldown
+# Track last trigger time per category to respect category-specific cooldowns
 _last_event_trigger: float = 0.0
+_last_category_trigger: dict[str, float] = {}
 
 # Track seen headlines to avoid re-triggering on the same news
 _seen_headlines: set[str] = set()
@@ -180,11 +202,14 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
     Checks:
     1. Are we within trading hours? (07:00-20:00 CET)
     2. Are there high-impact signals in the feeds?
-    3. Has enough time passed since last trigger? (cooldown)
+    3. Has enough time passed since last trigger? (category-specific cooldown)
+
+    Uses category-specific cooldowns: geopolitical=60s, supply_chain=120s, others=300s.
+    High-priority keywords (confirmed events) can bypass the general cooldown.
 
     Returns (should_trigger, trigger_events).
     """
-    global _last_event_trigger
+    global _last_event_trigger, _last_category_trigger
 
     now = datetime.now(PARIS_TZ)
 
@@ -193,13 +218,12 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
         return False, []
 
     # Only trigger during trading hours (07:00-19:30 CET)
-    # Leave margin before 20:00 close
     if now.hour < 7 or (now.hour >= 19 and now.minute >= 30):
         return False, []
 
-    # Respect cooldown
-    elapsed = time.time() - _last_event_trigger
-    if elapsed < TRIGGER_COOLDOWN_SECONDS:
+    # Hard minimum cooldown: 30s between any triggers (prevent spam)
+    elapsed_global = time.time() - _last_event_trigger
+    if elapsed_global < 30:
         return False, []
 
     triggers = scan_feeds_for_triggers()
@@ -207,15 +231,47 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
     if not triggers:
         return False, []
 
-    # Log what we found
+    # Filter triggers by category-specific cooldowns
+    current_time = time.time()
+    filtered_triggers = []
     for t in triggers:
+        trigger_categories = t.get("categories", [])
+        trigger_keywords = [kw.lower() for kw in t.get("keywords", [])]
+
+        # High-priority keywords bypass category cooldown (only respect 30s global minimum)
+        is_high_priority = any(kw in HIGH_PRIORITY_KEYWORDS for kw in trigger_keywords)
+
+        # Check category cooldown
+        should_include = is_high_priority  # High priority always passes
+        if not should_include:
+            for cat in trigger_categories:
+                cat_cooldown = CATEGORY_COOLDOWNS.get(cat, TRIGGER_COOLDOWN_SECONDS)
+                last_cat_trigger = _last_category_trigger.get(cat, 0.0)
+                if current_time - last_cat_trigger >= cat_cooldown:
+                    should_include = True
+                    break
+
+        if should_include:
+            filtered_triggers.append(t)
+
+    if not filtered_triggers:
+        return False, []
+
+    # Log what we found
+    for t in filtered_triggers:
+        priority = "HIGH-PRIORITY" if any(kw.lower() in HIGH_PRIORITY_KEYWORDS for kw in t.get("keywords", [])) else "SIGNAL"
         logger.info(
-            "HIGH-IMPACT SIGNAL: '%s' (source: %s, keywords: %s, categories: %s)",
-            t["title"], t["source"], t["keywords"], t["categories"],
+            "%s: '%s' (source: %s, keywords: %s, categories: %s)",
+            priority, t["title"], t["source"], t["keywords"], t["categories"],
         )
 
-    _last_event_trigger = time.time()
-    return True, triggers
+    # Update cooldown timestamps
+    _last_event_trigger = current_time
+    for t in filtered_triggers:
+        for cat in t.get("categories", []):
+            _last_category_trigger[cat] = current_time
+
+    return True, filtered_triggers
 
 
 def determine_scan_type() -> str:

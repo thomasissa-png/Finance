@@ -36,6 +36,8 @@ EIA_SERIES = {
     "PET.WDISTUS1.W": "US Distillate Fuel Stocks (Weekly)",
     # Weekly natural gas storage
     "NG.NW2_EPG0_SWO_R48_BCF.W": "US Natural Gas Storage (Weekly)",
+    # Refinery utilization — drop in utilization = crude demand collapse signal
+    "PET.WPULEUS3.W": "US Refinery Utilization Rate (Weekly %)",
 }
 
 
@@ -105,6 +107,8 @@ def fetch_eia_data() -> list[NewsItem]:
                 tickers = ["CL=F", "BZ=F"]
             elif "Natural Gas" in description:
                 tickers = ["NG=F"]
+            elif "Refinery" in description:
+                tickers = ["CL=F", "BZ=F"]
 
             # Build a precise headline with numbers
             direction = "hausse" if change > 0 else "baisse"
@@ -139,16 +143,22 @@ def fetch_eia_data() -> list[NewsItem]:
 # Critical agricultural zones with their commodity impacts
 # growing_months: months when crops are vulnerable (frost/heat matter)
 # drought_threshold_mm: zone-specific 7-day precipitation threshold
+# critical_months: subset of growing season where damage is most impactful
+#   (silking, grain fill, flowering — crop-dependent)
+# heat_stress_threshold: lower than heat_threshold — cumulative stress starts here
 AGRICULTURAL_ZONES: list[dict[str, Any]] = [
     {
         "name": "US Midwest Corn Belt",
         "lat": 41.5, "lon": -89.0,
         "tickers": ["ZC=F", "ZS=F", "ZW=F"],
         "crops": "mais, soja, ble",
-        "frost_threshold": -2,  # °C — late frost kills crops
-        "heat_threshold": 35,   # °C — corn silking stress starts at 35°C
+        "frost_threshold": -1,  # °C — adjusted: corn damage at -1°C during silking (was -2)
+        "heat_threshold": 35,   # °C — extreme heat alert
+        "heat_stress_threshold": 32,  # °C — corn pollen sterility starts at 32°C during silking
         "growing_months": [4, 5, 6, 7, 8, 9, 10],  # Apr-Oct
+        "critical_months": [6, 7, 8],  # Jun-Aug: silking + grain fill = max vulnerability
         "drought_threshold_mm": 10.0,  # 10mm/7d during growing season
+        "critical_drought_mm": 5.0,  # During critical months, even less rain = disaster
         "drought_note": "secheresse critique pendant la saison de croissance",
     },
     {
@@ -156,10 +166,13 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "lat": -21.0, "lon": -44.0,
         "tickers": ["KC=F", "SB=F"],
         "crops": "cafe, sucre",
-        "frost_threshold": 2,   # Coffee damage starts below 2°C
+        "frost_threshold": 0,   # °C — adjusted: coffee damage at 0°C with radiational cooling (was 2)
         "heat_threshold": 40,
+        "heat_stress_threshold": 35,
         "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Year-round (perennial)
+        "critical_months": [5, 6, 7, 8],  # May-Aug: Brazilian winter = frost risk peak for coffee
         "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 3.0,
         "drought_note": "secheresse = stress hydrique cafe",
     },
     {
@@ -167,11 +180,28 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "lat": -22.5, "lon": -47.5,
         "tickers": ["SB=F", "KC=F"],
         "crops": "sucre, ethanol, cafe",
-        "frost_threshold": 2,
+        "frost_threshold": 0,   # Adjusted from 2
         "heat_threshold": 40,
+        "heat_stress_threshold": 35,
         "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [5, 6, 7, 8],
         "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 3.0,
         "drought_note": "impacts recolte sucre",
+    },
+    {
+        "name": "Brazil Rio Grande do Sul (Soy/Corn)",
+        "lat": -29.5, "lon": -52.0,
+        "tickers": ["ZS=F", "ZC=F"],
+        "crops": "soja, mais",
+        "frost_threshold": -1,
+        "heat_threshold": 38,
+        "heat_stress_threshold": 33,
+        "growing_months": [9, 10, 11, 12, 1, 2, 3, 4],  # Sep-Apr (Southern hemisphere)
+        "critical_months": [12, 1, 2],  # Dec-Feb: flowering/grain fill
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "RS = major soja/mais producer, secheresse = export reduction",
     },
     {
         "name": "Ukraine/Black Sea (Wheat)",
@@ -180,20 +210,40 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "ble, mais",
         "frost_threshold": -20,  # Winter wheat hardened, extreme cold needed
         "heat_threshold": 35,
+        "heat_stress_threshold": 30,  # Wheat grain fill stress at 30°C
         "growing_months": [3, 4, 5, 6, 7, 8, 9, 10, 11],  # Mar-Nov
+        "critical_months": [5, 6, 7],  # May-Jul: grain fill
         "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
         "drought_note": "Mer Noire = 25% export ble mondial",
     },
     {
-        "name": "India (Wheat/Rice)",
-        "lat": 28.5, "lon": 77.0,
+        "name": "India Punjab/Haryana (Wheat)",
+        "lat": 30.0, "lon": 75.5,  # Adjusted: Punjab wheat belt center (was Delhi at 28.5, 77)
         "tickers": ["ZW=F"],
         "crops": "ble, riz",
         "frost_threshold": 0,
         "heat_threshold": 42,   # India heatwaves kill wheat
+        "heat_stress_threshold": 35,  # Sustained 35°C for 5+ days kills grain fill
         "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],  # Almost year-round
+        "critical_months": [3, 4, 5],  # Mar-May: wheat harvest + heat risk peak
         "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 2.0,
         "drought_note": "mousson faible = crise alimentaire",
+    },
+    {
+        "name": "Argentina Pampas (Soy/Corn/Wheat)",
+        "lat": -34.5, "lon": -59.0,
+        "tickers": ["ZS=F", "ZC=F", "ZW=F"],
+        "crops": "soja, mais, ble",
+        "frost_threshold": -2,
+        "heat_threshold": 38,
+        "heat_stress_threshold": 33,
+        "growing_months": [9, 10, 11, 12, 1, 2, 3, 4],  # Sep-Apr
+        "critical_months": [12, 1, 2],  # Dec-Feb: flowering
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "3eme exportateur soja mondial — La Nina = secheresse",
     },
     {
         "name": "Gulf of Mexico (Oil/Gas)",
@@ -202,8 +252,11 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "petrole offshore, gaz",
         "frost_threshold": -999,  # Not relevant
         "heat_threshold": 999,
+        "heat_stress_threshold": 999,
         "growing_months": [6, 7, 8, 9, 10, 11],  # Hurricane season Jun-Nov
+        "critical_months": [8, 9, 10],  # Aug-Oct: peak hurricane season
         "drought_threshold_mm": -1,  # Drought not relevant for offshore
+        "critical_drought_mm": -1,
         "drought_note": "ouragans = arret production offshore",
     },
     {
@@ -213,8 +266,11 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "huile de palme, riz",
         "frost_threshold": -999,
         "heat_threshold": 40,
+        "heat_stress_threshold": 37,
         "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [1, 2, 3, 7, 8, 9],  # Dry seasons = El Nino risk
         "drought_threshold_mm": 15.0,  # Tropical — needs more rain
+        "critical_drought_mm": 8.0,
         "drought_note": "El Nino = secheresse palmiers",
     },
     {
@@ -224,8 +280,11 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "crops": "ble",
         "frost_threshold": -5,
         "heat_threshold": 42,
+        "heat_stress_threshold": 35,
         "growing_months": [4, 5, 6, 7, 8, 9, 10, 11],  # Apr-Nov (Southern hemisphere)
+        "critical_months": [9, 10, 11],  # Sep-Nov: grain fill
         "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 2.0,
         "drought_note": "secheresse = export reduction",
     },
 ]
@@ -235,6 +294,15 @@ def _is_growing_season(zone: dict[str, Any]) -> bool:
     """Check if the current month is within the zone's growing season."""
     current_month = datetime.now(timezone.utc).month
     return current_month in zone.get("growing_months", range(1, 13))
+
+
+def _is_critical_period(zone: dict[str, Any]) -> bool:
+    """Check if we're in the critical growing period (silking, grain fill, flowering).
+
+    During critical months, weather impacts are 2-3x more severe on yields.
+    """
+    current_month = datetime.now(timezone.utc).month
+    return current_month in zone.get("critical_months", [])
 
 
 def fetch_weather_alerts() -> list[NewsItem]:
@@ -312,8 +380,22 @@ def fetch_weather_alerts() -> list[NewsItem]:
                     ))
 
             # ── Check 2: Heat stress alert (only during growing season) ──
+            # Two tiers: extreme heat (heat_threshold) and cumulative stress
+            # (heat_stress_threshold for 3+ consecutive days during critical months)
             if in_season and forecast_temp_maxs and zone["heat_threshold"] < 100:
                 max_forecast = max(forecast_temp_maxs)
+                is_critical = _is_critical_period(zone)
+                heat_stress_thresh = zone.get("heat_stress_threshold", zone["heat_threshold"])
+
+                # Count consecutive days above stress threshold (first 3 days of forecast = highest confidence)
+                consecutive_stress_days = 0
+                for temp in raw_forecast_temp_maxs[:5]:  # Only days 1-5 (reliable forecast window)
+                    if temp is not None and temp >= heat_stress_thresh:
+                        consecutive_stress_days += 1
+                    elif temp is not None:
+                        break  # Streak broken
+
+                # Alert 2a: Extreme heat spike
                 if max_forecast >= zone["heat_threshold"]:
                     heat_date = "prochains jours"
                     if len(dates) > 7:
@@ -321,9 +403,10 @@ def fetch_weather_alerts() -> list[NewsItem]:
                             if val is not None and val == max_forecast:
                                 heat_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
                                 break
+                    critical_tag = " [PERIODE CRITIQUE — silking/grain fill]" if is_critical else ""
                     title = (
                         f"[METEO ALERTE] Canicule prevue a {zone['name']}: {max_forecast:.1f}°C "
-                        f"le {heat_date} (seuil: {zone['heat_threshold']}°C) — "
+                        f"le {heat_date} (seuil: {zone['heat_threshold']}°C){critical_tag} — "
                         f"stress thermique: {zone['crops']}"
                     )
                     items.append(NewsItem(
@@ -335,16 +418,16 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         source_weight=1.15,
                     ))
 
-            # ── Check 3: Drought alert (zone-specific threshold) ──
-            drought_threshold = zone.get("drought_threshold_mm", 10.0)
-            if in_season and past_precip and drought_threshold > 0:
-                total_precip_7d = sum(past_precip)
-                if total_precip_7d < drought_threshold:
+                # Alert 2b: Cumulative heat stress (3+ days above stress threshold during critical period)
+                # This catches the "32°C for 5 days during silking = pollen sterility" scenario
+                elif is_critical and consecutive_stress_days >= 3:
+                    stress_temps = [t for t in raw_forecast_temp_maxs[:5] if t is not None and t >= heat_stress_thresh]
+                    avg_stress = sum(stress_temps) / len(stress_temps) if stress_temps else 0
                     title = (
-                        f"[METEO ALERTE] Secheresse a {zone['name']}: "
-                        f"seulement {total_precip_7d:.1f}mm sur 7 jours "
-                        f"(seuil: {drought_threshold}mm) — "
-                        f"{zone['drought_note']} — cultures: {zone['crops']}"
+                        f"[METEO ALERTE] Stress thermique cumule a {zone['name']}: "
+                        f"{consecutive_stress_days} jours consecutifs > {heat_stress_thresh}°C "
+                        f"(moy: {avg_stress:.1f}°C) — PERIODE CRITIQUE (silking/grain fill) — "
+                        f"risque sterilite pollen / perte rendement: {zone['crops']}"
                     )
                     items.append(NewsItem(
                         title=title,
@@ -352,8 +435,35 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         url="https://open-meteo.com",
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
-                        source_weight=1.15,
+                        source_weight=1.2,  # Higher weight for cumulative stress during critical period
                     ))
+
+            # ── Check 3: Drought alert (zone-specific, critical-period-aware) ──
+            drought_threshold = zone.get("drought_threshold_mm", 10.0)
+            if in_season and past_precip and drought_threshold > 0:
+                # Require sufficient data (>= 5 of 7 days) to avoid false alerts
+                if len(past_precip) >= 5:
+                    total_precip_7d = sum(past_precip)
+                    is_critical = _is_critical_period(zone)
+                    # Use tighter threshold during critical months
+                    effective_threshold = zone.get("critical_drought_mm", drought_threshold) if is_critical else drought_threshold
+                    if total_precip_7d < effective_threshold:
+                        critical_tag = " [PERIODE CRITIQUE]" if is_critical else ""
+                        severity = "SEVERE" if total_precip_7d < effective_threshold * 0.5 else ""
+                        title = (
+                            f"[METEO ALERTE] Secheresse{' ' + severity if severity else ''} a {zone['name']}: "
+                            f"seulement {total_precip_7d:.1f}mm sur 7 jours "
+                            f"(seuil: {effective_threshold}mm){critical_tag} — "
+                            f"{zone['drought_note']} — cultures: {zone['crops']}"
+                        )
+                        items.append(NewsItem(
+                            title=title,
+                            source="Open-Meteo",
+                            url="https://open-meteo.com",
+                            published=datetime.now(timezone.utc),
+                            related_tickers=zone["tickers"],
+                            source_weight=1.2 if is_critical else 1.15,
+                        ))
 
             # ── Check 4: Hurricane-force winds (always active for relevant zones) ──
             if forecast_wind:
@@ -467,6 +577,35 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "tickers": ["CL=F", "NG=F"],
         "category": "weather",
     },
+    # ── Portuguese queries for Brazil (12-24h earlier than English media) ──
+    {
+        "q": "geada cafe Minas Gerais frio",
+        "tickers": ["KC=F", "SB=F"],
+        "category": "weather",
+        "lang": "pt",
+    },
+    {
+        "q": "seca milho soja safra quebra",
+        "tickers": ["ZS=F", "ZC=F"],
+        "category": "weather",
+        "lang": "pt",
+    },
+    # ── Missing high-edge categories ──
+    {
+        "q": "wheat rust crop disease blight fungus",
+        "tickers": ["ZW=F", "ZC=F", "ZS=F"],
+        "category": "commodity",
+    },
+    {
+        "q": "fertilizer potash phosphate shortage sanctions",
+        "tickers": ["ZC=F", "ZW=F", "ZS=F"],
+        "category": "supply_chain",
+    },
+    {
+        "q": "avian flu bird flu livestock disease outbreak",
+        "tickers": ["ZC=F", "ZS=F"],  # Feed grain demand impact
+        "category": "commodity",
+    },
 ]
 
 
@@ -490,7 +629,7 @@ def fetch_gnews_targeted() -> list[NewsItem]:
             params = {
                 "q": query_cfg["q"],
                 "token": api_key,
-                "lang": "en",
+                "lang": query_cfg.get("lang", "en"),
                 "max": 5,  # 5 results per query
                 "sortby": "publishedAt",
             }
@@ -674,12 +813,60 @@ def _fetch_cot_csv_lines() -> list[str]:
     return lines
 
 
+def _parse_cot_by_date(lines: list[str], col_map: dict[str, int], target_date: str) -> dict[str, dict]:
+    """Parse COT data for a specific date, returning {code: {oi, comm_net, spec_net, comm_net_pct, spec_net_pct}}."""
+    market_col = col_map.get("Market_and_Exchange_Names", 0)
+    date_col = col_map.get("As_of_Date_In_Form_YYMMDD", 2)
+    oi_col = col_map["Open_Interest_All"]
+    comm_long_col = col_map["Comm_Positions_Long_All"]
+    comm_short_col = col_map["Comm_Positions_Short_All"]
+    spec_long_col = col_map["NonComm_Positions_Long_All"]
+    spec_short_col = col_map["NonComm_Positions_Short_All"]
+    max_col = max(oi_col, comm_long_col, comm_short_col, spec_long_col, spec_short_col)
+
+    results: dict[str, dict] = {}
+    for line in lines[1:]:
+        cols = line.split(",")
+        if len(cols) <= max_col:
+            continue
+        line_date = cols[date_col].strip().strip('"')
+        if line_date != target_date:
+            continue
+        market = cols[market_col].strip().strip('"')
+        for code, info in COT_CODES.items():
+            if info["name"].lower() in market.lower() or code in market:
+                try:
+                    oi = int(cols[oi_col].strip().strip('"'))
+                    if oi == 0:
+                        break
+                    comm_long = int(cols[comm_long_col].strip().strip('"'))
+                    comm_short = int(cols[comm_short_col].strip().strip('"'))
+                    spec_long = int(cols[spec_long_col].strip().strip('"'))
+                    spec_short = int(cols[spec_short_col].strip().strip('"'))
+                    comm_net = comm_long - comm_short
+                    spec_net = spec_long - spec_short
+                    results[code] = {
+                        "oi": oi,
+                        "comm_net": comm_net,
+                        "spec_net": spec_net,
+                        "comm_net_pct": (comm_net / oi) * 100,
+                        "spec_net_pct": (spec_net / oi) * 100,
+                    }
+                except (ValueError, IndexError):
+                    pass
+                break
+    return results
+
+
 def fetch_cot_data() -> list[NewsItem]:
     """Fetch latest COT positioning data from CFTC.
 
     The COT report shows commercial vs speculative positioning.
-    Extreme positions signal potential reversals — especially
-    when combined with a physical catalyst (weather, supply disruption).
+    Alerts on:
+    1. Week-over-week CHANGES in commercial net (>8pp swing = hedging shift)
+    2. Extreme absolute positioning (commercial net > 20% OI)
+    3. Speculator extremes (> 25% long or < -20% short = overextension)
+    4. Commercial vs speculator divergence (contrarian signal)
     """
     items: list[NewsItem] = []
 
@@ -690,108 +877,156 @@ def fetch_cot_data() -> list[NewsItem]:
 
         # Parse header
         header = lines[0].split(",")
-        # Find column indices
         col_map: dict[str, int] = {}
         for i, h in enumerate(header):
-            h_clean = h.strip().strip('"')
-            col_map[h_clean] = i
+            col_map[h.strip().strip('"')] = i
 
-        # Key columns
-        market_col = col_map.get("Market_and_Exchange_Names", 0)
         date_col = col_map.get("As_of_Date_In_Form_YYMMDD", 2)
-        oi_col = col_map.get("Open_Interest_All", None)
-        comm_long_col = col_map.get("Comm_Positions_Long_All", None)
-        comm_short_col = col_map.get("Comm_Positions_Short_All", None)
-        spec_long_col = col_map.get("NonComm_Positions_Long_All", None)
-        spec_short_col = col_map.get("NonComm_Positions_Short_All", None)
-
-        if None in (oi_col, comm_long_col, comm_short_col, spec_long_col, spec_short_col):
+        required = ["Open_Interest_All", "Comm_Positions_Long_All",
+                     "Comm_Positions_Short_All", "NonComm_Positions_Long_All",
+                     "NonComm_Positions_Short_All"]
+        if any(k not in col_map for k in required):
             logger.debug("COT CSV format not recognized")
             return []
 
-        # Find most recent date
-        latest_date = ""
+        # Find the 2 most recent dates for change detection
+        all_dates: set[str] = set()
         for line in lines[1:]:
             cols = line.split(",")
             if len(cols) > date_col:
                 d = cols[date_col].strip().strip('"')
-                if d > latest_date:
-                    latest_date = d
+                if d:
+                    all_dates.add(d)
 
-        if not latest_date:
+        sorted_dates = sorted(all_dates, reverse=True)
+        if not sorted_dates:
             return []
 
-        # Parse data for latest date
-        for line in lines[1:]:
-            cols = line.split(",")
-            if len(cols) <= max(oi_col, comm_long_col, comm_short_col, spec_long_col, spec_short_col):
+        latest_date = sorted_dates[0]
+        previous_date = sorted_dates[1] if len(sorted_dates) > 1 else None
+
+        # Parse both weeks
+        latest_data = _parse_cot_by_date(lines, col_map, latest_date)
+        previous_data = _parse_cot_by_date(lines, col_map, previous_date) if previous_date else {}
+
+        for code, info in COT_CODES.items():
+            if code not in latest_data:
                 continue
 
-            line_date = cols[date_col].strip().strip('"')
-            if line_date != latest_date:
-                continue
+            current = latest_data[code]
+            comm_net_pct = current["comm_net_pct"]
+            spec_net_pct = current["spec_net_pct"]
+            comm_direction = "LONG" if current["comm_net"] > 0 else "SHORT"
+            spec_direction = "LONG" if current["spec_net"] > 0 else "SHORT"
 
-            market = cols[market_col].strip().strip('"')
+            # ── Alert 1: Week-over-week CHANGE in commercial net (highest signal) ──
+            if code in previous_data:
+                prev = previous_data[code]
+                comm_change = comm_net_pct - prev["comm_net_pct"]
+                spec_change = spec_net_pct - prev["spec_net_pct"]
 
-            # Check if this market matches any of our tracked commodities
-            matched_code = None
-            for code, info in COT_CODES.items():
-                if info["name"].lower() in market.lower() or code in market:
-                    matched_code = code
-                    break
+                if abs(comm_change) >= 8:  # 8pp swing in one week = major shift
+                    shift_dir = "hausse" if comm_change > 0 else "baisse"
+                    title = (
+                        f"[COT CHANGE] {info['name']} — Swing commerciaux {shift_dir}: "
+                        f"{comm_change:+.1f}pp en 1 semaine "
+                        f"(maintenant {comm_direction} {abs(comm_net_pct):.1f}% OI, "
+                        f"etait {abs(prev['comm_net_pct']):.1f}%) — "
+                        f"changement majeur de hedging (date: {latest_date})"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="CFTC",
+                        url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                        published=datetime.now(timezone.utc),
+                        related_tickers=[info["ticker"]],
+                        source_weight=1.1,  # Higher weight for change signals
+                    ))
 
-            if not matched_code:
-                continue
-
-            info = COT_CODES[matched_code]
-
-            try:
-                oi = int(cols[oi_col].strip().strip('"'))
-                comm_long = int(cols[comm_long_col].strip().strip('"'))
-                comm_short = int(cols[comm_short_col].strip().strip('"'))
-                spec_long = int(cols[spec_long_col].strip().strip('"'))
-                spec_short = int(cols[spec_short_col].strip().strip('"'))
-            except (ValueError, IndexError):
-                continue
-
-            if oi == 0:
-                continue
-
-            # Calculate net positioning
-            comm_net = comm_long - comm_short
-            spec_net = spec_long - spec_short
-            comm_net_pct = (comm_net / oi) * 100
-            spec_net_pct = (spec_net / oi) * 100
-
-            # Generate alert for extreme positioning
-            # Commercials (hedgers) are contrarian — if they're massively long,
-            # it means they're buying physical at these prices = bullish signal
-            alert_level = ""
+            # ── Alert 2: Extreme absolute positioning (commercial) ──
             if abs(comm_net_pct) > 20:
-                alert_level = "EXTREME"
-            elif abs(comm_net_pct) > 10:
-                alert_level = "NOTABLE"
-            else:
-                continue  # Not interesting enough
+                title = (
+                    f"[COT DATA] {info['name']} — Positionnement EXTREME: "
+                    f"Commerciaux net {comm_direction} {abs(comm_net_pct):.1f}% OI, "
+                    f"Speculateurs net {spec_direction} {abs(spec_net_pct):.1f}% OI "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=[info["ticker"]],
+                    source_weight=1.05,
+                ))
 
-            comm_direction = "LONG" if comm_net > 0 else "SHORT"
-            spec_direction = "LONG" if spec_net > 0 else "SHORT"
+            # ── Alert 3: Speculator extremes (overextension = reversal risk) ──
+            if spec_net_pct > 25:
+                title = (
+                    f"[COT SPEC] {info['name']} — Speculateurs SUREXPOSES LONG: "
+                    f"{spec_net_pct:.1f}% OI net long — "
+                    f"risque de liquidation forcee / reversal "
+                    f"(commerciaux: {comm_direction} {abs(comm_net_pct):.1f}%) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=[info["ticker"]],
+                    source_weight=1.05,
+                ))
+            elif spec_net_pct < -20:
+                title = (
+                    f"[COT SPEC] {info['name']} — Speculateurs SUREXPOSES SHORT: "
+                    f"{spec_net_pct:.1f}% OI net short — "
+                    f"risque de short squeeze "
+                    f"(commerciaux: {comm_direction} {abs(comm_net_pct):.1f}%) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=[info["ticker"]],
+                    source_weight=1.05,
+                ))
 
-            title = (
-                f"[COT DATA] {info['name']} — Positionnement {alert_level}: "
-                f"Commerciaux net {comm_direction} {abs(comm_net_pct):.1f}% OI, "
-                f"Speculateurs net {spec_direction} {abs(spec_net_pct):.1f}% OI "
-                f"(date: {latest_date})"
-            )
-
-            items.append(NewsItem(
-                title=title,
-                source="CFTC",
-                url="https://www.cftc.gov/dea/futures/deacmelf.htm",
-                published=datetime.now(timezone.utc),
-                related_tickers=[info["ticker"]],
-                source_weight=1.05,
-            ))
+            # ── Alert 4: Commercial vs speculator divergence (contrarian signal) ──
+            if (current["comm_net"] > 0 and current["spec_net"] < 0
+                    and abs(comm_net_pct) > 10 and abs(spec_net_pct) > 10):
+                title = (
+                    f"[COT DIVERGENCE] {info['name']} — Commerciaux LONG ({comm_net_pct:.1f}% OI) "
+                    f"vs Speculateurs SHORT ({spec_net_pct:.1f}% OI) — "
+                    f"signal contrarian haussier (smart money vs crowd) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=[info["ticker"]],
+                    source_weight=1.1,
+                ))
+            elif (current["comm_net"] < 0 and current["spec_net"] > 0
+                    and abs(comm_net_pct) > 10 and abs(spec_net_pct) > 10):
+                title = (
+                    f"[COT DIVERGENCE] {info['name']} — Commerciaux SHORT ({comm_net_pct:.1f}% OI) "
+                    f"vs Speculateurs LONG ({spec_net_pct:.1f}% OI) — "
+                    f"signal contrarian baissier (smart money vs crowd) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=[info["ticker"]],
+                    source_weight=1.1,
+                ))
 
     except Exception as exc:
         logger.debug("COT data fetch error: %s", exc)
@@ -914,6 +1149,44 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     source_weight=0.95,
                 ))
 
+            # Alert on IV skew: put IV significantly higher than call IV = smart money hedging
+            try:
+                if not calls.empty and not puts.empty and "impliedVolatility" in calls.columns:
+                    avg_call_iv = calls["impliedVolatility"].mean()
+                    avg_put_iv = puts["impliedVolatility"].mean()
+                    if avg_call_iv > 0 and avg_put_iv > 0:
+                        skew = (avg_put_iv - avg_call_iv) / avg_call_iv * 100
+                        if skew > 25:  # Put IV 25%+ higher than call IV = fear
+                            title = (
+                                f"[OPTIONS SKEW] {name} ({ticker}) — Put IV >> Call IV: "
+                                f"skew {skew:.0f}% (put IV: {avg_put_iv:.2f}, call IV: {avg_call_iv:.2f}) — "
+                                f"smart money hedging a la baisse"
+                            )
+                            items.append(NewsItem(
+                                title=title,
+                                source="Options Flow",
+                                url="",
+                                published=datetime.now(timezone.utc),
+                                related_tickers=related,
+                                source_weight=1.0,
+                            ))
+                        elif skew < -20:  # Call IV higher = unusual bullish speculation
+                            title = (
+                                f"[OPTIONS SKEW] {name} ({ticker}) — Call IV >> Put IV: "
+                                f"skew inverse {skew:.0f}% (call IV: {avg_call_iv:.2f}, put IV: {avg_put_iv:.2f}) — "
+                                f"speculation haussiere inhabituelle"
+                            )
+                            items.append(NewsItem(
+                                title=title,
+                                source="Options Flow",
+                                url="",
+                                published=datetime.now(timezone.utc),
+                                related_tickers=related,
+                                source_weight=1.0,
+                            ))
+            except Exception:
+                pass  # IV data not always available
+
             # Alert on volume spike vs OI (>50% of OI traded in a day)
             if total_call_oi > 0 and total_call_vol > total_call_oi * 0.5:
                 title = (
@@ -972,6 +1245,33 @@ EONET_CATEGORY_MAP: dict[str, dict] = {
     },
 }
 
+# Geographic regions that matter for our commodity universe
+# Events outside these regions are lower priority
+EONET_COMMODITY_REGIONS: list[dict[str, Any]] = [
+    {"name": "US Midwest", "lat_range": (35, 50), "lon_range": (-100, -80), "tickers": ["ZC=F", "ZW=F", "ZS=F"]},
+    {"name": "Brazil", "lat_range": (-35, -5), "lon_range": (-60, -35), "tickers": ["KC=F", "SB=F", "ZS=F"]},
+    {"name": "Gulf of Mexico", "lat_range": (20, 32), "lon_range": (-100, -80), "tickers": ["CL=F", "NG=F"]},
+    {"name": "Black Sea/Ukraine", "lat_range": (40, 55), "lon_range": (25, 45), "tickers": ["ZW=F", "ZC=F"]},
+    {"name": "SE Asia", "lat_range": (-10, 10), "lon_range": (95, 120), "tickers": ["ZS=F"]},
+    {"name": "Australia", "lat_range": (-40, -20), "lon_range": (130, 155), "tickers": ["ZW=F"]},
+    {"name": "India", "lat_range": (20, 35), "lon_range": (68, 90), "tickers": ["ZW=F"]},
+    {"name": "Argentina", "lat_range": (-40, -25), "lon_range": (-65, -55), "tickers": ["ZS=F", "ZC=F", "ZW=F"]},
+    {"name": "Middle East", "lat_range": (20, 40), "lon_range": (35, 60), "tickers": ["CL=F", "GC=F"]},
+]
+
+
+def _match_eonet_region(lat: float, lon: float) -> list[str] | None:
+    """Match EONET event coordinates to commodity-relevant regions.
+
+    Returns tickers for the matched region, or None if outside our coverage.
+    """
+    for region in EONET_COMMODITY_REGIONS:
+        lat_min, lat_max = region["lat_range"]
+        lon_min, lon_max = region["lon_range"]
+        if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
+            return region["tickers"]
+    return None
+
 
 def fetch_nasa_eonet_events() -> list[NewsItem]:
     """Fetch recent natural events from NASA EONET.
@@ -1017,13 +1317,24 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
             if not matched_tickers:
                 continue  # Skip categories we don't trade
 
-            # Get location info if available
+            # Get location info and refine tickers based on geographic region
             geometry = event.get("geometry", [])
             location_str = ""
+            region_tickers = None
             if geometry:
                 coords = geometry[-1].get("coordinates", [])
                 if len(coords) >= 2:
-                    location_str = f" (lat {coords[1]:.1f}, lon {coords[0]:.1f})"
+                    lat, lon = coords[1], coords[0]
+                    location_str = f" (lat {lat:.1f}, lon {lon:.1f})"
+                    region_tickers = _match_eonet_region(lat, lon)
+
+            # If we have coordinates and the event is NOT in a commodity-relevant region, skip it
+            # (e.g., wildfire in Siberia doesn't impact our grains)
+            if geometry and region_tickers is None:
+                continue
+
+            # Use region-specific tickers if available, otherwise fall back to category default
+            final_tickers = region_tickers if region_tickers else matched_tickers
 
             title = f"[NASA EONET] {label}: {title_raw}{location_str}"
 
@@ -1032,7 +1343,7 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
                 source="NASA EONET",
                 url=event.get("link", "https://eonet.gsfc.nasa.gov/"),
                 published=datetime.now(timezone.utc),
-                related_tickers=list(set(matched_tickers)),
+                related_tickers=list(set(final_tickers)),
                 source_weight=1.1,
             ))
 
@@ -1052,12 +1363,45 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
 # Provides EU aggregate gas storage levels — critical for NG=F and energy
 
 
+# Seasonal storage thresholds — what's "normal" varies by time of year
+# Winter (Oct-Mar): storage is being drawn down, lower levels expected
+# Summer (Apr-Sep): injection season, storage should be building
+AGSI_SEASONAL_THRESHOLDS = {
+    "winter": {"low": 20, "critical_low": 10, "high": 75, "very_high": 90},  # Oct-Mar
+    "summer": {"low": 50, "critical_low": 30, "high": 90, "very_high": 97},  # Apr-Sep
+}
+
+# Key countries to monitor individually (largest consumers/storers)
+AGSI_COUNTRIES = {
+    "DE": "Allemagne",   # Largest EU gas consumer
+    "FR": "France",
+    "NL": "Pays-Bas",    # TTF hub
+    "IT": "Italie",      # Major consumer
+}
+
+
+def _get_agsi_season() -> str:
+    """Return current storage season (winter = draw, summer = injection)."""
+    month = datetime.now(timezone.utc).month
+    return "winter" if month >= 10 or month <= 3 else "summer"
+
+
+def _parse_agsi_entry(entry: dict) -> tuple[float | None, float | None, str]:
+    """Extract full_pct, injection, and date from an AGSI entry."""
+    full_pct = entry.get("full", entry.get("gasInStorage_pct"))
+    injection = entry.get("injection", entry.get("netWithdrawal"))
+    gas_date = entry.get("gasDayStart", entry.get("date", ""))
+    return (float(full_pct) if full_pct is not None else None,
+            float(injection) if injection is not None else None,
+            gas_date)
+
+
 def fetch_gie_agsi_data() -> list[NewsItem]:
     """Fetch European gas storage data from GIE AGSI.
 
-    Gas storage levels are a key driver of European energy prices.
-    Extreme levels (very high = bearish NG, very low = bullish NG)
-    provide directional signals.
+    Fetches both EU aggregate AND key country-level data (DE, FR, NL, IT).
+    Uses seasonal thresholds (winter vs summer norms).
+    Analyzes injection/withdrawal rates alongside absolute levels.
     """
     api_key = os.environ.get("GIE_AGSI_API_KEY", "")
     if not api_key:
@@ -1065,67 +1409,86 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
         return []
 
     items: list[NewsItem] = []
+    season = _get_agsi_season()
+    thresholds = AGSI_SEASONAL_THRESHOLDS[season]
+    headers = {"x-key": api_key}
 
+    # ── EU aggregate ──
     try:
-        url = "https://agsi.gie.eu/api/data/eu"
-        headers = {"x-key": api_key}
-        resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        resp = requests.get("https://agsi.gie.eu/api/data/eu", headers=headers, timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            entries = data.get("data", data) if isinstance(data, dict) else data
+            if entries and isinstance(entries, list) and entries[0]:
+                full_pct, injection, gas_date = _parse_agsi_entry(entries[0])
+                if full_pct is not None:
+                    alert = ""
+                    if full_pct < thresholds["critical_low"]:
+                        alert = "CRITIQUE BAS"
+                    elif full_pct < thresholds["low"]:
+                        alert = "BAS (vs norme saisonniere)"
+                    elif full_pct > thresholds["very_high"]:
+                        alert = "TRES HAUT"
+                    elif full_pct > thresholds["high"]:
+                        alert = "HAUT"
 
-        if resp.status_code != 200:
-            logger.debug("GIE AGSI API error: %d", resp.status_code)
-            return []
+                    injection_str = ""
+                    if injection is not None:
+                        injection_str = f", {'injection' if injection >= 0 else 'soutirage'}: {abs(injection):.2f} TWh/j"
 
-        data = resp.json()
-        # API returns a list of daily entries, most recent first
-        entries = data.get("data", data) if isinstance(data, dict) else data
-        if not entries or not isinstance(entries, list):
-            return []
-
-        latest = entries[0] if entries else None
-        if not latest:
-            return []
-
-        full_pct = latest.get("full", latest.get("gasInStorage_pct"))
-        injection = latest.get("injection", latest.get("netWithdrawal"))
-        gas_date = latest.get("gasDayStart", latest.get("date", ""))
-
-        if full_pct is not None:
-            full_pct = float(full_pct)
-            alert = ""
-            if full_pct < 30:
-                alert = "CRITIQUE BAS"
-            elif full_pct < 50:
-                alert = "BAS"
-            elif full_pct > 90:
-                alert = "TRES HAUT"
-            elif full_pct > 80:
-                alert = "HAUT"
-
-            injection_str = ""
-            if injection is not None:
-                inj_val = float(injection)
-                injection_str = f", injection nette: {inj_val:+.2f} TWh/j"
-
-            title = (
-                f"[GIE AGSI] Stockage gaz EU: {full_pct:.1f}% plein"
-                f"{' — niveau ' + alert if alert else ''}"
-                f"{injection_str} (date: {gas_date})"
-            )
-
-            items.append(NewsItem(
-                title=title,
-                source="GIE AGSI",
-                url="https://agsi.gie.eu/",
-                published=datetime.now(timezone.utc),
-                related_tickers=["NG=F"],
-                source_weight=1.1,
-            ))
-
+                    title = (
+                        f"[GIE AGSI] Stockage gaz EU: {full_pct:.1f}% plein"
+                        f"{' — niveau ' + alert if alert else ''}"
+                        f"{injection_str} (saison: {season}, date: {gas_date})"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="GIE AGSI",
+                        url="https://agsi.gie.eu/",
+                        published=datetime.now(timezone.utc),
+                        related_tickers=["NG=F"],
+                        source_weight=1.1,
+                    ))
     except Exception as exc:
-        logger.debug("GIE AGSI fetch error: %s", exc)
+        logger.debug("GIE AGSI EU fetch error: %s", exc)
+
+    # ── Country-level data (detect regional stress masked by aggregate) ──
+    for country_code, country_name in AGSI_COUNTRIES.items():
+        try:
+            resp = requests.get(
+                f"https://agsi.gie.eu/api/data/{country_code.lower()}",
+                headers=headers, timeout=REQUEST_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            entries = data.get("data", data) if isinstance(data, dict) else data
+            if not entries or not isinstance(entries, list) or not entries[0]:
+                continue
+            full_pct, injection, gas_date = _parse_agsi_entry(entries[0])
+            if full_pct is None:
+                continue
+
+            # Only alert on country level if it's significantly diverging from normal
+            if full_pct < thresholds["critical_low"]:
+                title = (
+                    f"[GIE AGSI] ALERTE {country_name}: stockage gaz {full_pct:.1f}% — "
+                    f"CRITIQUE BAS (seuil saison {season}: {thresholds['critical_low']}%) — "
+                    f"stress regional masque par l'agregat EU (date: {gas_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="GIE AGSI",
+                    url="https://agsi.gie.eu/",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=["NG=F"],
+                    source_weight=1.15,  # Higher weight for country-level stress
+                ))
+        except Exception as exc:
+            logger.debug("GIE AGSI %s fetch error: %s", country_code, exc)
 
     if items:
-        logger.info("Fetched GIE AGSI EU gas storage data")
+        logger.info("Fetched %d GIE AGSI gas storage data points", len(items))
     return items
 
 

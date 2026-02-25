@@ -411,8 +411,8 @@ def score_news_batch(
         transmission_delay = max(0, min(100, entry.get("transmission_delay", 50)))
         market_awareness = max(0, min(100, entry.get("market_awareness", 50)))
 
-        # Hard rejection: earnings/macro with unrealistic transmission_delay
-        # These are ALWAYS priced instantly by algos — Claude sometimes overestimates delay
+        # Hard rejection: categories with unrealistic transmission_delay
+        # These are priced quickly by algos — Claude sometimes overestimates delay
         if news_cat == "earnings" and transmission_delay > 15:
             logger.info("Earnings hard-cap: forcing transmission_delay %d -> 5 for '%s'",
                         transmission_delay, item.title[:60])
@@ -423,6 +423,16 @@ def score_news_batch(
                         transmission_delay, item.title[:60])
             transmission_delay = 10
             market_awareness = max(market_awareness, 85)
+        elif news_cat == "central_bank_subtle" and transmission_delay > 60:
+            logger.info("Central bank hard-cap: forcing transmission_delay %d -> 40 for '%s'",
+                        transmission_delay, item.title[:60])
+            transmission_delay = 40
+            market_awareness = max(market_awareness, 60)
+        elif news_cat == "m_a" and transmission_delay > 50:
+            logger.info("M&A hard-cap: forcing transmission_delay %d -> 30 for '%s'",
+                        transmission_delay, item.title[:60])
+            transmission_delay = 30
+            market_awareness = max(market_awareness, 70)
 
         # Apply category score multiplier (edge priority)
         cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)

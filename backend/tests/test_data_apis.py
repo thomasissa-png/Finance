@@ -144,7 +144,7 @@ def test_fetch_weather_alerts_structure():
     for alert in alerts:
         assert alert.title.startswith("[METEO ALERTE]")
         assert alert.source == "Open-Meteo"
-        assert alert.source_weight == 1.15
+        assert alert.source_weight >= 1.15  # 1.15 base, 1.2 during critical period
         assert len(alert.related_tickers) >= 1
 
 

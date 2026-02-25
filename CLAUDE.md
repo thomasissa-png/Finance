@@ -23,34 +23,46 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 
 ### Phase 0 : Structured Data APIs (PRIORITE MAX — donnees chiffrees)
 Module `data_apis.py` — 8 sources de donnees numeriques que Claude peut interpreter precisement :
-- **Open-Meteo** (GRATUIT, no key) : surveillance meteo 8 zones agricoles critiques
-  - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo
-  - Ukraine/Mer Noire (ble), Inde (ble/riz), Golfe du Mexique (petrole offshore)
-  - Asie du Sud-Est (huile palme), Australie (ble)
-  - Alertes : gel, canicule, secheresse (<2mm/7j), vents violents (>100km/h)
-- **EIA API** (cle gratuite `EIA_API_KEY`) : stocks petrole/gaz/distillats hebdo avec chiffres exacts
+- **Open-Meteo** (GRATUIT, no key) : surveillance meteo 10 zones agricoles critiques
+  - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo, Brazil Rio Grande do Sul (soja/mais)
+  - Ukraine/Mer Noire (ble), Inde Punjab/Haryana (ble/riz), Argentine Pampas (soja/mais/ble)
+  - Golfe du Mexique (petrole offshore), Asie du Sud-Est (huile palme), Australie (ble)
+  - Alertes : gel (seuils calibres par culture), canicule, stress thermique cumule (3j+ au-dessus du seuil)
+  - Secheresse avec seuils adaptatifs (periode critique vs normale)
+  - Periodes critiques : silking mais (Jun-Aug), grain fill ble, floraison soja (Dec-Feb hemisph. sud)
+- **EIA API** (cle gratuite `EIA_API_KEY`) : stocks petrole/gaz/distillats + utilisation raffineries hebdo
 - **USDA NASS** (cle gratuite `USDA_API_KEY`) : crop progress, conditions, recoltes
-- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 15 queries
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 20 queries
   - Originales : "drought frost flood crop", "oil sanctions embargo", "port congestion shipping"
   - "OPEC production cut", "wheat corn harvest", "military strike missile", "copper mine strike"
   - Nouvelles : "natural gas storage Europe TTF LNG", "palm oil export Indonesia Malaysia"
   - "China import commodity soybean", "Baltic dry index shipping freight"
   - "coffee frost Brazil Minas Gerais", "hurricane tropical storm Gulf Mexico"
+  - **Portugais** : "geada cafe Minas Gerais frio", "seca milho soja safra quebra" (12-24h avant medias EN)
+  - **Maladies/engrais** : "wheat rust crop disease blight", "fertilizer potash phosphate shortage"
+  - **Betail** : "avian flu bird flu livestock disease outbreak"
 - **CFTC COT** (GRATUIT, no key) : positionnement commerciaux vs speculateurs
-  - Alertes quand positionnement extreme (>20% OI net)
-- **Options Flow** (GRATUIT via yfinance) : put/call ratio extreme, volume spikes
+  - Alertes sur CHANGEMENTS hebdo (>8pp swing en 1 semaine = signal fort)
+  - Alertes positionnement extreme commerciaux (>20% OI net)
+  - Alertes speculateurs surexposes (>25% long ou < -20% short = risque reversal)
+  - Detection divergence commerciaux vs speculateurs (signal contrarian)
+- **Options Flow** (GRATUIT via yfinance) : put/call ratio extreme, volume spikes, IV skew
   - EU equities : TTE.PA, MC.PA, BNP.PA, SAN.PA, AI.PA (seuil P/C > 3.0)
   - US ETFs : SPY, QQQ, USO, GLD, SLV, CORN, WEAT (seuil P/C > 1.5)
   - Mappage ETF→tickers : SPY→^GSPC, USO→CL=F/BZ=F, GLD→GC=F, CORN→ZC=F, WEAT→ZW=F
+  - IV skew analysis : put IV >> call IV (+25%) = smart money hedging baissier
 - **NASA EONET** (GRATUIT, no key) : Earth Observatory Natural Events Tracker
   - Evenements : tempetes, feux de foret, volcans, inondations, seismes
-  - Mappage categories→tickers : storms→CL=F/NG=F, wildfires→ZW=F/ZC=F, volcanoes→GC=F
+  - Filtrage geographique : 9 regions commodity (US Midwest, Bresil, Golfe, Ukraine, SE Asia, etc.)
+  - Evenements hors zones commodity = ignores (reduit faux positifs)
   - Retry automatique sur 503 (serveur sous charge)
 - **GIE AGSI** (cle gratuite `GIE_AGSI_API_KEY`) : stockage gaz europeen
-  - Niveaux en % : alerte si < 30% (critique bas) ou > 90% (tres haut)
+  - Donnees EU aggregate + pays individuels (DE, FR, NL, IT)
+  - Seuils saisonniers : hiver (draw) vs ete (injection) — niveaux normaux differents
+  - Detection stress regional masque par l'agregat EU (ex: Allemagne a 20% = crise)
   - Impact : NG=F (gaz naturel)
 
-Poids premium : Open-Meteo=1.15, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.1, CFTC=1.05, Options=0.95
+Poids premium : Open-Meteo=1.15/1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.1/1.15, CFTC=1.05/1.1, Options=0.95/1.0
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
 Sources configurees dans `EARLY_SIGNAL_FEEDS` (18 feeds — verifie 2026-02-25) :
@@ -92,7 +104,9 @@ Module `event_scanner.py` — surveillance continue des feeds early-signal :
   - supply_chain : pipeline explosion, port closed, canal blocked, embargo, container shortage, baltic dry, freight rate surge, vessel grounding, lng terminal, strategic reserve...
   - geopolitical : military strike, sanctions, nuclear, invasion, carrier strike group, no-fly zone, military buildup, arms deal...
   - commodity : opec cut, crop failure, stockpile draw, shortage, gas storage, ttf price, palm oil export, coffee frost, china import, wheat export ban...
-- **Trigger** : si signal detecte → scan complet immediat (respecte cooldown 5min)
+- **Keywords prioritaires** : hurricane warning, pipeline explosion, military strike, export ban... → bypass cooldown categorie
+- **Cooldowns par categorie** : geopolitique=60s, supply_chain=120s, commodity/weather=300s (minimum global 30s)
+- **Trigger** : si signal detecte → scan complet immediat (respecte cooldown par categorie)
 - **Scan type** : avant 14:00 = europe, apres 14:00 = us
 
 ## Scoring — Formule Edge-Weighted (v3.1)

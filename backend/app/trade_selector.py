@@ -14,6 +14,17 @@ from .config import (
     TARGET_PERCENT,
     assets_for_session,
 )
+
+# ── Pre-move thresholds by asset category ──────────────────────────
+# Percentage of expected move that constitutes "already priced"
+# Forex: tight (0.3% overnight is normal), Commodities: loose (2-3% moves are common)
+PRE_MOVE_THRESHOLDS: dict[str, float] = {
+    "forex": 0.6,       # 60% of expected move — forex has small ATR, overnight gap is normal
+    "commodities": 0.85, # 85% — commodities can move 3%+ on real signals, don't reject too early
+    "metaux": 0.8,       # 80% — metals are volatile but less than soft commodities
+    "actions_europe": 0.8,  # 80% — stocks gap on earnings etc
+    "indices": 0.75,     # 75% — indices reflect broad sentiment, pre-move is more informative
+}
 from .economic_calendar import check_event_conflict, get_events_context
 from .models import (
     Direction,
@@ -107,16 +118,24 @@ def _check_binary_event(news_title: str, reasoning: str) -> str | None:
     return None
 
 
-def _check_correlation(ticker: str, existing_trade_ticker: str | None) -> bool:
-    """Check if two tickers are correlated (#22).
+def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | None) -> bool:
+    """Check if a ticker is correlated with ANY existing trade (#22).
 
+    Accepts either a single ticker (backward compat) or a list of all pending tickers.
     Returns True if correlated (should avoid).
     """
-    if not existing_trade_ticker:
+    if not existing_trade_tickers:
         return False
-    for group_tickers in CORRELATION_GROUPS.values():
-        if ticker in group_tickers and existing_trade_ticker in group_tickers:
-            return True
+    # Normalize to list
+    if isinstance(existing_trade_tickers, str):
+        tickers_to_check = [existing_trade_tickers]
+    else:
+        tickers_to_check = existing_trade_tickers
+
+    for existing in tickers_to_check:
+        for group_tickers in CORRELATION_GROUPS.values():
+            if ticker in group_tickers and existing in group_tickers:
+                return True
     return False
 
 
@@ -358,9 +377,9 @@ def select_trade(
             })
             continue
 
-        # (#4) News déjà pricée detection — direction-aware
-        # Use same volatility-regime factors as _calibrate_trade to avoid
-        # false rejections on low-vol (forex) or false passes on high-vol (NG)
+        # (#4) News déjà pricée detection — direction-aware, category-adaptive
+        # Use same volatility-regime factors as _calibrate_trade
+        # Pre-move threshold adapts to asset category (forex tighter, commodities looser)
         if avg_range < 1.0:
             _pre_factor = 0.35 + (best_news.total_score / 100) * 0.55
         elif avg_range > 5.0:
@@ -369,17 +388,19 @@ def select_trade(
             _pre_factor = 0.25 + (best_news.total_score / 100) * 0.45
         target_move_expected = avg_range * _pre_factor
         pre_move_pct = _detect_pre_move(price, prev_close, target_move_expected)
+        # Category-adaptive pre-move threshold (default 0.8 = 80% of expected move)
+        pre_move_ratio = PRE_MOVE_THRESHOLDS.get(asset.category, 0.8)
         if pre_move_pct is not None:
-            if best_news.direction == Direction.LONG and pre_move_pct > target_move_expected * 0.8:
-                reason = f"LONG deja price: pre-move +{pre_move_pct:.2f}% > seuil {target_move_expected * 0.8:.2f}%"
+            if best_news.direction == Direction.LONG and pre_move_pct > target_move_expected * pre_move_ratio:
+                reason = f"LONG deja price: pre-move +{pre_move_pct:.2f}% > seuil {target_move_expected * pre_move_ratio:.2f}% ({asset.category})"
                 logger.info("Skipping %s: %s", ticker, reason)
                 rejection_log.append({
                     "title": best_news.news.title, "ticker": [ticker],
                     "reason": reason, "score": raw_score, "pre_move_pct": pre_move_pct,
                 })
                 continue
-            elif best_news.direction == Direction.SHORT and pre_move_pct < -target_move_expected * 0.8:
-                reason = f"SHORT deja price: pre-move {pre_move_pct:.2f}% < seuil -{target_move_expected * 0.8:.2f}%"
+            elif best_news.direction == Direction.SHORT and pre_move_pct < -target_move_expected * pre_move_ratio:
+                reason = f"SHORT deja price: pre-move {pre_move_pct:.2f}% < seuil -{target_move_expected * pre_move_ratio:.2f}% ({asset.category})"
                 logger.info("Skipping %s: %s", ticker, reason)
                 rejection_log.append({
                     "title": best_news.news.title, "ticker": [ticker],
