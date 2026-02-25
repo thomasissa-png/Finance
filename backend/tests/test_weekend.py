@@ -146,4 +146,4 @@ class TestCronTriggerWeekday:
             f"Found {cron_count} CronTrigger definitions but only "
             f"{weekday_count} have day_of_week='mon-fri'"
         )
-        assert cron_count >= 4, f"Expected at least 4 CronTriggers, found {cron_count}"
+        assert cron_count >= 6, f"Expected at least 6 CronTriggers, found {cron_count}"

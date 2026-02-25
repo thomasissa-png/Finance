@@ -220,7 +220,7 @@ def select_trade(
     scored_news: list[ScoredNews],
     scan_type: ScanType,
     learning_adjustments: dict[str, float] | None = None,
-    existing_trade_ticker: str | None = None,
+    existing_trade_ticker: list[str] | str | None = None,
     market_context: dict | None = None,
 ) -> ScanResult:
     """Pick the single best trade from scored news.

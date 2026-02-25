@@ -94,7 +94,7 @@ export default function App() {
       <header className="app-header">
         <div>
           <div className="app-title">ONESHOT</div>
-          <div className="app-subtitle">News Trading — 2 scans / jour</div>
+          <div className="app-subtitle">News Trading — 4 scans / jour</div>
         </div>
         {/* (D1) Live status indicator */}
         <div className="header-status">

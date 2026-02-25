@@ -17,7 +17,14 @@ function useToasts() {
   return { toasts, addToast };
 }
 
-// (D3) Compute next scan time
+// (D3) Compute next scan time — 4 scans/day
+const SCAN_SCHEDULE = [
+  { h: 7, m: 50, label: "07:50 CET (Europe)" },
+  { h: 11, m: 15, label: "11:15 CET (Mid-Session)" },
+  { h: 14, m: 50, label: "14:50 CET (Pre-US)" },
+  { h: 17, m: 0, label: "17:00 CET (US Session)" },
+];
+
 function getNextScanInfo() {
   const now = new Date();
   const day = now.getDay();
@@ -25,21 +32,26 @@ function getNextScanInfo() {
   if (day === 0 || day === 6) {
     return { text: "Prochain scan : lundi 07:50 CET", cls: "weekend" };
   }
-  const h = now.getHours();
-  const m = now.getMinutes();
-  const totalMin = h * 60 + m;
-  if (totalMin < 7 * 60 + 50) {
-    return { text: "Prochain scan : aujourd'hui 07:50 CET (Europe)", cls: "online" };
-  }
-  if (totalMin < 14 * 60 + 30) {
-    return { text: "Prochain scan : aujourd'hui 14:30 CET (US)", cls: "online" };
+  const totalMin = now.getHours() * 60 + now.getMinutes();
+  for (const s of SCAN_SCHEDULE) {
+    if (totalMin < s.h * 60 + s.m) {
+      return { text: `Prochain scan : aujourd'hui ${s.label}`, cls: "online" };
+    }
   }
   if (day === 5) {
-    // Friday after 14:30
+    // Friday after last scan
     return { text: "Prochain scan : lundi 07:50 CET", cls: "offline" };
   }
   return { text: "Prochain scan : demain 07:50 CET (Europe)", cls: "offline" };
 }
+
+// Scan configuration: key, label, button label, css class
+const SCAN_DEFS = [
+  { key: "europe", label: "SCAN EUROPE — 07:50 CET", btn: "Europe (07:50)", cls: "europe" },
+  { key: "mid_session", label: "SCAN MID-SESSION — 11:15 CET", btn: "Mid-Session (11:15)", cls: "europe" },
+  { key: "us", label: "SCAN PRE-US — 14:50 CET", btn: "Pre-US (14:50)", cls: "us" },
+  { key: "us_session", label: "SCAN US SESSION — 17:00 CET", btn: "US Session (17:00)", cls: "us" },
+];
 
 export default function Dashboard() {
   const [scans, setScans] = useState({});
@@ -107,25 +119,22 @@ export default function Dashboard() {
       </div>
 
       <div className="trigger-section">
-        <button
-          className="trigger-btn europe"
-          onClick={() => triggerScan("europe")}
-          disabled={loading.europe}
-        >
-          {loading.europe ? "Scan en cours..." : "Scan Europe (07:50)"}
-        </button>
-        <button
-          className="trigger-btn us"
-          onClick={() => triggerScan("us")}
-          disabled={loading.us}
-        >
-          {loading.us ? "Scan en cours..." : "Scan US (14:30)"}
-        </button>
+        {SCAN_DEFS.map((s) => (
+          <button
+            key={s.key}
+            className={`trigger-btn ${s.cls}`}
+            onClick={() => triggerScan(s.key)}
+            disabled={loading[s.key]}
+          >
+            {loading[s.key] ? "Scan en cours..." : `Scan ${s.btn}`}
+          </button>
+        ))}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        <TradeCard scan={scans.europe} label="SCAN EUROPE — 07:50 CET" />
-        <TradeCard scan={scans.us} label="SCAN US — 14:30 CET" />
+        {SCAN_DEFS.map((s) => (
+          <TradeCard key={s.key} scan={scans[s.key]} label={s.label} />
+        ))}
       </div>
 
       {/* (D6) Toast container */}

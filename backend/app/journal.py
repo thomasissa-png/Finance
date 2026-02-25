@@ -142,21 +142,39 @@ def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: floa
     return "".join(parts)
 
 
-def _extract_scan_trace(scan_data: dict, scan_type_value: str) -> dict:
+def _extract_scan_trace(scan_data: dict, scan_type_value: str, ticker: str | None = None) -> dict:
     """Safely extract scan-level decision trace fields for a JournalEntry.
+
+    With 4 scan keys (europe, mid_session, us, us_session), a trade's scan_type
+    alone is ambiguous (e.g. "europe" could be 07:50 or 11:15 scan). We first
+    try to find the scan entry that produced this specific trade (matching ticker),
+    then fall back to the scan_type_value key.
 
     Returns a dict of kwargs safe to unpack into JournalEntry().
     Handles corrupt/missing/wrong-type cache data gracefully.
     """
+    def _extract(entry: dict) -> dict:
+        return {
+            "all_scored_news": entry.get("all_scored_news"),
+            "rejection_log": entry.get("rejection_log"),
+            "decision_summary": entry.get("decision_summary"),
+            "learning_state": entry.get("learning_state"),
+        }
+
+    # First pass: find the scan entry that matches this trade's ticker
+    if ticker:
+        for _key, entry in scan_data.items():
+            if not isinstance(entry, dict):
+                continue
+            rec = entry.get("recommendation")
+            if isinstance(rec, dict) and rec.get("ticker") == ticker:
+                return _extract(entry)
+
+    # Fallback: use scan_type_value directly
     entry = scan_data.get(scan_type_value)
     if not isinstance(entry, dict):
         return {}
-    return {
-        "all_scored_news": entry.get("all_scored_news"),
-        "rejection_log": entry.get("rejection_log"),
-        "decision_summary": entry.get("decision_summary"),
-        "learning_state": entry.get("learning_state"),
-    }
+    return _extract(entry)
 
 
 def _load_scan_decision_data() -> dict[str, dict]:
@@ -306,7 +324,7 @@ def run_daily_journal() -> list[dict]:
             actual_pricing_time_hours=actual_pricing_hours,
             delay_accuracy=delay_accuracy,
             # v3: Scan-level decision trace (from cached scan results)
-            **_extract_scan_trace(scan_data, trade.scan_type.value),
+            **_extract_scan_trace(scan_data, trade.scan_type.value, trade.ticker),
         )
         new_entries.append(entry)
         logger.info(

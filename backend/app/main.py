@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .backtest import run_backtest, run_parameter_sweep
-from .config import TRIGGER_COOLDOWN_SECONDS
+from .config import SCAN_KEY_TO_TYPE, TRIGGER_COOLDOWN_SECONDS
 from .economic_calendar import get_upcoming_events
 from .journal import load_journal, run_daily_journal
 from .learning import (
@@ -76,28 +76,43 @@ def _save_scans_cache(scans: dict[str, dict]) -> None:
 bg_scheduler = BackgroundScheduler(timezone="Europe/Paris")
 
 
-def _run_europe_scan() -> None:
-    # (#22) Get existing US trade ticker for correlation check
-    existing_ticker = None
-    us_scan = _last_scans.get("us", {})
-    if us_scan.get("has_trade") and us_scan.get("recommendation"):
-        existing_ticker = us_scan["recommendation"].get("ticker")
+def _get_existing_trade_tickers(exclude_key: str) -> list[str]:
+    """Collect trade tickers from all other active scans for portfolio correlation."""
+    tickers = []
+    for key, scan_data in _last_scans.items():
+        if key == exclude_key:
+            continue
+        if scan_data.get("has_trade") and scan_data.get("recommendation"):
+            ticker = scan_data["recommendation"].get("ticker")
+            if ticker:
+                tickers.append(ticker)
+    return tickers
 
-    result = run_scan(ScanType.EUROPE, existing_trade_ticker=existing_ticker)
-    _last_scans["europe"] = result
+
+def _run_scheduled_scan(scan_key: str) -> None:
+    """Run a scheduled scan and store results under scan_key."""
+    scan_type_str = SCAN_KEY_TO_TYPE.get(scan_key, scan_key)
+    scan_type = ScanType(scan_type_str)
+    existing = _get_existing_trade_tickers(scan_key)
+    result = run_scan(scan_type, existing_trade_ticker=existing or None)
+    _last_scans[scan_key] = result
     _save_scans_cache(_last_scans)
+
+
+def _run_europe_scan() -> None:
+    _run_scheduled_scan("europe")
+
+
+def _run_mid_session_scan() -> None:
+    _run_scheduled_scan("mid_session")
 
 
 def _run_us_scan() -> None:
-    # (#22) Get existing Europe trade ticker for correlation check
-    existing_ticker = None
-    eu_scan = _last_scans.get("europe", {})
-    if eu_scan.get("has_trade") and eu_scan.get("recommendation"):
-        existing_ticker = eu_scan["recommendation"].get("ticker")
+    _run_scheduled_scan("us")
 
-    result = run_scan(ScanType.US, existing_trade_ticker=existing_ticker)
-    _last_scans["us"] = result
-    _save_scans_cache(_last_scans)
+
+def _run_us_session_scan() -> None:
+    _run_scheduled_scan("us_session")
 
 
 def _run_daily_journal() -> None:
@@ -112,11 +127,13 @@ async def lifespan(app: FastAPI):
     if _last_scans:
         logger.info("Restored %d cached scan results", len(_last_scans))
 
-    # Schedule scans: 07:50 and 14:30 CET, weekdays only (markets closed on weekends)
+    # Schedule scans: 4 scans/day, weekdays only (markets closed on weekends)
     # misfire_grace_time=600 (10 min) — if app starts late (e.g. Replit cold start),
     # APScheduler still fires the missed scan instead of silently skipping it.
     bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=600)
-    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=600)
+    bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=600)
+    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=600)
+    bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=600)
     # Event-driven scan: check every 30 min for high-impact signals, weekdays only
     bg_scheduler.add_job(
         run_event_check,
@@ -127,7 +144,7 @@ async def lifespan(app: FastAPI):
     # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
     bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=600)
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50 and 14:30, event check every 30min, journal at 22:00 CET (weekdays only)")
+    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check every 30min, journal at 22:00 CET (weekdays only)")
     yield
     bg_scheduler.shutdown()
 
@@ -174,7 +191,7 @@ def get_latest_scan(scan_type: str):
 PARIS_TZ = ZoneInfo("Europe/Paris")
 
 
-def _run_triggered_scan(scan_type: str, st: ScanType, existing_ticker: str | None) -> None:
+def _run_triggered_scan(scan_type: str, st: ScanType, existing_ticker: list[str] | str | None) -> None:
     """Run a manually-triggered scan in a background thread.
 
     Results are stored in _last_scans and persisted to disk,
@@ -223,14 +240,14 @@ def trigger_scan(scan_type: str):
 
     _last_trigger_times[scan_type] = now
 
-    st = ScanType(scan_type)
+    # Map scan key to ScanType (supports europe, mid_session, us, us_session)
+    if scan_type not in SCAN_KEY_TO_TYPE:
+        raise HTTPException(status_code=400, detail=f"Type de scan invalide: {scan_type}. Valeurs acceptees: {', '.join(SCAN_KEY_TO_TYPE.keys())}")
+    st = ScanType(SCAN_KEY_TO_TYPE[scan_type])
 
-    # (#22) Get existing trade ticker from other scan for correlation
-    existing_ticker = None
-    other_scan = "us" if scan_type == "europe" else "europe"
-    other_result = _last_scans.get(other_scan, {})
-    if other_result.get("has_trade") and other_result.get("recommendation"):
-        existing_ticker = other_result["recommendation"].get("ticker")
+    # Portfolio-level correlation: collect all existing trade tickers from other scans
+    existing_tickers = _get_existing_trade_tickers(scan_type)
+    existing_ticker = existing_tickers or None
 
     # Run scan in background thread — return immediately to avoid HTTP timeout
     thread = threading.Thread(

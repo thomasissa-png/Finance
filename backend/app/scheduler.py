@@ -64,7 +64,7 @@ def run_event_check() -> dict | None:
     return result
 
 
-def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: str | None = None) -> dict:
+def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: list[str] | str | None = None) -> dict:
     """Execute a full scan pipeline: collect → score → select → save.
 
     Retries up to max_retries times. No sleep between retries to avoid blocking

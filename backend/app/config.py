@@ -3,8 +3,19 @@
 from dataclasses import dataclass
 
 SCAN_TIMES = {
-    "europe": "07:50",  # CET — 10 min avant ouverture Euronext
-    "us": "14:30",       # CET — 1h avant ouverture Wall Street
+    "europe": "07:50",       # CET — 10 min avant ouverture Euronext
+    "mid_session": "11:15",  # CET — mid-session EU, capte PMIs + meteo matin
+    "us": "14:50",           # CET — 20 min apres release macro US (ex 14:30 = conflit NFP/CPI)
+    "us_session": "17:00",   # CET — US mid-session, capte EIA/ISM/WASDE + reaction open
+}
+
+# Mapping scan cache keys to scan type (asset eligibility)
+# mid_session uses europe assets, us_session uses US assets
+SCAN_KEY_TO_TYPE: dict[str, str] = {
+    "europe": "europe",
+    "mid_session": "europe",
+    "us": "us",
+    "us_session": "us",
 }
 
 TARGET_PERCENT = 1.0  # Objectif minimum de mouvement en %

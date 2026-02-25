@@ -187,13 +187,20 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 
 ## Strategie
 - **Type**: Day trading event-driven (news-based), focus edge detection
-- **Scans**: 2/jour — Europe 07:50 CET, US 14:30 CET, **lundi-vendredi uniquement**
+- **Scans**: 4/jour — **lundi-vendredi uniquement**
+  - **07:50 CET** (Europe) : capte overnight US/Asie, rapports meteo nuit — edge max (12h+ de delay)
+  - **11:15 CET** (Mid-Session) : capte PMIs matin, donnees EU, meteo actualisee — 9h de trading restant
+  - **14:50 CET** (Pre-US) : decale de 14:30 pour eviter conflit NFP/CPI — les algos ont reagi, on capte le second ordre
+  - **17:00 CET** (US Session) : capte EIA petrole (mer 16:30), ISM (16:00), WASDE mensuel, reaction US open
+- **Scan keys**: `europe`, `mid_session`, `us`, `us_session` (cache + trigger API)
+- **Mapping scan → actifs**: europe/mid_session → ScanType.EUROPE, us/us_session → ScanType.US
 - **Weekend**: tous les scans, event checks et journal sont desactives samedi-dimanche (marches fermes). Les triggers manuels retournent HTTP 400 le week-end.
 - **Execution**: 0 ou 1 trade par scan
 - **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
 - **Univers**: 49 actifs (15 actions Euronext Paris, 4 metaux, 9 forex, 9 commodities, 12 indices)
 - **Filtrage par session**: Europe = Euronext + indices EUR/GBP + metaux/forex/commodities. US = indices USD/JPY/HKD/AUD + metaux/forex/commodities.
+- **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
 - **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)
 
 ## Calibration R/R (decorrellee)
