@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -173,9 +174,35 @@ def get_latest_scan(scan_type: str):
 PARIS_TZ = ZoneInfo("Europe/Paris")
 
 
+def _run_triggered_scan(scan_type: str, st: ScanType, existing_ticker: str | None) -> None:
+    """Run a manually-triggered scan in a background thread.
+
+    Results are stored in _last_scans and persisted to disk,
+    available via GET /api/scan/latest/{scan_type}.
+    """
+    try:
+        result = run_scan(st, existing_trade_ticker=existing_ticker)
+        _last_scans[scan_type] = result
+        _save_scans_cache(_last_scans)
+        logger.info("Background scan %s completed (trade=%s)", scan_type, result.get("has_trade"))
+    except Exception as exc:
+        logger.error("Background scan %s failed: %s", scan_type, exc)
+        _last_scans[scan_type] = {
+            "scan_type": scan_type,
+            "has_trade": False,
+            "reason_no_trade": f"Scan echoue: {exc}",
+            "news_analyzed": 0,
+        }
+        _save_scans_cache(_last_scans)
+
+
 @app.post("/api/scan/trigger/{scan_type}")
 def trigger_scan(scan_type: str):
-    """Manually trigger a scan (with rate-limiting #35)."""
+    """Manually trigger a scan (with rate-limiting #35).
+
+    The scan runs in a background thread and returns immediately.
+    Poll GET /api/scan/latest/{scan_type} for results.
+    """
     # Weekend guard — markets closed
     now_paris = datetime.now(PARIS_TZ)
     if now_paris.weekday() >= 5:  # 5=Saturday, 6=Sunday
@@ -205,10 +232,15 @@ def trigger_scan(scan_type: str):
     if other_result.get("has_trade") and other_result.get("recommendation"):
         existing_ticker = other_result["recommendation"].get("ticker")
 
-    result = run_scan(st, existing_trade_ticker=existing_ticker)
-    _last_scans[scan_type] = result
-    _save_scans_cache(_last_scans)
-    return result
+    # Run scan in background thread — return immediately to avoid HTTP timeout
+    thread = threading.Thread(
+        target=_run_triggered_scan,
+        args=(scan_type, st, existing_ticker),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "scan_started", "scan_type": scan_type, "message": "Scan lance en arriere-plan. Consultez GET /api/scan/latest pour les resultats."}
 
 
 @app.get("/api/trades")

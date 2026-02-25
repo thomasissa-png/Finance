@@ -196,11 +196,19 @@ def collect_all_news() -> list[NewsItem]:
     - Phase 1: Early-signal RSS feeds (NOAA, USDA, EIA, gCaptain, etc.)
     - Phase 2: Yahoo Finance (per-ticker news)
     - Phase 3: Mainstream RSS (Reuters, CNBC, Investing.com)
+
+    All 4 sources are fetched in parallel to reduce total collection time.
     """
-    yf_news = collect_yfinance_news()
-    rss_news = collect_rss_news()
-    early_news = collect_early_signal_news()
-    structured_news = collect_structured_data()
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_yf = executor.submit(collect_yfinance_news)
+        future_rss = executor.submit(collect_rss_news)
+        future_early = executor.submit(collect_early_signal_news)
+        future_structured = executor.submit(collect_structured_data)
+
+        yf_news = future_yf.result(timeout=60)
+        rss_news = future_rss.result(timeout=60)
+        early_news = future_early.result(timeout=60)
+        structured_news = future_structured.result(timeout=60)
 
     all_items = structured_news + early_news + yf_news + rss_news
 
