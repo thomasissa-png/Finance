@@ -14,6 +14,11 @@ from .models import NewsItem
 
 logger = logging.getLogger(__name__)
 
+# Max news items to send to Claude per scan.
+# 50 items ~= 5,200 input tokens → ~30s processing → well within 90s timeout.
+# Phase 0/1 premium sources naturally rank higher and always make the cut.
+MAX_NEWS_PER_SCAN = 50
+
 # Network timeout for RSS feed fetches (seconds).
 # feedparser.parse(url) uses urllib with NO timeout internally,
 # so we fetch via requests first, then parse the content.
@@ -232,6 +237,52 @@ def _dedup_by_similarity(items: list[NewsItem], threshold: float = 0.65) -> list
     return unique
 
 
+def _pre_filter_for_scoring(items: list[NewsItem], max_items: int = MAX_NEWS_PER_SCAN) -> list[NewsItem]:
+    """Heuristic pre-filter to cap items before sending to Claude API.
+
+    Without this, 100+ items cause API timeouts (~3 min per attempt).
+    Prioritizes by source weight (Phase 0/1 always make the cut),
+    freshness, and context richness.
+    """
+    if len(items) <= max_items:
+        return items
+
+    now = datetime.now(timezone.utc)
+
+    def _priority(item: NewsItem) -> float:
+        # Source weight dominates: Phase 0/1 (>1.0) always rank above Phase 2/3
+        score = item.source_weight * 100
+
+        # Freshness boost
+        if item.published:
+            age_h = (now - item.published).total_seconds() / 3600
+            if age_h <= 2:
+                score += 30
+            elif age_h <= 4:
+                score += 15
+        else:
+            score += 10  # Unknown age — don't penalize
+
+        # Description = more context for Claude scoring
+        if item.description:
+            score += 10
+
+        # Related tickers = more actionable
+        if item.related_tickers:
+            score += 5
+
+        return score
+
+    sorted_items = sorted(items, key=_priority, reverse=True)
+    filtered = sorted_items[:max_items]
+
+    logger.info(
+        "Pre-filtered %d -> %d items for Claude scoring (dropped %d low-priority)",
+        len(items), len(filtered), len(items) - len(filtered),
+    )
+    return filtered
+
+
 def collect_all_news() -> list[NewsItem]:
     """Aggregate news from all sources, pre-filtered and deduplicated.
 
@@ -272,8 +323,11 @@ def collect_all_news() -> list[NewsItem]:
     # (#2) Smart dedup by Jaccard similarity
     unique = _dedup_by_similarity(all_items)
 
+    # Cap items to avoid Claude API timeout on large batches (111+ items → timeout)
+    unique = _pre_filter_for_scoring(unique)
+
     logger.info(
-        "Collected %d unique news (%d structured, %d early-signal, %d yfinance, %d rss, after pre-filter & dedup)",
+        "Collected %d news for scoring (%d structured, %d early-signal, %d yfinance, %d rss, after pre-filter & dedup)",
         len(unique), len(structured_news), len(early_news), len(yf_news), len(rss_news),
     )
     return unique

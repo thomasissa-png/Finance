@@ -247,9 +247,9 @@ def _build_context_string(market_ctx: dict, scan_type: ScanType) -> str:
     parts = []
 
     if scan_type == ScanType.EUROPE:
-        parts.append("Scan EUROPE 07h50 — focus ouverture europeenne, recap session asiatique")
+        parts.append("Scan EUROPE — focus marche europeen, recap session asiatique")
     else:
-        parts.append("Scan US 14h30 — focus ouverture americaine, bilan session europeenne")
+        parts.append("Scan US — focus marche americain, bilan session europeenne")
 
     # VIX & regime
     if market_ctx.get("vix"):
@@ -303,7 +303,7 @@ Headlines :
                 messages=[{"role": "user", "content": user_message}],
                 tools=[SCORING_TOOL],
                 tool_choice={"type": "tool", "name": "submit_news_scores"},
-                timeout=60.0,  # 60s hard timeout — prevents scan stall if API hangs
+                timeout=90.0,  # 90s timeout — 50 items ~30s processing, margin for API queueing
             )
 
             # (#9) Extract structured tool_use response
@@ -341,11 +341,20 @@ Headlines :
     return []
 
 
+# Max items per Claude API call — keeps processing under 30s per batch.
+# Pre-filter in news_collector caps at 50, but this is a safety net
+# in case items are injected from other sources (event triggers, etc.)
+SCORING_BATCH_SIZE = 50
+
+
 def score_news_batch(
     news_items: list[NewsItem],
     scan_type: ScanType,
 ) -> tuple[list[ScoredNews], dict]:
-    """Send a batch of news headlines to Claude for scoring.
+    """Send news headlines to Claude for scoring, with automatic batching.
+
+    If more than SCORING_BATCH_SIZE items, splits into multiple API calls
+    to avoid timeout. Each batch is scored independently.
 
     Returns (scored_news, market_context).
     """
@@ -369,10 +378,40 @@ def score_news_batch(
 
     # (#5) Fetch market context
     market_ctx = _fetch_market_context()
+    session_context = _build_context_string(market_ctx, scan_type)
 
+    # Split into batches if needed (safety net — pre-filter should already cap at 50)
+    if len(news_items) > SCORING_BATCH_SIZE:
+        logger.info("Splitting %d items into batches of %d for Claude scoring",
+                     len(news_items), SCORING_BATCH_SIZE)
+
+    all_scored: list[ScoredNews] = []
+    for batch_start in range(0, len(news_items), SCORING_BATCH_SIZE):
+        batch_items = news_items[batch_start:batch_start + SCORING_BATCH_SIZE]
+        batch_scored = _score_batch(client, batch_items, session_context, batch_start)
+        all_scored.extend(batch_scored)
+
+    all_scored.sort(key=lambda s: s.total_score, reverse=True)
+    logger.info("Scored %d/%d news items (VIX=%s, regime=%s)",
+                len(all_scored), len(news_items),
+                market_ctx.get("vix", "N/A"), market_ctx.get("regime", "N/A"))
+    return all_scored, market_ctx
+
+
+def _score_batch(
+    client: anthropic.Anthropic,
+    batch_items: list[NewsItem],
+    session_context: str,
+    index_offset: int = 0,
+) -> list[ScoredNews]:
+    """Score a single batch of news items via Claude API.
+
+    index_offset is the position of this batch within the full list
+    (used to map scores back to the correct NewsItem).
+    """
     # Build the headlines payload — include description when available for more context
     headlines = []
-    for i, item in enumerate(news_items):
+    for i, item in enumerate(batch_items):
         age_str = ""
         if item.published:
             age_h = (datetime.now(timezone.utc) - item.published).total_seconds() / 3600
@@ -381,21 +420,19 @@ def score_news_batch(
         desc_str = f" | {item.description}" if item.description else ""
         headlines.append(f"{i+1}. {item.title}{desc_str}{tickers_str}{age_str}")
 
-    session_context = _build_context_string(market_ctx, scan_type)
-
     scores = _call_claude_with_retry(client, headlines, session_context)
 
     if not scores:
-        return [], market_ctx
+        return []
 
     # Map scores back to ScoredNews objects
     scored: list[ScoredNews] = []
     for entry in scores:
         idx = entry.get("index", 0) - 1
-        if idx < 0 or idx >= len(news_items):
+        if idx < 0 or idx >= len(batch_items):
             continue
 
-        item = news_items[idx]
+        item = batch_items[idx]
         freshness = _compute_freshness(item.published)
 
         try:
@@ -460,11 +497,7 @@ def score_news_batch(
             chain_reactions=chain_reactions,
         ))
 
-    scored.sort(key=lambda s: s.total_score, reverse=True)
-    logger.info("Scored %d/%d news items (VIX=%s, regime=%s)",
-                len(scored), len(news_items),
-                market_ctx.get("vix", "N/A"), market_ctx.get("regime", "N/A"))
-    return scored, market_ctx
+    return scored
 
 
 def _detect_chain_reactions(impacted_tickers: list[str], direction: Direction) -> list[ChainReaction]:

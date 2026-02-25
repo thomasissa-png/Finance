@@ -83,6 +83,9 @@ RSS feeds (5 sources) : BBC Business + World, CNBC World + Business, Investing.c
 **Note** : Reuters feeds.reuters.com DNS dead → remplace par BBC
 
 - **Claude API (Anthropic)**: scoring des news via Sonnet avec tool_use pour structured output + retry exponentiel (max 2 retries). Headlines incluent la description RSS quand disponible (contexte enrichi). WARNING logs si GNEWS_API_KEY ou EIA_API_KEY manquantes. Seul secret requis: `ANTHROPIC_API_KEY`.
+  - **Pre-filtrage** : cap a 50 items max avant Claude (heuristique source_weight + freshness + description)
+  - **Batching** : si > 50 items, decoupe en batchs de 50 pour eviter timeout API
+  - **Timeout** : 90s par batch (50 items ~30s processing, marge pour queueing API)
 
 ## Calendrier Economique
 Module `economic_calendar.py` — bloque les trades avant les evenements macro majeurs :
@@ -290,7 +293,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **select_trade()** : pre-fetch de tous les prix candidats en parallele avant evaluation
 - **run_daily_journal()** : pre-fetch des prix de cloture en parallele pour tous les trades pending
 - **scan_feeds_for_triggers()** : 8 early-signal feeds en parallele (event scanner)
-- **Claude API** : timeout 60s pour eviter les blocages infinis
+- **Claude API** : timeout 90s par batch, pre-filtrage a 50 items max, batching automatique si > 50
 - **Scheduler** : retry immediat (pas de `time.sleep()` qui bloquerait le thread scheduler)
 - **Scheduler** : `misfire_grace_time=600` sur tous les jobs (evite de rater le scan si l'app demarre en retard)
 - **Trigger scan** : non-bloquant — execute en background thread (evite timeout HTTP)
