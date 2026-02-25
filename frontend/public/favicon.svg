@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <!-- Pulse line -->
+  <polyline points="6,38 18,38 22,22 28,48 34,30 38,38 58,38" fill="none" stroke="#00d4aa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.35"/>
+  <!-- NT monogram -->
+  <text x="32" y="43" text-anchor="middle" font-family="monospace" font-weight="700" font-size="28" fill="#56d4f1" letter-spacing="-1">NT</text>
+</svg>
