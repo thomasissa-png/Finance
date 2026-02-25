@@ -357,12 +357,20 @@ def score_news_batch(
         logger.error("ANTHROPIC_API_KEY not set — cannot score news")
         return [], {}
 
+    # Warn about missing optional keys that significantly improve coverage
+    if not os.environ.get("GNEWS_API_KEY"):
+        logger.warning("GNEWS_API_KEY non configuree — 8 recherches ciblees (drought, oil, sanctions...) desactivees. "
+                        "Source early-signal majeure manquante. Inscription gratuite: https://gnews.io/")
+    if not os.environ.get("EIA_API_KEY"):
+        logger.warning("EIA_API_KEY non configuree — donnees stocks petrole/gaz desactivees. "
+                        "Inscription gratuite: https://www.eia.gov/opendata/register.php")
+
     client = anthropic.Anthropic(api_key=api_key)
 
     # (#5) Fetch market context
     market_ctx = _fetch_market_context()
 
-    # Build the headlines payload
+    # Build the headlines payload — include description when available for more context
     headlines = []
     for i, item in enumerate(news_items):
         age_str = ""
@@ -370,7 +378,8 @@ def score_news_batch(
             age_h = (datetime.now(timezone.utc) - item.published).total_seconds() / 3600
             age_str = f" [il y a {age_h:.1f}h]"
         tickers_str = f" (lie a: {', '.join(item.related_tickers)})" if item.related_tickers else ""
-        headlines.append(f"{i+1}. {item.title}{tickers_str}{age_str}")
+        desc_str = f" | {item.description}" if item.description else ""
+        headlines.append(f"{i+1}. {item.title}{desc_str}{tickers_str}{age_str}")
 
     session_context = _build_context_string(market_ctx, scan_type)
 

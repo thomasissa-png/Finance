@@ -31,6 +31,7 @@ class NewsItem(BaseModel):
     published: datetime | None = None
     related_tickers: list[str] = Field(default_factory=list)
     source_weight: float = 0.75  # (#6) reliability weight of source
+    description: str = ""  # RSS summary/description — gives Claude more context
 
 
 class ChainReaction(BaseModel):
@@ -58,7 +59,7 @@ class ScoredNews(BaseModel):
 
     @property
     def total_score(self) -> float:
-        """Edge-weighted score: surprise * freshness * clarity * edge_factor * category_mult.
+        """Edge-weighted score: surprise * clarity * edge_factor * source_weight * category_mult.
 
         La formule privilegie les news NON ENCORE PRICEES :
         - transmission_delay eleve = le marche n'a pas encore integre -> boost
@@ -68,8 +69,12 @@ class ScoredNews(BaseModel):
         edge_factor = transmission_delay/100 * (1 - market_awareness/100)
         Un earnings (delay=5, awareness=95) -> edge_factor = 0.05 * 0.05 = 0.0025
         Un rapport meteo (delay=80, awareness=10) -> edge_factor = 0.8 * 0.9 = 0.72
+
+        NOTE: freshness n'est PAS dans la formule car Claude voit deja l'age
+        de la news ("[il y a X.Xh]") et ajuste surprise/transmission_delay
+        en consequence. L'inclure causerait une double penalisation.
+        freshness reste stocke pour le journal/tracing.
         """
-        freshness_factor = self.freshness / 100
         clarity_factor = self.directional_clarity / 100
 
         # Edge factor: how much room is left for the market to price this?
@@ -77,11 +82,11 @@ class ScoredNews(BaseModel):
         awareness_discount = 1 - (self.market_awareness / 100)
         edge_factor = delay_factor * awareness_discount
 
-        # Floor at 0.01 — low enough to crush zero-edge news (earnings/macro)
-        # but not exactly 0 to avoid total blackout
-        edge_factor = max(edge_factor, 0.01)
+        # Floor at 0.05 — enough to crush zero-edge news (earnings/macro)
+        # but high enough that mid-range signals aren't obliterated
+        edge_factor = max(edge_factor, 0.05)
 
-        score = self.surprise * freshness_factor * clarity_factor * edge_factor
+        score = self.surprise * clarity_factor * edge_factor
         # Apply source reliability weight (#6)
         score *= self.news.source_weight
         # Apply category edge-priority multiplier

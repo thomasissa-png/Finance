@@ -7,6 +7,7 @@ feeds, it triggers a full scan immediately (respecting cooldown).
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -82,11 +83,39 @@ def _check_headline_for_triggers(title: str) -> list[tuple[str, str]]:
     return matches
 
 
+def _fetch_feed_triggers(feed_url: str, seen: set[str]) -> list[dict]:
+    """Fetch a single feed and extract trigger matches — designed to run in a thread."""
+    results: list[dict] = []
+    try:
+        resp = requests.get(feed_url, timeout=15, headers=_RSS_HEADERS)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
+        for entry in feed.entries[:10]:
+            title = entry.get("title", "")
+            if not title or title in seen:
+                continue
+
+            matches = _check_headline_for_triggers(title)
+            if matches:
+                keywords = [m[0] for m in matches]
+                categories = list(set(m[1] for m in matches))
+                results.append({
+                    "title": title,
+                    "source": feed.feed.get("title", feed_url),
+                    "url": entry.get("link", ""),
+                    "keywords": keywords,
+                    "categories": categories,
+                })
+    except Exception as exc:
+        logger.debug("Event scan feed error %s: %s", feed_url, exc)
+    return results
+
+
 def scan_feeds_for_triggers() -> list[dict]:
     """Quick scan of early-signal feeds for high-impact headlines.
 
     This is a lightweight check — only parses RSS titles,
-    doesn't call Claude or fetch prices.
+    doesn't call Claude or fetch prices. Feeds are fetched in parallel.
 
     Returns list of trigger events: [{title, source, keywords, categories}]
     """
@@ -98,31 +127,25 @@ def scan_feeds_for_triggers() -> list[dict]:
     if len(_seen_headlines) > _MAX_SEEN:
         _seen_headlines = set(list(_seen_headlines)[-_MAX_SEEN // 2:])
 
-    for feed_url in EARLY_SIGNAL_FEEDS:
-        try:
-            resp = requests.get(feed_url, timeout=15, headers=_RSS_HEADERS)
-            resp.raise_for_status()
-            feed = feedparser.parse(resp.content)
-            for entry in feed.entries[:10]:
-                title = entry.get("title", "")
-                if not title or title in _seen_headlines:
-                    continue
+    # Snapshot seen headlines for thread-safe read (writes happen after)
+    seen_snapshot = set(_seen_headlines)
 
-                matches = _check_headline_for_triggers(title)
-                if matches:
-                    _seen_headlines.add(title)
-                    keywords = [m[0] for m in matches]
-                    categories = list(set(m[1] for m in matches))
-                    triggers.append({
-                        "title": title,
-                        "source": feed.feed.get("title", feed_url),
-                        "url": entry.get("link", ""),
-                        "keywords": keywords,
-                        "categories": categories,
-                    })
-
-        except Exception as exc:
-            logger.debug("Event scan feed error %s: %s", feed_url, exc)
+    executor = ThreadPoolExecutor(max_workers=8)
+    futures = {executor.submit(_fetch_feed_triggers, url, seen_snapshot): url for url in EARLY_SIGNAL_FEEDS}
+    try:
+        for future in as_completed(futures, timeout=30):
+            try:
+                results = future.result(timeout=5)
+                for r in results:
+                    if r["title"] not in _seen_headlines:
+                        _seen_headlines.add(r["title"])
+                        triggers.append(r)
+            except Exception as exc:
+                logger.debug("Event scan future error: %s", exc)
+    except TimeoutError:
+        logger.warning("Event scan timed out, some feeds skipped")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return triggers
 

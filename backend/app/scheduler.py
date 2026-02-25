@@ -104,14 +104,14 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: s
 
             # Log scored results with scores for traceability
             if scored:
-                logger.info("--- Scored news ---")
-                for s in sorted(scored, key=lambda x: x.get("score", 0), reverse=True):
-                    logger.info("  score=%-6.1f dir=%-7s cat=%-15s delay=%-3s aware=%-3s | %s",
-                                s.get("score", 0), s.get("direction", "?"),
-                                s.get("news_category", "?"),
-                                s.get("transmission_delay", "?"),
-                                s.get("market_awareness", "?"),
-                                s.get("headline", "?")[:100])
+                logger.info("--- Scored news (%d) ---", len(scored))
+                for s in scored:  # already sorted by total_score desc
+                    logger.info("  score=%-6.1f dir=%-7s cat=%-15s delay=%-3d aware=%-3d | %s",
+                                s.total_score, s.direction.value,
+                                s.news_category,
+                                s.transmission_delay,
+                                s.market_awareness,
+                                s.news.title[:100])
 
             # Step 3: Get learning adjustments (#26 — cached)
             adjustments = get_learning_adjustments()

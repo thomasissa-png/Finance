@@ -78,8 +78,8 @@ def test_assets_for_session_us():
 
 
 def test_min_score_threshold():
-    """Score threshold should be 55 (#19)."""
-    assert MIN_SCORE_THRESHOLD == 55
+    """Score threshold should be 25 (lowered from 55 — multiplicative formula too punitive)."""
+    assert MIN_SCORE_THRESHOLD == 25
 
 
 def test_min_risk_reward():

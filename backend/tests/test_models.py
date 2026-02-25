@@ -28,7 +28,8 @@ def test_scored_news_edge_weighted_score():
         category_score_mult=1.0,
     )
     # edge_factor = 0.8 * 0.9 = 0.72
-    # 80 * 1.0 * 1.0 * 0.72 * 1.0 * 1.0 = 57.6
+    # score = surprise * clarity * edge_factor * source_weight * category_mult
+    # 80 * 1.0 * 0.72 * 1.0 * 1.0 = 57.6 (freshness NOT in formula)
     assert scored.total_score == 57.6
 
 
@@ -45,9 +46,9 @@ def test_scored_news_zero_edge_earnings():
         direction=Direction.LONG,
         category_score_mult=0.2,  # Earnings penalty
     )
-    # edge_factor = max(0.05 * 0.05, 0.01) = 0.01 (floor)
-    # 80 * 1.0 * 1.0 * 0.01 * 1.0 * 0.2 = 0.16
-    assert scored.total_score == 0.16
+    # edge_factor = max(0.05 * 0.05, 0.05) = 0.05 (floor raised from 0.01 to 0.05)
+    # score = 80 * 1.0 * 0.05 * 1.0 * 0.2 = 0.8 (freshness NOT in formula)
+    assert scored.total_score == 0.8
 
 
 def test_scored_news_weather_commodity():
@@ -64,12 +65,12 @@ def test_scored_news_weather_commodity():
         category_score_mult=1.8,  # Weather category boost
     )
     # edge_factor = 0.85 * 0.95 = 0.8075
-    # 75 * 1.0 * 0.9 * 0.8075 * 1.1 * 1.8 = 96.55...
+    # score = 75 * 0.9 * 0.8075 * 1.1 * 1.8 = 96.55... (freshness NOT in formula)
     assert scored.total_score > 90
 
 
 def test_scored_news_stale_cap():
-    """When freshness < 30, score is capped at 20."""
+    """Freshness is NOT in the formula — stale news scores same as fresh (Claude adjusts via surprise/delay)."""
     news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
     scored = ScoredNews(
         news=news,
@@ -80,7 +81,8 @@ def test_scored_news_stale_cap():
         market_awareness=10,
         direction=Direction.LONG,
     )
-    assert scored.total_score <= 20.0
+    # score = 100 * 1.0 * 0.72 * 1.0 * 1.0 = 72.0 (freshness NOT in formula)
+    assert scored.total_score == 72.0
 
 
 def test_scored_news_source_weight_applied():

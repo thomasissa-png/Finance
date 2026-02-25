@@ -108,12 +108,23 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
                     *entry.published_parsed[:6], tzinfo=timezone.utc
                 )
 
+            # Extract description/summary for Claude context
+            desc = entry.get("summary", "") or entry.get("description", "")
+            # Strip HTML tags and truncate
+            if desc:
+                import re
+                desc = re.sub(r"<[^>]+>", " ", desc).strip()
+                desc = " ".join(desc.split())  # normalize whitespace
+                if len(desc) > 200:
+                    desc = desc[:197] + "..."
+
             items.append(NewsItem(
                 title=title,
                 source=feed_title,
                 url=entry.get("link", ""),
                 published=published,
                 source_weight=_get_source_weight(feed_title),
+                description=desc,
             ))
     except Exception as exc:
         logger.warning("RSS error for %s: %s", feed_url, exc)
@@ -196,7 +207,7 @@ def _filter_old_news(items: list[NewsItem]) -> list[NewsItem]:
     return filtered
 
 
-def _dedup_by_similarity(items: list[NewsItem], threshold: float = 0.75) -> list[NewsItem]:
+def _dedup_by_similarity(items: list[NewsItem], threshold: float = 0.65) -> list[NewsItem]:
     """Deduplicate news by Jaccard similarity (#2).
 
     Keeps the first (highest source weight) version of similar headlines.

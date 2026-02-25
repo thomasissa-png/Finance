@@ -25,13 +25,13 @@ def test_freshness_one_hour_ago():
 def test_freshness_four_hours_ago():
     four_hours = datetime.now(timezone.utc) - timedelta(hours=4)
     score = _compute_freshness(four_hours)
-    # Between peak (2h) and max (6h): should be between 0 and 100
+    # Between peak (2h) and max (8h): should be between 0 and 100
     assert 0 < score < 100
 
 
 def test_freshness_too_old():
-    old = datetime.now(timezone.utc) - timedelta(hours=7)
-    assert _compute_freshness(old) == 5  # Floor at 5 for residual slow-transmission value
+    old = datetime.now(timezone.utc) - timedelta(hours=9)
+    assert _compute_freshness(old) == 5  # Floor at 5 for residual slow-transmission value (max age = 8h)
 
 
 def test_freshness_none():
@@ -45,8 +45,8 @@ def test_freshness_exactly_at_peak():
 
 
 def test_freshness_exactly_at_max():
-    at_max = datetime.now(timezone.utc) - timedelta(hours=6)
-    assert _compute_freshness(at_max) == 5  # Floor at 5 for residual slow-transmission value
+    at_max = datetime.now(timezone.utc) - timedelta(hours=8)
+    assert _compute_freshness(at_max) == 5  # Floor at 5 for residual slow-transmission value (max age = 8h)
 
 
 def test_freshness_future_time():
@@ -55,8 +55,8 @@ def test_freshness_future_time():
 
 
 def test_freshness_midpoint():
-    """At 4h (midpoint between 2h peak and 6h max), score should be ~50."""
-    midpoint = datetime.now(timezone.utc) - timedelta(hours=4)
+    """At 5h (midpoint between 2h peak and 8h max), score should be ~50."""
+    midpoint = datetime.now(timezone.utc) - timedelta(hours=5)
     score = _compute_freshness(midpoint)
     assert 45 <= score <= 55  # Allow small tolerance
 

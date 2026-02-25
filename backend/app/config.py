@@ -9,9 +9,9 @@ SCAN_TIMES = {
 
 TARGET_PERCENT = 1.0  # Objectif minimum de mouvement en %
 MIN_RISK_REWARD = 1.3  # Ratio risque/rendement minimum (#20 — ex 1.0)
-NEWS_MAX_AGE_HOURS = 6  # Ignorer les news de plus de 6h
+NEWS_MAX_AGE_HOURS = 8  # Ignorer les news de plus de 8h (ex 6h — elargi pour capter overnight US au scan Europe 07:50)
 NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h
-MIN_SCORE_THRESHOLD = 55  # Score minimum pour recommander un trade (#19 — ex 40)
+MIN_SCORE_THRESHOLD = 25  # Score minimum pour recommander un trade (ex 55 — abaisse car formule multiplicative trop punitive)
 
 DEFAULT_SOURCE_WEIGHT = 0.75
 
@@ -23,14 +23,14 @@ CATEGORY_SCORE_MULTIPLIERS: dict[str, float] = {
     "earnings":      0.2,   # Quasi zero-edge — deja price en pre-market
     "macro":         0.3,   # Algos HFT dominent — on n'a aucun avantage
     "geopolitical":  1.3,   # Fort edge si signal early — delai de pricing 1-6h
-    "regulatory":    0.6,   # Generalement telegraphe, faible edge
-    "m_a":           0.5,   # Fort si rumeur, mais rarement en avance de phase
+    "regulatory":    0.9,   # Peut avoir de l'edge si signal early (ex 0.6)
+    "m_a":           0.7,   # Fort si rumeur, rarement en avance de phase (ex 0.5)
     "sector":        1.2,   # Liens indirects = edge reel — le marche connecte lentement
     "commodity":     1.5,   # Edge max — signaux physiques (meteo, shipping, stocks)
     "weather":       1.6,   # Fort edge mais faux-positifs possibles sur previsions
     "supply_chain":  1.6,   # Disruptions logistiques — delai de pricing long
-    "central_bank_subtle": 0.6,  # Speeches/minutes secondaires — edge faible mais non nul
-    "other":         0.6,
+    "central_bank_subtle": 0.8,  # Speeches/minutes secondaires — edge faible mais non nul (ex 0.6)
+    "other":         0.8,   # Defaut moins punitif (ex 0.6)
 }
 
 # ── News category multipliers for calibration (#7) ────────────
