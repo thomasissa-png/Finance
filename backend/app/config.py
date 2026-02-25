@@ -226,8 +226,9 @@ NEWS_CATEGORIES = [
 
 RSS_FEEDS = [
     # ── Phase 3: medias mainstream (information deja traitee par les algos) ──
-    "https://feeds.reuters.com/reuters/businessNews",
-    "https://feeds.reuters.com/reuters/topNews",
+    # Reuters: feeds.reuters.com deprecated (DNS dead). BBC Business as replacement.
+    "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "https://feeds.bbci.co.uk/news/rss.xml",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://www.cnbc.com/id/10000664/device/rss/rss.html",
     "https://www.investing.com/rss/news.rss",
@@ -236,23 +237,35 @@ RSS_FEEDS = [
 # ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
 EARLY_SIGNAL_FEEDS = [
     # Meteo / Agri — signaux physiques pour commodities
-    "https://www.drought.gov/rss/rss.xml",
-    "https://www.cpc.ncep.noaa.gov/products/precip_app/cpc_rss.xml",
-    "https://alerts.weather.gov/cap/us.php?x=0",
+    # drought.gov/rss/rss.xml: 404. No RSS feed available. Replace with NCEI climate news + SPC severe weather.
+    "https://www.ncei.noaa.gov/news.xml",                          # NCEI: precipitation, drought, temperature reports
+    "https://www.spc.noaa.gov/products/spcrss.xml",                # SPC: severe weather outlooks, tornado/storm watches
+    # cpc.ncep.noaa.gov/products/precip_app/cpc_rss.xml: 404. CPC dropped their RSS feed.
+    # Replace with NWS main RSS (weather alerts, fire weather, precipitation outlooks).
+    "https://www.weather.gov/rss_page.php?site_name=nws",          # NWS national weather summary
+    # alerts.weather.gov: decommissioned Dec 2, 2025. Replaced by api.weather.gov ATOM feed.
+    "https://api.weather.gov/alerts/active.atom",                   # NWS active alerts (CAP v1.2 ATOM)
     # USDA / FAO — rapports sur les recoltes et stocks
-    "https://www.usda.gov/rss/home.xml",
-    "https://www.fao.org/publications/highlights/rss/en/",
+    # usda.gov/rss/home.xml: 503 timeout. Replace with NASS reports + news feeds (working, verified).
+    "https://www.nass.usda.gov/rss/reports.xml",                    # NASS: crop reports, cold storage, production
+    "https://www.nass.usda.gov/rss/news.xml",                      # NASS: ag statistics news, acreage, forecasts
+    # fao.org/publications/highlights/rss/en/: 404. Replace with FAO newsroom RSS (working, verified).
+    "https://www.fao.org/feeds/fao-newsroom-rss",                   # FAO: food security, agriculture, crop reports
     # Geopolitique — OSINT, conflits, sanctions
-    "https://www.state.gov/rss/channels/press-releases.xml",
-    "https://www.iaea.org/feeds/press-releases",
+    "https://www.state.gov/rss/press-releases/feed/",
+    # iaea.org/feeds/press-releases: 404. Correct URL is /feeds/pressalerts (verified working).
+    "https://www.iaea.org/feeds/pressalerts",                       # IAEA: nuclear, sanctions, inspections
     "https://www.eia.gov/rss/todayinenergy.xml",
     # Maritime / Energie — perturbations supply chain
+    # gcaptain.com/feed/: intermittent 403. Add backup maritime feeds for resilience.
     "https://gcaptain.com/feed/",
+    "https://www.marinelink.com/news/rss",                          # MarineLink: shipping, maritime, offshore
+    "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions, geopolitics
     "https://oilprice.com/rss/main",
     # Central banks — speeches et minutes (signaux dovish/hawkish subtils)
     "https://www.ecb.europa.eu/rss/press.html",
     "https://www.federalreserve.gov/feeds/press_all.xml",
-    "https://www.bankofengland.co.uk/rss/speeches",
+    "https://www.bankofengland.co.uk/rss/speeches",                 # BoE: verified working (200)
 ]
 
 # ── Source weights: early-signal sources get premium weight ──────
@@ -266,11 +279,19 @@ SOURCE_WEIGHTS: dict[str, float] = {
     # Phase 1: early-signal (premium — info pas encore pricee)
     "USDA": 1.1,
     "usda": 1.1,
+    "NASS": 1.1,
+    "nass": 1.1,
     "FAO": 1.05,
     "fao.org": 1.05,
     "NOAA": 1.1,
+    "NCEI": 1.1,
+    "ncei": 1.1,
+    "Storm Prediction Center": 1.1,
+    "spc.noaa.gov": 1.1,
+    "National Weather Service": 1.1,
     "drought.gov": 1.1,
     "weather.gov": 1.1,
+    "api.weather.gov": 1.1,
     "EIA": 1.15,
     "eia.gov": 1.15,
     "IAEA": 1.05,
@@ -285,9 +306,15 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "bankofengland": 1.0,
     "gCaptain": 1.05,
     "gcaptain": 1.05,
+    "MarineLink": 1.05,
+    "marinelink": 1.05,
+    "Maritime Executive": 1.05,
+    "maritime-executive": 1.05,
     "OilPrice": 1.0,
     "oilprice": 1.0,
     # Phase 3: mainstream (info deja traitee — poids reduits)
+    "BBC": 0.85,
+    "bbc": 0.85,
     "reuters": 0.85,
     "Reuters": 0.85,
     "CNBC": 0.9,

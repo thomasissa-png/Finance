@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 PARIS_TZ = ZoneInfo("Europe/Paris")
 
+# Browser User-Agent — some feeds block python-requests default UA
+_RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+}
+
 # ── High-impact keywords that trigger immediate scans ─────────────
 # Organized by category with associated weight
 HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
@@ -95,7 +100,7 @@ def scan_feeds_for_triggers() -> list[dict]:
 
     for feed_url in EARLY_SIGNAL_FEEDS:
         try:
-            resp = requests.get(feed_url, timeout=10)
+            resp = requests.get(feed_url, timeout=15, headers=_RSS_HEADERS)
             resp.raise_for_status()
             feed = feedparser.parse(resp.content)
             for entry in feed.entries[:10]:

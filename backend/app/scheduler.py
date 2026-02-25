@@ -1,6 +1,7 @@
 """Scheduler: triggers scans at 07:50 and 14:30 CET + event-driven scans every 30 min."""
 
 import logging
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .event_scanner import determine_scan_type, should_trigger_scan
@@ -87,9 +88,30 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: s
                     "news_analyzed": 0,
                 }
 
+            # Log collected headlines for traceability
+            logger.info("--- Headlines collected (%d) ---", len(news_items))
+            for i, item in enumerate(news_items, 1):
+                age = ""
+                if item.published:
+                    age_h = (datetime.now(timezone.utc) - item.published).total_seconds() / 3600
+                    age = f" [{age_h:.1f}h ago]"
+                logger.info("  [%d] %s (src: %s, weight: %.2f)%s",
+                            i, item.title, item.source, item.source_weight, age)
+
             # Step 2: Score via Claude (now returns market_context too)
             scored, market_ctx = score_news_batch(news_items, scan_type)
             logger.info("Scored %d news items", len(scored))
+
+            # Log scored results with scores for traceability
+            if scored:
+                logger.info("--- Scored news ---")
+                for s in sorted(scored, key=lambda x: x.get("score", 0), reverse=True):
+                    logger.info("  score=%-6.1f dir=%-7s cat=%-15s delay=%-3s aware=%-3s | %s",
+                                s.get("score", 0), s.get("direction", "?"),
+                                s.get("news_category", "?"),
+                                s.get("transmission_delay", "?"),
+                                s.get("market_awareness", "?"),
+                                s.get("headline", "?")[:100])
 
             # Step 3: Get learning adjustments (#26 — cached)
             adjustments = get_learning_adjustments()

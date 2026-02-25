@@ -17,7 +17,13 @@ logger = logging.getLogger(__name__)
 # Network timeout for RSS feed fetches (seconds).
 # feedparser.parse(url) uses urllib with NO timeout internally,
 # so we fetch via requests first, then parse the content.
-RSS_FETCH_TIMEOUT = 10
+RSS_FETCH_TIMEOUT = 15
+
+# Browser User-Agent — many feeds (CNBC, gCaptain, BoE) return 403
+# when they see the default "python-requests/x.y.z" User-Agent.
+_RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+}
 
 
 def _get_source_weight(source: str) -> float:
@@ -87,7 +93,7 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
     """
     items: list[NewsItem] = []
     try:
-        resp = requests.get(feed_url, timeout=RSS_FETCH_TIMEOUT)
+        resp = requests.get(feed_url, timeout=RSS_FETCH_TIMEOUT, headers=_RSS_HEADERS)
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
         feed_title = feed.feed.get("title", feed_url)
