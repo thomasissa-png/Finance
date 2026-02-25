@@ -298,7 +298,7 @@ Headlines :
         try:
             response = client.messages.create(
                 model="claude-sonnet-4-5-20250929",
-                max_tokens=4096,
+                max_tokens=16384,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_message}],
                 tools=[SCORING_TOOL],
@@ -306,10 +306,21 @@ Headlines :
                 timeout=90.0,  # 90s timeout — 50 items ~30s processing, margin for API queueing
             )
 
+            # Detect truncation — if max_tokens was hit, scores are likely incomplete
+            if response.stop_reason == "max_tokens":
+                logger.warning("Claude response truncated (max_tokens hit, attempt %d) — retrying", attempt + 1)
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                    continue
+
             # (#9) Extract structured tool_use response
             for block in response.content:
                 if block.type == "tool_use" and block.name == "submit_news_scores":
-                    return block.input.get("scores", [])
+                    scores = block.input.get("scores", [])
+                    if not scores:
+                        logger.warning("Claude returned tool_use with empty scores array (attempt %d, stop_reason=%s)",
+                                       attempt + 1, response.stop_reason)
+                    return scores
 
             # Fallback: try text-based JSON parsing if tool_use somehow not used
             for block in response.content:
@@ -496,6 +507,10 @@ def _score_batch(
             category_score_mult=cat_mult,
             chain_reactions=chain_reactions,
         ))
+
+    if scored and len(scored) < len(batch_items):
+        logger.warning("Claude scored only %d/%d items in batch (possible truncation or index mismatch)",
+                       len(scored), len(batch_items))
 
     return scored
 
