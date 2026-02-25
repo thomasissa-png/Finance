@@ -11,6 +11,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import feedparser
+import requests
 
 from .config import EARLY_SIGNAL_FEEDS, TRIGGER_COOLDOWN_SECONDS
 
@@ -94,7 +95,9 @@ def scan_feeds_for_triggers() -> list[dict]:
 
     for feed_url in EARLY_SIGNAL_FEEDS:
         try:
-            feed = feedparser.parse(feed_url)
+            resp = requests.get(feed_url, timeout=10)
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.content)
             for entry in feed.entries[:10]:
                 title = entry.get("title", "")
                 if not title or title in _seen_headlines:

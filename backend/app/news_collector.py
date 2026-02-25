@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import feedparser
+import requests
 import yfinance as yf
 
 from .config import ASSETS, DEFAULT_SOURCE_WEIGHT, EARLY_SIGNAL_FEEDS, NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS
@@ -12,6 +13,11 @@ from .data_apis import collect_structured_data
 from .models import NewsItem
 
 logger = logging.getLogger(__name__)
+
+# Network timeout for RSS feed fetches (seconds).
+# feedparser.parse(url) uses urllib with NO timeout internally,
+# so we fetch via requests first, then parse the content.
+RSS_FETCH_TIMEOUT = 10
 
 
 def _get_source_weight(source: str) -> float:
@@ -56,23 +62,34 @@ def collect_yfinance_news() -> list[NewsItem]:
     """Fetch news for all tracked assets via yfinance in parallel."""
     items: list[NewsItem] = []
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(_fetch_news_for_asset, asset): asset for asset in ASSETS}
+    executor = ThreadPoolExecutor(max_workers=10)
+    futures = {executor.submit(_fetch_news_for_asset, asset): asset for asset in ASSETS}
+    try:
         for future in as_completed(futures, timeout=30):
             try:
                 items.extend(future.result(timeout=10))
             except Exception as exc:
                 asset = futures[future]
                 logger.debug("yfinance news timeout/error for %s: %s", asset.ticker, exc)
+    except TimeoutError:
+        logger.warning("yfinance collection timed out, some assets skipped")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return items
 
 
 def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
-    """Fetch news from a single RSS feed — designed to run in a thread."""
+    """Fetch news from a single RSS feed — designed to run in a thread.
+
+    Uses requests.get() with a timeout instead of feedparser.parse(url)
+    to avoid indefinite blocking on unresponsive servers.
+    """
     items: list[NewsItem] = []
     try:
-        feed = feedparser.parse(feed_url)
+        resp = requests.get(feed_url, timeout=RSS_FETCH_TIMEOUT)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
         feed_title = feed.feed.get("title", feed_url)
         for entry in feed.entries[:20]:
             title = entry.get("title", "")
@@ -101,14 +118,19 @@ def collect_rss_news() -> list[NewsItem]:
     """Fetch news from configured RSS feeds in parallel."""
     items: list[NewsItem] = []
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
+    executor = ThreadPoolExecutor(max_workers=5)
+    futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
+    try:
         for future in as_completed(futures, timeout=20):
             try:
                 items.extend(future.result(timeout=10))
             except Exception as exc:
                 url = futures[future]
                 logger.debug("RSS feed timeout/error for %s: %s", url, exc)
+    except TimeoutError:
+        logger.warning("RSS collection timed out, some feeds skipped")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return items
 
@@ -121,8 +143,9 @@ def collect_early_signal_news() -> list[NewsItem]:
     """
     items: list[NewsItem] = []
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
+    executor = ThreadPoolExecutor(max_workers=8)
+    futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
+    try:
         for future in as_completed(futures, timeout=20):
             try:
                 result = future.result(timeout=10)
@@ -131,6 +154,10 @@ def collect_early_signal_news() -> list[NewsItem]:
             except Exception as exc:
                 url = futures[future]
                 logger.debug("Early-signal feed unavailable %s: %s", url, exc)
+    except TimeoutError:
+        logger.warning("Early-signal collection timed out, some feeds skipped")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     if items:
         logger.info("Collected %d early-signal news items", len(items))
@@ -198,17 +225,27 @@ def collect_all_news() -> list[NewsItem]:
     - Phase 3: Mainstream RSS (Reuters, CNBC, Investing.com)
 
     All 4 sources are fetched in parallel to reduce total collection time.
+    Uses shutdown(wait=False) to avoid blocking if a source hangs.
     """
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        future_yf = executor.submit(collect_yfinance_news)
-        future_rss = executor.submit(collect_rss_news)
-        future_early = executor.submit(collect_early_signal_news)
-        future_structured = executor.submit(collect_structured_data)
+    executor = ThreadPoolExecutor(max_workers=4)
+    future_yf = executor.submit(collect_yfinance_news)
+    future_rss = executor.submit(collect_rss_news)
+    future_early = executor.submit(collect_early_signal_news)
+    future_structured = executor.submit(collect_structured_data)
 
-        yf_news = future_yf.result(timeout=60)
-        rss_news = future_rss.result(timeout=60)
-        early_news = future_early.result(timeout=60)
-        structured_news = future_structured.result(timeout=60)
+    def _safe_get(future, name):
+        try:
+            return future.result(timeout=90)
+        except Exception as exc:
+            logger.warning("News source '%s' failed/timed out: %s", name, exc)
+            return []
+
+    yf_news = _safe_get(future_yf, "yfinance")
+    rss_news = _safe_get(future_rss, "rss")
+    early_news = _safe_get(future_early, "early-signal")
+    structured_news = _safe_get(future_structured, "structured")
+
+    executor.shutdown(wait=False, cancel_futures=True)
 
     all_items = structured_news + early_news + yf_news + rss_news
 

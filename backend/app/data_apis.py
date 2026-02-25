@@ -903,15 +903,20 @@ def collect_structured_data() -> list[NewsItem]:
         ("options", fetch_options_unusual_activity),
     ]
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        futures = {executor.submit(fn): name for name, fn in sources}
-        for future in as_completed(futures):
+    executor = ThreadPoolExecutor(max_workers=6)
+    futures = {executor.submit(fn): name for name, fn in sources}
+    try:
+        for future in as_completed(futures, timeout=50):
             source_name = futures[future]
             try:
                 items = future.result(timeout=45)
                 all_items.extend(items)
             except Exception as exc:
                 logger.warning("Structured data source '%s' failed: %s", source_name, exc)
+    except TimeoutError:
+        logger.warning("Structured data collection timed out, some sources skipped")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     if all_items:
         logger.info("Total structured data collected: %d items", len(all_items))
