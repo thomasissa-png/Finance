@@ -40,20 +40,24 @@ Module `data_apis.py` — donnees numeriques que Claude peut interpreter precise
 Poids premium : Open-Meteo=1.15, EIA=1.1, USDA=1.1, CFTC=1.05, Options=0.95
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
-Sources configurees dans `EARLY_SIGNAL_FEEDS` (14 feeds) :
-- **Meteo/Agri** : drought.gov, NOAA CPC, weather.gov (alertes NWS)
-- **USDA/FAO** : rapports recoltes, stocks, previsions mondiales
-- **Geopolitique** : State Department, IAEA (nucleaire/sanctions)
-- **Energie** : EIA (stocks petrole/gaz), OilPrice, gCaptain (maritime/shipping)
-- **Banques centrales** : ECB, Federal Reserve, Bank of England (speeches/minutes subtils)
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (17 feeds — verifie et corrige) :
+- **Meteo/Agri** : NCEI (climat/precipitation), SPC (orages/tornades), NWS (alertes nationales), api.weather.gov (ATOM alerts CAP v1.2)
+- **USDA/FAO** : NASS reports + news (recoltes, stocks, previsions), FAO newsroom
+- **Geopolitique** : State Department (press releases), IAEA (pressalerts — nucleaire/sanctions)
+- **Energie** : EIA Today in Energy, OilPrice
+- **Maritime** : gCaptain (intermittent 403), MarineLink, Maritime Executive (backups pour resilience)
+- **Banques centrales** : ECB, Federal Reserve, Bank of England (speeches)
+
+**Feeds remplaces** (404/DNS dead) : drought.gov→NCEI+SPC, weather.gov alerts→api.weather.gov ATOM, CPC NCEP→NWS, usda.gov→NASS, fao.org→FAO newsroom, iaea.org/feeds/press-releases→pressalerts
 
 ### Phase 2 : Yahoo Finance (yfinance)
 Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API.
 
 ### Phase 3 : Medias mainstream (info deja traitee par les algos)
-RSS feeds (5 sources) : Reuters, CNBC, Investing.com. Poids reduits : CNBC=0.9, Investing.com=0.7
+RSS feeds (5 sources) : BBC Business + World, CNBC World + Business, Investing.com. Poids reduits : BBC=0.85, CNBC=0.9, Investing.com=0.7
+**Note** : Reuters feeds.reuters.com DNS dead → remplace par BBC
 
-- **Claude API (Anthropic)**: scoring des news via Sonnet avec tool_use pour structured output + retry exponentiel (max 2 retries). Seul secret requis: `ANTHROPIC_API_KEY`.
+- **Claude API (Anthropic)**: scoring des news via Sonnet avec tool_use pour structured output + retry exponentiel (max 2 retries). Headlines incluent la description RSS quand disponible (contexte enrichi). WARNING logs si GNEWS_API_KEY ou EIA_API_KEY manquantes. Seul secret requis: `ANTHROPIC_API_KEY`.
 
 ## Calendrier Economique
 Module `economic_calendar.py` — bloque les trades avant les evenements macro majeurs :
@@ -78,45 +82,54 @@ Module `event_scanner.py` — surveillance continue des feeds early-signal :
 - **Trigger** : si signal detecte → scan complet immediat (respecte cooldown 5min)
 - **Scan type** : avant 14:00 = europe, apres 14:00 = us
 
-## Scoring — Formule Edge-Weighted (v2.0)
+## Scoring — Formule Edge-Weighted (v3.1)
 
 ### Criteres d'evaluation (par Claude)
 1. **surprise** (0-100) : A quel point l'info est inattendue
-2. **directional_clarity** (0-100) : Clarte de la direction d'impact
-3. **transmission_delay** (0-100) : CRITIQUE — Temps avant que le marche price pleinement
+2. **freshness** (0-100) : Calculee automatiquement (age de la news). **NON incluse dans la formule** — stockee pour le journal/tracing uniquement. Claude voit deja l'age "[il y a X.Xh]" et ajuste transmission_delay en consequence. L'inclure causerait une double penalisation.
+3. **directional_clarity** (0-100) : Clarte de la direction d'impact
+4. **transmission_delay** (0-100) : CRITIQUE — Temps avant que le marche price pleinement
    - 0 = deja price (earnings, NFP conforme)
    - 20 = algos HFT ont deja reagi (CPI, FOMC)
    - 50 = quelques acteurs ont vu, pas le gros du marche
    - 80 = info specialisee, seuls les experts comprennent (rapport USDA, alerte NOAA)
    - 100 = personne n'a fait le lien avec les actifs
-4. **market_awareness** (0-100) : % des participants qui ont DEJA VU l'info
+5. **market_awareness** (0-100) : % des participants qui ont DEJA VU l'info
    - 0 = personne (bulletin meteo local)
    - 50 = desk institutionnels
    - 100 = tout le monde (headline CNN, trending Twitter)
-5. **direction** : LONG / SHORT / NEUTRAL
-6. **impacted_tickers** : tickers directement impactes
-7. **news_category** : earnings, macro, geopolitical, regulatory, m_a, sector, commodity, weather, supply_chain, central_bank_subtle, other
-8. **reasoning** : explication incluant l'estimation du delai de pricing
+6. **direction** : LONG / SHORT / NEUTRAL
+7. **impacted_tickers** : tickers directement impactes
+8. **news_category** : earnings, macro, geopolitical, regulatory, m_a, sector, commodity, weather, supply_chain, central_bank_subtle, other
+9. **reasoning** : explication incluant l'estimation du delai de pricing
 
-### Formule de score
+### Formule de score (v3.1 — freshness retiree)
 ```
-edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.01)
-score = surprise * (freshness/100) * (clarity/100) * edge_factor * source_weight * category_score_mult
+edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.05)
+score = surprise * (clarity/100) * edge_factor * source_weight * category_score_mult
 ```
+**Changements v3.1 vs v2.0 :**
+- freshness retiree de la formule (evite double penalisation avec transmission_delay)
+- edge_factor floor releve de 0.01 → 0.05 (empeche l'ecrasement total des scores mid-range)
+- MIN_SCORE_THRESHOLD abaisse de 55 → 25 (formule multiplicative trop punitive a 55)
 
 **Exemples concrets :**
-- Earnings Apple (delay=5, awareness=95) → edge_factor = 0.05*0.05 = 0.0025 (floor 0.01) → score ecrase
+- Earnings Apple (delay=5, awareness=95) → edge_factor = 0.05*0.05 = 0.0025 (floor 0.05) → score ecrase
 - Rapport NOAA secheresse (delay=80, awareness=10) → edge_factor = 0.8*0.9 = 0.72 → score booste
 - Gel Bresil cafe (delay=90, awareness=5) → edge_factor = 0.9*0.95 = 0.855 → score maximal
+
+### Hard-caps sur categories zero-edge
+- **earnings** : transmission_delay force a 5 si > 15, market_awareness force a >= 90
+- **macro** : transmission_delay force a 10 si > 20, market_awareness force a >= 85
 
 ### Category Score Multipliers (edge-priority)
 ```
 earnings:           0.2   # Quasi zero-edge — deja price en pre-market
 macro:              0.3   # Algos HFT dominent — aucun avantage
-m_a:                0.5   # Fort si rumeur, rarement en avance de phase
-central_bank_subtle: 0.6  # Speeches secondaires — edge faible
-other:              0.6   # Defaut conservateur
-regulatory:         0.6   # Generalement telegraphe, faible edge
+m_a:                0.7   # Fort si rumeur, rarement en avance de phase (releve de 0.5)
+central_bank_subtle: 0.8  # Speeches secondaires — edge faible mais non nul (releve de 0.6)
+other:              0.8   # Defaut moins punitif (releve de 0.6)
+regulatory:         0.9   # Peut avoir de l'edge si signal early (releve de 0.6)
 sector:             1.2   # Liens indirects = edge reel
 geopolitical:       1.3   # Fort edge si signal early
 commodity:          1.5   # Edge max — signaux physiques
@@ -213,11 +226,13 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   pour diagnostiquer si un echec vient de Claude ou du learning
 - **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour acces concurrent sur aux fichiers JSON
 
-## Parametres cles (v3.0)
-- Score minimum: 55/100 (releve de 40 — filtre plus strict)
+## Parametres cles (v3.1)
+- Score minimum: 25/100 (abaisse de 55 — formule multiplicative trop punitive a 55)
+- Edge factor floor: 0.05 (releve de 0.01)
 - Ratio risque/rendement minimum: 1.3 (releve de 1.0)
-- Freshness peak: < 2h
-- News max age: 6h
+- Freshness peak: < 2h (stocke, non inclus dans la formule)
+- News max age: 8h (elargi de 6h pour capter overnight US au scan Europe 07:50)
+- Dedup Jaccard threshold: 0.65 (abaisse de 0.75 pour meilleure dedup)
 - Trigger cooldown: 300s (5 min entre deux triggers manuels)
 - Schema version: 3
 - Learning min trades: 5 (global), 4 (par ticker), 5 (par categorie/news_cat/session)
@@ -235,12 +250,18 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 
 ### Backend — Parallelisation I/O
 - **collect_structured_data()** : 6 sources API en parallele (ThreadPoolExecutor, max_workers=6, timeout 45s)
+- **collect_all_news()** : 4 sources (structured, early-signal, yfinance, rss) en parallele
 - **_fetch_market_context()** : 9 appels yfinance en parallele (VIX + indices + trends)
 - **select_trade()** : pre-fetch de tous les prix candidats en parallele avant evaluation
 - **run_daily_journal()** : pre-fetch des prix de cloture en parallele pour tous les trades pending
+- **scan_feeds_for_triggers()** : 8 early-signal feeds en parallele (event scanner)
 - **Claude API** : timeout 60s pour eviter les blocages infinis
 - **Scheduler** : retry immediat (pas de `time.sleep()` qui bloquerait le thread scheduler)
-- **yfinance/feedparser/RSS** : timeouts sur tous les appels reseau (10-30s)
+- **Scheduler** : `misfire_grace_time=600` sur tous les jobs (evite de rater le scan si l'app demarre en retard)
+- **Trigger scan** : non-bloquant — execute en background thread (evite timeout HTTP)
+- **RSS** : `requests.get(url, timeout=15)` + `feedparser.parse(content)` (au lieu de `feedparser.parse(url)` qui n'a pas de timeout reseau)
+- **RSS** : User-Agent navigateur pour eviter les 403 (CNBC, gCaptain, BoE)
+- **ThreadPoolExecutor** : pattern `try/finally + shutdown(wait=False, cancel_futures=True)` partout (evite blocage si un thread hang)
 
 ### Backend — Caches
 - **Performance summary** : cache `build_performance_summary()` invalide apres chaque journal
