@@ -112,16 +112,19 @@ async def lifespan(app: FastAPI):
         logger.info("Restored %d cached scan results", len(_last_scans))
 
     # Schedule scans: 07:50 and 14:30 CET, weekdays only (markets closed on weekends)
-    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan")
-    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan")
+    # misfire_grace_time=600 (10 min) — if app starts late (e.g. Replit cold start),
+    # APScheduler still fires the missed scan instead of silently skipping it.
+    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=600)
+    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=30, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=600)
     # Event-driven scan: check every 30 min for high-impact signals, weekdays only
     bg_scheduler.add_job(
         run_event_check,
         CronTrigger(minute="*/30", day_of_week="mon-fri", timezone="Europe/Paris"),
         id="event_check",
+        misfire_grace_time=600,
     )
     # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
-    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal")
+    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=600)
     bg_scheduler.start()
     logger.info("Scheduler started — scans at 07:50 and 14:30, event check every 30min, journal at 22:00 CET (weekdays only)")
     yield
