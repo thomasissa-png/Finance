@@ -1,8 +1,9 @@
 run = "pip install -r backend/requirements.txt && uvicorn backend.app.main:app --host 0.0.0.0 --port 5000"
 
 [deployment]
-build = ["bash", "-c", "cd frontend && npm install && npm run build && cd .. && pip install -r backend/requirements.txt"]
-run = ["bash", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port 5000"]
+deploymentTarget = "cloudrun"
+build = ["sh", "-c", "cd frontend && npm install && npm run build && cd .. && pip install -r backend/requirements.txt"]
+run = ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port 5000"]
 
 [[ports]]
 localPort = 5000
