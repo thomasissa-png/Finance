@@ -241,18 +241,21 @@ app.add_middleware(
 )
 
 
-# ── Root health check for Replit Autoscale (Cloud Run) ───────────
-# Replit sends health checks to GET / — must return 200 instantly.
-# This is separate from /api/health which has more detail.
+# ── Root endpoint — serves frontend in prod, health check in dev ──
+FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 
 @app.get("/")
-def root_health():
-    """Minimal health check for Replit Autoscale.
+def root():
+    """Root endpoint — doubles as Replit Autoscale health check (returns 200).
 
-    Cloud Run pings GET / to decide if the container is healthy.
-    MUST return 200 with zero latency — no I/O, no external calls.
+    In production: serves index.html (frontend build exists).
+    In dev: returns JSON status (Vite dev server handles the frontend).
+    Either way, Cloud Run gets the 200 it needs.
     """
+    index = FRONTEND_DIST / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return {"status": "ok"}
 
 
@@ -585,8 +588,6 @@ def health():
 # In production (Replit Autoscale), there's no Vite dev server.
 # The backend serves the built React app from frontend/dist/.
 # This MUST be after all /api routes so they take precedence.
-
-FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 
 if FRONTEND_DIST.is_dir():
     # Serve static assets (JS, CSS, images)
