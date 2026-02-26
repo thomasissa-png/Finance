@@ -1532,7 +1532,9 @@ def collect_structured_data() -> list[NewsItem]:
     except TimeoutError:
         logger.warning("Structured data collection timed out, some sources skipped")
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        # wait=True: ensure threads are joined before returning to caller,
+        # preventing zombie threads from overlapping with the next collection phase.
+        executor.shutdown(wait=True, cancel_futures=True)
 
     if all_items:
         logger.info("Total structured data collected: %d items", len(all_items))

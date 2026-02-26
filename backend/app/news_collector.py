@@ -91,7 +91,7 @@ def collect_yfinance_news() -> list[NewsItem]:
         logger.warning("yfinance collection timed out after 60s (%d/%d assets completed)",
                        completed_count, len(ASSETS))
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        executor.shutdown(wait=True, cancel_futures=True)
 
     return items
 
@@ -162,7 +162,9 @@ def collect_rss_news() -> list[NewsItem]:
         logger.warning("RSS collection timed out after 45s (%d/%d feeds completed)",
                        completed_count, len(RSS_FEEDS))
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        # wait=True: ensure all threads are joined before returning,
+        # so the next source doesn't overlap with zombie threads.
+        executor.shutdown(wait=True, cancel_futures=True)
 
     if not items and RSS_FEEDS:
         logger.warning("RSS collection returned 0 items from %d feeds", len(RSS_FEEDS))
@@ -195,7 +197,8 @@ def collect_early_signal_news() -> list[NewsItem]:
         logger.warning("Early-signal collection timed out after 45s (%d/%d feeds completed)",
                        completed_count, len(EARLY_SIGNAL_FEEDS))
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        # wait=True: ensure all threads are joined before returning.
+        executor.shutdown(wait=True, cancel_futures=True)
 
     if items:
         logger.info("Collected %d early-signal news items", len(items))
@@ -310,32 +313,27 @@ def collect_all_news() -> list[NewsItem]:
     - Phase 2: Yahoo Finance (per-ticker news)
     - Phase 3: Mainstream RSS (Reuters, CNBC, Investing.com)
 
-    All 4 sources are fetched in parallel to reduce total collection time.
-    Uses shutdown(wait=False) to avoid blocking if a source hangs.
+    Sources are fetched SEQUENTIALLY to avoid nested ThreadPoolExecutor on Replit.
+    Each source internally uses max_workers=3, and we wait for full cleanup
+    before starting the next source. This guarantees at most 3 active threads
+    at any point, preventing Replit from killing the process.
     """
-    executor = ThreadPoolExecutor(max_workers=4)
-    future_yf = executor.submit(collect_yfinance_news)
-    future_rss = executor.submit(collect_rss_news)
-    future_early = executor.submit(collect_early_signal_news)
-    future_structured = executor.submit(collect_structured_data)
-
-    def _safe_get(future, name):
+    def _safe_collect(fn, name):
         try:
-            return future.result(timeout=90)
+            return fn()
         except Exception as exc:
-            logger.warning("News source '%s' failed/timed out: %s", name, exc)
+            logger.warning("News source '%s' failed: %s", name, exc)
             return []
 
-    structured_news = _safe_get(future_structured, "structured")
-    early_news = _safe_get(future_early, "early-signal")
-    yf_news = _safe_get(future_yf, "yfinance")
-    rss_news = _safe_get(future_rss, "rss")
+    # Sequential: each source completes (including thread cleanup) before next starts
+    structured_news = _safe_collect(collect_structured_data, "structured")
+    early_news = _safe_collect(collect_early_signal_news, "early-signal")
+    yf_news = _safe_collect(collect_yfinance_news, "yfinance")
+    rss_news = _safe_collect(collect_rss_news, "rss")
 
     # Log per-source results for diagnostics (helps debug "0 news" issues)
     logger.info("News sources: structured=%d, early-signal=%d, yfinance=%d, rss=%d",
                 len(structured_news), len(early_news), len(yf_news), len(rss_news))
-
-    executor.shutdown(wait=False, cancel_futures=True)
 
     all_items = structured_news + early_news + yf_news + rss_news
 

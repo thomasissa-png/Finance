@@ -192,7 +192,7 @@ def scan_feeds_for_triggers() -> list[dict]:
     except TimeoutError:
         logger.warning("Event scan timed out, some feeds skipped")
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        executor.shutdown(wait=True, cancel_futures=True)
 
     return triggers
 
