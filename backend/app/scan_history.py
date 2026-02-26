@@ -4,6 +4,10 @@ After each scan, the full ScanResult (all scored news, rejections, decision)
 is appended to data/scan_history.json. This lets us review what signals were
 detected but not traded — essential for post-hoc analysis.
 
+Also provides cross-scan deduplication: get_recently_scored_titles() returns
+headlines already scored in recent scans, so run_scan() can skip them before
+calling Claude (avoids re-scoring the same news every 3 hours).
+
 Retention: entries older than MAX_HISTORY_DAYS are pruned on each write
 to prevent unbounded growth.
 """
@@ -23,6 +27,12 @@ SCAN_HISTORY_FILE = DATA_DIR / "scan_history.json"
 
 # Keep 30 days of scan history (~120 scans at 4/day)
 MAX_HISTORY_DAYS = 30
+
+# ── In-memory cache for cross-scan dedup ─────────────────────────
+# Populated from scan_history.json on first access, then updated after each scan.
+# Avoids re-reading disk on every scan while staying in sync.
+_scored_titles_cache: list[str] = []
+_cache_last_updated: float = 0.0
 
 
 def _ensure_file() -> None:
@@ -59,6 +69,50 @@ def save_scan_history(entries: list[ScanHistoryEntry]) -> None:
             )
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def get_recently_scored_titles(max_age_hours: float = 8.0) -> list[str]:
+    """Return titles of news already scored in recent scans.
+
+    Used by run_scan() for cross-scan dedup: if a headline was already
+    sent to Claude in a recent scan, skip it to avoid wasting API calls
+    and prevent duplicate trades on the same signal.
+
+    Uses in-memory cache refreshed after each scan to avoid disk I/O.
+    Falls back to loading from disk if cache is empty (first call after restart).
+    """
+    global _scored_titles_cache, _cache_last_updated
+
+    # On first call or if cache is stale (>1h), reload from disk
+    import time
+    now = time.time()
+    if not _scored_titles_cache or (now - _cache_last_updated) > 3600:
+        _refresh_titles_cache(max_age_hours)
+
+    return _scored_titles_cache
+
+
+def _refresh_titles_cache(max_age_hours: float = 8.0) -> None:
+    """Rebuild the in-memory titles cache from scan_history.json."""
+    global _scored_titles_cache, _cache_last_updated
+    import time
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+    entries = load_scan_history()
+    titles = []
+    for entry in entries:
+        ts = entry.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts < cutoff:
+            continue
+        for news in entry.all_scored_news:
+            title = news.get("title", "")
+            if title:
+                titles.append(title)
+    _scored_titles_cache = titles
+    _cache_last_updated = time.time()
+    logger.debug("Cross-scan dedup cache: %d titles from last %.0fh", len(titles), max_age_hours)
 
 
 def append_scan_result(scan_result: dict) -> None:
@@ -99,6 +153,9 @@ def append_scan_result(scan_result: dict) -> None:
         save_scan_history(entries)
         logger.info("Scan history saved: %s scan, %d scored news, trade=%s",
                      entry.scan_type.value, len(entry.all_scored_news), entry.has_trade)
+
+        # Refresh cross-scan dedup cache with newly saved data
+        _refresh_titles_cache()
 
     except Exception as exc:
         logger.warning("Failed to save scan history: %s", exc)

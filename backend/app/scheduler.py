@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 from .event_scanner import determine_scan_type, should_trigger_scan
 from .learning import compute_learning_adjustments, load_trades, save_trade
 from .models import ScanType, TradeResult
-from .news_collector import collect_all_news
+from .news_collector import collect_all_news, _jaccard_similarity
 from .news_scorer import score_news_batch
-from .scan_history import append_scan_result
+from .scan_history import append_scan_result, get_recently_scored_titles
 from .trade_selector import select_trade
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,32 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
                     "scan_type": scan_type.value,
                     "has_trade": False,
                     "reason_no_trade": "Aucune news collectée",
+                    "news_analyzed": 0,
+                }
+
+            # Step 1b: Cross-scan dedup — skip headlines already scored in recent scans
+            recently_scored = get_recently_scored_titles()
+            if recently_scored:
+                before_dedup = len(news_items)
+                filtered = []
+                for item in news_items:
+                    is_dup = False
+                    for scored_title in recently_scored:
+                        if _jaccard_similarity(item.title, scored_title) >= 0.65:
+                            is_dup = True
+                            break
+                    if not is_dup:
+                        filtered.append(item)
+                news_items = filtered
+                if before_dedup != len(news_items):
+                    logger.info("Cross-scan dedup: filtered %d already-scored headlines (%d → %d)",
+                                before_dedup - len(news_items), before_dedup, len(news_items))
+
+            if not news_items:
+                return {
+                    "scan_type": scan_type.value,
+                    "has_trade": False,
+                    "reason_no_trade": "Toutes les news ont déjà été scorées dans les scans précédents",
                     "news_analyzed": 0,
                 }
 
