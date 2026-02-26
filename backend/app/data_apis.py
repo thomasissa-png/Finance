@@ -1517,10 +1517,12 @@ def collect_structured_data() -> list[NewsItem]:
         ("agsi", fetch_gie_agsi_data),
     ]
 
-    executor = ThreadPoolExecutor(max_workers=8)
+    # max_workers=3: Replit kills process on too many concurrent threads.
+    # 8 sources / 3 workers = ~3 waves. Slower but avoids thread limit crash.
+    executor = ThreadPoolExecutor(max_workers=3)
     futures = {executor.submit(fn): name for name, fn in sources}
     try:
-        for future in as_completed(futures, timeout=50):
+        for future in as_completed(futures, timeout=90):
             source_name = futures[future]
             try:
                 items = future.result(timeout=45)

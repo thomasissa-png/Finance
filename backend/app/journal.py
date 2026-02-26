@@ -234,7 +234,8 @@ def run_daily_journal() -> list[dict]:
 
     price_cache: dict[tuple[str, str | None], tuple[float | None, float | None, float | None]] = {}
     if price_tasks:
-        with ThreadPoolExecutor(max_workers=min(5, len(price_tasks))) as executor:
+        # max_workers capped at 3: Replit kills process on too many concurrent threads.
+        with ThreadPoolExecutor(max_workers=min(3, len(price_tasks))) as executor:
             futures = {
                 executor.submit(_fetch_day_prices, ticker, date): (ticker, date)
                 for ticker, date in price_tasks

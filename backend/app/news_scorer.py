@@ -162,7 +162,8 @@ def _compute_freshness(published: datetime | None) -> int:
 def _fetch_market_context() -> dict:
     """Fetch current market context: VIX, major index changes, regime (#5, #8).
 
-    All yfinance calls are parallelized to minimize latency.
+    Uses limited parallelism (max 3 workers) to avoid exceeding Replit thread limits.
+    Falls back to defaults on any failure — market context is nice-to-have, not critical.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -197,7 +198,9 @@ def _fetch_market_context() -> dict:
         indices = [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("^DJI", "DowJones")]
         trends = [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("GC=F", "Or"), ("CL=F", "WTI"), ("EURUSD=X", "EURUSD")]
 
-        with ThreadPoolExecutor(max_workers=9) as executor:
+        # max_workers=3: Replit kills the process if too many threads spawn at once.
+        # 9 tasks / 3 workers = 3 waves of ~3 concurrent yfinance calls. Slower but stable.
+        with ThreadPoolExecutor(max_workers=3) as executor:
             vix_future = executor.submit(_fetch_vix)
             idx_futures = {executor.submit(_fetch_index_change, t): name for t, name in indices}
             trend_futures = {executor.submit(_fetch_trend, t): name for t, name in trends}

@@ -74,7 +74,9 @@ def collect_yfinance_news() -> list[NewsItem]:
     """Fetch news for all tracked assets via yfinance in parallel."""
     items: list[NewsItem] = []
 
-    executor = ThreadPoolExecutor(max_workers=10)
+    # max_workers=3: Replit kills process on too many concurrent threads.
+    # 49 assets / 3 workers = sequential batches. Slower but stable on Replit.
+    executor = ThreadPoolExecutor(max_workers=3)
     futures = {executor.submit(_fetch_news_for_asset, asset): asset for asset in ASSETS}
     completed_count = 0
     try:
@@ -144,7 +146,7 @@ def collect_rss_news() -> list[NewsItem]:
     """Fetch news from configured RSS feeds in parallel."""
     items: list[NewsItem] = []
 
-    executor = ThreadPoolExecutor(max_workers=5)
+    executor = ThreadPoolExecutor(max_workers=3)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
     completed_count = 0
     try:
@@ -176,7 +178,7 @@ def collect_early_signal_news() -> list[NewsItem]:
     """
     items: list[NewsItem] = []
 
-    executor = ThreadPoolExecutor(max_workers=8)
+    executor = ThreadPoolExecutor(max_workers=3)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
     try:

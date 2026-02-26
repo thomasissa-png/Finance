@@ -342,7 +342,8 @@ def select_trade(
                 break
 
     price_cache: dict[str, tuple] = {}
-    with ThreadPoolExecutor(max_workers=min(5, len(candidate_tickers) or 1)) as executor:
+    # max_workers capped at 3: Replit kills process on too many concurrent threads.
+    with ThreadPoolExecutor(max_workers=min(3, len(candidate_tickers) or 1)) as executor:
         futures = {executor.submit(_get_price_and_range, t): t for t in candidate_tickers}
         for future in futures:
             ticker_key = futures[future]

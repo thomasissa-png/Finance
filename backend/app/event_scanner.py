@@ -176,7 +176,8 @@ def scan_feeds_for_triggers() -> list[dict]:
     # Snapshot seen headlines for thread-safe read (writes happen after)
     seen_snapshot = set(_seen_headlines)
 
-    executor = ThreadPoolExecutor(max_workers=8)
+    # max_workers=3: Replit kills process on too many concurrent threads.
+    executor = ThreadPoolExecutor(max_workers=3)
     futures = {executor.submit(_fetch_feed_triggers, url, seen_snapshot): url for url in EARLY_SIGNAL_FEEDS}
     try:
         for future in as_completed(futures, timeout=30):
