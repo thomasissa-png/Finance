@@ -22,7 +22,8 @@ MAX_NEWS_PER_SCAN = 50
 # Network timeout for RSS feed fetches (seconds).
 # feedparser.parse(url) uses urllib with NO timeout internally,
 # so we fetch via requests first, then parse the content.
-RSS_FETCH_TIMEOUT = 15
+# Raised from 15→20s: Replit cold starts have slow DNS/network, 15s was too tight.
+RSS_FETCH_TIMEOUT = 20
 
 # Browser User-Agent — many feeds (CNBC, gCaptain, BoE) return 403
 # when they see the default "python-requests/x.y.z" User-Agent.
@@ -75,15 +76,18 @@ def collect_yfinance_news() -> list[NewsItem]:
 
     executor = ThreadPoolExecutor(max_workers=10)
     futures = {executor.submit(_fetch_news_for_asset, asset): asset for asset in ASSETS}
+    completed_count = 0
     try:
-        for future in as_completed(futures, timeout=30):
+        for future in as_completed(futures, timeout=60):
             try:
-                items.extend(future.result(timeout=10))
+                items.extend(future.result(timeout=15))
+                completed_count += 1
             except Exception as exc:
                 asset = futures[future]
                 logger.debug("yfinance news timeout/error for %s: %s", asset.ticker, exc)
     except TimeoutError:
-        logger.warning("yfinance collection timed out, some assets skipped")
+        logger.warning("yfinance collection timed out after 60s (%d/%d assets completed)",
+                       completed_count, len(ASSETS))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -142,17 +146,24 @@ def collect_rss_news() -> list[NewsItem]:
 
     executor = ThreadPoolExecutor(max_workers=5)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
+    completed_count = 0
     try:
-        for future in as_completed(futures, timeout=20):
+        for future in as_completed(futures, timeout=45):
             try:
-                items.extend(future.result(timeout=10))
+                result = future.result(timeout=20)
+                items.extend(result)
+                completed_count += 1
             except Exception as exc:
                 url = futures[future]
-                logger.debug("RSS feed timeout/error for %s: %s", url, exc)
+                logger.warning("RSS feed timeout/error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("RSS collection timed out, some feeds skipped")
+        logger.warning("RSS collection timed out after 45s (%d/%d feeds completed)",
+                       completed_count, len(RSS_FEEDS))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
+
+    if not items and RSS_FEEDS:
+        logger.warning("RSS collection returned 0 items from %d feeds", len(RSS_FEEDS))
 
     return items
 
@@ -167,22 +178,27 @@ def collect_early_signal_news() -> list[NewsItem]:
 
     executor = ThreadPoolExecutor(max_workers=8)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
+    completed_count = 0
     try:
-        for future in as_completed(futures, timeout=20):
+        for future in as_completed(futures, timeout=45):
             try:
-                result = future.result(timeout=10)
+                result = future.result(timeout=20)
                 if result:
                     items.extend(result)
+                completed_count += 1
             except Exception as exc:
                 url = futures[future]
-                logger.debug("Early-signal feed unavailable %s: %s", url, exc)
+                logger.warning("Early-signal feed unavailable %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("Early-signal collection timed out, some feeds skipped")
+        logger.warning("Early-signal collection timed out after 45s (%d/%d feeds completed)",
+                       completed_count, len(EARLY_SIGNAL_FEEDS))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
     if items:
         logger.info("Collected %d early-signal news items", len(items))
+    elif EARLY_SIGNAL_FEEDS:
+        logger.warning("Early-signal collection returned 0 items from %d feeds", len(EARLY_SIGNAL_FEEDS))
     return items
 
 
@@ -308,10 +324,14 @@ def collect_all_news() -> list[NewsItem]:
             logger.warning("News source '%s' failed/timed out: %s", name, exc)
             return []
 
+    structured_news = _safe_get(future_structured, "structured")
+    early_news = _safe_get(future_early, "early-signal")
     yf_news = _safe_get(future_yf, "yfinance")
     rss_news = _safe_get(future_rss, "rss")
-    early_news = _safe_get(future_early, "early-signal")
-    structured_news = _safe_get(future_structured, "structured")
+
+    # Log per-source results for diagnostics (helps debug "0 news" issues)
+    logger.info("News sources: structured=%d, early-signal=%d, yfinance=%d, rss=%d",
+                len(structured_news), len(early_news), len(yf_news), len(rss_news))
 
     executor.shutdown(wait=False, cancel_futures=True)
 

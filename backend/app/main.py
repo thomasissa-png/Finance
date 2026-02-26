@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
@@ -74,6 +75,28 @@ def _save_scans_cache(scans: dict[str, dict]) -> None:
 
 
 bg_scheduler = BackgroundScheduler(timezone="Europe/Paris")
+
+# ── Self-ping keepalive ──────────────────────────────────────
+# Replit autoscale kills apps with no inbound traffic.
+# This thread pings /api/health every 4 minutes to keep the process alive
+# so that APScheduler jobs (scans at 07:50, 11:15, 14:50, 17:00) actually fire.
+KEEPALIVE_INTERVAL = 240  # 4 minutes
+_keepalive_stop = threading.Event()
+
+
+def _keepalive_loop() -> None:
+    """Ping our own health endpoint to prevent Replit from killing the app."""
+    # Wait a bit for the server to be ready
+    _keepalive_stop.wait(10)
+    port = os.environ.get("PORT", "8000")
+    url = f"http://127.0.0.1:{port}/api/health"
+    while not _keepalive_stop.is_set():
+        try:
+            resp = requests.get(url, timeout=10)
+            logger.debug("Keepalive ping: %d", resp.status_code)
+        except Exception as exc:
+            logger.debug("Keepalive ping failed: %s", exc)
+        _keepalive_stop.wait(KEEPALIVE_INTERVAL)
 
 
 def _get_existing_trade_tickers(exclude_key: str) -> list[str]:
@@ -145,7 +168,15 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=600)
     bg_scheduler.start()
     logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check every 30min, journal at 22:00 CET (weekdays only)")
+
+    # Start keepalive thread to prevent Replit autoscale from killing the app
+    keepalive_thread = threading.Thread(target=_keepalive_loop, daemon=True, name="keepalive")
+    keepalive_thread.start()
+    logger.info("Keepalive thread started (ping every %ds)", KEEPALIVE_INTERVAL)
+
     yield
+
+    _keepalive_stop.set()
     bg_scheduler.shutdown()
 
 
