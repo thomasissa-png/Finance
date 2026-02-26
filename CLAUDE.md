@@ -17,7 +17,28 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 ## Architecture
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite
-- **Persistence**: `data/trades.json` + `data/journal.json` (flat files, file locking via `fcntl`)
+- **Persistence**: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` (flat files, file locking via `fcntl`)
+
+## REGLE ABSOLUE — Protection des donnees de production
+
+**JAMAIS committer les fichiers `data/*.json` dans git.**
+
+Ces fichiers contiennent les trades reels, le journal, l'historique de scans.
+Ils sont dans `.gitignore` et crees automatiquement au demarrage par les guards `_ensure_file()`.
+Un commit accidentel de ces fichiers = **perte de toutes les donnees a chaque deploiement**.
+
+Fichiers proteges :
+- `data/trades.json` — tous les trades passes et pending
+- `data/journal.json` — journal quotidien avec analyse post-trade
+- `data/scan_history.json` — historique de tous les scans (audit trail)
+- `data/last_scans.json` — cache des derniers scans (volatile)
+
+Regles :
+1. **Ne JAMAIS `git add data/`** ou `git add -A` sans verifier
+2. **Ne JAMAIS ecraser** ces fichiers (write_text, truncate) sans lire d'abord
+3. **Toujours utiliser file locking** (`fcntl.LOCK_EX` / `LOCK_SH`) pour les acces concurrents
+4. **Toujours avoir un guard `_ensure_file()`** qui cree le fichier vide `[]` si absent
+5. **Les tests `test_data_persistence.py`** verifient ces regles — ne pas les supprimer
 
 ## Data Sources — 4 phases par priorite d'edge
 
@@ -320,6 +341,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Plateforme cible: Replit
 - Backend: `uvicorn backend.app.main:app`
 - Frontend: Vite dev server ou build statique
+- **ATTENTION** : `data/*.json` est dans `.gitignore` — les donnees de production vivent sur le disque Replit, PAS dans git. Un `git checkout` ou redeploy ne doit JAMAIS ecraser ces fichiers.
 
 ## Tests
 - Framework: pytest
