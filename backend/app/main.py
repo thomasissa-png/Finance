@@ -240,6 +240,21 @@ app.add_middleware(
 )
 
 
+# ── Root health check for Replit Autoscale (Cloud Run) ───────────
+# Replit sends health checks to GET / — must return 200 instantly.
+# This is separate from /api/health which has more detail.
+
+
+@app.get("/")
+def root_health():
+    """Minimal health check for Replit Autoscale.
+
+    Cloud Run pings GET / to decide if the container is healthy.
+    MUST return 200 with zero latency — no I/O, no external calls.
+    """
+    return {"status": "ok"}
+
+
 # ── API Endpoints ────────────────────────────────────────────────
 
 

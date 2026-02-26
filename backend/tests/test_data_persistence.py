@@ -6,6 +6,7 @@ These tests verify that:
 3. All persistence modules have _ensure_file() guards
 4. File locking is used for concurrent access
 5. Cross-scan dedup cache works correctly
+6. Root health check endpoint responds for Replit Autoscale
 
 NEVER DELETE THESE TESTS — they prevent the critical bug where deploying
 new code overwrites production trade/journal data with empty files.
@@ -338,3 +339,29 @@ def test_append_scan_result_preserves_existing():
             titles = [n.get("title") for e in entries for n in e.all_scored_news]
             assert "Existing scan headline" in titles
             assert "New scan headline" in titles
+
+
+# ── 7. Root health check for Replit Autoscale ─────────────────────
+
+
+def test_root_health_check_returns_200():
+    """GET / must return 200 instantly — Replit Autoscale depends on this."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_api_health_check_returns_200():
+    """GET /api/health must also return 200 (detailed health)."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] in ("ok", "degraded")
