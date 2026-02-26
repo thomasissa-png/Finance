@@ -71,28 +71,77 @@ def _fetch_news_for_asset(asset) -> list[NewsItem]:
 
 
 def collect_yfinance_news() -> list[NewsItem]:
-    """Fetch news for all tracked assets via yfinance in parallel."""
+    """Fetch news for key tracked assets via yfinance — fully sequential.
+
+    Replit OOM-kills the process when ThreadPoolExecutor is used here:
+    after Phase 0 (structured) + Phase 1 (early-signal) have already consumed
+    memory, even 3-worker yfinance pool for 49 assets is too much.
+
+    Mitigations:
+    1. Fully sequential — zero threads, one yfinance call at a time.
+    2. Reduced to ~15 key tickers (commodities, energy, indices, gold)
+       instead of all 49. Phase 2 is lower priority; Phase 0/1 already
+       provide the edge signals. The 15 tickers cover the core universe.
+    3. Hard timeout of 45s total — bail early if it's taking too long.
+    """
+    import time
+    import gc
+
+    # Key tickers covering core commodity/energy/index universe.
+    # Euronext and minor forex are well-covered by Phase 0/1 RSS feeds.
+    KEY_TICKERS = [
+        "CL=F", "BZ=F", "NG=F", "GC=F",     # energy + gold
+        "ZC=F", "ZW=F", "ZS=F", "KC=F",      # agriculture
+        "^GSPC", "^FCHI", "^DJI",             # major indices
+        "EURUSD=X", "USDJPY=X",              # key forex
+        "HG=F", "SI=F",                       # metals
+    ]
+
     items: list[NewsItem] = []
+    start = time.monotonic()
+    timeout_secs = 45
+    completed = 0
 
-    # max_workers=3: Replit kills process on too many concurrent threads.
-    # 49 assets / 3 workers = sequential batches. Slower but stable on Replit.
-    executor = ThreadPoolExecutor(max_workers=3)
-    futures = {executor.submit(_fetch_news_for_asset, asset): asset for asset in ASSETS}
-    completed_count = 0
-    try:
-        for future in as_completed(futures, timeout=60):
-            try:
-                items.extend(future.result(timeout=15))
-                completed_count += 1
-            except Exception as exc:
-                asset = futures[future]
-                logger.debug("yfinance news timeout/error for %s: %s", asset.ticker, exc)
-    except TimeoutError:
-        logger.warning("yfinance collection timed out after 60s (%d/%d assets completed)",
-                       completed_count, len(ASSETS))
-    finally:
-        executor.shutdown(wait=True, cancel_futures=True)
+    # Build a lookup for asset metadata
+    asset_by_ticker = {a.ticker: a for a in ASSETS}
 
+    for ticker in KEY_TICKERS:
+        if time.monotonic() - start > timeout_secs:
+            logger.warning("yfinance news collection timed out after %ds (%d/%d tickers)",
+                           timeout_secs, completed, len(KEY_TICKERS))
+            break
+        asset = asset_by_ticker.get(ticker)
+        if not asset:
+            continue
+        try:
+            t = yf.Ticker(ticker)
+            news = t.news or []
+            for article in news:
+                title = article.get("title", "")
+                if not title:
+                    continue
+                published = None
+                pub_ts = article.get("providerPublishTime")
+                if pub_ts:
+                    published = datetime.fromtimestamp(pub_ts, tz=timezone.utc)
+                source = article.get("publisher", "Yahoo Finance")
+                items.append(NewsItem(
+                    title=title,
+                    source=source,
+                    url=article.get("link", ""),
+                    published=published,
+                    related_tickers=[ticker],
+                    source_weight=_get_source_weight(source),
+                ))
+            completed += 1
+        except Exception as exc:
+            logger.debug("yfinance news error for %s: %s", ticker, exc)
+
+        # Free yfinance internal caches between tickers to reduce memory pressure
+        gc.collect()
+
+    logger.info("yfinance news: %d items from %d/%d tickers in %.1fs",
+                len(items), completed, len(KEY_TICKERS), time.monotonic() - start)
     return items
 
 
