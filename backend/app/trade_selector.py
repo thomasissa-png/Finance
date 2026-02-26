@@ -122,7 +122,8 @@ def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | No
     """Check if a ticker is correlated with ANY existing trade (#22).
 
     Accepts either a single ticker (backward compat) or a list of all pending tickers.
-    Returns True if correlated (should avoid).
+    Returns True if correlated (should avoid). Also blocks exact same ticker
+    even if not in any correlation group.
     """
     if not existing_trade_tickers:
         return False
@@ -131,6 +132,10 @@ def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | No
         tickers_to_check = [existing_trade_tickers]
     else:
         tickers_to_check = existing_trade_tickers
+
+    # Direct same-ticker check (even if not in any correlation group)
+    if ticker in tickers_to_check:
+        return True
 
     for existing in tickers_to_check:
         for group_tickers in CORRELATION_GROUPS.values():

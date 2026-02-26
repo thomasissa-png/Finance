@@ -22,7 +22,7 @@ const CATEGORY_COLORS = {
 };
 
 function formatDate(iso) {
-  if (!iso) return "\u2014";
+  if (!iso) return "—";
   return new Date(iso).toLocaleDateString("fr-FR", {
     day: "2-digit",
     month: "short",
@@ -32,7 +32,7 @@ function formatDate(iso) {
 }
 
 function formatTime(iso) {
-  if (!iso) return "\u2014";
+  if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("fr-FR", {
     hour: "2-digit",
     minute: "2-digit",
@@ -66,12 +66,12 @@ function TradesTable({ trades }) {
             <th>Scan</th>
             <th>Actif</th>
             <th>Dir.</th>
-            <th>Entr\u00e9e</th>
+            <th>Entrée</th>
             <th>Objectif</th>
             <th>Stop</th>
             <th>R/R</th>
             <th>Conf.</th>
-            <th>R\u00e9sultat</th>
+            <th>Résultat</th>
             <th>P&L</th>
           </tr>
         </thead>
@@ -94,7 +94,7 @@ function TradesTable({ trades }) {
                     </div>
                     {t.binary_event_warning && (
                       <div className="trade-warning-inline" style={{ fontSize: 10 }}>
-                        \u00c9vt. binaire
+                        Évt. binaire
                       </div>
                     )}
                   </td>
@@ -121,7 +121,7 @@ function TradesTable({ trades }) {
                       fontWeight: 600,
                     }}
                   >
-                    {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct}%` : "\u2014"}
+                    {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct}%` : "—"}
                   </td>
                 </tr>
               );
@@ -138,7 +138,7 @@ function ScanHistorySection({ scanHistory }) {
   if (!scanHistory.length) {
     return (
       <div style={{ color: "var(--text-muted)", padding: "12px 0" }}>
-        Aucun historique de scan disponible. Les donn\u00e9es appara\u00eetront apr\u00e8s le prochain scan.
+        Aucun historique de scan disponible. Les données apparaîtront après le prochain scan.
       </div>
     );
   }
@@ -185,7 +185,7 @@ function ScanHistorySection({ scanHistory }) {
                   {scan.scan_type === "europe" ? "Europe" : "US"}
                 </span>
                 <span style={{ fontSize: 13 }}>
-                  {scoredNews.length} signal{scoredNews.length !== 1 ? "s" : ""} scor\u00e9{scoredNews.length !== 1 ? "s" : ""}
+                  {scoredNews.length} signal{scoredNews.length !== 1 ? "s" : ""} scoré{scoredNews.length !== 1 ? "s" : ""}
                 </span>
                 {tradeSelected ? (
                   <span className="result-badge tp" style={{ fontSize: 10, padding: "1px 6px" }}>
@@ -233,7 +233,7 @@ function ScanHistorySection({ scanHistory }) {
                         <tr>
                           <th>Score</th>
                           <th>Dir.</th>
-                          <th>Cat\u00e9gorie</th>
+                          <th>Catégorie</th>
                           <th>Headline</th>
                           <th>Tickers</th>
                           <th>Delay</th>
@@ -280,7 +280,7 @@ function ScanHistorySection({ scanHistory }) {
                                     </span>
                                   ) : (
                                     <span style={{ color: "var(--text-muted)", fontSize: 10 }}>
-                                      \u2014
+                                      —
                                     </span>
                                   )}
                                 </td>
@@ -310,18 +310,18 @@ function ScanHistorySection({ scanHistory }) {
                                   {news.title}
                                 </td>
                                 <td style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                                  {(news.impacted_tickers || []).join(", ") || "\u2014"}
+                                  {(news.impacted_tickers || []).join(", ") || "—"}
                                 </td>
                                 <td style={{ textAlign: "center" }}>
-                                  {news.transmission_delay ?? "\u2014"}
+                                  {news.transmission_delay ?? "—"}
                                 </td>
                                 <td style={{ textAlign: "center" }}>
-                                  {news.market_awareness ?? "\u2014"}
+                                  {news.market_awareness ?? "—"}
                                 </td>
                                 <td>
                                   {isSelected ? (
                                     <span className="result-badge tp" style={{ fontSize: 10, padding: "1px 6px" }}>
-                                      Selectionn\u00e9
+                                      Sélectionné
                                     </span>
                                   ) : rejection ? (
                                     <span
@@ -333,11 +333,11 @@ function ScanHistorySection({ scanHistory }) {
                                     >
                                       {rejection.reason?.length > 30
                                         ? rejection.reason.slice(0, 30) + "..."
-                                        : rejection.reason || "Rejet\u00e9"}
+                                        : rejection.reason || "Rejeté"}
                                     </span>
                                   ) : (
                                     <span style={{ color: "var(--text-muted)", fontSize: 10 }}>
-                                      \u2014
+                                      —
                                     </span>
                                   )}
                                 </td>
@@ -392,10 +392,10 @@ export default function History() {
   if (!hasTrades && !hasScans) {
     return (
       <div className="no-trade">
-        <div className="no-trade-icon">{"\u2014"}</div>
-        <div className="no-trade-title">Aucun trade enregistr\u00e9</div>
+        <div className="no-trade-icon">—</div>
+        <div className="no-trade-title">Aucun trade enregistré</div>
         <div className="no-trade-reason">
-          Les trades apparaitront ici apr\u00e8s le premier scan.
+          Les trades apparaîtront ici après le premier scan.
         </div>
         <div className="no-trade-meta">
           <span className="no-trade-tag">Scans : 07:50, 11:15, 14:50, 17:00 CET</span>
@@ -428,7 +428,7 @@ export default function History() {
             minWidth: 120,
           }}
         >
-          Signaux scor\u00e9s ({scanHistory.length})
+          Signaux scorés ({scanHistory.length})
         </button>
         {activeTab === "trades" && (
           <a
@@ -447,7 +447,7 @@ export default function History() {
           <TradesTable trades={trades} />
         ) : (
           <div style={{ color: "var(--text-muted)", padding: "12px 0" }}>
-            Aucun trade enregistr\u00e9.
+            Aucun trade enregistré.
           </div>
         )
       ) : (

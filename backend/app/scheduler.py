@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from .event_scanner import determine_scan_type, should_trigger_scan
-from .learning import compute_learning_adjustments, save_trade
-from .models import ScanType
+from .learning import compute_learning_adjustments, load_trades, save_trade
+from .models import ScanType, TradeResult
 from .news_collector import collect_all_news
 from .news_scorer import score_news_batch
 from .scan_history import append_scan_result
@@ -38,6 +38,26 @@ def get_learning_adjustments() -> dict[str, float]:
     return _cached_adjustments
 
 
+def _get_pending_trade_tickers() -> list[str]:
+    """Get tickers from today's PENDING trades for correlation checking.
+
+    Event-driven scans need to know what's already been traded today
+    to avoid duplicate/correlated positions.
+    """
+    try:
+        now = datetime.now(PARIS_TZ)
+        today = now.strftime("%Y-%m-%d")
+        trades = load_trades()
+        tickers = []
+        for t in trades:
+            if t.result == TradeResult.PENDING and t.timestamp.strftime("%Y-%m-%d") == today:
+                tickers.append(t.ticker)
+        return tickers
+    except Exception as exc:
+        logger.warning("Failed to load pending trade tickers: %s", exc)
+        return []
+
+
 def run_event_check() -> dict | None:
     """Check for high-impact signals and trigger a scan if needed.
 
@@ -55,7 +75,13 @@ def run_event_check() -> dict | None:
 
     scan_type_str = determine_scan_type()
     scan_type = ScanType(scan_type_str)
-    result = run_scan(scan_type)
+
+    # Load existing trade tickers to avoid duplicate/correlated positions
+    existing_tickers = _get_pending_trade_tickers()
+    if existing_tickers:
+        logger.info("Event-driven scan: existing pending tickers today: %s", existing_tickers)
+
+    result = run_scan(scan_type, existing_trade_ticker=existing_tickers or None)
 
     if result.get("has_trade"):
         logger.info("Event-driven scan produced a trade!")
