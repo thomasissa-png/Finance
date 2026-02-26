@@ -18,7 +18,8 @@ from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from .backtest import run_backtest, run_parameter_sweep
 from .config import SCAN_KEY_TO_TYPE, TRIGGER_COOLDOWN_SECONDS
@@ -578,3 +579,23 @@ def health():
         status["status"] = "degraded"
 
     return status
+
+
+# ── Serve frontend build (production only) ────────────────────────
+# In production (Replit Autoscale), there's no Vite dev server.
+# The backend serves the built React app from frontend/dist/.
+# This MUST be after all /api routes so they take precedence.
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+if FRONTEND_DIST.is_dir():
+    # Serve static assets (JS, CSS, images)
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="static-assets")
+
+    @app.get("/{path:path}")
+    def serve_spa(path: str):
+        """Serve frontend SPA — any non-API route returns index.html."""
+        file_path = FRONTEND_DIST / path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(FRONTEND_DIST / "index.html")
