@@ -163,6 +163,27 @@ class ScanResult(BaseModel):
     learning_state: dict | None = None                # Learning adjustments at time of scan
 
 
+class ScanHistoryEntry(BaseModel):
+    """Persisted record of a single scan — all scored events + decision trace.
+
+    Stored in data/scan_history.json after each scan. Keeps a full audit trail
+    of what was evaluated, what was rejected, and why — even when no trade was taken.
+    """
+    timestamp: datetime
+    scan_type: ScanType
+    has_trade: bool
+    news_analyzed: int = 0
+    reason_no_trade: str = ""
+    # Trade recommendation (if any)
+    recommendation: dict | None = None
+    # Full decision trace
+    all_scored_news: list[dict] = Field(default_factory=list)
+    rejection_log: list[dict] = Field(default_factory=list)
+    decision_summary: str | None = None
+    learning_state: dict | None = None
+    market_context: dict | None = None
+
+
 class JournalEntry(BaseModel):
     """Daily journal entry for a single trade — generated at 22:00 CET."""
     schema_version: int = 3  # (#42) v3: ML learning fields

@@ -9,6 +9,7 @@ from .learning import compute_learning_adjustments, save_trade
 from .models import ScanType
 from .news_collector import collect_all_news
 from .news_scorer import score_news_batch
+from .scan_history import append_scan_result
 from .trade_selector import select_trade
 
 logger = logging.getLogger(__name__)
@@ -138,7 +139,12 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
             else:
                 logger.info("No trade: %s", result.reason_no_trade)
 
-            return result.model_dump(mode="json")
+            result_dict = result.model_dump(mode="json")
+
+            # Persist full scan result to history (all scored news + rejections)
+            append_scan_result(result_dict)
+
+            return result_dict
 
         except Exception as exc:
             logger.error("Scan %s failed (attempt %d/%d): %s",

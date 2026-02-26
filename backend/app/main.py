@@ -31,6 +31,7 @@ from .learning import (
     update_trade_result,
 )
 from .models import ScanType, TradeResult
+from .scan_history import load_scan_history
 from .scheduler import run_event_check, run_scan
 
 load_dotenv()
@@ -379,6 +380,32 @@ def get_journal_by_date(date: str):
 def trigger_journal():
     """Manually trigger the daily journal (for testing)."""
     return run_daily_journal()
+
+
+# ── Scan history endpoints ────────────────────────────────────────
+
+
+@app.get("/api/scan-history")
+def get_scan_history(limit: int = 50):
+    """Get recent scan history (all scored events + rejections).
+
+    Returns the last `limit` scans, most recent first.
+    Each entry includes all_scored_news and rejection_log for audit trail.
+    """
+    entries = load_scan_history()
+    # Most recent first, capped
+    entries.reverse()
+    return [e.model_dump(mode="json") for e in entries[:limit]]
+
+
+@app.get("/api/scan-history/{date}")
+def get_scan_history_by_date(date: str):
+    """Get scan history for a specific date (YYYY-MM-DD)."""
+    entries = load_scan_history()
+    return [
+        e.model_dump(mode="json") for e in entries
+        if e.timestamp.strftime("%Y-%m-%d") == date
+    ]
 
 
 # ── (#38) CSV Export endpoints ────────────────────────────────────
