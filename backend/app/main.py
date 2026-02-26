@@ -50,10 +50,6 @@ _last_scans: dict[str, dict] = {}
 # (#35) Rate limiting for triggers
 _last_trigger_times: dict[str, float] = {}
 
-# Health check yfinance cache (5 min TTL)
-_health_yf_cache: str = "unchecked"
-_health_yf_ts: float = 0.0
-
 
 def _load_scans_cache() -> dict[str, dict]:
     """Load last scan results from disk (#34)."""
@@ -113,13 +109,30 @@ def _get_existing_trade_tickers(exclude_key: str) -> list[str]:
 
 
 def _run_scheduled_scan(scan_key: str) -> None:
-    """Run a scheduled scan and store results under scan_key."""
-    scan_type_str = SCAN_KEY_TO_TYPE.get(scan_key, scan_key)
-    scan_type = ScanType(scan_type_str)
-    existing = _get_existing_trade_tickers(scan_key)
-    result = run_scan(scan_type, existing_trade_ticker=existing or None)
-    _last_scans[scan_key] = result
-    _save_scans_cache(_last_scans)
+    """Run a scheduled scan in a background daemon thread.
+
+    APScheduler's BackgroundScheduler runs jobs on its own threadpool.
+    If a scan takes 2-3 minutes (collect → Claude API → select), it blocks
+    that thread. On Replit this means the event loop can't serve HTTP
+    (including health checks), so Replit kills the process.
+
+    Solution: spawn a daemon thread and return immediately. The scheduler
+    thread stays free, health checks keep responding, Replit stays happy.
+    """
+    def _scan_worker():
+        try:
+            scan_type_str = SCAN_KEY_TO_TYPE.get(scan_key, scan_key)
+            scan_type = ScanType(scan_type_str)
+            existing = _get_existing_trade_tickers(scan_key)
+            result = run_scan(scan_type, existing_trade_ticker=existing or None)
+            _last_scans[scan_key] = result
+            _save_scans_cache(_last_scans)
+        except Exception as exc:
+            logger.error("Scheduled scan '%s' failed: %s", scan_key, exc)
+
+    thread = threading.Thread(target=_scan_worker, daemon=True, name=f"scan-{scan_key}")
+    thread.start()
+    logger.info("Scheduled scan '%s' dispatched to background thread", scan_key)
 
 
 def _run_europe_scan() -> None:
@@ -138,8 +151,28 @@ def _run_us_session_scan() -> None:
     _run_scheduled_scan("us_session")
 
 
+def _run_event_check_bg() -> None:
+    """Run event check in background thread (same reason as scans)."""
+    def _event_worker():
+        try:
+            run_event_check()
+        except Exception as exc:
+            logger.error("Event check failed: %s", exc)
+
+    thread = threading.Thread(target=_event_worker, daemon=True, name="event-check")
+    thread.start()
+
+
 def _run_daily_journal() -> None:
-    run_daily_journal()
+    """Run daily journal in background thread (same reason as scans)."""
+    def _journal_worker():
+        try:
+            run_daily_journal()
+        except Exception as exc:
+            logger.error("Daily journal failed: %s", exc)
+
+    thread = threading.Thread(target=_journal_worker, daemon=True, name="daily-journal")
+    thread.start()
 
 
 @asynccontextmanager
@@ -151,21 +184,23 @@ async def lifespan(app: FastAPI):
         logger.info("Restored %d cached scan results", len(_last_scans))
 
     # Schedule scans: 4 scans/day, weekdays only (markets closed on weekends)
-    # misfire_grace_time=600 (10 min) — if app starts late (e.g. Replit cold start),
-    # APScheduler still fires the missed scan instead of silently skipping it.
-    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=600)
-    bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=600)
-    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=600)
-    bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=600)
+    # misfire_grace_time=60 (1 min) — short grace period prevents crash loops:
+    # if the app crashes mid-scan, a 10 min window would re-trigger the scan
+    # immediately on restart, causing another crash. 60s is enough for normal
+    # cold-start delays without re-triggering after a crash.
+    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=60)
     # Event-driven scan: check every 30 min for high-impact signals, weekdays only
     bg_scheduler.add_job(
-        run_event_check,
+        _run_event_check_bg,
         CronTrigger(minute="*/30", day_of_week="mon-fri", timezone="Europe/Paris"),
         id="event_check",
-        misfire_grace_time=600,
+        misfire_grace_time=60,
     )
     # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
-    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=600)
+    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=60)
     bg_scheduler.start()
     logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check every 30min, journal at 22:00 CET (weekdays only)")
 
@@ -470,7 +505,13 @@ def api_backtest_sweep():
 
 @app.get("/api/health")
 def health():
-    """Enhanced health check: checks yfinance and API key status (#41)."""
+    """Lightweight health check — MUST always return 200 quickly.
+
+    NEVER call external services (yfinance, APIs) here. Replit pings this
+    endpoint to decide whether to keep the process alive. If it blocks or
+    returns 500, Replit kills the app → misfire_grace_time re-triggers a scan
+    → scan blocks the event loop → health fails again → infinite crash loop.
+    """
     status = {
         "status": "ok",
         "time_utc": datetime.now(timezone.utc).isoformat(),
@@ -478,38 +519,20 @@ def health():
         "dependencies": {},
     }
 
-    # Check yfinance (cached 5 min to avoid blocking on every health check)
-    global _health_yf_cache, _health_yf_ts
-    now_ts = time.time()
-    if now_ts - _health_yf_ts > 300:  # 5 min TTL
-        try:
-            import yfinance as yf
-            data = yf.Ticker("^GSPC").history(period="1d")
-            _health_yf_cache = "ok" if not data.empty else "no_data"
-        except Exception as exc:
-            _health_yf_cache = f"error: {exc}"
-        _health_yf_ts = now_ts
-    status["dependencies"]["yfinance"] = _health_yf_cache
-
-    # Check Anthropic API key
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    status["dependencies"]["anthropic_key"] = "configured" if api_key else "missing"
-
-    # Check optional API keys for structured data
+    # API key checks — instant, no I/O
+    status["dependencies"]["anthropic_key"] = "configured" if os.environ.get("ANTHROPIC_API_KEY") else "missing"
     status["dependencies"]["eia_key"] = "configured" if os.environ.get("EIA_API_KEY") else "not_set (optional)"
     status["dependencies"]["gnews_key"] = "configured" if os.environ.get("GNEWS_API_KEY") else "not_set (optional)"
     status["dependencies"]["usda_key"] = "configured" if os.environ.get("USDA_API_KEY") else "not_set (optional)"
 
-    # Check data files
+    # Data file checks — local filesystem, instant
     trades_file = DATA_DIR / "trades.json"
     journal_file = DATA_DIR / "journal.json"
     status["dependencies"]["trades_file"] = "ok" if trades_file.exists() else "missing"
     status["dependencies"]["journal_file"] = "ok" if journal_file.exists() else "missing"
 
-    # Overall status
-    if any("error" in str(v) or v == "missing" for v in status["dependencies"].values()
-           if v != "missing"):  # trades/journal files missing is OK on first run
-        if status["dependencies"].get("anthropic_key") == "missing":
-            status["status"] = "degraded"
+    # Degraded only if the critical API key is missing
+    if status["dependencies"].get("anthropic_key") == "missing":
+        status["status"] = "degraded"
 
     return status
