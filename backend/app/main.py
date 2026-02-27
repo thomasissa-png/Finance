@@ -33,7 +33,7 @@ from .learning import (
 )
 from .models import ScanType, TradeResult
 from .scan_history import load_scan_history
-from .scheduler import run_event_check, run_scan
+from .scheduler import run_scan
 
 load_dotenv()
 
@@ -153,18 +153,6 @@ def _run_us_session_scan() -> None:
     _run_scheduled_scan("us_session")
 
 
-def _run_event_check_bg() -> None:
-    """Run event check in background thread (same reason as scans)."""
-    def _event_worker():
-        try:
-            run_event_check()
-        except Exception as exc:
-            logger.error("Event check failed: %s", exc)
-
-    thread = threading.Thread(target=_event_worker, daemon=True, name="event-check")
-    thread.start()
-
-
 def _run_daily_journal() -> None:
     """Run daily journal in background thread (same reason as scans)."""
     def _journal_worker():
@@ -194,17 +182,10 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=60)
     bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=60)
     bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=60)
-    # Event-driven scan: check every 30 min for high-impact signals, weekdays only
-    bg_scheduler.add_job(
-        _run_event_check_bg,
-        CronTrigger(minute="*/30", day_of_week="mon-fri", timezone="Europe/Paris"),
-        id="event_check",
-        misfire_grace_time=60,
-    )
     # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
     bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=60)
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check every 30min, journal at 22:00 CET (weekdays only)")
+    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, journal at 22:00 CET (weekdays only)")
 
     # Start keepalive thread to prevent Replit autoscale from killing the app
     keepalive_thread = threading.Thread(target=_keepalive_loop, daemon=True, name="keepalive")
@@ -507,21 +488,6 @@ def get_calendar(days: int = 7):
         }
         for e in events
     ]
-
-
-@app.post("/api/scan/event-check")
-def trigger_event_check():
-    """Manually trigger an event-driven scan check."""
-    # Weekend guard
-    if datetime.now(PARIS_TZ).weekday() >= 5:
-        raise HTTPException(
-            status_code=400,
-            detail="Marchés fermés le week-end.",
-        )
-    result = run_event_check()
-    if result is None:
-        return {"triggered": False, "reason": "No high-impact signals detected"}
-    return {"triggered": True, "scan_result": result}
 
 
 # ── (#31) Backtest endpoints ─────────────────────────────────────

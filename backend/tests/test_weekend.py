@@ -109,17 +109,6 @@ class TestManualTriggerWeekend:
         assert response.status_code == 400
         assert "week-end" in response.json()["detail"]
 
-    def test_event_check_blocked_weekend(self):
-        """POST /api/scan/event-check returns 400 on Saturday."""
-        saturday = datetime(2026, 2, 28, 10, 0, tzinfo=PARIS_TZ)
-        with patch("backend.app.main.datetime") as mock_dt:
-            mock_dt.now.return_value = saturday
-            mock_dt.fromisoformat = datetime.fromisoformat
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            response = client.post("/api/scan/event-check")
-        assert response.status_code == 400
-        assert "week-end" in response.json()["detail"]
-
 
 # ════════════════════════════════════════════════════════════════
 # CronTrigger weekday configuration
@@ -146,4 +135,4 @@ class TestCronTriggerWeekday:
             f"Found {cron_count} CronTrigger definitions but only "
             f"{weekday_count} have day_of_week='mon-fri'"
         )
-        assert cron_count >= 6, f"Expected at least 6 CronTriggers, found {cron_count}"
+        assert cron_count >= 5, f"Expected at least 5 CronTriggers, found {cron_count}"
