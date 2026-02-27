@@ -19,7 +19,7 @@ from backend.app.config import (
 
 
 def test_49_assets():
-    assert len(ASSETS) == 49
+    assert len(ASSETS) == 52
 
 
 def test_categories_coverage():
@@ -34,7 +34,7 @@ def test_category_counts():
     assert counts["actions_europe"] == 15
     assert counts["metaux"] == 4
     assert counts["forex"] == 9
-    assert counts["commodities"] == 9
+    assert counts["commodities"] == 12
     assert counts["indices"] == 12
 
 

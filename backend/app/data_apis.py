@@ -292,6 +292,91 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "critical_drought_mm": 2.0,
         "drought_note": "secheresse = export reduction",
     },
+    # ── NEW: Cocoa, Cotton, Orange Juice zones ──
+    {
+        "name": "Ivory Coast (Cocoa)",
+        "lat": 6.5, "lon": -5.5,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,  # Tropical — no frost risk
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,  # Cocoa trees stressed above 35°C
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Year-round
+        "critical_months": [3, 4, 5, 10, 11, 12],  # Main crop Oct-Mar, mid-crop Apr-Sep harvests
+        "drought_threshold_mm": 15.0,  # Tropical — needs substantial rain
+        "critical_drought_mm": 8.0,
+        "drought_note": "Cote d'Ivoire = 45% production mondiale cacao — secheresse = choc offre",
+    },
+    {
+        "name": "Ghana (Cocoa)",
+        "lat": 6.7, "lon": -1.6,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 10, 11, 12],
+        "drought_threshold_mm": 15.0,
+        "critical_drought_mm": 8.0,
+        "drought_note": "Ghana = 25% production mondiale cacao — virus swollen shoot + secheresse",
+    },
+    {
+        "name": "US South Texas (Cotton)",
+        "lat": 31.5, "lon": -100.0,
+        "tickers": ["CT=F"],
+        "crops": "coton",
+        "frost_threshold": -2,
+        "heat_threshold": 42,
+        "heat_stress_threshold": 38,  # Cotton heat stress above 38°C during boll development
+        "growing_months": [4, 5, 6, 7, 8, 9, 10],  # Apr-Oct
+        "critical_months": [6, 7, 8],  # Jun-Aug: flowering + boll development
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "Texas = 40% production coton US — secheresse recurrente",
+    },
+    {
+        "name": "India Gujarat/Maharashtra (Cotton)",
+        "lat": 22.0, "lon": 72.0,
+        "tickers": ["CT=F"],
+        "crops": "coton",
+        "frost_threshold": -999,
+        "heat_threshold": 45,
+        "heat_stress_threshold": 40,
+        "growing_months": [6, 7, 8, 9, 10, 11, 12],  # Jun-Dec (monsoon-dependent)
+        "critical_months": [7, 8, 9],  # Jul-Sep: monsoon peak = critical for cotton
+        "drought_threshold_mm": 10.0,
+        "critical_drought_mm": 5.0,
+        "drought_note": "Inde = 25% production mondiale coton — mousson faible = catastrophe",
+    },
+    {
+        "name": "Florida (Orange Juice)",
+        "lat": 28.0, "lon": -81.5,
+        "tickers": ["OJ=F"],
+        "crops": "oranges, agrumes",
+        "frost_threshold": -2,  # Citrus freeze damage below -2°C
+        "heat_threshold": 999,  # Heat not an issue for citrus
+        "heat_stress_threshold": 999,
+        "growing_months": [1, 2, 3, 10, 11, 12],  # Harvest Oct-Jun, frost risk Nov-Mar
+        "critical_months": [11, 12, 1, 2],  # Nov-Feb: frost + hurricane aftermath
+        "drought_threshold_mm": 10.0,
+        "critical_drought_mm": 5.0,
+        "drought_note": "Floride = production US OJ en chute, gel = spike prix historique",
+    },
+    {
+        "name": "Brazil Sao Paulo (Orange Juice)",
+        "lat": -22.5, "lon": -48.5,
+        "tickers": ["OJ=F", "SB=F"],
+        "crops": "oranges, sucre",
+        "frost_threshold": 0,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [5, 6, 7, 8],  # Brazilian winter = frost risk
+        "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 3.0,
+        "drought_note": "Bresil = 70% export mondial OJ — citrus greening (HLB) + secheresse",
+    },
 ]
 
 
@@ -505,8 +590,8 @@ def fetch_weather_alerts() -> list[NewsItem]:
 
 # Targeted queries aligned with our edge categories
 # Split by specificity: frost and drought are separate (different commodities)
-# Optimized: 16 queries (was 20) — removed redundant frost/drought/harvest overlap
-# 4 scans/day × 16 queries = 64 req/day (was 80), well within 100/day free tier
+# 19 queries: 16 consolidated (was 20) + 3 new (cocoa, cotton, OJ)
+# 4 scans/day × 19 queries = 76 req/day, within 100/day free tier
 GNEWS_QUERIES: list[dict[str, Any]] = [
     # ── Weather: consolidated frost + coffee frost into one ──
     {
@@ -587,6 +672,22 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "wheat rust crop disease blight avian flu outbreak",
         "tickers": ["ZW=F", "ZC=F", "ZS=F"],
         "category": "commodity",
+    },
+    # ── Cocoa, Cotton, Orange Juice — high-edge soft commodities ──
+    {
+        "q": "cocoa crop Ghana Ivory Coast disease swollen shoot drought",
+        "tickers": ["CC=F"],
+        "category": "commodity",
+    },
+    {
+        "q": "cotton crop drought Texas India monsoon export ban",
+        "tickers": ["CT=F"],
+        "category": "commodity",
+    },
+    {
+        "q": "orange juice citrus greening Florida freeze Brazil harvest",
+        "tickers": ["OJ=F"],
+        "category": "weather",
     },
     # ── Portuguese queries for Brazil (12-24h earlier than English media) ──
     {
@@ -843,6 +944,9 @@ COT_CODES: dict[str, dict[str, str]] = {
     "005602": {"name": "Soybeans", "ticker": "ZS=F"},
     "083731": {"name": "Coffee", "ticker": "KC=F"},
     "080732": {"name": "Sugar", "ticker": "SB=F"},
+    "073732": {"name": "Cocoa", "ticker": "CC=F"},
+    "033661": {"name": "Cotton", "ticker": "CT=F"},
+    "040701": {"name": "Orange Juice", "ticker": "OJ=F"},
     "023651": {"name": "Natural Gas", "ticker": "NG=F"},
     "085692": {"name": "Copper", "ticker": "HG=F"},
 }
@@ -1326,12 +1430,15 @@ EONET_CATEGORY_MAP: dict[str, dict] = {
 # Events outside these regions are lower priority
 EONET_COMMODITY_REGIONS: list[dict[str, Any]] = [
     {"name": "US Midwest", "lat_range": (35, 50), "lon_range": (-100, -80), "tickers": ["ZC=F", "ZW=F", "ZS=F"]},
-    {"name": "Brazil", "lat_range": (-35, -5), "lon_range": (-60, -35), "tickers": ["KC=F", "SB=F", "ZS=F"]},
+    {"name": "US South/Texas", "lat_range": (25, 35), "lon_range": (-105, -90), "tickers": ["CT=F", "CL=F"]},
+    {"name": "Florida", "lat_range": (24, 31), "lon_range": (-88, -79), "tickers": ["OJ=F"]},
+    {"name": "Brazil", "lat_range": (-35, -5), "lon_range": (-60, -35), "tickers": ["KC=F", "SB=F", "ZS=F", "OJ=F", "CC=F"]},
     {"name": "Gulf of Mexico", "lat_range": (20, 32), "lon_range": (-100, -80), "tickers": ["CL=F", "NG=F"]},
+    {"name": "West Africa", "lat_range": (0, 12), "lon_range": (-15, 5), "tickers": ["CC=F"]},
     {"name": "Black Sea/Ukraine", "lat_range": (40, 55), "lon_range": (25, 45), "tickers": ["ZW=F", "ZC=F"]},
     {"name": "SE Asia", "lat_range": (-10, 10), "lon_range": (95, 120), "tickers": ["ZS=F"]},
     {"name": "Australia", "lat_range": (-40, -20), "lon_range": (130, 155), "tickers": ["ZW=F"]},
-    {"name": "India", "lat_range": (20, 35), "lon_range": (68, 90), "tickers": ["ZW=F"]},
+    {"name": "India", "lat_range": (20, 35), "lon_range": (68, 90), "tickers": ["ZW=F", "CT=F"]},
     {"name": "Argentina", "lat_range": (-40, -25), "lon_range": (-65, -55), "tickers": ["ZS=F", "ZC=F", "ZW=F"]},
     {"name": "Middle East", "lat_range": (20, 40), "lon_range": (35, 60), "tickers": ["CL=F", "GC=F"]},
 ]

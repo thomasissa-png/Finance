@@ -44,10 +44,11 @@ Regles :
 
 ### Phase 0 : Structured Data APIs (PRIORITE MAX — donnees chiffrees)
 Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut interpreter precisement :
-- **Open-Meteo** (GRATUIT, no key) : surveillance meteo 10 zones agricoles critiques
+- **Open-Meteo** (GRATUIT, no key) : surveillance meteo 16 zones agricoles critiques
   - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo, Brazil Rio Grande do Sul (soja/mais)
   - Ukraine/Mer Noire (ble), Inde Punjab/Haryana (ble/riz), Argentine Pampas (soja/mais/ble)
   - Golfe du Mexique (petrole offshore), Asie du Sud-Est (huile palme), Australie (ble)
+  - **NOUVEAU** : Cote d'Ivoire (cacao), Ghana (cacao), US South Texas (coton), Inde Gujarat (coton), Floride (OJ), Bresil SP (OJ)
   - Alertes : gel (seuils calibres par culture), canicule, stress thermique cumule (3j+ au-dessus du seuil)
   - Secheresse avec seuils adaptatifs (periode critique vs normale)
   - Periodes critiques : silking mais (Jun-Aug), grain fill ble, floraison soja (Dec-Feb hemisph. sud)
@@ -58,9 +59,10 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
   - Queries saisonnieres : planting (Apr-Jun), condition (May-Sep), emergence (May-Jul), harvest (Sep-Dec)
   - Ble condition : toute l'annee (winter wheat)
   - Delta WoW : calcul automatique semaine vs semaine, flag [SWING MAJEUR] si >= 5pp
-- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 16 queries (was 20)
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 19 queries (was 20, consolide puis +3)
   - Consolide : frost+coffee frost en 1, drought+harvest en 1, palm oil+China import en 1, PT queries en 1
-  - 4 scans/jour x 16 queries = 64 req/jour (was 80), marge confortable vs 100/jour
+  - Ajoute : cocoa Ghana/Ivory Coast, cotton Texas/India, orange juice Florida/citrus greening
+  - 4 scans/jour x 19 queries = 76 req/jour, marge confortable vs 100/jour
   - Originales : "frost freeze crop damage", "oil sanctions embargo", "port congestion shipping"
   - "OPEC production cut", "wheat corn soybean USDA", "military strike missile", "copper mine strike"
   - "natural gas storage Europe TTF LNG", "palm oil export China import soybean"
@@ -245,7 +247,7 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 - **Execution**: 0 ou 1 trade par scan
 - **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
-- **Univers**: 49 actifs (15 actions Euronext Paris, 4 metaux, 9 forex, 9 commodities, 12 indices)
+- **Univers**: 52 actifs (15 actions Euronext Paris, 4 metaux, 9 forex, 12 commodities, 12 indices)
 - **Filtrage par session**: Europe = Euronext + indices EUR/GBP + metaux/forex/commodities. US = indices USD/JPY/HKD/AUD + metaux/forex/commodities.
 - **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
 - **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)

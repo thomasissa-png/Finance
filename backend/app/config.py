@@ -68,6 +68,7 @@ CORRELATION_GROUPS: dict[str, list[str]] = {
     "jpy_carry": ["USDJPY=X", "EURJPY=X", "^N225"],
     "luxury": ["MC.PA", "RMS.PA", "OR.PA"],
     "agri": ["ZC=F", "ZW=F", "ZS=F"],
+    "tropical_soft": ["KC=F", "SB=F", "CC=F", "OJ=F"],  # Same tropical zones (Brazil, West Africa)
 }
 
 # ── Chain reactions: effets de second ordre ─────────────────────
@@ -100,9 +101,20 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
     ],
     "KC=F":  [
         {"ticker": "SB=F", "direction": "same", "reason": "Memes planteurs bresil — sucre et cafe"},
+        {"ticker": "CC=F", "direction": "same", "reason": "Cafe et cacao = soft tropicaux, memes pressions climatiques"},
     ],
     "SB=F":  [
         {"ticker": "KC=F", "direction": "same", "reason": "Memes zones bresiliennes — cafe et sucre"},
+    ],
+    "CC=F":  [
+        {"ticker": "KC=F", "direction": "same", "reason": "Cacao et cafe = soft tropicaux, memes zones Afrique/Bresil"},
+        {"ticker": "SB=F", "direction": "same", "reason": "Soft commodities tropicales correles"},
+    ],
+    "OJ=F":  [
+        {"ticker": "SB=F", "direction": "same", "reason": "Jus d'orange et sucre — Bresil/Floride, meteo tropicale"},
+    ],
+    "CT=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Coton et mais — competition terres US South"},
     ],
     # Geopolitique Moyen-Orient
     "USDJPY=X": [
@@ -167,7 +179,7 @@ ASSETS: list[Asset] = [
     Asset("NZDUSD=X", "NZD/USD", "forex", "USD"),
     Asset("EURGBP=X", "EUR/GBP", "forex", "GBP"),
     Asset("EURJPY=X", "EUR/JPY", "forex", "JPY"),
-    # ── COMMODITIES (9) ──────────────────────────────────────────
+    # ── COMMODITIES (12) ──────────────────────────────────────────
     Asset("CL=F", "Pétrole WTI", "commodities", "USD"),
     Asset("BZ=F", "Pétrole Brent", "commodities", "USD"),
     Asset("NG=F", "Gaz Naturel", "commodities", "USD"),
@@ -176,6 +188,9 @@ ASSETS: list[Asset] = [
     Asset("ZS=F", "Soja", "commodities", "USD"),
     Asset("KC=F", "Café", "commodities", "USD"),
     Asset("SB=F", "Sucre", "commodities", "USD"),
+    Asset("CC=F", "Cacao", "commodities", "USD"),
+    Asset("CT=F", "Coton", "commodities", "USD"),
+    Asset("OJ=F", "Jus d'Orange", "commodities", "USD"),
     Asset("HG=F", "Cuivre", "commodities", "USD"),
     # ── INDICES (12) ─────────────────────────────────────────────
     Asset("^FCHI", "CAC 40", "indices", "EUR"),
