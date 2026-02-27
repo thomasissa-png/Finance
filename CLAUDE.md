@@ -43,7 +43,7 @@ Regles :
 ## Data Sources — 4 phases par priorite d'edge
 
 ### Phase 0 : Structured Data APIs (PRIORITE MAX — donnees chiffrees)
-Module `data_apis.py` — 8 sources de donnees numeriques que Claude peut interpreter precisement :
+Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut interpreter precisement :
 - **Open-Meteo** (GRATUIT, no key) : surveillance meteo 10 zones agricoles critiques
   - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo, Brazil Rio Grande do Sul (soja/mais)
   - Ukraine/Mer Noire (ble), Inde Punjab/Haryana (ble/riz), Argentine Pampas (soja/mais/ble)
@@ -91,16 +91,30 @@ Module `data_apis.py` — 8 sources de donnees numeriques que Claude peut interp
   - Seuils saisonniers : hiver (draw) vs ete (injection) — niveaux normaux differents
   - Detection stress regional masque par l'agregat EU (ex: Allemagne a 20% = crise)
   - Impact : NG=F (gaz naturel)
+- **USDA WASDE** (cle gratuite `USDA_API_KEY`) : World Agri Supply and Demand Estimates
+  - Production et rendement mais/soja/ble — rapport mensuel le plus market-moving en agri
+  - Detection revision vs estimation precedente (seuil 0.5%)
+  - Impact : ZC=F, ZS=F, ZW=F
+- **CME FedWatch** (GRATUIT via yfinance ZQ=F) : taux implicites Fed Funds futures
+  - Taux implicite = 100 - prix du future, variation 5j en bps
+  - Seuil alerte : |shift| >= 5bps (repricing significatif)
+  - Forward guidance : spread M+1/M+2/M+3 vs spot (>15bps = anticipation forte)
+  - Impact : GC=F (inverse), EURUSD=X, ^GSPC, USDJPY=X
+- **SHFE/LME Inventaires** (GRATUIT via yfinance) : proxy inventaires metaux via volume/prix
+  - Volume anormal (>2x moy 20j) = mouvement inventaires physiques
+  - Mouvement mensuel >5% = tightness ou surplus
+  - Impact : HG=F (cuivre)
 
-Poids premium : Open-Meteo=1.15/1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.1/1.15, CFTC=1.05/1.1, Options=0.95/1.0
+Poids premium : Open-Meteo=1.15/1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.1/1.15, CFTC=1.05/1.1, Options=0.95/1.0, FedWatch=1.0, SHFE=1.1
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
-Sources configurees dans `EARLY_SIGNAL_FEEDS` (21 feeds — verifie 2026-02-27) :
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (23 feeds — verifie 2026-02-27) :
 - **Meteo/Agri** : Drought.gov (US drought monitor), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique), Climate.gov (ENSO/outlooks)
 - **USDA/FAO** : NASS reports (recoltes, stocks), FAO newsroom
 - **Geopolitique/Defense** : war.gov + defense.gov fallback (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
 - **Energie** : EIA Today in Energy, OilPrice
 - **Maritime/Shipping** : gCaptain, MarineLink, Maritime Executive, Splash247 (ports, containers, BDI)
+- **Canal chokepoints** : Suez Canal Authority (SCA), Panama Canal Authority (ACP) — transit disruptions
 - **Banques centrales** : ECB (corrige .html→.xml), Federal Reserve, Bank of England (speeches)
 
 **Feeds remplaces** : NCEI news.xml (mort)→Drought.gov+Climate.gov, Defense.gov→war.gov, ECB .html→.xml

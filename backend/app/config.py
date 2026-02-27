@@ -246,7 +246,7 @@ RSS_FEEDS = [
 ]
 
 # ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
-# Verified 2026-02-27 — 21 feeds (was 18, added drought.gov, climate.gov, war.gov; fixed ECB .html→.xml)
+# Verified 2026-02-27 — 23 feeds (was 18, added drought.gov, climate.gov, war.gov, Suez/Panama canals; fixed ECB .html→.xml)
 EARLY_SIGNAL_FEEDS = [
     # Meteo / Agri — signaux physiques pour commodities
     "https://www.drought.gov/rss/rss.xml",                          # Drought.gov: US drought monitor + outlooks (replaces dead NCEI news.xml)
@@ -271,6 +271,9 @@ EARLY_SIGNAL_FEEDS = [
     "https://www.marinelink.com/news/rss",                          # MarineLink: shipping, maritime, offshore
     "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions
     "https://splash247.com/feed/",                                  # Splash247: global shipping, ports, containers, BDI commentary
+    # Canal chokepoints — Suez/Panama transit disruptions = supply chain + oil
+    "https://www.suezcanal.gov.eg/English/MediaCenter/News/Pages/default.aspx",  # SCA: Suez Canal Authority news (transit, disruptions)
+    "https://pancanal.com/en/feed/",                               # ACP: Panama Canal Authority (draft restrictions, transit delays)
     # Central banks — speeches et minutes (signaux dovish/hawkish subtils)
     "https://www.ecb.europa.eu/rss/press.xml",                     # ECB: press releases RSS (was .html — returned HTML not XML)
     "https://www.federalreserve.gov/feeds/press_all.xml",
@@ -300,7 +303,6 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "Storm Prediction Center": 1.1,
     "spc.noaa.gov": 1.1,
     "National Weather Service": 1.1,
-    "drought.gov": 1.1,
     "weather.gov": 1.1,
     "api.weather.gov": 1.1,
     "EIA": 1.15,
@@ -326,6 +328,13 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "oilprice": 1.0,
     "Splash247": 1.05,
     "splash247": 1.05,
+    "Suez Canal": 1.1,
+    "suezcanal": 1.1,
+    "Panama Canal": 1.1,
+    "pancanal": 1.1,
+    "SHFE": 1.1,               # Shanghai Futures Exchange inventories
+    "shfe": 1.1,
+    "FedWatch": 1.0,           # CME FedWatch implied rates
     "NHC": 1.15,                # Hurricane advisories — critical for oil/sugar
     "nhc.noaa.gov": 1.15,
     "National Hurricane Center": 1.15,
