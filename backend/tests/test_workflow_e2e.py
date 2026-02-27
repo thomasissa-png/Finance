@@ -561,26 +561,30 @@ class TestLearningPipeline:
         trades = self._make_closed_trades(8, 2)
         raw = [t.model_dump(mode="json") for t in trades]
         with _with_temp_trades(raw):
-            adj = compute_learning_adjustments()
-        if "CL=F" in adj:
-            assert adj["CL=F"] > 1.0
+            result = compute_learning_adjustments()
+        ticker_adjs = result.get("adjustments", {}) if isinstance(result, dict) else result
+        if "CL=F" in ticker_adjs:
+            assert ticker_adjs["CL=F"] > 1.0
 
     def test_losing_ticker_penalized(self):
         """A ticker with mostly losses should get multiplier < 1.0."""
         trades = self._make_closed_trades(1, 8)
         raw = [t.model_dump(mode="json") for t in trades]
         with _with_temp_trades(raw):
-            adj = compute_learning_adjustments()
-        if "CL=F" in adj:
-            assert adj["CL=F"] < 1.0
+            result = compute_learning_adjustments()
+        ticker_adjs = result.get("adjustments", {}) if isinstance(result, dict) else result
+        if "CL=F" in ticker_adjs:
+            assert ticker_adjs["CL=F"] < 1.0
 
     def test_adjustments_bounded(self):
         """All adjustments must stay within [0.5, 1.5]."""
         trades = self._make_closed_trades(15, 0)
         raw = [t.model_dump(mode="json") for t in trades]
         with _with_temp_trades(raw):
-            adj = compute_learning_adjustments()
-        for mult in adj.values():
+            result = compute_learning_adjustments()
+        # v3.4: structured return — check per-ticker adjustments
+        ticker_adjs = result.get("adjustments", {}) if isinstance(result, dict) else result
+        for mult in ticker_adjs.values():
             assert 0.5 <= mult <= 1.5
 
     def test_significance_rejects_noise(self):
@@ -710,11 +714,12 @@ class TestFullPipelineIntegration:
             assert stats.wins == 6
             assert stats.win_rate == round(6 / 8 * 100, 1)
 
-            # Verify learning produces adjustments
-            adj = compute_learning_adjustments()
+            # Verify learning produces adjustments (v3.4: structured return)
+            result = compute_learning_adjustments()
+            ticker_adjs = result.get("adjustments", {}) if isinstance(result, dict) else result
             # CL=F has 6 wins, 0 losses → should be boosted
-            if "CL=F" in adj:
-                assert adj["CL=F"] >= 1.0
+            if "CL=F" in ticker_adjs:
+                assert ticker_adjs["CL=F"] >= 1.0
 
             # Verify performance summary is generated
             summary = build_performance_summary()

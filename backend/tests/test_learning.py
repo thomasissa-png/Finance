@@ -1,4 +1,7 @@
-"""Tests for the learning module."""
+"""Tests for the learning module.
+
+v3.4 audit: updated for new return format (structured dict) and new features.
+"""
 
 import json
 import tempfile
@@ -60,6 +63,14 @@ def _with_temp_trades(trades_data):
     return patch("backend.app.learning.TRADES_FILE", Path(tmp.name))
 
 
+# ── Helper to extract adjustments from v3.4 structured return ──
+def _get_ticker_adj(result: dict, ticker: str) -> float | None:
+    """Get a ticker adjustment from the v3.4 structured return format."""
+    if not isinstance(result, dict) or "adjustments" not in result:
+        return None
+    return result["adjustments"].get(ticker)
+
+
 def test_load_empty():
     with _with_temp_trades([]):
         trades = load_trades()
@@ -104,16 +115,24 @@ def test_learning_adjustments_not_enough_data():
 
 
 def test_learning_adjustments_enough_data():
+    """v3.4: Returns structured dict. Per-ticker needs 8+ trades now."""
     trades = []
-    for i in range(6):
-        pnl = 1.0 if i < 5 else -0.5
+    for i in range(10):
+        pnl = 1.0 if i < 8 else -0.5
         result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
         trades.append(_make_trade(result=result, pnl_pct=pnl))
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
-        adj = compute_learning_adjustments()
-    assert "MC.PA" in adj
-    assert adj["MC.PA"] > 1.0
+        result = compute_learning_adjustments()
+    assert isinstance(result, dict)
+    assert "adjustments" in result
+    assert "session_adj" in result
+    assert "newscat_adj" in result
+    assert "regime_adj" in result
+    # Per-ticker should exist with 10 trades (above min 8)
+    ticker_mult = _get_ticker_adj(result, "MC.PA")
+    assert ticker_mult is not None
+    assert ticker_mult > 1.0  # Mostly winning
 
 
 # ── New tests for v2.0 learning features ────────────────────────
@@ -160,27 +179,29 @@ def test_decay_weight_half_life():
 
 
 def test_learning_adjustments_bounded():
-    """Adjustments should be bounded to [0.5, 1.5]."""
+    """v3.4: Per-ticker adjustments should be bounded to [0.5, 1.5]."""
     trades = []
     for i in range(10):
         trades.append(_make_trade(result=TradeResult.TP_HIT, pnl_pct=5.0))
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
-        adj = compute_learning_adjustments()
-    for ticker, mult in adj.items():
+        result = compute_learning_adjustments()
+    ticker_adjs = result.get("adjustments", {})
+    for ticker, mult in ticker_adjs.items():
         assert 0.5 <= mult <= 1.5
 
 
 def test_learning_adjustments_losing_ticker():
-    """A consistently losing ticker should get a lower multiplier."""
+    """A consistently losing ticker should get a lower multiplier (v3.4: needs 8+ trades)."""
     trades = []
-    for i in range(6):
+    for i in range(10):
         trades.append(_make_trade(result=TradeResult.SL_HIT, pnl_pct=-1.0))
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
-        adj = compute_learning_adjustments()
-    if "MC.PA" in adj:
-        assert adj["MC.PA"] < 1.0
+        result = compute_learning_adjustments()
+    ticker_mult = _get_ticker_adj(result, "MC.PA")
+    if ticker_mult is not None:
+        assert ticker_mult < 1.0
 
 
 def test_performance_by_category():
@@ -246,8 +267,7 @@ def test_compute_adjustment_significant():
 
 
 def test_multiplicative_blending():
-    """v3: Blending should be multiplicative — all 1.0 inputs → 1.0 output."""
-    # Create enough trades for all dimensions to have significant data
+    """v3.4: Blending uses ticker*category. Result should exist and be bounded."""
     trades = []
     for i in range(10):
         pnl = 1.0 if i < 8 else -0.5
@@ -255,10 +275,10 @@ def test_multiplicative_blending():
         trades.append(_make_trade(result=result, pnl_pct=pnl))
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
-        adj = compute_learning_adjustments()
-    # With multiplicative blending, the adjustment should exist
-    if "MC.PA" in adj:
-        assert 0.5 <= adj["MC.PA"] <= 1.5
+        result = compute_learning_adjustments()
+    ticker_mult = _get_ticker_adj(result, "MC.PA")
+    if ticker_mult is not None:
+        assert 0.5 <= ticker_mult <= 1.5
 
 
 def test_build_performance_summary_not_enough_data():
@@ -283,3 +303,166 @@ def test_build_performance_summary_with_data():
     assert "HISTORIQUE DE PERFORMANCE" in summary
     assert "Win rate" in summary
     assert "Derniers" in summary
+
+
+# ── v3.4 audit tests ──────────────────────────────────────────────
+
+
+def test_v34_structured_return_format():
+    """v3.4: compute_learning_adjustments returns structured dict with all dimensions."""
+    trades = []
+    for i in range(10):
+        pnl = 1.0 if i < 7 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        result = compute_learning_adjustments()
+    # Must have all expected keys
+    assert "adjustments" in result
+    assert "session_adj" in result
+    assert "newscat_adj" in result
+    assert "regime_adj" in result
+    assert "decomposition" in result
+
+
+def test_v34_session_adj_returned_separately():
+    """v3.4 #2: Session adjustments are returned separately, not baked into ticker adj."""
+    trades = []
+    for i in range(10):
+        pnl = 1.0 if i < 7 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(
+            scan_type=ScanType.EUROPE, result=result, pnl_pct=pnl,
+        ))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        result = compute_learning_adjustments()
+    # Session adj should have "europe" key
+    session = result.get("session_adj", {})
+    if session:
+        assert "europe" in session
+        assert 0.8 <= session["europe"] <= 1.2
+
+
+def test_v34_regime_adj():
+    """v3.4 #1: Regime-conditional learning produces adjustments per VIX regime."""
+    trades = []
+    for i in range(10):
+        pnl = 1.5 if i < 8 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(
+            result=result, pnl_pct=pnl,
+            market_regime="calm",
+        ))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        result = compute_learning_adjustments()
+    regime = result.get("regime_adj", {})
+    if regime:
+        assert "calm" in regime
+        assert regime["calm"] > 1.0  # Mostly winning in calm → boost
+
+
+def test_v34_per_ticker_stricter_significance():
+    """v3.4 #3: Per-ticker needs 8 trades and t>1.5 to be significant."""
+    # Only 6 trades — should NOT produce per-ticker adjustment
+    trades = []
+    for i in range(6):
+        pnl = 1.0 if i < 5 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        result = compute_learning_adjustments()
+    # category adj may exist (min 5) but per-ticker should NOT (min 8)
+    ticker_mult = _get_ticker_adj(result, "MC.PA")
+    # With 6 trades < min 8, ticker-level should be None or default to cat_adj only
+    # The ticker may still appear in adjustments due to cat_adj being applied
+    decomp = result.get("decomposition", {}).get("MC.PA", {})
+    assert decomp.get("ticker_mult", 1.0) == 1.0  # Not enough for per-ticker
+
+
+def test_v34_newscat_adj_returned_separately():
+    """v3.4 #4: News category adjustments returned as separate dict."""
+    trades = []
+    for i in range(10):
+        pnl = 1.0 if i < 7 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(
+            result=result, pnl_pct=pnl,
+            news_category="weather",
+        ))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        result = compute_learning_adjustments()
+    newscat = result.get("newscat_adj", {})
+    if newscat:
+        assert "weather" in newscat
+        assert 0.7 <= newscat["weather"] <= 1.3
+
+
+def test_v34_decomposition_logged():
+    """v3.4 #8: Decomposition contains ticker_mult and cat_mult for each ticker."""
+    trades = []
+    for i in range(10):
+        trades.append(_make_trade(result=TradeResult.TP_HIT, pnl_pct=1.5))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        result = compute_learning_adjustments()
+    decomp = result.get("decomposition", {})
+    if "MC.PA" in decomp:
+        assert "ticker_mult" in decomp["MC.PA"]
+        assert "cat_mult" in decomp["MC.PA"]
+
+
+def test_v34_is_significant_with_t_threshold():
+    """v3.4: _is_significant supports configurable t_threshold."""
+    # Data with moderate signal: passes t>1.0 but may fail t>1.5
+    data = [1.0, 0.5, 1.2, 0.3, 0.8]
+    assert _is_significant(data, min_samples=4, t_threshold=1.0) is True
+    # Stricter threshold should require stronger signal
+    noisy = [0.5, -0.3, 0.2, -0.1, 0.4, -0.2, 0.3, -0.1]
+    assert _is_significant(noisy, min_samples=4, t_threshold=1.5) is False
+
+
+def test_v34_compute_adjustment_pnl_signed():
+    """v3.4 #6: _compute_adjustment uses PnL-signed signal, not binary win_rate."""
+    # All positive PnL = strong positive signal
+    entries_positive = [(2.0, 1.0), (1.5, 1.0), (1.8, 1.0), (1.3, 1.0), (1.0, 1.0)]
+    result_pos = _compute_adjustment(entries_positive, min_significant=4, sensitivity=0.5)
+    assert result_pos is not None
+    assert result_pos > 1.0
+
+    # All negative PnL = strong negative signal
+    entries_negative = [(-1.0, 1.0), (-1.5, 1.0), (-0.8, 1.0), (-1.2, 1.0), (-1.0, 1.0)]
+    result_neg = _compute_adjustment(entries_negative, min_significant=4, sensitivity=0.5)
+    assert result_neg is not None
+    assert result_neg < 1.0
+
+
+def test_v34_performance_summary_benchmark():
+    """v3.4 #11: Performance summary includes baseline benchmark."""
+    trades = []
+    for i in range(6):
+        pnl = 1.0 if i < 4 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        summary = build_performance_summary()
+    assert "baseline: 50%" in summary
+    assert "PnL moyen" in summary
+
+
+def test_v34_performance_summary_anti_double_counting():
+    """v3.4 #7: Performance summary tells Claude NOT to adjust scores."""
+    trades = []
+    for i in range(6):
+        pnl = 1.0 if i < 4 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    raw = [t.model_dump(mode="json") for t in trades]
+    with _with_temp_trades(raw):
+        summary = build_performance_summary()
+    assert "N'ajuste PAS tes scores" in summary

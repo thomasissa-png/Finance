@@ -30,13 +30,20 @@ def invalidate_learning_cache() -> None:
     logger.info("Learning cache invalidated")
 
 
-def get_learning_adjustments() -> dict[str, float]:
-    """Get learning adjustments with caching (#26)."""
+def get_learning_adjustments() -> dict:
+    """Get learning adjustments with caching (#26).
+
+    v3.4: Returns the full learning dict with adjustments, session_adj,
+    newscat_adj, regime_adj, and decomposition.
+    Cache is invalidated after 22h journal — trades added during the day
+    are NOT reflected until then (acceptable for 4 scans/day).
+    """
     global _cached_adjustments, _cache_valid
     if not _cache_valid:
         _cached_adjustments = compute_learning_adjustments()
         _cache_valid = True
-        logger.info("Learning cache refreshed: %d adjustments", len(_cached_adjustments))
+        adj = _cached_adjustments.get("adjustments", {}) if isinstance(_cached_adjustments, dict) else _cached_adjustments
+        logger.info("Learning cache refreshed: %d adjustments", len(adj))
     return _cached_adjustments
 
 
@@ -169,11 +176,11 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
                                 s.news.title[:100])
 
             # Step 3: Get learning adjustments (#26 — cached)
-            adjustments = get_learning_adjustments()
+            learning_data = get_learning_adjustments()
 
             # Step 4: Select trade (with correlation check #22)
             result = select_trade(
-                scored, scan_type, adjustments,
+                scored, scan_type, learning_data,
                 existing_trade_ticker=existing_trade_ticker,
                 market_context=market_ctx,
             )

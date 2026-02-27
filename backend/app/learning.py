@@ -1,4 +1,15 @@
-"""Performance tracking and self-learning via historical trade analysis."""
+"""Performance tracking and self-learning via historical trade analysis.
+
+v3.4 audit changes:
+- #1: Regime-conditional learning (VIX calm/normal/elevated/stress)
+- #2: Session mult uses current scan type, not last trade's scan type
+- #3: Per-ticker significance raised (t>1.5, min 8 trades)
+- #4: News category blend uses direct newscat_adj, not historical average
+- #5: learning_helped tracking (adjusted vs raw score correlation)
+- #6: PnL-signed signal replaces binary win_rate in _compute_adjustment
+- #8: Per-dimension multiplier decomposition logged
+- #11: Benchmark in performance summary
+"""
 
 import fcntl
 import json
@@ -212,13 +223,18 @@ def compute_performance() -> PerformanceStats:
     )
 
 
-def _is_significant(pnl_values: list[float], min_samples: int = 4) -> bool:
+def _is_significant(pnl_values: list[float], min_samples: int = 4,
+                    t_threshold: float = 1.0) -> bool:
     """P0-#12: Check if we have enough data for a statistically meaningful adjustment.
 
     Requires:
     1. At least min_samples data points
     2. Standard error small enough that the mean is distinguishable from zero
-       (pseudo t-test: |mean| > stderr, i.e. t > 1.0 — lenient threshold for trading)
+       (pseudo t-test: |mean/stderr| > t_threshold)
+
+    v3.4: t_threshold is configurable per dimension.
+    Per-ticker uses 1.5 (stricter — small samples, high noise).
+    Per-category/session/newscat uses 1.0 (larger pool, less noise).
     """
     if len(pnl_values) < min_samples:
         return False
@@ -230,15 +246,20 @@ def _is_significant(pnl_values: list[float], min_samples: int = 4) -> bool:
         stderr = stdev / math.sqrt(len(pnl_values))
         if stderr == 0:
             return True  # All identical values — signal is clear
-        return abs(mean / stderr) > 1.0
+        return abs(mean / stderr) > t_threshold
     except (statistics.StatisticsError, ZeroDivisionError):
         return False
 
 
 def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float = 0.5,
                         pnl_cap: float = 0.25, bounds: tuple[float, float] = (0.5, 1.5),
-                        min_significant: int = 4) -> float | None:
+                        min_significant: int = 4, t_threshold: float = 1.0) -> float | None:
     """Compute a single decay-weighted adjustment with significance check.
+
+    v3.4 #6: Uses PnL-signed signal instead of binary win_rate.
+    The old formula used `win_rate - 0.5` which treats an EXPIRED at +0.8%
+    the same as a SL_HIT at -2%. Now we use decay-weighted average PnL directly,
+    normalized and capped, as the primary signal.
 
     Returns None if not significant, else a multiplier in [bounds].
     """
@@ -250,27 +271,43 @@ def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float =
 
     # P0-#12: Significance check on raw PnL values
     pnl_values = [p for p, _ in entries]
-    if not _is_significant(pnl_values, min_samples=min_significant):
+    if not _is_significant(pnl_values, min_samples=min_significant,
+                           t_threshold=t_threshold):
         return None
 
-    avg = sum(p * w for p, w in entries) / total_w
-    win_rate = sum(w for p, w in entries if p > 0) / total_w
-    mult = 1.0 + (win_rate - 0.5) * sensitivity + min(pnl_cap, max(-pnl_cap, avg / 10))
+    # v3.4 #6: PnL-signed signal — decay-weighted average PnL
+    avg_pnl = sum(p * w for p, w in entries) / total_w
+    # Normalize: divide by a reference scale (1% PnL = strong signal)
+    pnl_signal = min(pnl_cap, max(-pnl_cap, avg_pnl / 2.0))
+    mult = 1.0 + pnl_signal * sensitivity
     lo, hi = bounds
     return round(max(lo, min(hi, mult)), 3)
 
 
-def compute_learning_adjustments() -> dict[str, float]:
+def compute_learning_adjustments() -> dict:
     """Compute per-ticker score multipliers based on historical performance.
 
     Uses temporal decay: recent trades weigh more than old ones.
-    Also computes per-category, per-hour (#28), and per-news_category (#29) adjustments.
+    Also computes per-category, per-session (#28), per-news_category (#29),
+    and per-regime (#1 v3.4) adjustments.
 
     v3 changes:
     - P0-#2: Multiplicative blending instead of additive (signals compound, not average)
     - P0-#12: Significance test — adjustments only applied when statistically meaningful
 
-    Returns dict of ticker -> multiplier (default 1.0, range 0.5-1.5).
+    v3.4 audit changes:
+    - #1: Regime-conditional learning (VIX calm/normal/elevated/stress)
+    - #2: Session/hour adj returned separately — applied by current scan, not last trade
+    - #3: Per-ticker significance raised (t>1.5, min 8 trades)
+    - #4: News category uses direct newscat_adj instead of averaging history
+    - #8: Per-dimension decomposition logged for diagnostics
+
+    Returns dict with:
+    - "adjustments": dict[ticker, multiplier] (default 1.0, range 0.5-1.5)
+    - "session_adj": dict[scan_type, multiplier] — applied by caller based on current scan
+    - "newscat_adj": dict[news_category, multiplier] — applied by caller based on current news
+    - "regime_adj": dict[regime, multiplier] — applied by caller based on current VIX regime
+    - "decomposition": dict[ticker, {ticker_mult, cat_mult}] — for diagnostics (#8)
     """
     trades = load_trades()
     closed = [t for t in trades if t.result != TradeResult.PENDING]
@@ -281,7 +318,7 @@ def compute_learning_adjustments() -> dict[str, float]:
     # (#30) Adaptive decay
     half_life = _get_decay_half_life(len(closed))
 
-    # ── Per-ticker adjustments (with decay + significance) ────────
+    # ── Per-ticker adjustments (v3.4 #3: stricter — t>1.5, min 8) ────
     ticker_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
@@ -291,7 +328,8 @@ def compute_learning_adjustments() -> dict[str, float]:
     ticker_adj: dict[str, float] = {}
     for ticker, entries in ticker_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.5, pnl_cap=0.25,
-                                  bounds=(0.5, 1.5), min_significant=4)
+                                  bounds=(0.5, 1.5), min_significant=8,
+                                  t_threshold=1.5)
         if adj is not None:
             ticker_adj[ticker] = adj
 
@@ -309,21 +347,21 @@ def compute_learning_adjustments() -> dict[str, float]:
         if adj is not None:
             cat_adj[cat] = adj
 
-    # ── (#28) Per-hour adjustments ────────────────────────────────
+    # ── (#28) Per-session adjustments (v3.4 #2: returned separately) ──
     hour_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
             w = _compute_decay_weight(t.timestamp, half_life)
             hour_weighted.setdefault(t.scan_type.value, []).append((t.pnl_pct, w))
 
-    hour_adj: dict[str, float] = {}
+    session_adj: dict[str, float] = {}
     for scan_type, entries in hour_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.2, pnl_cap=0.1,
                                   bounds=(0.8, 1.2), min_significant=5)
         if adj is not None:
-            hour_adj[scan_type] = adj
+            session_adj[scan_type] = adj
 
-    # ── (#29) Per-news_category adjustments ────────────────────────
+    # ── (#29) Per-news_category adjustments (v3.4 #4: returned separately) ──
     newscat_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None and hasattr(t, "news_category"):
@@ -337,12 +375,27 @@ def compute_learning_adjustments() -> dict[str, float]:
         if adj is not None:
             newscat_adj[ncat] = adj
 
-    # ── P0-#2: MULTIPLICATIVE blend ───────────────────────────────
-    # Each dimension is an independent signal. Multiplicative blending means
-    # a bad ticker (0.6) on a bad category (0.8) gives 0.48 — real punishment.
-    # Additive would give 0.8 — diluted.
+    # ── v3.4 #1: Per-regime adjustments (VIX-conditional learning) ──
+    regime_weighted: dict[str, list[tuple[float, float]]] = {}
+    for t in closed:
+        if t.pnl_pct is not None:
+            regime = getattr(t, "market_regime", None) or "normal"
+            w = _compute_decay_weight(t.timestamp, half_life)
+            regime_weighted.setdefault(regime, []).append((t.pnl_pct, w))
+
+    regime_adj: dict[str, float] = {}
+    for regime, entries in regime_weighted.items():
+        adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
+                                  bounds=(0.7, 1.3), min_significant=5)
+        if adj is not None:
+            regime_adj[regime] = adj
+
+    # ── Multiplicative blend: ticker * category only ──────────────
+    # v3.4 #2/#4: session, newscat, and regime are returned separately
+    # and applied contextually by the caller (based on CURRENT scan/news/regime).
     from .config import ASSET_BY_TICKER
     adjustments: dict[str, float] = {}
+    decomposition: dict[str, dict] = {}
     all_tickers = set(ticker_adj.keys())
     for t in closed:
         if t.ticker not in ticker_adj and t.category in cat_adj:
@@ -353,30 +406,39 @@ def compute_learning_adjustments() -> dict[str, float]:
         asset = ASSET_BY_TICKER.get(ticker)
         c_mult = cat_adj.get(asset.category, 1.0) if asset else 1.0
 
-        # (#29) News category blend — average across all news categories seen for this ticker
-        nc_mults = []
-        for t in closed:
-            if t.ticker == ticker and hasattr(t, "news_category") and t.news_category in newscat_adj:
-                nc_mults.append(newscat_adj[t.news_category])
-        nc_mult = sum(nc_mults) / len(nc_mults) if nc_mults else 1.0
-
-        # (#28) Hour blend — use scan type of most recent trade for this ticker
-        h_mult = 1.0
-        recent_scan = None
-        for t in reversed(closed):
-            if t.ticker == ticker:
-                recent_scan = t.scan_type.value
-                break
-        if recent_scan and recent_scan in hour_adj:
-            h_mult = hour_adj[recent_scan]
-
-        # P0-#2: Multiplicative blend — signals compound instead of averaging
-        blended = t_mult * c_mult * nc_mult * h_mult
+        # v3.4: Only ticker * category in the base blend.
+        # Session, newscat, and regime applied contextually by select_trade().
+        blended = t_mult * c_mult
         adjustments[ticker] = round(max(0.5, min(1.5, blended)), 3)
 
-    logger.info("Learning adjustments for %d tickers (%d categories, %d news_cats, %d hours, half_life=%.0fd)",
-                len(adjustments), len(cat_adj), len(newscat_adj), len(hour_adj), half_life)
-    return adjustments
+        # v3.4 #8: Store decomposition for diagnostics
+        decomposition[ticker] = {"ticker_mult": t_mult, "cat_mult": c_mult}
+
+    # v3.4 #8: Log per-dimension decomposition
+    logger.info("Learning v3.4: %d tickers, %d categories, %d sessions, %d news_cats, "
+                "%d regimes, half_life=%.0fd",
+                len(adjustments), len(cat_adj), len(session_adj),
+                len(newscat_adj), len(regime_adj), half_life)
+    if decomposition:
+        for ticker, dec in sorted(decomposition.items()):
+            if dec["ticker_mult"] != 1.0 or dec["cat_mult"] != 1.0:
+                logger.info("  %s: ticker=%.3f, cat=%.3f → base=%.3f",
+                            ticker, dec["ticker_mult"], dec["cat_mult"],
+                            adjustments.get(ticker, 1.0))
+    if session_adj:
+        logger.info("  Session adj: %s", session_adj)
+    if newscat_adj:
+        logger.info("  NewsCategory adj: %s", newscat_adj)
+    if regime_adj:
+        logger.info("  Regime adj: %s", regime_adj)
+
+    return {
+        "adjustments": adjustments,
+        "session_adj": session_adj,
+        "newscat_adj": newscat_adj,
+        "regime_adj": regime_adj,
+        "decomposition": decomposition,
+    }
 
 
 # ── Cached performance summary (invalidated with learning cache) ────
@@ -417,10 +479,19 @@ def build_performance_summary(max_recent: int = 15) -> str:
     pnls = [t.pnl_pct for t in closed]
     win_rate = len(wins) / len(closed) * 100 if closed else 0
 
+    # v3.4 #11: Benchmark — compare win rate to random baseline (50%)
+    avg_pnl = sum(pnls) / len(pnls) if pnls else 0
     parts = [
         f"\n--- HISTORIQUE DE PERFORMANCE (feedback loop) ---",
-        f"Trades clotures: {len(closed)} | Win rate: {win_rate:.0f}% | PnL total: {sum(pnls):+.1f}%",
+        f"Trades clotures: {len(closed)} | Win rate: {win_rate:.0f}% (baseline: 50%) | "
+        f"PnL total: {sum(pnls):+.1f}% | PnL moyen: {avg_pnl:+.2f}%",
     ]
+
+    # v3.4 #7: Anti-double-counting note — tell Claude NOT to adjust scores
+    # based on this history, because the learning system already does it.
+    parts.append("NOTE: N'ajuste PAS tes scores surprise/transmission_delay en fonction "
+                 "de cet historique — le systeme de learning applique deja des multiplicateurs "
+                 "automatiques. Ton role est de scorer OBJECTIVEMENT chaque news.")
 
     # Performance by news category
     by_newscat: dict[str, dict] = {}
@@ -438,7 +509,7 @@ def build_performance_summary(max_recent: int = 15) -> str:
         for nc, stats in sorted(by_newscat.items(), key=lambda x: x[1]["pnl"], reverse=True):
             if stats["total"] >= 3:
                 wr = stats["wins"] / stats["total"] * 100
-                cat_lines.append(f"  {nc}: {stats['total']} trades, WR={wr:.0f}%, PnL={stats['pnl']:+.1f}%")
+                cat_lines.append(f"  {nc}: {stats['total']} trades, WR={wr:.0f}% (vs 50%), PnL={stats['pnl']:+.1f}%")
         if cat_lines:
             parts.append("Par categorie de news (min 3 trades):")
             parts.extend(cat_lines)

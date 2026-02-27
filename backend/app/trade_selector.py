@@ -224,18 +224,24 @@ def _build_scored_news_log(scored_news: list[ScoredNews]) -> list[dict]:
 def select_trade(
     scored_news: list[ScoredNews],
     scan_type: ScanType,
-    learning_adjustments: dict[str, float] | None = None,
+    learning_adjustments: dict | None = None,
     existing_trade_ticker: list[str] | str | None = None,
     market_context: dict | None = None,
 ) -> ScanResult:
     """Pick the single best trade from scored news.
 
     v3: Enriched with full decision trace for journal learning.
+    v3.4: learning_adjustments is now a dict with sub-keys:
+      - "adjustments": per-ticker base multipliers
+      - "session_adj": per-scan-type multipliers (applied by current scan)
+      - "newscat_adj": per-news-category multipliers (applied by current news)
+      - "regime_adj": per-VIX-regime multipliers (applied by current market)
+      Also backward-compatible with old format (flat dict of ticker -> float).
 
     Args:
         scored_news: News scored by the LLM, sorted by total_score desc.
         scan_type: europe or us scan.
-        learning_adjustments: Optional dict of ticker -> multiplier from learning module.
+        learning_adjustments: Learning data from compute_learning_adjustments().
         existing_trade_ticker: Ticker from the other scan (for correlation check #22).
         market_context: Market context from news_scorer (#5).
 
@@ -243,7 +249,34 @@ def select_trade(
         ScanResult with either a trade recommendation or a pass.
     """
     now = datetime.now(timezone.utc)
-    adjustments = learning_adjustments or {}
+
+    # v3.4: Unpack the structured learning data (backward-compatible with flat dict)
+    if isinstance(learning_adjustments, dict) and "adjustments" in learning_adjustments:
+        ticker_adj = learning_adjustments.get("adjustments", {})
+        session_adj = learning_adjustments.get("session_adj", {})
+        newscat_adj = learning_adjustments.get("newscat_adj", {})
+        regime_adj = learning_adjustments.get("regime_adj", {})
+        learning_state_for_log = learning_adjustments
+    elif isinstance(learning_adjustments, dict):
+        # Backward compat: old flat format {ticker: multiplier}
+        ticker_adj = learning_adjustments
+        session_adj = {}
+        newscat_adj = {}
+        regime_adj = {}
+        learning_state_for_log = learning_adjustments
+    else:
+        ticker_adj = {}
+        session_adj = {}
+        newscat_adj = {}
+        regime_adj = {}
+        learning_state_for_log = None
+
+    # v3.4 #2: Session multiplier from CURRENT scan type (not last trade)
+    current_session_mult = session_adj.get(scan_type.value, 1.0)
+
+    # v3.4 #1: Regime multiplier from CURRENT market context
+    current_regime = market_context.get("regime", "normal") if market_context else "normal"
+    current_regime_mult = regime_adj.get(current_regime, 1.0)
 
     # Build the full scored news log for journal (all Claude reasoning)
     all_scored_log = _build_scored_news_log(scored_news) if scored_news else None
@@ -257,7 +290,7 @@ def select_trade(
             reason_no_trade="Aucune news collectée",
             news_analyzed=0,
             market_context=market_context,
-            learning_state=adjustments if adjustments else None,
+            learning_state=learning_state_for_log,
         )
 
     # ── Calendar check: block trades near major macro events ──────
@@ -275,7 +308,7 @@ def select_trade(
             news_analyzed=len(scored_news),
             market_context=market_context,
             all_scored_news=all_scored_log,
-            learning_state=adjustments if adjustments else None,
+            learning_state=learning_state_for_log,
         )
 
     # Session-eligible tickers
@@ -314,8 +347,12 @@ def select_trade(
             })
             continue
 
-        # Apply learning multiplier
-        multiplier = adjustments.get(best_ticker, 1.0)
+        # v3.4: Contextual learning multiplier = base(ticker*cat) * session * newscat * regime
+        base_mult = ticker_adj.get(best_ticker, 1.0)
+        nc_mult = newscat_adj.get(sn.news_category, 1.0)  # v3.4 #4: direct from current news
+        multiplier = base_mult * current_session_mult * nc_mult * current_regime_mult
+        multiplier = max(0.5, min(1.5, multiplier))  # Clamp
+
         adjusted_score = sn.total_score * multiplier
         candidates.append((sn, adjusted_score))
 
@@ -331,7 +368,7 @@ def select_trade(
             market_context=market_context,
             all_scored_news=all_scored_log,
             rejection_log=rejection_log if rejection_log else None,
-            learning_state=adjustments if adjustments else None,
+            learning_state=learning_state_for_log,
         )
 
     # Build decision summary — track why we chose the winner
@@ -363,7 +400,12 @@ def select_trade(
         ticker = next(t for t in best_news.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers)
         asset = ASSET_BY_TICKER[ticker]
         raw_score = best_news.total_score
-        multiplier = adjustments.get(ticker, 1.0)
+
+        # v3.4: Recompute full contextual multiplier for this candidate
+        base_mult = ticker_adj.get(ticker, 1.0)
+        nc_mult = newscat_adj.get(best_news.news_category, 1.0)
+        multiplier = base_mult * current_session_mult * nc_mult * current_regime_mult
+        multiplier = max(0.5, min(1.5, multiplier))
 
         # (#22) Correlation check
         if _check_correlation(ticker, existing_trade_ticker):
@@ -456,10 +498,17 @@ def select_trade(
             if entry_vs_prev > 2.0:
                 logger.warning("Entry price for %s may have significant latency: %.2f%% from prev close", ticker, entry_vs_prev)
 
-        # Build decision summary
+        # v3.4 #5: Track learning_helped — did learning boost or penalize this trade?
+        learning_helped = None
+        if multiplier != 1.0:
+            learning_helped = multiplier > 1.0  # True = learning boosted this trade
+
+        # v3.4 #8: Build decision summary with full decomposition
         decision_parts.append(
             f"SELECTIONNE #{rank+1}: {ticker} {best_news.direction.value} | "
-            f"Score brut Claude={raw_score:.1f}, learning_mult={multiplier:.3f}, "
+            f"Score brut Claude={raw_score:.1f}, learning_mult={multiplier:.3f} "
+            f"(base={base_mult:.3f}, session={current_session_mult:.3f}, "
+            f"newscat={nc_mult:.3f}, regime={current_regime_mult:.3f}), "
             f"score ajuste={best_score:.1f} | "
             f"News: '{best_news.news.title[:80]}' | "
             f"Categorie: {best_news.news_category}, edge={best_news.transmission_delay}/{best_news.market_awareness}"
@@ -526,7 +575,7 @@ def select_trade(
             all_scored_news=all_scored_log,
             rejection_log=rejection_log if rejection_log else None,
             decision_summary=" | ".join(decision_parts),
-            learning_state=adjustments if adjustments else None,
+            learning_state=learning_state_for_log,
         )
 
     # All candidates failed price/R/R checks
@@ -541,5 +590,5 @@ def select_trade(
         all_scored_news=all_scored_log,
         rejection_log=rejection_log if rejection_log else None,
         decision_summary=" | ".join(decision_parts),
-        learning_state=adjustments if adjustments else None,
+        learning_state=learning_state_for_log,
     )

@@ -316,27 +316,45 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `vix_at_trade` / `market_regime` : contexte marche au moment du trade
   - `predicted_transmission_delay` / `actual_pricing_time_hours` / `delay_accuracy` : tracking precision
 
-## Learning adaptatif (v3.0)
-- **Par ticker**: ajustement 0.5-1.5 base sur l'historique de resultats (min 4 trades significatifs)
-- **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades significatifs)
-- **Par categorie de news**: ajustement 0.7-1.3 (min 5 trades significatifs)
-- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades significatifs)
-- **Blending multiplicatif** (v3): `ticker * cat * newscat * hour`, borne a [0.5, 1.5]
-  - Avant v3 : blending additif (signaux dilues). Maintenant les signaux se composent.
-  - Ex: mauvais ticker (0.6) * mauvaise categorie (0.8) = 0.48 (punition reelle)
-- **Significance test** (v3): pseudo t-test (`|mean/stderr| > 1.0`) avant d'appliquer un ajustement
-  - Evite les faux signaux sur echantillons trop petits ou trop bruyants
+## Learning adaptatif (v3.4 — audit ML)
+- **Par ticker**: ajustement 0.5-1.5 (v3.4: min **8** trades, t-stat > **1.5** — plus strict pour eviter overfitting sur petits echantillons)
+- **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0)
+- **Par categorie de news**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0) — v3.4: **applique contextuellement** par la news_category du trade courant (pas moyennee sur l'historique du ticker)
+- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades, t-stat > 1.0) — v3.4: **applique par le scan courant** (pas le dernier scan du ticker)
+- **Par regime VIX** (v3.4 NEW): ajustement 0.7-1.3 par regime calm/normal/elevated/stress (min 5 trades)
+  - Permet de differencier "les trades weather marchent en regime calm" vs "echouent en regime stress"
+- **Blending multiplicatif** (v3.4): base = `ticker * cat`, les dimensions contextuelles (session, newscat, regime) sont appliquees **au moment du trade** par `select_trade()`
+  - Avant v3.4 : session/newscat bakes dans le blend de maniere statique (bugs #2/#4 corriges)
+  - v3.4: `final_mult = base(ticker*cat) * session_adj[current_scan] * newscat_adj[current_newscat] * regime_adj[current_regime]`
+  - Ex: mauvais ticker (0.6) * regime stress (0.8) = 0.48 (punition reelle en regime defavorable)
+- **Significance test** (v3.4): pseudo t-test avec **seuil configurable par dimension**
+  - Per-ticker: t > 1.5, min 8 trades (strict — echantillons petits, bruit eleve)
+  - Per-category/session/newscat/regime: t > 1.0, min 5 trades (pool plus large)
+- **Signal PnL-signe** (v3.4): `_compute_adjustment()` utilise le PnL signe normalise au lieu du binaire win_rate
+  - Un EXPIRED a +0.8% contribue positivement (pas traite comme un echec)
+  - Formule: `1.0 + clamp(avg_pnl / 2, -cap, cap) * sensitivity`
 - **Decay temporel adaptatif**: demi-vie 45j (peu de trades) → 30j (beaucoup de trades)
   - Transition graduelle entre 50 et 200 trades clotures
-- **Feedback loop Claude** (v3): `build_performance_summary()` injecte dans le prompt :
-  - Win rate global et par categorie de news
+- **Feedback loop Claude** (v3.4): `build_performance_summary()` injecte dans le prompt :
+  - Win rate global avec **benchmark baseline 50%** pour comparaison
+  - PnL moyen par categorie de news (avec benchmark)
   - Derniers 15 trades (ticker, direction, resultat, PnL)
   - Detection de biais transmission_delay (surestime/sous-estime)
-- **Score decomposition** (v3): chaque trade stocke `raw_claude_score` et `learning_multiplier`
+  - **Anti-double-counting** (v3.4): note explicite demandant a Claude de NE PAS ajuster ses scores en fonction de l'historique (le learning s'en charge automatiquement)
+- **Score decomposition** (v3/v3.4): chaque trade stocke `raw_claude_score` et `learning_multiplier`
   pour diagnostiquer si un echec vient de Claude ou du learning
+- **Decomposition par dimension** (v3.4): logs detaillent `ticker_mult`, `cat_mult`, `session_mult`, `newscat_mult`, `regime_mult` pour chaque trade (diagnostic)
+- **learning_helped tracking** (v3.4): chaque trade tracke si le learning a booste ou penalise la selection
+- **Cache learning** : invalide apres le journal 22h. Les trades ajoutes en journee ne sont PAS pris en compte avant le prochain journal (acceptable pour 4 scans/jour)
+- **Return format** (v3.4): `compute_learning_adjustments()` retourne un dict structure :
+  - `adjustments`: dict[ticker, multiplier] — base blend ticker*cat
+  - `session_adj`: dict[scan_type, multiplier] — applique par scan courant
+  - `newscat_adj`: dict[news_category, multiplier] — applique par news courante
+  - `regime_adj`: dict[regime, multiplier] — applique par VIX courant
+  - `decomposition`: dict[ticker, {ticker_mult, cat_mult}] — pour diagnostics
 - **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour acces concurrent sur aux fichiers JSON
 
-## Parametres cles (v3.3)
+## Parametres cles (v3.4)
 - Score minimum: 20/100 (abaisse de 25 — capte les signaux mid-range)
 - Edge factor floor: 0.05 (releve de 0.01)
 - Ratio risque/rendement minimum: 1.2 (abaisse de 1.3 — plus realiste en intraday)
@@ -345,8 +363,8 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Dedup Jaccard threshold: 0.65 (abaisse de 0.75 pour meilleure dedup)
 - Trigger cooldown: 300s (5 min entre deux triggers manuels)
 - Schema version: 3
-- Learning min trades: 5 (global), 4 (par ticker), 5 (par categorie/news_cat/session)
-- Learning significance: t-stat > 1.0 requis avant d'appliquer un ajustement
+- Learning min trades: 5 (global), **8** (par ticker, releve de 4), 5 (par categorie/news_cat/session/regime)
+- Learning significance: t-stat > **1.5** per-ticker (releve de 1.0), t-stat > 1.0 pour les autres dimensions
 
 ## Secrets (Replit)
 - **Requis** : `ANTHROPIC_API_KEY`
@@ -400,6 +418,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Lancer: `python -m pytest backend/tests/ -v` (depuis la racine du projet)
 - Couvre: config, models, news_scorer, trade_selector, journal, learning, economic_calendar, data_apis, event_scanner
 - v3 tests ajoutés : significance test, compute_adjustment, multiplicative blending, build_performance_summary
+- v3.4 tests ajoutés (10 tests) : structured return format, session_adj separate, regime_adj, per-ticker stricter significance, newscat_adj separate, decomposition, configurable t_threshold, PnL-signed adjustment, benchmark in summary, anti-double-counting
 - **test_workflow_e2e.py** (57 tests) : backtest complet du pipeline end-to-end
   - Phase 1 : scoring formula edge cases (weather vs earnings, stale vs fresh, etc.)
   - Phase 2 : trade selection (filtering, session, correlation, pre-move, R/R)
