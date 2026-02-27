@@ -590,8 +590,8 @@ def fetch_weather_alerts() -> list[NewsItem]:
 
 # Targeted queries aligned with our edge categories
 # Split by specificity: frost and drought are separate (different commodities)
-# 19 queries: 16 consolidated (was 20) + 3 new (cocoa, cotton, OJ)
-# 4 scans/day × 19 queries = 76 req/day, within 100/day free tier
+# 21 queries: 16 consolidated (was 20) + 3 soft commodities + 2 livestock
+# 4 scans/day × 21 queries = 84 req/day, within 100/day free tier
 GNEWS_QUERIES: list[dict[str, Any]] = [
     # ── Weather: consolidated frost + coffee frost into one ──
     {
@@ -670,7 +670,18 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     },
     {
         "q": "wheat rust crop disease blight avian flu outbreak",
-        "tickers": ["ZW=F", "ZC=F", "ZS=F"],
+        "tickers": ["ZW=F", "ZC=F", "ZS=F", "LE=F", "HE=F"],
+        "category": "commodity",
+    },
+    # ── Livestock — disease + supply crisis signals ──
+    {
+        "q": "cattle disease screwworm BSE foot-and-mouth herd liquidation",
+        "tickers": ["LE=F", "HE=F"],
+        "category": "commodity",
+    },
+    {
+        "q": "African swine fever pork hog disease ban export",
+        "tickers": ["HE=F", "LE=F", "ZC=F"],
         "category": "commodity",
     },
     # ── Cocoa, Cotton, Orange Juice — high-edge soft commodities ──
@@ -947,6 +958,8 @@ COT_CODES: dict[str, dict[str, str]] = {
     "073732": {"name": "Cocoa", "ticker": "CC=F"},
     "033661": {"name": "Cotton", "ticker": "CT=F"},
     "040701": {"name": "Orange Juice", "ticker": "OJ=F"},
+    "057642": {"name": "Live Cattle", "ticker": "LE=F"},
+    "054642": {"name": "Lean Hogs", "ticker": "HE=F"},
     "023651": {"name": "Natural Gas", "ticker": "NG=F"},
     "085692": {"name": "Copper", "ticker": "HG=F"},
 }
@@ -1430,7 +1443,7 @@ EONET_CATEGORY_MAP: dict[str, dict] = {
 # Events outside these regions are lower priority
 EONET_COMMODITY_REGIONS: list[dict[str, Any]] = [
     {"name": "US Midwest", "lat_range": (35, 50), "lon_range": (-100, -80), "tickers": ["ZC=F", "ZW=F", "ZS=F"]},
-    {"name": "US South/Texas", "lat_range": (25, 35), "lon_range": (-105, -90), "tickers": ["CT=F", "CL=F"]},
+    {"name": "US South/Texas", "lat_range": (25, 35), "lon_range": (-105, -90), "tickers": ["CT=F", "CL=F", "LE=F"]},
     {"name": "Florida", "lat_range": (24, 31), "lon_range": (-88, -79), "tickers": ["OJ=F"]},
     {"name": "Brazil", "lat_range": (-35, -5), "lon_range": (-60, -35), "tickers": ["KC=F", "SB=F", "ZS=F", "OJ=F", "CC=F"]},
     {"name": "Gulf of Mexico", "lat_range": (20, 32), "lon_range": (-100, -80), "tickers": ["CL=F", "NG=F"]},
@@ -1735,6 +1748,21 @@ def fetch_usda_wasde() -> list[NewsItem]:
             "unit_desc": "BU / ACRE",
             "tickers": ["ZS=F"],
             "label": "Soja (rendement)",
+        },
+        # Livestock — among most market-moving USDA reports
+        {
+            "commodity_desc": "CATTLE",
+            "statisticcat_desc": "INVENTORY",
+            "unit_desc": "HEAD",
+            "tickers": ["LE=F"],
+            "label": "Betail (inventaire)",
+        },
+        {
+            "commodity_desc": "HOGS",
+            "statisticcat_desc": "INVENTORY",
+            "unit_desc": "HEAD",
+            "tickers": ["HE=F"],
+            "label": "Porcins (inventaire)",
         },
     ]
 

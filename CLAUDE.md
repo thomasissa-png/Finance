@@ -59,10 +59,11 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
   - Queries saisonnieres : planting (Apr-Jun), condition (May-Sep), emergence (May-Jul), harvest (Sep-Dec)
   - Ble condition : toute l'annee (winter wheat)
   - Delta WoW : calcul automatique semaine vs semaine, flag [SWING MAJEUR] si >= 5pp
-- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 19 queries (was 20, consolide puis +3)
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 21 queries (was 20, consolide puis +5)
   - Consolide : frost+coffee frost en 1, drought+harvest en 1, palm oil+China import en 1, PT queries en 1
   - Ajoute : cocoa Ghana/Ivory Coast, cotton Texas/India, orange juice Florida/citrus greening
-  - 4 scans/jour x 19 queries = 76 req/jour, marge confortable vs 100/jour
+  - **Betail** : "cattle disease screwworm BSE", "African swine fever pork hog"
+  - 4 scans/jour x 21 queries = 84 req/jour, marge confortable vs 100/jour
   - Originales : "frost freeze crop damage", "oil sanctions embargo", "port congestion shipping"
   - "OPEC production cut", "wheat corn soybean USDA", "military strike missile", "copper mine strike"
   - "natural gas storage Europe TTF LNG", "palm oil export China import soybean"
@@ -247,7 +248,7 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 - **Execution**: 0 ou 1 trade par scan
 - **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
-- **Univers**: 52 actifs (15 actions Euronext Paris, 4 metaux, 9 forex, 12 commodities, 12 indices)
+- **Univers**: 54 actifs (15 actions Euronext Paris, 4 metaux, 9 forex, 14 commodities, 12 indices)
 - **Filtrage par session**: Europe = Euronext + indices EUR/GBP + metaux/forex/commodities. US = indices USD/JPY/HKD/AUD + metaux/forex/commodities.
 - **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
 - **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)

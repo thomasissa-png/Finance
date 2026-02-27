@@ -69,6 +69,7 @@ CORRELATION_GROUPS: dict[str, list[str]] = {
     "luxury": ["MC.PA", "RMS.PA", "OR.PA"],
     "agri": ["ZC=F", "ZW=F", "ZS=F"],
     "tropical_soft": ["KC=F", "SB=F", "CC=F", "OJ=F"],  # Same tropical zones (Brazil, West Africa)
+    "livestock": ["LE=F", "HE=F"],  # Same disease/feed cost drivers
 }
 
 # ── Chain reactions: effets de second ordre ─────────────────────
@@ -115,6 +116,15 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
     ],
     "CT=F":  [
         {"ticker": "ZC=F", "direction": "same", "reason": "Coton et mais — competition terres US South"},
+    ],
+    # Betail — feed demand + disease contagion
+    "LE=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Betail = demande de mais (feed) — hausse betail tire le mais"},
+        {"ticker": "HE=F", "direction": "same", "reason": "Meme filiere elevage, memes risques sanitaires"},
+    ],
+    "HE=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Porc = demande de mais/soja (feed)"},
+        {"ticker": "LE=F", "direction": "same", "reason": "Meme filiere elevage, risques sanitaires communs"},
     ],
     # Geopolitique Moyen-Orient
     "USDJPY=X": [
@@ -179,7 +189,7 @@ ASSETS: list[Asset] = [
     Asset("NZDUSD=X", "NZD/USD", "forex", "USD"),
     Asset("EURGBP=X", "EUR/GBP", "forex", "GBP"),
     Asset("EURJPY=X", "EUR/JPY", "forex", "JPY"),
-    # ── COMMODITIES (12) ──────────────────────────────────────────
+    # ── COMMODITIES (14) ──────────────────────────────────────────
     Asset("CL=F", "Pétrole WTI", "commodities", "USD"),
     Asset("BZ=F", "Pétrole Brent", "commodities", "USD"),
     Asset("NG=F", "Gaz Naturel", "commodities", "USD"),
@@ -192,6 +202,8 @@ ASSETS: list[Asset] = [
     Asset("CT=F", "Coton", "commodities", "USD"),
     Asset("OJ=F", "Jus d'Orange", "commodities", "USD"),
     Asset("HG=F", "Cuivre", "commodities", "USD"),
+    Asset("LE=F", "Bétail Vivant", "commodities", "USD"),
+    Asset("HE=F", "Porc Maigre", "commodities", "USD"),
     # ── INDICES (12) ─────────────────────────────────────────────
     Asset("^FCHI", "CAC 40", "indices", "EUR"),
     Asset("^GSPC", "S&P 500", "indices", "USD"),
