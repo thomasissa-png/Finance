@@ -227,7 +227,7 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
         return False, []
 
     # Only trigger during trading hours (07:00-19:30 CET)
-    if now.hour < 7 or (now.hour >= 19 and now.minute >= 30):
+    if now.hour < 7 or now.hour > 19 or (now.hour == 19 and now.minute >= 30):
         return False, []
 
     # Hard minimum cooldown: 30s between any triggers (prevent spam)

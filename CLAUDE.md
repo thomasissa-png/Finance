@@ -104,21 +104,22 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
 - **CME FedWatch** (GRATUIT via yfinance ZQ=F) : taux implicites Fed Funds futures
   - Taux implicite = 100 - prix du future, variation 5j en bps
   - Seuil alerte : |shift| >= 5bps (repricing significatif)
-  - Forward guidance : spread M+1/M+2/M+3 vs spot (>15bps = anticipation forte)
+  - Forward guidance : spread M+1/M+2/M+3 vs spot (>15bps = anticipation forte) — tickers dynamiques (calcules a partir de la date courante)
   - Impact : GC=F (inverse), EURUSD=X, ^GSPC, USDJPY=X
 - **SHFE/LME Inventaires** (GRATUIT via yfinance) : proxy inventaires metaux via volume/prix
   - Volume anormal (>2x moy 20j) = mouvement inventaires physiques
   - Mouvement mensuel >5% = tightness ou surplus
   - Impact : HG=F (cuivre)
 
-Poids premium (v3.2) : Open-Meteo=1.15/1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.15, CFTC=1.1, Options=1.0, FedWatch=1.0, SHFE=1.1, OilPrice=0.9
+Poids premium (v3.3) : Open-Meteo=1.2 (via SOURCE_WEIGHTS), EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.15, CFTC=1.1, Options=1.0 (via SOURCE_WEIGHTS), FedWatch=1.0, SHFE=1.1, OilPrice=0.9
+- Tous les poids lus via `SOURCE_WEIGHTS.get()` — plus de hardcodes dans data_apis.py
 - GNews: poids variable par categorie query (weather=1.0, commodity/supply_chain=0.95, geopolitical=0.85)
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
-Sources configurees dans `EARLY_SIGNAL_FEEDS` (21 feeds — v3.2 nettoye) :
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (20 feeds — v3.3 nettoye) :
 - **Meteo/Agri** : Drought.gov (US drought monitor), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique), Climate.gov (ENSO/outlooks)
 - **USDA/FAO** : NASS reports (recoltes, stocks), FAO newsroom
-- **Geopolitique/Defense** : war.gov + defense.gov fallback (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
+- **Geopolitique/Defense** : war.gov (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
 - **Energie** : EIA Today in Energy, OilPrice
 - **Maritime/Shipping** : gCaptain, MarineLink, Maritime Executive, Splash247 (ports, containers, BDI)
 - **Canal chokepoints** : Panama Canal Authority (ACP) — transit disruptions
@@ -152,9 +153,10 @@ Module `economic_calendar.py` — bloque les trades avant les evenements macro m
 - **Action** : si evenement dans la fenetre, le trade est BLOQUE (zero edge sur macro)
 - **Contexte Claude** : les evenements a venir sont injectes dans le prompt
 
-## Scans Evenementiels (reactifs)
-Module `event_scanner.py` — surveillance continue des feeds early-signal :
-- **Cron** : toutes les 30 minutes pendant les heures de trading (07:00-19:30 CET), lundi-vendredi
+## Scans Evenementiels (reactifs) — NON ACTIFS
+Module `event_scanner.py` — code implemente mais **non wire dans le scheduler** (`run_event_check()` n'est jamais schedule dans `main.py`).
+Fonctionnalite disponible pour activation future :
+- **Cron prevu** : toutes les 30 minutes pendant les heures de trading (07:00-19:30 CET), lundi-vendredi
 - **Weekend** : desactive (weekday check dans `should_trigger_scan()` + `day_of_week` dans CronTrigger)
 - **Detection** : mots-cles a fort potentiel dans les titres RSS (v3.1 — elargi)
   - weather : drought, frost, hurricane, typhoon, tropical storm, el nino, la nina, wildfire, volcanic eruption, earthquake, monsoon failure, record heat/cold...
@@ -241,10 +243,10 @@ Detection automatique des effets de second ordre. Le marche est LENT a connecter
 
 ### Liens configures (`CHAIN_REACTIONS`)
 - **Energie** : CL=F (WTI) → TTE.PA, BZ=F, NG=F | BZ=F → CL=F
-- **Metaux/safe haven** : GC=F (Or) → SI=F (argent, same), USDCHF=X (CHF, inverse)
-- **Agriculture** : ZC=F (Mais) → ZS=F (soja), ZW=F (ble) | KC=F (Cafe) → SB=F (sucre)
+- **Metaux/safe haven** : GC=F (Or) → SI=F (same), USDCHF=X (inverse), EURUSD=X (same), USDJPY=X (inverse, risk-off)
+- **Agriculture** : ZC=F (Mais) → ZS=F, ZW=F (same), LE=F, HE=F (inverse — feed cost) | KC=F (Cafe) → SB=F (sucre)
 - **Luxe/Chine** : MC.PA → RMS.PA, OR.PA (meme exposition consommateur chinois)
-- **Cuivre** : HG=F → ^GSPC, ^FCHI (proxy activite industrielle)
+- **Cuivre** : HG=F → ^GSPC, ^FCHI (proxy industriel), AUDUSD=X (same — Australie producteur)
 - **PGM** : PL=F ↔ PA=F (memes mines sud-africaines — disruption impacte les deux)
 - **Yen carry** : USDJPY=X → GC=F (risk-off inverse)
 
@@ -264,15 +266,19 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 - **Execution**: 0 ou 1 trade par scan
 - **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
-- **Univers**: 42 actifs (10 actions Euronext Paris, 4 metaux, 6 forex, 14 commodities, 8 indices)
-  - v3.2: elagage de 12 actifs sans source dediee (5 actions, 3 forex, 4 indices)
+- **Univers**: 39 actifs (7 actions Euronext Paris, 4 metaux, 6 forex, 14 commodities, 8 indices)
+  - v3.3: elagage de 15 actifs sans source dediee (8 actions, 3 forex, 4 indices)
 - **Filtrage par session**: Europe = Euronext + indices EUR/GBP + metaux/forex/commodities. US = indices USD/JPY/HKD/AUD + metaux/forex/commodities.
 - **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
 - **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)
 
 ## Calibration R/R (decorrellee)
-- **Target**: ATR x (0.25 + score/100 x 0.45) x news_category_target_mult — pondere par le score de confiance
-- **Stop**: ATR x 0.4 x news_category_stop_mult — fixe, independant du target
+3 tiers de volatilite :
+- **Low-vol** (ATR < 1%, forex/large indices) : factor=0.35+score/100*0.55, stop=0.5 (plus large pour absorber le bruit)
+- **Normal** (ATR 1-5%) : factor=0.25+score/100*0.45, stop=0.4
+- **High-vol** (ATR > 5%, NG, small-cap) : factor=0.15+score/100*0.30, stop=0.3 (plus serre, target realiste)
+- **Target**: ATR x score_factor x news_category_target_mult — pondere par le score de confiance
+- **Stop**: ATR x stop_fraction x news_category_stop_mult — fixe, independant du target
 - **R/R variable**: le ratio varie selon le score (plus le score est eleve, plus le target est ambitieux)
 - **Planchers**: target min = TARGET_PERCENT, stop min = TARGET_PERCENT x 0.7
 
@@ -285,6 +291,8 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - jpy_carry: USDJPY=X, EURJPY=X, ^N225
 - luxury: MC.PA, RMS.PA, OR.PA
 - agri: ZC=F, ZW=F, ZS=F
+- tropical_soft: KC=F, SB=F, CC=F, OJ=F
+- livestock: LE=F, HE=F
 - pgm: PL=F, PA=F
 
 ## Journal quotidien (22h CET)
@@ -328,10 +336,10 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   pour diagnostiquer si un echec vient de Claude ou du learning
 - **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour acces concurrent sur aux fichiers JSON
 
-## Parametres cles (v3.1)
-- Score minimum: 25/100 (abaisse de 55 — formule multiplicative trop punitive a 55)
+## Parametres cles (v3.3)
+- Score minimum: 20/100 (abaisse de 25 — capte les signaux mid-range)
 - Edge factor floor: 0.05 (releve de 0.01)
-- Ratio risque/rendement minimum: 1.3 (releve de 1.0)
+- Ratio risque/rendement minimum: 1.2 (abaisse de 1.3 — plus realiste en intraday)
 - Freshness peak: < 2h (stocke, non inclus dans la formule)
 - News max age: 8h (elargi de 6h pour capter overnight US au scan Europe 07:50)
 - Dedup Jaccard threshold: 0.65 (abaisse de 0.75 pour meilleure dedup)
@@ -344,7 +352,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **Requis** : `ANTHROPIC_API_KEY`
 - **Optionnels** (gratuits, ameliorent la couverture) :
   - `EIA_API_KEY` : donnees energie EIA (https://www.eia.gov/opendata/register.php)
-  - `GNEWS_API_KEY` : recherche news ciblee — 15 queries (https://gnews.io/)
+  - `GNEWS_API_KEY` : recherche news ciblee — 25 queries (https://gnews.io/)
   - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
   - `GIE_AGSI_API_KEY` : stockage gaz europeen (https://agsi.gie.eu/ — inscription gratuite)
 - yfinance, Open-Meteo, CFTC COT, NASA EONET et RSS ne necessitent aucune cle

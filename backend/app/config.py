@@ -1,4 +1,4 @@
-"""Configuration: 42 assets and application settings."""
+"""Configuration: 39 assets and application settings."""
 
 from dataclasses import dataclass
 
@@ -92,11 +92,14 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
         {"ticker": "SI=F", "direction": "same", "reason": "Argent suit l'or"},
         {"ticker": "USDCHF=X", "direction": "inverse", "reason": "CHF safe haven correle a l'or"},
         {"ticker": "EURUSD=X", "direction": "same", "reason": "Or monte = dollar faiblit = EUR/USD monte"},
+        {"ticker": "USDJPY=X", "direction": "inverse", "reason": "Or monte = risk-off = yen se renforce"},
     ],
     # Agriculture — memes zones de production
     "ZC=F":  [
         {"ticker": "ZS=F", "direction": "same", "reason": "Soja meme zone de production (Midwest)"},
         {"ticker": "ZW=F", "direction": "same", "reason": "Rotation des cultures — memes terres"},
+        {"ticker": "LE=F", "direction": "inverse", "reason": "Mais monte = feed cost hausse = pression sur betail"},
+        {"ticker": "HE=F", "direction": "inverse", "reason": "Mais monte = feed cost hausse = pression sur porc"},
     ],
     "ZW=F":  [
         {"ticker": "ZC=F", "direction": "same", "reason": "Rotation cultures — prix ble tire mais"},
@@ -147,6 +150,7 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
     "HG=F":  [
         {"ticker": "^GSPC", "direction": "same", "reason": "Cuivre = proxy activite industrielle"},
         {"ticker": "^FCHI", "direction": "same", "reason": "Cuivre = proxy activite industrielle EU"},
+        {"ticker": "AUDUSD=X", "direction": "same", "reason": "Australie 4e producteur cuivre — AUD correle"},
     ],
 }
 
@@ -166,26 +170,24 @@ class Asset:
 
 
 ASSETS: list[Asset] = [
-    # ── ACTIONS EURONEXT PARIS (15) ──────────────────────────────
+    # ── ACTIONS EURONEXT PARIS (7) ───────────────────────────────
     Asset("MC.PA", "LVMH", "actions_europe", "EUR"),
     Asset("OR.PA", "L'Oréal", "actions_europe", "EUR"),
     Asset("AI.PA", "Air Liquide", "actions_europe", "EUR"),
     Asset("SAN.PA", "Sanofi", "actions_europe", "EUR"),
     Asset("TTE.PA", "TotalEnergies", "actions_europe", "EUR"),
     Asset("BNP.PA", "BNP Paribas", "actions_europe", "EUR"),
-    Asset("SU.PA", "Schneider Electric", "actions_europe", "EUR"),
-    Asset("SAF.PA", "Safran", "actions_europe", "EUR"),
     Asset("RMS.PA", "Hermès", "actions_europe", "EUR"),
     # Removed: CS.PA (AXA), CAP.PA (Capgemini), VIE.PA (Veolia), DG.PA (Vinci),
-    # EN.PA (Bouygues) — zero edge: no dedicated source, no chain reaction,
+    # EN.PA (Bouygues), SU.PA (Schneider), SAF.PA (Safran), RI.PA (Pernod)
+    # — zero edge: no dedicated source, no chain reaction,
     # no commodity/weather link. Only reachable via generic RSS/yfinance.
-    Asset("RI.PA", "Pernod Ricard", "actions_europe", "EUR"),
     # ── MÉTAUX PRÉCIEUX (4) ──────────────────────────────────────
     Asset("GC=F", "Or", "metaux", "USD"),
     Asset("SI=F", "Argent", "metaux", "USD"),
     Asset("PL=F", "Platine", "metaux", "USD"),   # Covered by GNews "mine strike South Africa" query
     Asset("PA=F", "Palladium", "metaux", "USD"),  # Covered by GNews "mine strike South Africa" + Russia sanctions
-    # ── FOREX (9) ────────────────────────────────────────────────
+    # ── FOREX (6) ────────────────────────────────────────────────
     Asset("EURUSD=X", "EUR/USD", "forex", "USD"),
     Asset("GBPUSD=X", "GBP/USD", "forex", "USD"),
     Asset("USDJPY=X", "USD/JPY", "forex", "JPY"),
@@ -208,7 +210,7 @@ ASSETS: list[Asset] = [
     Asset("HG=F", "Cuivre", "commodities", "USD"),
     Asset("LE=F", "Bétail Vivant", "commodities", "USD"),
     Asset("HE=F", "Porc Maigre", "commodities", "USD"),
-    # ── INDICES (12) ─────────────────────────────────────────────
+    # ── INDICES (8) ──────────────────────────────────────────────
     Asset("^FCHI", "CAC 40", "indices", "EUR"),
     Asset("^GSPC", "S&P 500", "indices", "USD"),
     Asset("^DJI", "Dow Jones", "indices", "USD"),
@@ -275,7 +277,7 @@ RSS_FEEDS = [
 ]
 
 # ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
-# Verified 2026-02-27 — 23 feeds (was 18, added drought.gov, climate.gov, war.gov, Suez/Panama canals; fixed ECB .html→.xml)
+# Verified 2026-02-27 — 20 feeds (was 23, removed Suez Canal HTML + defense.gov fallback + dead NCEI)
 EARLY_SIGNAL_FEEDS = [
     # Meteo / Agri — signaux physiques pour commodities
     "https://www.drought.gov/rss/rss.xml",                          # Drought.gov: US drought monitor + outlooks (replaces dead NCEI news.xml)

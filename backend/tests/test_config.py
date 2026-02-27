@@ -18,9 +18,9 @@ from backend.app.config import (
 )
 
 
-def test_42_assets():
-    """42 assets after pruning zero-edge assets without dedicated sources."""
-    assert len(ASSETS) == 42
+def test_39_assets():
+    """39 assets after pruning zero-edge assets without dedicated sources."""
+    assert len(ASSETS) == 39
 
 
 def test_categories_coverage():
@@ -32,7 +32,7 @@ def test_category_counts():
     counts = {}
     for a in ASSETS:
         counts[a.category] = counts.get(a.category, 0) + 1
-    assert counts["actions_europe"] == 10  # Was 15, removed 5 without dedicated sources
+    assert counts["actions_europe"] == 7  # Was 10, removed SU.PA, SAF.PA, RI.PA (no source, no chain)
     assert counts["metaux"] == 4  # PL=F and PA=F kept (now covered by GNews mine strike query)
     assert counts["forex"] == 6  # Was 9, removed USDCAD, NZDUSD, EURGBP
     assert counts["commodities"] == 14
@@ -177,6 +177,14 @@ def test_chain_reactions_defined():
     # Oil should trigger TTE.PA
     oil_chains = [c["ticker"] for c in CHAIN_REACTIONS["CL=F"]]
     assert "TTE.PA" in oil_chains
-    # Gold should trigger silver
+    # Gold should trigger silver and USDJPY (inverse)
     gold_chains = [c["ticker"] for c in CHAIN_REACTIONS["GC=F"]]
     assert "SI=F" in gold_chains
+    assert "USDJPY=X" in gold_chains
+    # Copper should trigger AUDUSD
+    copper_chains = [c["ticker"] for c in CHAIN_REACTIONS["HG=F"]]
+    assert "AUDUSD=X" in copper_chains
+    # Corn should trigger livestock (inverse — feed cost)
+    corn_chains = CHAIN_REACTIONS["ZC=F"]
+    le_entry = next(c for c in corn_chains if c["ticker"] == "LE=F")
+    assert le_entry["direction"] == "inverse"

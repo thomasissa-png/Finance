@@ -466,7 +466,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         url="https://open-meteo.com",
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
-                        source_weight=1.15,
+                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
                     ))
 
             # ── Check 2: Heat stress alert (only during growing season) ──
@@ -505,7 +505,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         url="https://open-meteo.com",
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
-                        source_weight=1.15,
+                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
                     ))
 
                 # Alert 2b: Cumulative heat stress (3+ days above stress threshold during critical period)
@@ -525,7 +525,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         url="https://open-meteo.com",
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
-                        source_weight=1.2,  # Higher weight for cumulative stress during critical period
+                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),  # Cumulative stress during critical period
                     ))
 
             # ── Check 3: Drought alert (zone-specific, critical-period-aware) ──
@@ -552,7 +552,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                             url="https://open-meteo.com",
                             published=datetime.now(timezone.utc),
                             related_tickers=zone["tickers"],
-                            source_weight=1.2 if is_critical else 1.15,
+                            source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
                         ))
 
             # ── Check 4: Hurricane-force winds (always active for relevant zones) ──
@@ -570,7 +570,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         url="https://open-meteo.com",
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
-                        source_weight=1.15,
+                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
                     ))
 
         except Exception as exc:
@@ -666,7 +666,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     },
     {
         "q": "palm oil export Indonesia Malaysia China import soybean",
-        "tickers": ["ZS=F", "HG=F"],
+        "tickers": ["ZS=F"],
         "category": "commodity",
     },
     {
@@ -1363,7 +1363,7 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     url="",
                     published=datetime.now(timezone.utc),
                     related_tickers=related,
-                    source_weight=0.95,
+                    source_weight=SOURCE_WEIGHTS.get("Options Flow", 1.0),
                 ))
             elif pc_ratio < 0.25 and total_call_vol > (50000 if is_us_etf else 2000):
                 title = (
@@ -1377,7 +1377,7 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     url="",
                     published=datetime.now(timezone.utc),
                     related_tickers=related,
-                    source_weight=0.95,
+                    source_weight=SOURCE_WEIGHTS.get("Options Flow", 1.0),
                 ))
 
             # Alert on IV skew: put IV significantly higher than call IV = smart money hedging
@@ -1431,7 +1431,7 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     url="",
                     published=datetime.now(timezone.utc),
                     related_tickers=related,
-                    source_weight=0.95,
+                    source_weight=SOURCE_WEIGHTS.get("Options Flow", 1.0),
                 ))
 
         except Exception as exc:
@@ -1716,7 +1716,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                     url="https://agsi.gie.eu/",
                     published=datetime.now(timezone.utc),
                     related_tickers=["NG=F"],
-                    source_weight=1.15,  # Higher weight for country-level stress
+                    source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),  # Country-level stress
                 ))
         except Exception as exc:
             logger.debug("GIE AGSI %s fetch error: %s", country_code, exc)
@@ -1941,7 +1941,15 @@ def fetch_fedwatch_implied() -> list[NewsItem]:
                 ))
 
         # Also check 2nd/3rd month futures for forward guidance signal
-        for i, suffix in enumerate(["ZQH26.CBT", "ZQJ26.CBT", "ZQK26.CBT"], start=1):
+        # Dynamically compute next 3 contract months from current date
+        _cme_month_codes = {1:"F",2:"G",3:"H",4:"J",5:"K",6:"M",7:"N",8:"Q",9:"U",10:"V",11:"X",12:"Z"}
+        _now = datetime.now(timezone.utc)
+        _fwd_tickers = []
+        for offset in range(1, 4):
+            _m = ((_now.month - 1 + offset) % 12) + 1
+            _y = _now.year + ((_now.month - 1 + offset) // 12)
+            _fwd_tickers.append(f"ZQ{_cme_month_codes[_m]}{str(_y)[-2:]}.CBT")
+        for i, suffix in enumerate(_fwd_tickers, start=1):
             try:
                 fwd = yf.Ticker(suffix)
                 fwd_hist = fwd.history(period="2d")

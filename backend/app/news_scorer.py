@@ -30,7 +30,7 @@ SYSTEM_PROMPT = f"""Tu es un speculateur expert en news trading depuis 20 ans, s
 de DISLOCATIONS NON ENCORE PRICEES par le marche. Ton edge, c'est d'identifier les news qui ne sont
 PAS ENCORE integrees dans les cours — les signaux en avance de phase.
 
-Univers de 42 actifs surveilles :
+Univers de 39 actifs surveilles :
 {TICKER_LIST}
 
 Pour chaque news, tu dois evaluer :
