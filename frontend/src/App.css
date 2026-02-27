@@ -507,6 +507,34 @@ a:focus:not(:focus-visible) {
   border: 1px solid var(--border);
 }
 
+/* ── API error alert banner ───────────────────────────────── */
+
+.api-error-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+.api-error-banner strong {
+  color: var(--red);
+  font-size: 14px;
+  letter-spacing: 0.5px;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--red); }
+  50% { border-color: rgba(239, 68, 68, 0.4); }
+}
+
 /* ── (D3) Next scan status bar ─────────────────────────────── */
 
 .scan-status-bar {

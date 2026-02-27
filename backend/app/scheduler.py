@@ -4,6 +4,8 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import anthropic
+
 from .event_scanner import determine_scan_type, should_trigger_scan
 from .learning import compute_learning_adjustments, load_trades, save_trade
 from .models import ScanType, TradeResult
@@ -197,6 +199,22 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
             append_scan_result(result_dict)
 
             return result_dict
+
+        except anthropic.APIError as exc:
+            # Surface API errors (credit exhaustion, auth, rate limit) distinctly
+            logger.error("Claude API error during %s scan (attempt %d/%d): %s",
+                         scan_type.value, attempt + 1, max_retries + 1, exc)
+            if attempt < max_retries:
+                logger.info("Retrying immediately (attempt %d)...", attempt + 2)
+            else:
+                error_type = type(exc).__name__
+                return {
+                    "scan_type": scan_type.value,
+                    "has_trade": False,
+                    "reason_no_trade": f"Erreur API Claude ({error_type}): {exc}",
+                    "news_analyzed": 0,
+                    "api_error": error_type,
+                }
 
         except Exception as exc:
             logger.error("Scan %s failed (attempt %d/%d): %s",

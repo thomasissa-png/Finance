@@ -318,7 +318,8 @@ Headlines :
             if attempt < max_retries:
                 time.sleep(2 ** attempt)
                 continue
-            return []
+            # Re-raise after all retries so callers can surface the error
+            raise
 
     return []
 

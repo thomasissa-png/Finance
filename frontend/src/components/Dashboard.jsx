@@ -53,11 +53,29 @@ const SCAN_DEFS = [
   { key: "us_session", label: "SCAN US SESSION — 17:00 CET", btn: "US Session (17:00)", cls: "us" },
 ];
 
+// Detect API errors from any scan result
+function getApiError(scans) {
+  for (const key of Object.keys(scans)) {
+    const scan = scans[key];
+    if (scan?.api_error) {
+      return scan;
+    }
+    // Also detect credit issues from reason_no_trade text
+    const reason = scan?.reason_no_trade || "";
+    if (reason.includes("API Claude") || reason.includes("AuthenticationError") || reason.includes("RateLimitError")) {
+      return scan;
+    }
+  }
+  return null;
+}
+
 export default function Dashboard() {
   const [scans, setScans] = useState({});
   const [loading, setLoading] = useState({});
   const [scanInfo, setScanInfo] = useState(getNextScanInfo);
   const { toasts, addToast } = useToasts();
+
+  const apiErrorScan = getApiError(scans);
 
   const fetchScans = useCallback(async () => {
     // (F2) Skip polling when tab is not visible
@@ -112,6 +130,20 @@ export default function Dashboard() {
 
   return (
     <div>
+      {/* API error alert banner */}
+      {apiErrorScan && (
+        <div className="api-error-banner">
+          <strong>API Claude hors service</strong>
+          <span>{apiErrorScan.api_error === "AuthenticationError"
+            ? "Cle API invalide ou credits epuises. Verifiez ANTHROPIC_API_KEY."
+            : apiErrorScan.api_error === "RateLimitError"
+            ? "Limite de requetes atteinte. Verifiez vos credits Anthropic."
+            : `Erreur API : ${apiErrorScan.reason_no_trade || apiErrorScan.api_error}`
+          }</span>
+          <span>Les scans ne peuvent pas scorer les news tant que l'API est indisponible.</span>
+        </div>
+      )}
+
       {/* (D3) Scan status bar */}
       <div className="scan-status-bar">
         <span className={`status-dot ${scanInfo.cls}`} />
