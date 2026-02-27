@@ -18,8 +18,9 @@ from backend.app.config import (
 )
 
 
-def test_49_assets():
-    assert len(ASSETS) == 54
+def test_42_assets():
+    """42 assets after pruning zero-edge assets without dedicated sources."""
+    assert len(ASSETS) == 42
 
 
 def test_categories_coverage():
@@ -31,11 +32,11 @@ def test_category_counts():
     counts = {}
     for a in ASSETS:
         counts[a.category] = counts.get(a.category, 0) + 1
-    assert counts["actions_europe"] == 15
-    assert counts["metaux"] == 4
-    assert counts["forex"] == 9
+    assert counts["actions_europe"] == 10  # Was 15, removed 5 without dedicated sources
+    assert counts["metaux"] == 4  # PL=F and PA=F kept (now covered by GNews mine strike query)
+    assert counts["forex"] == 6  # Was 9, removed USDCAD, NZDUSD, EURGBP
     assert counts["commodities"] == 14
-    assert counts["indices"] == 12
+    assert counts["indices"] == 8  # Was 12, removed IBEX, FTSEMIB, HSI, AXJO
 
 
 def test_asset_by_ticker_lookup():

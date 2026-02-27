@@ -1,4 +1,4 @@
-# OneShot News Trading System — v3.0 Full Intelligence Pipeline
+# OneShot News Trading System — v3.2 Full Intelligence Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -63,7 +63,8 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
   - Consolide : frost+coffee frost en 1, drought+harvest en 1, palm oil+China import en 1, PT queries en 1
   - Ajoute : cocoa Ghana/Ivory Coast, cotton Texas/India, orange juice Florida/citrus greening
   - **Betail** : "cattle disease screwworm BSE", "African swine fever pork hog"
-  - 4 scans/jour x 21 queries = 84 req/jour, marge confortable vs 100/jour
+  - 4 scans/jour x 25 queries = 100 req/jour, exactement au plafond free tier
+  - v3.2: +4 queries (Suez Canal, China demand, EU energy crisis, Middle East tensions)
   - Originales : "frost freeze crop damage", "oil sanctions embargo", "port congestion shipping"
   - "OPEC production cut", "wheat corn soybean USDA", "military strike missile", "copper mine strike"
   - "natural gas storage Europe TTF LNG", "palm oil export China import soybean"
@@ -108,19 +109,23 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
   - Mouvement mensuel >5% = tightness ou surplus
   - Impact : HG=F (cuivre)
 
-Poids premium : Open-Meteo=1.15/1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.1/1.15, CFTC=1.05/1.1, Options=0.95/1.0, FedWatch=1.0, SHFE=1.1
+Poids premium (v3.2) : Open-Meteo=1.15/1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.15, CFTC=1.1, Options=1.0, FedWatch=1.0, SHFE=1.1, OilPrice=0.9
+- GNews: poids variable par categorie query (weather=1.0, commodity/supply_chain=0.95, geopolitical=0.85)
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
-Sources configurees dans `EARLY_SIGNAL_FEEDS` (23 feeds — verifie 2026-02-27) :
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (21 feeds — v3.2 nettoye) :
 - **Meteo/Agri** : Drought.gov (US drought monitor), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique), Climate.gov (ENSO/outlooks)
 - **USDA/FAO** : NASS reports (recoltes, stocks), FAO newsroom
 - **Geopolitique/Defense** : war.gov + defense.gov fallback (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
 - **Energie** : EIA Today in Energy, OilPrice
 - **Maritime/Shipping** : gCaptain, MarineLink, Maritime Executive, Splash247 (ports, containers, BDI)
-- **Canal chokepoints** : Suez Canal Authority (SCA), Panama Canal Authority (ACP) — transit disruptions
+- **Canal chokepoints** : Panama Canal Authority (ACP) — transit disruptions
+  - v3.2: Suez Canal Authority retire (page HTML, pas RSS — jamais parsee correctement)
+  - Couvert par GNews query "Suez Canal disruption" a la place
 - **Banques centrales** : ECB (corrige .html→.xml), Federal Reserve, Bank of England (speeches)
 
 **Feeds remplaces** : NCEI news.xml (mort)→Drought.gov+Climate.gov, Defense.gov→war.gov, ECB .html→.xml
+**v3.2** : Defense.gov fallback retire (redondant avec war.gov), Suez Canal retire (HTML pas RSS)→GNews query
 
 ### Phase 2 : Yahoo Finance (yfinance)
 Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API.
@@ -154,6 +159,7 @@ Module `event_scanner.py` — surveillance continue des feeds early-signal :
   - supply_chain : pipeline explosion, port closed, canal blocked, embargo, container shortage, baltic dry, freight rate surge, vessel grounding, lng terminal, strategic reserve...
   - geopolitical : military strike, sanctions, nuclear, invasion, carrier strike group, no-fly zone, military buildup, arms deal...
   - commodity : opec cut, crop failure, stockpile draw, shortage, gas storage, ttf price, palm oil export, coffee frost, china import, wheat export ban...
+  - **v3.2 livestock** : african swine fever, avian flu, bird flu, foot-and-mouth, bse, mad cow, screwworm, herd liquidation, cattle disease, swine fever...
 - **Keywords prioritaires** : hurricane warning, pipeline explosion, military strike, export ban... → bypass cooldown categorie
 - **Cooldowns par categorie** : geopolitique=60s, supply_chain=120s, commodity/weather=300s (minimum global 30s)
 - **Trigger** : si signal detecte → scan complet immediat (respecte cooldown par categorie)
@@ -195,9 +201,16 @@ score = surprise * (clarity/100) * edge_factor * source_weight * category_score_
 - Rapport NOAA secheresse (delay=80, awareness=10) → edge_factor = 0.8*0.9 = 0.72 → score booste
 - Gel Bresil cafe (delay=90, awareness=5) → edge_factor = 0.9*0.95 = 0.855 → score maximal
 
-### Hard-caps sur categories zero-edge
+### Hard-caps sur categories zero-edge (v3.2 — stratifie)
 - **earnings** : transmission_delay force a 5 si > 15, market_awareness force a >= 90
 - **macro** : transmission_delay force a 10 si > 20, market_awareness force a >= 85
+- **m_a** (v3.2) : 2 niveaux :
+  - **M&A confirme** ("confirms", "agrees to buy") → delay=5, awareness>=90 (comme earnings)
+  - **M&A rumeur** ("talks", "in discussions") → delay cap a 40, awareness>=50 (edge reel)
+- **central_bank_subtle** (v3.2) : 3 niveaux :
+  - **Decision de taux** ("rate decision", "holds rates") → delay=5, awareness>=95 (HFT domine)
+  - **Discours president** ("Powell", "Lagarde") → delay cap a 25, awareness>=70
+  - **Discours secondaire** (regional Fed, membre ECB) → delay cap a 45, awareness>=50 (edge max)
 
 ### Category Score Multipliers (edge-priority)
 ```
@@ -248,7 +261,8 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 - **Execution**: 0 ou 1 trade par scan
 - **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
-- **Univers**: 54 actifs (15 actions Euronext Paris, 4 metaux, 9 forex, 14 commodities, 12 indices)
+- **Univers**: 42 actifs (10 actions Euronext Paris, 4 metaux, 6 forex, 14 commodities, 8 indices)
+  - v3.2: elagage de 12 actifs sans source dediee (5 actions, 3 forex, 4 indices)
 - **Filtrage par session**: Europe = Euronext + indices EUR/GBP + metaux/forex/commodities. US = indices USD/JPY/HKD/AUD + metaux/forex/commodities.
 - **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
 - **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)

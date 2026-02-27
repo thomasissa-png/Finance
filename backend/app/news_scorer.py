@@ -30,7 +30,7 @@ SYSTEM_PROMPT = f"""Tu es un speculateur expert en news trading depuis 20 ans, s
 de DISLOCATIONS NON ENCORE PRICEES par le marche. Ton edge, c'est d'identifier les news qui ne sont
 PAS ENCORE integrees dans les cours — les signaux en avance de phase.
 
-Univers de 49 actifs surveilles :
+Univers de 42 actifs surveilles :
 {TICKER_LIST}
 
 Pour chaque news, tu dois evaluer :
@@ -87,6 +87,17 @@ REGLES CRUCIALES — PHILOSOPHIE DU SYSTEME :
 
 - GEOPOLITIQUE : Evaluer honnêtement — une declaration officielle = deja vue.
   Un mouvement militaire capte par OSINT = potentiellement en avance de phase.
+
+- M&A (FUSIONS/ACQUISITIONS) : DISTINGUER RUMEUR vs CONFIRMATION.
+  - Rumeur non confirmee / "talks" / "in discussions" → transmission_delay 40-60
+    (le marche n'a pas encore price car incertain)
+  - Deal confirme / "announces acquisition" / "agrees to buy" → transmission_delay ≤ 10,
+    market_awareness ≥ 85 (deja price en pre-market par les algos)
+
+- CENTRAL BANK : DISTINGUER DECISION vs DISCOURS.
+  - Decision de taux (rate decision) = deja price par algos HFT → transmission_delay ≤ 5
+  - Discours president (Fed Chair, ECB President) = signal fort → transmission_delay 20-40
+  - Discours secondaire (regional Fed, membre ECB non-president) → transmission_delay 40-60
 
 - EFFETS DE SECOND ORDRE : Si une news impacte un actif A, pense aux impacts
   indirects sur B et C (ex: gel bresilien → cafe + sucre car memes planteurs).
@@ -443,16 +454,62 @@ def _score_batch(
                         transmission_delay, item.title[:60])
             transmission_delay = 10
             market_awareness = max(market_awareness, 85)
-        elif news_cat == "central_bank_subtle" and transmission_delay > 60:
-            logger.info("Central bank hard-cap: forcing transmission_delay %d -> 40 for '%s'",
-                        transmission_delay, item.title[:60])
-            transmission_delay = 40
-            market_awareness = max(market_awareness, 60)
-        elif news_cat == "m_a" and transmission_delay > 50:
-            logger.info("M&A hard-cap: forcing transmission_delay %d -> 30 for '%s'",
-                        transmission_delay, item.title[:60])
-            transmission_delay = 30
-            market_awareness = max(market_awareness, 70)
+        elif news_cat == "central_bank_subtle":
+            # Stratify: rate decision vs president speech vs secondary official
+            title_lower = item.title.lower()
+            reasoning_lower = entry.get("reasoning", "").lower()
+            combined = title_lower + " " + reasoning_lower
+            _is_rate_decision = any(kw in combined for kw in [
+                "rate decision", "taux directeur", "interest rate",
+                "rate unchanged", "rate hike", "rate cut",
+                "holds rates", "raises rates", "cuts rates",
+            ])
+            _is_major_speaker = any(kw in combined for kw in [
+                "fed chair", "powell", "lagarde", "ecb president",
+                "boe governor", "bailey", "president de la bce",
+            ])
+            if _is_rate_decision:
+                # Rate decisions = priced by HFT in microseconds
+                if transmission_delay > 10:
+                    logger.info("Central bank rate-decision hard-cap: forcing transmission_delay %d -> 5 for '%s'",
+                                transmission_delay, item.title[:60])
+                    transmission_delay = 5
+                    market_awareness = max(market_awareness, 95)
+            elif _is_major_speaker and transmission_delay > 40:
+                # Major speaker (Powell, Lagarde) — widely followed
+                logger.info("Central bank major-speech hard-cap: forcing transmission_delay %d -> 25 for '%s'",
+                            transmission_delay, item.title[:60])
+                transmission_delay = 25
+                market_awareness = max(market_awareness, 70)
+            elif transmission_delay > 60:
+                # Secondary official — less attention, more edge
+                logger.info("Central bank secondary hard-cap: forcing transmission_delay %d -> 45 for '%s'",
+                            transmission_delay, item.title[:60])
+                transmission_delay = 45
+                market_awareness = max(market_awareness, 50)
+        elif news_cat == "m_a":
+            # Distinguish M&A rumor (high edge) vs confirmed deal (zero edge)
+            title_lower = item.title.lower()
+            reasoning_lower = entry.get("reasoning", "").lower()
+            combined = title_lower + " " + reasoning_lower
+            _is_confirmed = any(kw in combined for kw in [
+                "confirms", "confirmed", "announces acquisition", "agrees to buy",
+                "agrees to acquire", "completed acquisition", "merger approved",
+                "deal closed", "takeover complete", "annonce l'acquisition",
+            ])
+            if _is_confirmed:
+                # Confirmed M&A = already priced in pre-market (treat like earnings)
+                if transmission_delay > 10:
+                    logger.info("M&A confirmed hard-cap: forcing transmission_delay %d -> 5 for '%s'",
+                                transmission_delay, item.title[:60])
+                    transmission_delay = 5
+                    market_awareness = max(market_awareness, 90)
+            elif transmission_delay > 50:
+                # M&A rumor — cap less aggressively (rumors still have edge)
+                logger.info("M&A rumor hard-cap: forcing transmission_delay %d -> 40 for '%s'",
+                            transmission_delay, item.title[:60])
+                transmission_delay = 40
+                market_awareness = max(market_awareness, 50)
 
         # Apply category score multiplier (edge priority)
         cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)

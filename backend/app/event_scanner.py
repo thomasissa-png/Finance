@@ -85,6 +85,11 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
         "soybean import", "wheat export ban", "corn harvest delay",
         # China demand
         "china import", "china commodity", "china stockpile",
+        # Livestock disease — major supply shocks (swine fever, avian flu, BSE)
+        "african swine fever", "avian flu", "bird flu", "avian influenza",
+        "foot-and-mouth", "foot and mouth", "bse", "mad cow",
+        "screwworm", "herd liquidation", "livestock disease",
+        "cattle disease", "swine fever", "hog disease",
     ],
 }
 
@@ -99,6 +104,9 @@ HIGH_PRIORITY_KEYWORDS: set[str] = {
     "crop failure", "harvest failure", "production halt", "export ban",
     "drought", "frost", "freeze", "wildfire",
     "opec cut", "opec+ cut",
+    # Livestock disease outbreaks — massive supply shocks
+    "african swine fever", "avian flu", "bird flu", "foot-and-mouth",
+    "bse", "mad cow", "herd liquidation",
 }
 
 # Flatten for quick lookup

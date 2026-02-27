@@ -590,8 +590,8 @@ def fetch_weather_alerts() -> list[NewsItem]:
 
 # Targeted queries aligned with our edge categories
 # Split by specificity: frost and drought are separate (different commodities)
-# 21 queries: 16 consolidated (was 20) + 3 soft commodities + 2 livestock
-# 4 scans/day × 21 queries = 84 req/day, within 100/day free tier
+# 25 queries: 16 consolidated + 3 soft commodities + 2 livestock + 4 new (v3.2)
+# 4 scans/day × 25 queries = 100 req/day, exactly at free tier limit
 GNEWS_QUERIES: list[dict[str, Any]] = [
     # ── Weather: consolidated frost + coffee frost into one ──
     {
@@ -628,8 +628,8 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "category": "supply_chain",
     },
     {
-        "q": "copper mine strike production halt",
-        "tickers": ["HG=F"],
+        "q": "copper platinum palladium mine strike production halt South Africa",
+        "tickers": ["HG=F", "PL=F", "PA=F"],
         "category": "supply_chain",
     },
     {
@@ -707,6 +707,31 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "category": "weather",
         "lang": "pt",
     },
+    # ── v3.2: New queries for uncovered niches (+4 queries = 25 total, 100 req/day) ──
+    # Suez Canal disruption (replaces dead RSS feed — HTML page, not RSS)
+    {
+        "q": "Suez Canal disruption blocked tanker transit delay",
+        "tickers": ["CL=F", "BZ=F", "NG=F"],
+        "category": "supply_chain",
+    },
+    # China commodity demand (key driver for metals, agri, energy)
+    {
+        "q": "China commodity demand stimulus import surge slowdown",
+        "tickers": ["HG=F", "CL=F", "ZS=F", "GC=F"],
+        "category": "commodity",
+    },
+    # EU energy crisis (covers NG=F, TTE.PA via chain reaction)
+    {
+        "q": "Europe energy crisis gas shortage pipeline sabotage winter",
+        "tickers": ["NG=F", "CL=F"],
+        "category": "supply_chain",
+    },
+    # Middle East tensions (oil + gold safe haven)
+    {
+        "q": "Iran Israel Houthi Red Sea attack tanker strike",
+        "tickers": ["CL=F", "BZ=F", "GC=F"],
+        "category": "geopolitical",
+    },
 ]
 
 
@@ -756,13 +781,24 @@ def fetch_gnews_targeted() -> list[NewsItem]:
 
                 source_name = article.get("source", {}).get("name", "GNews")
 
+                # GNews weight varies by query category:
+                # weather/commodity queries produce higher-edge results (physical signals)
+                # geopolitical queries are more mainstream (lower edge)
+                cat = query_cfg.get("category", "other")
+                gnews_weight = {
+                    "weather": 1.0,       # Physical signals via GNews = good edge
+                    "commodity": 0.95,    # Commodity searches = moderate edge
+                    "supply_chain": 0.95, # Supply chain = moderate edge
+                    "geopolitical": 0.85, # Geopolitical headlines = lower edge (algos watch these)
+                }.get(cat, 0.85)
+
                 items.append(NewsItem(
                     title=title,
                     source=source_name,
                     url=article.get("url", ""),
                     published=published,
                     related_tickers=query_cfg["tickers"],
-                    source_weight=0.85,  # Slightly above default, below premium
+                    source_weight=gnews_weight,
                 ))
 
         except Exception as exc:

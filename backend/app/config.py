@@ -1,4 +1,4 @@
-"""Configuration: 49 assets and application settings."""
+"""Configuration: 42 assets and application settings."""
 
 from dataclasses import dataclass
 
@@ -63,13 +63,14 @@ NEWS_CATEGORY_MULTIPLIERS: dict[str, dict[str, float]] = {
 CORRELATION_GROUPS: dict[str, list[str]] = {
     "energy": ["TTE.PA", "CL=F", "BZ=F", "NG=F"],
     "gold_safe": ["GC=F", "SI=F", "USDCHF=X"],
-    "risk_on_eu": ["^FCHI", "^GDAXI", "^FTSE", "^IBEX", "^FTSEMIB"],
+    "risk_on_eu": ["^FCHI", "^GDAXI", "^FTSE"],
     "risk_on_us": ["^GSPC", "^DJI", "^IXIC", "^RUT"],
     "jpy_carry": ["USDJPY=X", "EURJPY=X", "^N225"],
     "luxury": ["MC.PA", "RMS.PA", "OR.PA"],
     "agri": ["ZC=F", "ZW=F", "ZS=F"],
     "tropical_soft": ["KC=F", "SB=F", "CC=F", "OJ=F"],  # Same tropical zones (Brazil, West Africa)
     "livestock": ["LE=F", "HE=F"],  # Same disease/feed cost drivers
+    "pgm": ["PL=F", "PA=F"],  # Platinum Group Metals — same South African mines
 }
 
 # ── Chain reactions: effets de second ordre ─────────────────────
@@ -135,6 +136,13 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
         {"ticker": "RMS.PA", "direction": "same", "reason": "Meme exposition consommateur chinois"},
         {"ticker": "OR.PA", "direction": "same", "reason": "Luxe/beaute — meme clientele"},
     ],
+    # PGM (Platinum Group Metals) — same mines in South Africa
+    "PL=F":  [
+        {"ticker": "PA=F", "direction": "same", "reason": "Memes mines sud-africaines — disruption PGM impacte les deux"},
+    ],
+    "PA=F":  [
+        {"ticker": "PL=F", "direction": "same", "reason": "Memes mines sud-africaines — disruption PGM impacte les deux"},
+    ],
     # Cuivre = indicateur industriel
     "HG=F":  [
         {"ticker": "^GSPC", "direction": "same", "reason": "Cuivre = proxy activite industrielle"},
@@ -168,26 +176,22 @@ ASSETS: list[Asset] = [
     Asset("SU.PA", "Schneider Electric", "actions_europe", "EUR"),
     Asset("SAF.PA", "Safran", "actions_europe", "EUR"),
     Asset("RMS.PA", "Hermès", "actions_europe", "EUR"),
-    Asset("CS.PA", "AXA", "actions_europe", "EUR"),
-    Asset("CAP.PA", "Capgemini", "actions_europe", "EUR"),
-    Asset("VIE.PA", "Veolia", "actions_europe", "EUR"),
-    Asset("DG.PA", "Vinci", "actions_europe", "EUR"),
-    Asset("EN.PA", "Bouygues", "actions_europe", "EUR"),
+    # Removed: CS.PA (AXA), CAP.PA (Capgemini), VIE.PA (Veolia), DG.PA (Vinci),
+    # EN.PA (Bouygues) — zero edge: no dedicated source, no chain reaction,
+    # no commodity/weather link. Only reachable via generic RSS/yfinance.
     Asset("RI.PA", "Pernod Ricard", "actions_europe", "EUR"),
     # ── MÉTAUX PRÉCIEUX (4) ──────────────────────────────────────
     Asset("GC=F", "Or", "metaux", "USD"),
     Asset("SI=F", "Argent", "metaux", "USD"),
-    Asset("PL=F", "Platine", "metaux", "USD"),
-    Asset("PA=F", "Palladium", "metaux", "USD"),
+    Asset("PL=F", "Platine", "metaux", "USD"),   # Covered by GNews "mine strike South Africa" query
+    Asset("PA=F", "Palladium", "metaux", "USD"),  # Covered by GNews "mine strike South Africa" + Russia sanctions
     # ── FOREX (9) ────────────────────────────────────────────────
     Asset("EURUSD=X", "EUR/USD", "forex", "USD"),
     Asset("GBPUSD=X", "GBP/USD", "forex", "USD"),
     Asset("USDJPY=X", "USD/JPY", "forex", "JPY"),
     Asset("AUDUSD=X", "AUD/USD", "forex", "USD"),
     Asset("USDCHF=X", "USD/CHF", "forex", "CHF"),
-    Asset("USDCAD=X", "USD/CAD", "forex", "CAD"),
-    Asset("NZDUSD=X", "NZD/USD", "forex", "USD"),
-    Asset("EURGBP=X", "EUR/GBP", "forex", "GBP"),
+    # Removed: USDCAD=X, NZDUSD=X, EURGBP=X — no dedicated source, no chain reaction
     Asset("EURJPY=X", "EUR/JPY", "forex", "JPY"),
     # ── COMMODITIES (14) ──────────────────────────────────────────
     Asset("CL=F", "Pétrole WTI", "commodities", "USD"),
@@ -212,11 +216,9 @@ ASSETS: list[Asset] = [
     Asset("^RUT", "Russell 2000", "indices", "USD"),
     Asset("^GDAXI", "DAX", "indices", "EUR"),
     Asset("^FTSE", "FTSE 100", "indices", "GBP"),
-    Asset("^IBEX", "IBEX 35", "indices", "EUR"),
-    Asset("^FTSEMIB", "FTSE MIB", "indices", "EUR"),
-    Asset("^N225", "Nikkei 225", "indices", "JPY"),
-    Asset("^HSI", "Hang Seng", "indices", "HKD"),
-    Asset("^AXJO", "ASX 200", "indices", "AUD"),
+    Asset("^N225", "Nikkei 225", "indices", "JPY"),  # Kept: jpy_carry correlation group
+    # Removed: ^IBEX, ^FTSEMIB — in risk_on_eu but no dedicated source (^FCHI + ^GDAXI suffisent)
+    # Removed: ^HSI (Hang Seng), ^AXJO (ASX 200) — no dedicated source, no chain reaction
 ]
 
 ASSET_BY_TICKER = {a.ticker: a for a in ASSETS}
@@ -286,9 +288,8 @@ EARLY_SIGNAL_FEEDS = [
     "https://www.nass.usda.gov/rss/reports.xml",                    # NASS: crop reports, cold storage, production
     "https://www.fao.org/feeds/fao-newsroom-rss",                   # FAO: food security, agriculture, crop reports
     # Geopolitique — OSINT, conflits, sanctions, defense
-    # defense.gov redirects to war.gov since 2025. Using war.gov directly.
+    # defense.gov redirects to war.gov since 2025. Single entry (was 2 — redundant fallback wasted a thread).
     "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # war.gov (ex Defense.gov): military ops, geopolitics
-    "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # Defense.gov fallback (redirects to war.gov)
     "https://www.iaea.org/feeds/pressalerts",                       # IAEA: nuclear, sanctions, inspections
     # Energie
     "https://www.eia.gov/rss/todayinenergy.xml",                   # EIA: energy analysis, stocks commentary
@@ -298,8 +299,8 @@ EARLY_SIGNAL_FEEDS = [
     "https://www.marinelink.com/news/rss",                          # MarineLink: shipping, maritime, offshore
     "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions
     "https://splash247.com/feed/",                                  # Splash247: global shipping, ports, containers, BDI commentary
-    # Canal chokepoints — Suez/Panama transit disruptions = supply chain + oil
-    "https://www.suezcanal.gov.eg/English/MediaCenter/News/Pages/default.aspx",  # SCA: Suez Canal Authority news (transit, disruptions)
+    # Canal chokepoints — Panama transit disruptions = supply chain + oil
+    # Removed: suezcanal.gov.eg — HTML page, NOT an RSS feed (always fails to parse)
     "https://pancanal.com/en/feed/",                               # ACP: Panama Canal Authority (draft restrictions, transit delays)
     # Central banks — speeches et minutes (signaux dovish/hawkish subtils)
     "https://www.ecb.europa.eu/rss/press.xml",                     # ECB: press releases RSS (was .html — returned HTML not XML)
@@ -312,9 +313,9 @@ SOURCE_WEIGHTS: dict[str, float] = {
     # Phase 0: structured data APIs (premium — donnees chiffrees, pas du texte)
     "Open-Meteo": 1.2,
     "open-meteo": 1.2,
-    "CFTC": 1.05,
-    "cftc": 1.05,
-    "Options Flow": 0.95,
+    "CFTC": 1.1,      # Raised from 1.05: positioning extremes (>8pp weekly swing) are genuinely market-moving
+    "cftc": 1.1,
+    "Options Flow": 1.0,  # Raised from 0.95: put/call extremes + IV skew = smart money hedging
     # Phase 1: early-signal (premium — info pas encore pricee)
     "USDA": 1.1,
     "usda": 1.1,
@@ -351,12 +352,11 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "marinelink": 1.05,
     "Maritime Executive": 1.05,
     "maritime-executive": 1.05,
-    "OilPrice": 1.0,
-    "oilprice": 1.0,
+    "OilPrice": 0.9,   # Lowered from 1.0: news aggregator, not primary source (often lags EIA/OPEC)
+    "oilprice": 0.9,
     "Splash247": 1.05,
     "splash247": 1.05,
-    "Suez Canal": 1.1,
-    "suezcanal": 1.1,
+    # Removed: Suez Canal source weight — HTML page, not RSS (dead source)
     "Panama Canal": 1.1,
     "pancanal": 1.1,
     "SHFE": 1.1,               # Shanghai Futures Exchange inventories
@@ -366,7 +366,7 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "nhc.noaa.gov": 1.15,
     "National Hurricane Center": 1.15,
     "NASA EONET": 1.1,         # Natural events tracker — wildfires, storms, volcanoes
-    "GIE AGSI": 1.1,           # European gas storage — critical for NG/energy
+    "GIE AGSI": 1.15,          # Raised from 1.1: European gas storage — critical for NG/energy, especially winter
     # Phase 3: mainstream (info deja traitee — poids reduits)
     "BBC": 0.85,
     "bbc": 0.85,
