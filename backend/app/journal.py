@@ -1,4 +1,7 @@
-"""Daily journal: auto-closes trades at 22:00 CET, generates journal entries."""
+"""Daily journal: auto-closes trades at 22:00 CET, generates journal entries.
+
+v4.0: PostgreSQL persistence (when DATABASE_URL is set, falls back to JSON files).
+"""
 
 import json
 import logging
@@ -8,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
+from .database import is_pg_enabled
 from .learning import load_trades, update_trade_result, compute_learning_adjustments
 from .models import Direction, JournalEntry, TradeRecommendation, TradeResult
 
@@ -35,7 +39,15 @@ def _ensure_journal_file() -> None:
 
 
 def load_journal() -> list[JournalEntry]:
-    """Load all journal entries from disk."""
+    """Load all journal entries."""
+    if is_pg_enabled():
+        try:
+            from .database import pg_load_journal
+            raw = pg_load_journal()
+            return [JournalEntry(**e) for e in raw]
+        except Exception as exc:
+            logger.error("Failed to load journal from PostgreSQL: %s", exc)
+            return []
     _ensure_journal_file()
     try:
         raw = json.loads(JOURNAL_FILE.read_text())
@@ -183,6 +195,13 @@ def _load_scan_decision_data() -> dict[str, dict]:
     Returns a dict keyed by scan type ("europe"/"us"), with safe fallback
     to empty dict if the file is missing, corrupt, or has unexpected format.
     """
+    if is_pg_enabled():
+        try:
+            from .database import pg_load_last_scans
+            return pg_load_last_scans()
+        except Exception as exc:
+            logger.warning("Failed to load scans cache from PostgreSQL: %s", exc)
+            return {}
     scans_file = DATA_DIR / "last_scans.json"
     try:
         if scans_file.exists():
@@ -334,10 +353,16 @@ def run_daily_journal() -> list[dict]:
             result.value, pnl_pct, delay_accuracy,
         )
 
-    # Append to journal file
+    # Append to journal
     if new_entries:
-        existing.extend(new_entries)
-        _save_journal(existing)
+        if is_pg_enabled():
+            from .database import pg_save_journal_entries
+            pg_save_journal_entries(
+                [e.model_dump(mode="json") for e in new_entries]
+            )
+        else:
+            existing.extend(new_entries)
+            _save_journal(existing)
 
     # (#26) Invalidate learning cache after journal
     invalidate_learning_cache()

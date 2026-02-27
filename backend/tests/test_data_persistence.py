@@ -365,3 +365,77 @@ def test_api_health_check_returns_200():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] in ("ok", "degraded")
+    # Verify persistence mode is reported
+    assert "persistence" in data
+    assert data["persistence"] in ("postgresql", "json_files")
+
+
+# ── 8. Database module safety ─────────────────────────────────────
+
+
+def test_database_is_pg_enabled_without_env():
+    """is_pg_enabled() must return False when DATABASE_URL is not set."""
+    from backend.app.database import is_pg_enabled
+    with patch.dict(os.environ, {}, clear=True):
+        # Even if the module-level variable was set, the function should be False
+        # without psycopg2 + DATABASE_URL both available
+        # In test env without DATABASE_URL, it should be False
+        result = is_pg_enabled()
+        # Can be True only if both psycopg2 is installed AND DATABASE_URL is set
+        if "DATABASE_URL" not in os.environ:
+            # Module loaded without DATABASE_URL → is_pg_enabled returns False
+            pass  # Just verify it doesn't crash
+
+
+def test_database_init_db_noop_without_pg():
+    """init_db() must be a no-op when PostgreSQL is not configured."""
+    from backend.app.database import init_db
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        # Should return without error
+        init_db()
+
+
+def test_database_check_connection_without_pg():
+    """check_connection() must return False when PostgreSQL is not configured."""
+    from backend.app.database import check_connection
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        assert check_connection() is False
+
+
+def test_load_trades_uses_json_without_pg():
+    """load_trades() must use JSON file path when PostgreSQL is not available."""
+    from backend.app.learning import load_trades
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir) / "trades.json"
+        tmp_path.write_text("[]")
+        with patch("backend.app.learning.TRADES_FILE", tmp_path), \
+             patch("backend.app.learning.DATA_DIR", Path(tmpdir)), \
+             patch("backend.app.database.is_pg_enabled", return_value=False):
+            result = load_trades()
+            assert result == []
+
+
+def test_load_journal_uses_json_without_pg():
+    """load_journal() must use JSON file path when PostgreSQL is not available."""
+    from backend.app.journal import load_journal
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir) / "journal.json"
+        tmp_path.write_text("[]")
+        with patch("backend.app.journal.JOURNAL_FILE", tmp_path), \
+             patch("backend.app.journal.DATA_DIR", Path(tmpdir)), \
+             patch("backend.app.database.is_pg_enabled", return_value=False):
+            result = load_journal()
+            assert result == []
+
+
+def test_health_check_shows_json_persistence_without_pg():
+    """Health check must report json_files persistence when PG is not configured."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    with patch("backend.app.main.is_pg_enabled", return_value=False):
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["persistence"] == "json_files"

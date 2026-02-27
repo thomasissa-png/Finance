@@ -10,6 +10,8 @@ calling Claude (avoids re-scoring the same news every 3 hours).
 
 Retention: entries older than MAX_HISTORY_DAYS are pruned on each write
 to prevent unbounded growth.
+
+v4.0: PostgreSQL persistence (when DATABASE_URL is set, falls back to JSON files).
 """
 
 import fcntl
@@ -18,6 +20,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from .database import is_pg_enabled
 from .models import ScanHistoryEntry
 
 logger = logging.getLogger(__name__)
@@ -42,7 +45,15 @@ def _ensure_file() -> None:
 
 
 def load_scan_history() -> list[ScanHistoryEntry]:
-    """Load all scan history entries from disk."""
+    """Load all scan history entries."""
+    if is_pg_enabled():
+        try:
+            from .database import pg_load_scan_history
+            raw = pg_load_scan_history()
+            return [ScanHistoryEntry(**e) for e in raw]
+        except Exception as exc:
+            logger.error("Failed to load scan history from PostgreSQL: %s", exc)
+            return []
     _ensure_file()
     try:
         with open(SCAN_HISTORY_FILE, "r") as f:
@@ -58,7 +69,7 @@ def load_scan_history() -> list[ScanHistoryEntry]:
 
 
 def save_scan_history(entries: list[ScanHistoryEntry]) -> None:
-    """Save scan history to disk with exclusive lock."""
+    """Save scan history (JSON path only — PG uses direct insert in append_scan_result)."""
     _ensure_file()
     with open(SCAN_HISTORY_FILE, "w") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
@@ -93,9 +104,23 @@ def get_recently_scored_titles(max_age_hours: float = 8.0) -> list[str]:
 
 
 def _refresh_titles_cache(max_age_hours: float = 8.0) -> None:
-    """Rebuild the in-memory titles cache from scan_history.json."""
+    """Rebuild the in-memory titles cache from scan history."""
     global _scored_titles_cache, _cache_last_updated
     import time
+
+    if is_pg_enabled():
+        try:
+            from .database import pg_get_recently_scored_titles
+            _scored_titles_cache = pg_get_recently_scored_titles(max_age_hours)
+            _cache_last_updated = time.time()
+            logger.debug("Cross-scan dedup cache (PG): %d titles from last %.0fh",
+                         len(_scored_titles_cache), max_age_hours)
+            return
+        except Exception as exc:
+            logger.warning("Failed to refresh titles cache from PG: %s", exc)
+            _scored_titles_cache = []
+            _cache_last_updated = time.time()
+            return
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
     entries = load_scan_history()
@@ -116,7 +141,7 @@ def _refresh_titles_cache(max_age_hours: float = 8.0) -> None:
 
 
 def append_scan_result(scan_result: dict) -> None:
-    """Append a scan result to the history file.
+    """Append a scan result to the history.
 
     Called after each scan completes (from scheduler.run_scan).
     Automatically prunes entries older than MAX_HISTORY_DAYS.
@@ -139,18 +164,23 @@ def append_scan_result(scan_result: dict) -> None:
             market_context=scan_result.get("market_context"),
         )
 
-        entries = load_scan_history()
-        entries.append(entry)
+        if is_pg_enabled():
+            from .database import pg_save_scan_history_entry
+            pg_save_scan_history_entry(entry.model_dump(mode="json"))
+        else:
+            entries = load_scan_history()
+            entries.append(entry)
 
-        # Prune old entries
-        cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_HISTORY_DAYS)
-        before = len(entries)
-        entries = [e for e in entries if e.timestamp.replace(tzinfo=timezone.utc) > cutoff]
-        if len(entries) < before:
-            logger.info("Pruned %d old scan history entries (>%dd)",
-                        before - len(entries), MAX_HISTORY_DAYS)
+            # Prune old entries
+            cutoff = datetime.now(timezone.utc) - timedelta(days=MAX_HISTORY_DAYS)
+            before = len(entries)
+            entries = [e for e in entries if e.timestamp.replace(tzinfo=timezone.utc) > cutoff]
+            if len(entries) < before:
+                logger.info("Pruned %d old scan history entries (>%dd)",
+                            before - len(entries), MAX_HISTORY_DAYS)
 
-        save_scan_history(entries)
+            save_scan_history(entries)
+
         logger.info("Scan history saved: %s scan, %d scored news, trade=%s",
                      entry.scan_type.value, len(entry.all_scored_news), entry.has_trade)
 

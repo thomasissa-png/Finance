@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .backtest import run_backtest, run_parameter_sweep
 from .config import SCAN_KEY_TO_TYPE, TRIGGER_COOLDOWN_SECONDS
+from .database import is_pg_enabled, init_db
 from .economic_calendar import get_upcoming_events
 from .journal import load_journal, run_daily_journal
 from .learning import (
@@ -54,7 +55,14 @@ _last_trigger_times: dict[str, float] = {}
 
 
 def _load_scans_cache() -> dict[str, dict]:
-    """Load last scan results from disk (#34)."""
+    """Load last scan results (#34). Uses PostgreSQL when available."""
+    if is_pg_enabled():
+        try:
+            from .database import pg_load_last_scans
+            return pg_load_last_scans()
+        except Exception as exc:
+            logger.warning("Failed to load scans cache from PostgreSQL: %s", exc)
+            return {}
     try:
         if SCANS_CACHE_FILE.exists():
             return json.loads(SCANS_CACHE_FILE.read_text())
@@ -64,7 +72,15 @@ def _load_scans_cache() -> dict[str, dict]:
 
 
 def _save_scans_cache(scans: dict[str, dict]) -> None:
-    """Save scan results to disk (#34)."""
+    """Save scan results (#34). Uses PostgreSQL when available."""
+    if is_pg_enabled():
+        try:
+            from .database import pg_save_all_last_scans
+            pg_save_all_last_scans(scans)
+            return
+        except Exception as exc:
+            logger.warning("Failed to save scans cache to PostgreSQL: %s", exc)
+            return
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         SCANS_CACHE_FILE.write_text(json.dumps(scans, indent=2, default=str))
@@ -168,6 +184,8 @@ def _run_daily_journal() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _last_scans
+    # Initialize PostgreSQL tables if DATABASE_URL is set
+    init_db()
     # (#34) Load cached scans on startup
     _last_scans = _load_scans_cache()
     if _last_scans:
@@ -537,14 +555,22 @@ def health():
     status["dependencies"]["gnews_key"] = "configured" if os.environ.get("GNEWS_API_KEY") else "not_set (optional)"
     status["dependencies"]["usda_key"] = "configured" if os.environ.get("USDA_API_KEY") else "not_set (optional)"
 
-    # Data file checks — local filesystem, instant
-    trades_file = DATA_DIR / "trades.json"
-    journal_file = DATA_DIR / "journal.json"
-    status["dependencies"]["trades_file"] = "ok" if trades_file.exists() else "missing"
-    status["dependencies"]["journal_file"] = "ok" if journal_file.exists() else "missing"
+    # Data storage checks
+    if is_pg_enabled():
+        from .database import check_connection
+        status["dependencies"]["database"] = "ok" if check_connection() else "error"
+        status["persistence"] = "postgresql"
+    else:
+        trades_file = DATA_DIR / "trades.json"
+        journal_file = DATA_DIR / "journal.json"
+        status["dependencies"]["trades_file"] = "ok" if trades_file.exists() else "missing"
+        status["dependencies"]["journal_file"] = "ok" if journal_file.exists() else "missing"
+        status["persistence"] = "json_files"
 
     # Degraded only if the critical API key is missing
     if status["dependencies"].get("anthropic_key") == "missing":
+        status["status"] = "degraded"
+    if status["dependencies"].get("database") == "error":
         status["status"] = "degraded"
 
     return status

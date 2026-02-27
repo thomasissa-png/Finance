@@ -9,6 +9,8 @@ v3.4 audit changes:
 - #6: PnL-signed signal replaces binary win_rate in _compute_adjustment
 - #8: Per-dimension multiplier decomposition logged
 - #11: Benchmark in performance summary
+
+v4.0: PostgreSQL persistence (when DATABASE_URL is set, falls back to JSON files).
 """
 
 import fcntl
@@ -19,6 +21,7 @@ import statistics
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .database import is_pg_enabled
 from .models import PerformanceStats, TradeRecommendation, TradeResult
 
 logger = logging.getLogger(__name__)
@@ -66,7 +69,15 @@ def _write_json_locked(path: Path, data: list) -> None:
 
 
 def load_trades() -> list[TradeRecommendation]:
-    """Load all historical trades from disk."""
+    """Load all historical trades."""
+    if is_pg_enabled():
+        try:
+            from .database import pg_load_trades
+            raw = pg_load_trades()
+            return [TradeRecommendation(**t) for t in raw]
+        except Exception as exc:
+            logger.error("Failed to load trades from PostgreSQL: %s", exc)
+            return []
     try:
         raw = _read_json_locked(TRADES_FILE)
         return [TradeRecommendation(**t) for t in raw]
@@ -77,6 +88,11 @@ def load_trades() -> list[TradeRecommendation]:
 
 def save_trade(trade: TradeRecommendation) -> None:
     """Append a new trade to the history."""
+    if is_pg_enabled():
+        from .database import pg_save_trade
+        pg_save_trade(trade.model_dump(mode="json"))
+        logger.info("Saved trade: %s %s %s", trade.direction, trade.ticker, trade.catalyst[:50])
+        return
     trades = load_trades()
     trades.append(trade)
     _write_trades(trades)
@@ -96,6 +112,20 @@ def update_trade_result(
     Also signals that the learning cache should be invalidated,
     so the next scan picks up the updated performance data.
     """
+    if is_pg_enabled():
+        from .database import pg_update_trade_result
+        updated, pnl = pg_update_trade_result(
+            ticker, timestamp, result.value, exit_price,
+            datetime.now(timezone.utc),
+            actual_pricing_time_hours, delay_accuracy,
+        )
+        if updated:
+            logger.info("Updated trade %s %s: %s (PnL: %s%%)", ticker, timestamp, result, pnl)
+            _signal_learning_cache_invalidation()
+        else:
+            logger.warning("Trade not found for update: %s %s", ticker, timestamp)
+        return
+
     trades = load_trades()
     for trade in trades:
         if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
