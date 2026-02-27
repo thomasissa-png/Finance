@@ -610,15 +610,10 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "tickers": ["CL=F", "NG=F"],
         "category": "weather",
     },
-    # ── Geopolitical ──
+    # ── Geopolitical (consolidated into 1 query to free a slot for PGM) ──
     {
-        "q": "oil sanctions embargo pipeline explosion",
-        "tickers": ["CL=F", "BZ=F"],
-        "category": "geopolitical",
-    },
-    {
-        "q": "military strike missile attack conflict",
-        "tickers": ["GC=F", "CL=F"],
+        "q": "oil sanctions military strike missile pipeline embargo conflict",
+        "tickers": ["CL=F", "BZ=F", "GC=F"],
         "category": "geopolitical",
     },
     # ── Supply chain ──
@@ -628,8 +623,14 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "category": "supply_chain",
     },
     {
-        "q": "copper platinum palladium mine strike production halt South Africa",
-        "tickers": ["HG=F", "PL=F", "PA=F"],
+        "q": "copper mine strike production halt supply disruption",
+        "tickers": ["HG=F"],
+        "category": "supply_chain",
+    },
+    # ── PGM (Platinum Group Metals) — dedicated query ──
+    {
+        "q": "Eskom load shedding platinum Nornickel sanctions palladium mine South Africa",
+        "tickers": ["PL=F", "PA=F"],
         "category": "supply_chain",
     },
     {
