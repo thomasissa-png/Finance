@@ -13,6 +13,7 @@ from typing import Any
 
 import requests
 
+from .config import SOURCE_WEIGHTS
 from .models import NewsItem
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,10 @@ def fetch_eia_data() -> list[NewsItem]:
             change = current_val - previous_val
             change_pct = (change / abs(previous_val)) * 100
 
+            # Skip insignificant changes — noise from rounding or marginal moves
+            if abs(change_pct) < 0.5:
+                continue
+
             # Determine related tickers based on series
             tickers = []
             if "Crude" in description:
@@ -123,7 +128,7 @@ def fetch_eia_data() -> list[NewsItem]:
                 url=f"https://www.eia.gov/petroleum/supply/weekly/",
                 published=datetime.now(timezone.utc),
                 related_tickers=tickers,
-                source_weight=1.1,
+                source_weight=SOURCE_WEIGHTS.get("EIA", 1.15),
             ))
 
         except Exception as exc:
@@ -500,34 +505,66 @@ def fetch_weather_alerts() -> list[NewsItem]:
 
 # Targeted queries aligned with our edge categories
 # Split by specificity: frost and drought are separate (different commodities)
+# Optimized: 16 queries (was 20) — removed redundant frost/drought/harvest overlap
+# 4 scans/day × 16 queries = 64 req/day (was 80), well within 100/day free tier
 GNEWS_QUERIES: list[dict[str, Any]] = [
+    # ── Weather: consolidated frost + coffee frost into one ──
     {
-        "q": "frost freeze crop damage agriculture",
-        "tickers": ["KC=F", "ZC=F", "ZW=F"],
+        "q": "frost freeze crop damage coffee cold wave",
+        "tickers": ["KC=F", "ZC=F", "ZW=F", "SB=F"],
         "category": "weather",
     },
+    # ── Weather: drought (merged with harvest failure — same signal) ──
     {
-        "q": "drought harvest failure crop loss",
+        "q": "drought crop failure harvest loss shortage",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "weather",
     },
+    {
+        "q": "hurricane tropical storm Gulf Mexico offshore oil",
+        "tickers": ["CL=F", "NG=F"],
+        "category": "weather",
+    },
+    # ── Geopolitical ──
     {
         "q": "oil sanctions embargo pipeline explosion",
         "tickers": ["CL=F", "BZ=F"],
         "category": "geopolitical",
     },
     {
+        "q": "military strike missile attack conflict",
+        "tickers": ["GC=F", "CL=F"],
+        "category": "geopolitical",
+    },
+    # ── Supply chain ──
+    {
         "q": "port congestion shipping disruption canal blocked",
         "tickers": [],
         "category": "supply_chain",
     },
+    {
+        "q": "copper mine strike production halt",
+        "tickers": ["HG=F"],
+        "category": "supply_chain",
+    },
+    {
+        "q": "Baltic dry index shipping freight rate",
+        "tickers": ["HG=F"],  # BDI = proxy industrial activity
+        "category": "supply_chain",
+    },
+    {
+        "q": "fertilizer potash phosphate shortage sanctions",
+        "tickers": ["ZC=F", "ZW=F", "ZS=F"],
+        "category": "supply_chain",
+    },
+    # ── Commodity ──
     {
         "q": "OPEC production cut output quota",
         "tickers": ["CL=F", "BZ=F"],
         "category": "commodity",
     },
     {
-        "q": "wheat corn soybean crop report harvest",
+        "q": "wheat corn soybean crop report USDA",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "commodity",
     },
@@ -537,74 +574,26 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "category": "commodity",
     },
     {
-        "q": "military strike missile attack conflict",
-        "tickers": ["GC=F", "CL=F"],
-        "category": "geopolitical",
-    },
-    {
-        "q": "copper mine strike production halt",
-        "tickers": ["HG=F"],
-        "category": "supply_chain",
-    },
-    # ── New queries added for broader coverage ──
-    {
         "q": "natural gas storage Europe TTF LNG",
         "tickers": ["NG=F"],
         "category": "commodity",
     },
     {
-        "q": "palm oil export Indonesia Malaysia MPOB",
-        "tickers": ["ZS=F"],  # Soy as proxy for vegetable oils
-        "category": "commodity",
-    },
-    {
-        "q": "China import commodity soybean iron ore",
+        "q": "palm oil export Indonesia Malaysia China import soybean",
         "tickers": ["ZS=F", "HG=F"],
         "category": "commodity",
     },
     {
-        "q": "Baltic dry index shipping freight rate",
-        "tickers": ["HG=F"],  # BDI = proxy industrial activity
-        "category": "supply_chain",
-    },
-    {
-        "q": "coffee frost Brazil Minas Gerais cold wave",
-        "tickers": ["KC=F", "SB=F"],
-        "category": "weather",
-    },
-    {
-        "q": "hurricane tropical storm Gulf Mexico offshore oil",
-        "tickers": ["CL=F", "NG=F"],
-        "category": "weather",
-    },
-    # ── Portuguese queries for Brazil (12-24h earlier than English media) ──
-    {
-        "q": "geada cafe Minas Gerais frio",
-        "tickers": ["KC=F", "SB=F"],
-        "category": "weather",
-        "lang": "pt",
-    },
-    {
-        "q": "seca milho soja safra quebra",
-        "tickers": ["ZS=F", "ZC=F"],
-        "category": "weather",
-        "lang": "pt",
-    },
-    # ── Missing high-edge categories ──
-    {
-        "q": "wheat rust crop disease blight fungus",
+        "q": "wheat rust crop disease blight avian flu outbreak",
         "tickers": ["ZW=F", "ZC=F", "ZS=F"],
         "category": "commodity",
     },
+    # ── Portuguese queries for Brazil (12-24h earlier than English media) ──
     {
-        "q": "fertilizer potash phosphate shortage sanctions",
-        "tickers": ["ZC=F", "ZW=F", "ZS=F"],
-        "category": "supply_chain",
-    },
-    {
-        "q": "avian flu bird flu livestock disease outbreak",
-        "tickers": ["ZC=F", "ZS=F"],  # Feed grain demand impact
-        "category": "commodity",
+        "q": "geada cafe seca milho soja safra quebra frio",
+        "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F"],
+        "category": "weather",
+        "lang": "pt",
     },
 ]
 
@@ -679,11 +668,91 @@ def fetch_gnews_targeted() -> list[NewsItem]:
 # Env var: USDA_API_KEY
 
 
+def _get_usda_seasonal_queries() -> list[dict[str, Any]]:
+    """Return USDA queries adapted to the current season.
+
+    Crop progress data is only published during the relevant season:
+    - Planting: Apr-Jun
+    - Condition: May-Sep (growing season)
+    - Harvested: Sep-Dec
+    - Winter wheat condition: year-round (dormant check in winter)
+    """
+    month = datetime.now(timezone.utc).month
+
+    queries: list[dict[str, Any]] = []
+
+    # Winter wheat condition — always relevant
+    queries.append({
+        "commodity_desc": "WHEAT",
+        "statisticcat_desc": "CONDITION, MEASURED IN PCT GOOD",
+        "tickers": ["ZW=F"],
+        "label": "Ble",
+    })
+
+    # Planting season (Apr-Jun)
+    if 4 <= month <= 6:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT PLANTED",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+        queries.append({
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT PLANTED",
+            "tickers": ["ZS=F"],
+            "label": "Soja",
+        })
+
+    # Emergence (May-Jul)
+    if 5 <= month <= 7:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT EMERGED",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+
+    # Growing season condition (May-Sep)
+    if 5 <= month <= 9:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "CONDITION, MEASURED IN PCT GOOD",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+        queries.append({
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "CONDITION, MEASURED IN PCT GOOD",
+            "tickers": ["ZS=F"],
+            "label": "Soja",
+        })
+
+    # Harvest season (Sep-Dec)
+    if month >= 9 or month <= 1:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT HARVESTED",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+        queries.append({
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT HARVESTED",
+            "tickers": ["ZS=F"],
+            "label": "Soja",
+        })
+
+    return queries
+
+
 def fetch_usda_crop_data() -> list[NewsItem]:
-    """Fetch USDA crop progress/condition data.
+    """Fetch USDA crop progress/condition data with seasonal awareness.
 
     The USDA publishes weekly crop progress reports — these are
     among the most market-moving agricultural data points.
+    Queries adapt to season: planting (Apr-Jun), condition (May-Sep),
+    harvest (Sep-Dec). Week-over-week delta computed when 2+ records exist.
     """
     api_key = os.environ.get("USDA_API_KEY", "")
     if not api_key:
@@ -692,28 +761,7 @@ def fetch_usda_crop_data() -> list[NewsItem]:
 
     items: list[NewsItem] = []
     current_year = str(datetime.now(timezone.utc).year)
-
-    # Key crop progress queries
-    queries = [
-        {
-            "commodity_desc": "CORN",
-            "statisticcat_desc": "PROGRESS, MEASURED IN PCT HARVESTED",
-            "tickers": ["ZC=F"],
-            "label": "Mais",
-        },
-        {
-            "commodity_desc": "SOYBEANS",
-            "statisticcat_desc": "PROGRESS, MEASURED IN PCT HARVESTED",
-            "tickers": ["ZS=F"],
-            "label": "Soja",
-        },
-        {
-            "commodity_desc": "WHEAT",
-            "statisticcat_desc": "CONDITION, MEASURED IN PCT GOOD",
-            "tickers": ["ZW=F"],
-            "label": "Ble",
-        },
-    ]
+    queries = _get_usda_seasonal_queries()
 
     for q in queries:
         try:
@@ -735,32 +783,48 @@ def fetch_usda_crop_data() -> list[NewsItem]:
             if not records:
                 continue
 
-            # Get the most recent record
+            # Get the 2 most recent records for WoW delta
             records.sort(key=lambda r: r.get("week_ending", ""), reverse=True)
             latest = records[0]
             value = latest.get("Value", "")
             week = latest.get("week_ending", "")
             stat = latest.get("short_desc", q["statisticcat_desc"])
 
-            if value:
-                title = (
-                    f"[USDA DATA] {q['label']} — {stat}: {value}% "
-                    f"(semaine du {week})"
-                )
-                items.append(NewsItem(
-                    title=title,
-                    source="USDA",
-                    url="https://quickstats.nass.usda.gov/",
-                    published=datetime.now(timezone.utc),
-                    related_tickers=q["tickers"],
-                    source_weight=1.1,
-                ))
+            if not value:
+                continue
+
+            # Week-over-week delta
+            wow_str = ""
+            if len(records) >= 2:
+                prev_value = records[1].get("Value", "")
+                if prev_value:
+                    try:
+                        delta = float(value) - float(prev_value)
+                        wow_str = f", WoW: {delta:+.1f}pp"
+                        # Flag large swings (>5pp in one week = significant)
+                        if abs(delta) >= 5:
+                            wow_str += " [SWING MAJEUR]"
+                    except (ValueError, TypeError):
+                        pass
+
+            title = (
+                f"[USDA DATA] {q['label']} — {stat}: {value}%{wow_str} "
+                f"(semaine du {week})"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="USDA",
+                url="https://quickstats.nass.usda.gov/",
+                published=datetime.now(timezone.utc),
+                related_tickers=q["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+            ))
 
         except Exception as exc:
             logger.debug("USDA fetch error for %s: %s", q["commodity_desc"], exc)
 
     if items:
-        logger.info("Fetched %d USDA data points", len(items))
+        logger.info("Fetched %d USDA data points (%d seasonal queries)", len(items), len(queries))
     return items
 
 
@@ -1088,15 +1152,28 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
             if not expirations:
                 continue
 
-            # Check nearest expiration
-            chain = stock.option_chain(expirations[0])
-            calls = chain.calls
-            puts = chain.puts
+            # Check up to 3 nearest expirations to catch positioning beyond weeklies
+            # Smart money often uses 2nd/3rd expiration to avoid gamma squeeze on nearest
+            import pandas as pd
+            all_calls = pd.DataFrame()
+            all_puts = pd.DataFrame()
+            for exp in expirations[:3]:
+                try:
+                    chain = stock.option_chain(exp)
+                    if not chain.calls.empty:
+                        all_calls = pd.concat([all_calls, chain.calls], ignore_index=True)
+                    if not chain.puts.empty:
+                        all_puts = pd.concat([all_puts, chain.puts], ignore_index=True)
+                except Exception:
+                    continue
+
+            calls = all_calls
+            puts = all_puts
 
             if calls.empty and puts.empty:
                 continue
 
-            # Calculate total call/put volume and OI
+            # Calculate total call/put volume and OI across all checked expirations
             total_call_vol = int(calls["volume"].sum()) if "volume" in calls.columns else 0
             total_put_vol = int(puts["volume"].sum()) if "volume" in puts.columns else 0
             total_call_oi = int(calls["openInterest"].sum()) if "openInterest" in calls.columns else 0
@@ -1134,7 +1211,7 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                     related_tickers=related,
                     source_weight=0.95,
                 ))
-            elif pc_ratio < 0.25 and total_call_vol > (500 if is_us_etf else 2000):
+            elif pc_ratio < 0.25 and total_call_vol > (50000 if is_us_etf else 2000):
                 title = (
                     f"[OPTIONS] {name} ({ticker}) — Activite calls inhabituelle: P/C ratio {pc_ratio:.2f} "
                     f"(calls: {total_call_vol}, puts: {total_put_vol}) — "

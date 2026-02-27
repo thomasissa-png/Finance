@@ -246,21 +246,22 @@ RSS_FEEDS = [
 ]
 
 # ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
-# Verified 2026-02-25 — 20 feeds (was 17, added NHC, Defense.gov, Splash247)
+# Verified 2026-02-27 — 21 feeds (was 18, added drought.gov, climate.gov, war.gov; fixed ECB .html→.xml)
 EARLY_SIGNAL_FEEDS = [
     # Meteo / Agri — signaux physiques pour commodities
-    "https://www.ncei.noaa.gov/news.xml",                          # NCEI: precipitation, drought, temperature reports
+    "https://www.drought.gov/rss/rss.xml",                          # Drought.gov: US drought monitor + outlooks (replaces dead NCEI news.xml)
     "https://www.spc.noaa.gov/products/spcrss.xml",                # SPC: severe weather outlooks, tornado/storm watches
     "https://www.weather.gov/rss_page.php?site_name=nws",          # NWS national weather summary
     "https://api.weather.gov/alerts/active.atom",                   # NWS active alerts (CAP v1.2 ATOM)
     "https://www.nhc.noaa.gov/index-at.xml",                       # NHC: Atlantic hurricane advisories (Jun-Nov critical for oil/sugar)
+    "https://www.climate.gov/feeds/all.xml",                        # NOAA Climate.gov: ENSO, seasonal outlooks, climate events
     # USDA / FAO — rapports sur les recoltes et stocks
     "https://www.nass.usda.gov/rss/reports.xml",                    # NASS: crop reports, cold storage, production
-    # nass.usda.gov/rss/news.xml: stale since Sep 2025 — removed
     "https://www.fao.org/feeds/fao-newsroom-rss",                   # FAO: food security, agriculture, crop reports
     # Geopolitique — OSINT, conflits, sanctions, defense
-    # state.gov/rss/press-releases/feed/: dead (returns PNG). Replaced by Defense.gov.
-    "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # Defense.gov: military ops, geopolitics
+    # defense.gov redirects to war.gov since 2025. Using war.gov directly.
+    "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # war.gov (ex Defense.gov): military ops, geopolitics
+    "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # Defense.gov fallback (redirects to war.gov)
     "https://www.iaea.org/feeds/pressalerts",                       # IAEA: nuclear, sanctions, inspections
     # Energie
     "https://www.eia.gov/rss/todayinenergy.xml",                   # EIA: energy analysis, stocks commentary
@@ -271,7 +272,7 @@ EARLY_SIGNAL_FEEDS = [
     "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions
     "https://splash247.com/feed/",                                  # Splash247: global shipping, ports, containers, BDI commentary
     # Central banks — speeches et minutes (signaux dovish/hawkish subtils)
-    "https://www.ecb.europa.eu/rss/press.html",
+    "https://www.ecb.europa.eu/rss/press.xml",                     # ECB: press releases RSS (was .html — returned HTML not XML)
     "https://www.federalreserve.gov/feeds/press_all.xml",
     "https://www.bankofengland.co.uk/rss/speeches",                 # BoE: verified working (200)
 ]
@@ -294,6 +295,8 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "NOAA": 1.1,
     "NCEI": 1.1,
     "ncei": 1.1,
+    "drought.gov": 1.1,
+    "climate.gov": 1.1,
     "Storm Prediction Center": 1.1,
     "spc.noaa.gov": 1.1,
     "National Weather Service": 1.1,

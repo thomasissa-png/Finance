@@ -52,11 +52,18 @@ Module `data_apis.py` — 8 sources de donnees numeriques que Claude peut interp
   - Secheresse avec seuils adaptatifs (periode critique vs normale)
   - Periodes critiques : silking mais (Jun-Aug), grain fill ble, floraison soja (Dec-Feb hemisph. sud)
 - **EIA API** (cle gratuite `EIA_API_KEY`) : stocks petrole/gaz/distillats + utilisation raffineries hebdo
+  - Seuil de significance : |change_pct| >= 0.5% (ignore le bruit de rounding)
+  - Poids: lit `SOURCE_WEIGHTS["EIA"]` (1.15) au lieu d'un hardcode
 - **USDA NASS** (cle gratuite `USDA_API_KEY`) : crop progress, conditions, recoltes
-- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 20 queries
-  - Originales : "drought frost flood crop", "oil sanctions embargo", "port congestion shipping"
-  - "OPEC production cut", "wheat corn harvest", "military strike missile", "copper mine strike"
-  - Nouvelles : "natural gas storage Europe TTF LNG", "palm oil export Indonesia Malaysia"
+  - Queries saisonnieres : planting (Apr-Jun), condition (May-Sep), emergence (May-Jul), harvest (Sep-Dec)
+  - Ble condition : toute l'annee (winter wheat)
+  - Delta WoW : calcul automatique semaine vs semaine, flag [SWING MAJEUR] si >= 5pp
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 16 queries (was 20)
+  - Consolide : frost+coffee frost en 1, drought+harvest en 1, palm oil+China import en 1, PT queries en 1
+  - 4 scans/jour x 16 queries = 64 req/jour (was 80), marge confortable vs 100/jour
+  - Originales : "frost freeze crop damage", "oil sanctions embargo", "port congestion shipping"
+  - "OPEC production cut", "wheat corn soybean USDA", "military strike missile", "copper mine strike"
+  - "natural gas storage Europe TTF LNG", "palm oil export China import soybean"
   - "China import commodity soybean", "Baltic dry index shipping freight"
   - "coffee frost Brazil Minas Gerais", "hurricane tropical storm Gulf Mexico"
   - **Portugais** : "geada cafe Minas Gerais frio", "seca milho soja safra quebra" (12-24h avant medias EN)
@@ -70,6 +77,8 @@ Module `data_apis.py` — 8 sources de donnees numeriques que Claude peut interp
 - **Options Flow** (GRATUIT via yfinance) : put/call ratio extreme, volume spikes, IV skew
   - EU equities : TTE.PA, MC.PA, BNP.PA, SAN.PA, AI.PA (seuil P/C > 3.0)
   - US ETFs : SPY, QQQ, USO, GLD, SLV, CORN, WEAT (seuil P/C > 1.5)
+  - Seuil volume calls US ETFs : 50000 (was 500 — SPY trade millions/jour)
+  - Check 3 expirations les plus proches (was 1 — smart money utilise souvent la 2e/3e)
   - Mappage ETF→tickers : SPY→^GSPC, USO→CL=F/BZ=F, GLD→GC=F, CORN→ZC=F, WEAT→ZW=F
   - IV skew analysis : put IV >> call IV (+25%) = smart money hedging baissier
 - **NASA EONET** (GRATUIT, no key) : Earth Observatory Natural Events Tracker
@@ -86,15 +95,15 @@ Module `data_apis.py` — 8 sources de donnees numeriques que Claude peut interp
 Poids premium : Open-Meteo=1.15/1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.1/1.15, CFTC=1.05/1.1, Options=0.95/1.0
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
-Sources configurees dans `EARLY_SIGNAL_FEEDS` (18 feeds — verifie 2026-02-25) :
-- **Meteo/Agri** : NCEI (climat), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique)
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (21 feeds — verifie 2026-02-27) :
+- **Meteo/Agri** : Drought.gov (US drought monitor), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique), Climate.gov (ENSO/outlooks)
 - **USDA/FAO** : NASS reports (recoltes, stocks), FAO newsroom
-- **Geopolitique/Defense** : Defense.gov (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
+- **Geopolitique/Defense** : war.gov + defense.gov fallback (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
 - **Energie** : EIA Today in Energy, OilPrice
 - **Maritime/Shipping** : gCaptain, MarineLink, Maritime Executive, Splash247 (ports, containers, BDI)
-- **Banques centrales** : ECB, Federal Reserve, Bank of England (speeches)
+- **Banques centrales** : ECB (corrige .html→.xml), Federal Reserve, Bank of England (speeches)
 
-**Feeds remplaces** : State Dept (mort, PNG)→Defense.gov, USDA NASS News (stale sept 2025)→supprime
+**Feeds remplaces** : NCEI news.xml (mort)→Drought.gov+Climate.gov, Defense.gov→war.gov, ECB .html→.xml
 
 ### Phase 2 : Yahoo Finance (yfinance)
 Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API.
