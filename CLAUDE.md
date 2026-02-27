@@ -59,17 +59,19 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
   - Queries saisonnieres : planting (Apr-Jun), condition (May-Sep), emergence (May-Jul), harvest (Sep-Dec)
   - Ble condition : toute l'annee (winter wheat)
   - Delta WoW : calcul automatique semaine vs semaine, flag [SWING MAJEUR] si >= 5pp
-- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 21 queries (was 20, consolide puis +5)
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 25 queries
   - Consolide : frost+coffee frost en 1, drought+harvest en 1, palm oil+China import en 1, PT queries en 1
   - Ajoute : cocoa Ghana/Ivory Coast, cotton Texas/India, orange juice Florida/citrus greening
   - **Betail** : "cattle disease screwworm BSE", "African swine fever pork hog"
   - 4 scans/jour x 25 queries = 100 req/jour, exactement au plafond free tier
   - v3.2: +4 queries (Suez Canal, China demand, EU energy crisis, Middle East tensions)
-  - Originales : "frost freeze crop damage", "oil sanctions embargo", "port congestion shipping"
-  - "OPEC production cut", "wheat corn soybean USDA", "military strike missile", "copper mine strike"
+  - v3.2: 2 queries geopolitiques consolidees en 1 → slot libere pour PGM
+  - **PGM** : "Eskom load shedding platinum Nornickel sanctions palladium" (PL=F, PA=F)
+  - Originales : "frost freeze crop damage", "oil sanctions military strike missile pipeline embargo"
+  - "port congestion shipping", "copper mine strike", "Baltic dry index shipping freight"
+  - "OPEC production cut", "wheat corn soybean USDA", "gold reserve central bank"
   - "natural gas storage Europe TTF LNG", "palm oil export China import soybean"
-  - "China import commodity soybean", "Baltic dry index shipping freight"
-  - "coffee frost Brazil Minas Gerais", "hurricane tropical storm Gulf Mexico"
+  - "hurricane tropical storm Gulf Mexico"
   - **Portugais** : "geada cafe Minas Gerais frio", "seca milho soja safra quebra" (12-24h avant medias EN)
   - **Maladies/engrais** : "wheat rust crop disease blight", "fertilizer potash phosphate shortage"
   - **Betail** : "avian flu bird flu livestock disease outbreak"
@@ -243,6 +245,7 @@ Detection automatique des effets de second ordre. Le marche est LENT a connecter
 - **Agriculture** : ZC=F (Mais) → ZS=F (soja), ZW=F (ble) | KC=F (Cafe) → SB=F (sucre)
 - **Luxe/Chine** : MC.PA → RMS.PA, OR.PA (meme exposition consommateur chinois)
 - **Cuivre** : HG=F → ^GSPC, ^FCHI (proxy activite industrielle)
+- **PGM** : PL=F ↔ PA=F (memes mines sud-africaines — disruption impacte les deux)
 - **Yen carry** : USDJPY=X → GC=F (risk-off inverse)
 
 ### Fonctionnement
@@ -277,11 +280,12 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 Groupes d'actifs correles pour eviter les doubles expositions :
 - energy: TTE.PA, CL=F, BZ=F, NG=F
 - gold_safe: GC=F, SI=F, USDCHF=X
-- risk_on_eu: ^FCHI, ^GDAXI, ^FTSE, ^IBEX, ^FTSEMIB
+- risk_on_eu: ^FCHI, ^GDAXI, ^FTSE
 - risk_on_us: ^GSPC, ^DJI, ^IXIC, ^RUT
 - jpy_carry: USDJPY=X, EURJPY=X, ^N225
 - luxury: MC.PA, RMS.PA, OR.PA
 - agri: ZC=F, ZW=F, ZS=F
+- pgm: PL=F, PA=F
 
 ## Journal quotidien (22h CET)
 - **Scheduler**: job automatique a 22:00 CET chaque jour ouvrable (lundi-vendredi)

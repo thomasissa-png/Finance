@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from backend.app.event_scanner import (
     ALL_KEYWORDS,
     HIGH_IMPACT_KEYWORDS,
+    HIGH_PRIORITY_KEYWORDS,
     _check_headline_for_triggers,
     determine_scan_type,
     scan_feeds_for_triggers,
@@ -92,6 +93,50 @@ def test_check_headline_multiple_keywords():
     """Headlines with multiple keywords should return multiple matches."""
     matches = _check_headline_for_triggers("Flood and drought devastate crop harvest, shortage expected")
     assert len(matches) >= 2
+
+
+# ── Livestock disease keywords (v3.2) ─────────────────────────────────
+
+
+def test_check_headline_african_swine_fever():
+    """Should detect African swine fever as commodity trigger."""
+    matches = _check_headline_for_triggers("African swine fever outbreak confirmed in Germany")
+    assert len(matches) >= 1
+    categories = [m[1] for m in matches]
+    assert "commodity" in categories
+
+
+def test_check_headline_avian_flu():
+    """Should detect avian flu as commodity trigger."""
+    matches = _check_headline_for_triggers("Avian flu outbreak forces culling of 2 million birds in Iowa")
+    assert len(matches) >= 1
+    categories = [m[1] for m in matches]
+    assert "commodity" in categories
+
+
+def test_check_headline_bse():
+    """Should detect BSE/mad cow as commodity trigger."""
+    matches = _check_headline_for_triggers("BSE case detected in Brazilian cattle herd")
+    assert len(matches) >= 1
+    categories = [m[1] for m in matches]
+    assert "commodity" in categories
+
+
+def test_livestock_keywords_in_high_priority():
+    """Livestock disease keywords should bypass category cooldown (HIGH_PRIORITY)."""
+    livestock_priority = {"african swine fever", "avian flu", "bird flu",
+                          "foot-and-mouth", "bse", "mad cow", "herd liquidation"}
+    for kw in livestock_priority:
+        assert kw in HIGH_PRIORITY_KEYWORDS, f"'{kw}' missing from HIGH_PRIORITY_KEYWORDS"
+
+
+def test_livestock_keywords_in_commodity_category():
+    """All livestock disease keywords should be in the commodity category."""
+    commodity_kws = HIGH_IMPACT_KEYWORDS["commodity"]
+    expected = ["african swine fever", "avian flu", "bird flu", "bse",
+                "screwworm", "cattle disease", "swine fever"]
+    for kw in expected:
+        assert kw in commodity_kws, f"'{kw}' missing from commodity HIGH_IMPACT_KEYWORDS"
 
 
 # ── Scan type determination ──────────────────────────────────────────
