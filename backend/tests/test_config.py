@@ -78,13 +78,13 @@ def test_assets_for_session_us():
 
 
 def test_min_score_threshold():
-    """Score threshold should be 25 (lowered from 55 — multiplicative formula too punitive)."""
-    assert MIN_SCORE_THRESHOLD == 25
+    """Score threshold should be 20 (lowered from 25 — capture mid-range signals)."""
+    assert MIN_SCORE_THRESHOLD == 20
 
 
 def test_min_risk_reward():
-    """R/R minimum should be 1.3 (#20)."""
-    assert MIN_RISK_REWARD == 1.3
+    """R/R minimum should be 1.2 (lowered from 1.3 — more realistic for intraday)."""
+    assert MIN_RISK_REWARD == 1.2
 
 
 def test_source_weights_known_sources():

@@ -24,17 +24,12 @@ export default function TradeCard({ scan, label }) {
     return (
       <div className="no-trade">
         <div className="no-trade-icon">—</div>
-        <div className="no-trade-title">Pas de trade</div>
+        <div className="no-trade-title">{label}</div>
         <div className="no-trade-reason">{reason}</div>
         {/* (D4+D13) Personalized empty state with meta info */}
         {analyzed > 0 && (
           <div className="no-trade-meta">
             <span className="no-trade-tag">{analyzed} news analysées</span>
-            {scan?.scan_type && (
-              <span className="no-trade-tag">
-                {scan.scan_type === "europe" ? "Session Europe" : "Session US"}
-              </span>
-            )}
           </div>
         )}
       </div>

@@ -19,10 +19,10 @@ SCAN_KEY_TO_TYPE: dict[str, str] = {
 }
 
 TARGET_PERCENT = 1.0  # Objectif minimum de mouvement en %
-MIN_RISK_REWARD = 1.3  # Ratio risque/rendement minimum (#20 — ex 1.0)
+MIN_RISK_REWARD = 1.2  # Ratio risque/rendement minimum (ex 1.3 — 1.2 plus realiste en intraday)
 NEWS_MAX_AGE_HOURS = 8  # Ignorer les news de plus de 8h (ex 6h — elargi pour capter overnight US au scan Europe 07:50)
 NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h
-MIN_SCORE_THRESHOLD = 25  # Score minimum pour recommander un trade (ex 55 — abaisse car formule multiplicative trop punitive)
+MIN_SCORE_THRESHOLD = 20  # Score minimum pour recommander un trade (ex 25 — capte les signaux mid-range)
 
 DEFAULT_SOURCE_WEIGHT = 0.75
 
