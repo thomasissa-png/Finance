@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 
 const RESULT_LABELS = {
   TP_HIT: { label: "TP", cls: "tp" },
@@ -365,7 +365,8 @@ export default function History() {
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("trades");
 
-  useEffect(() => {
+  const fetchData = useCallback(() => {
+    if (document.hidden) return;
     Promise.all([
       fetch("/api/trades").then((r) => (r.ok ? r.json() : [])).catch(() => []),
       fetch("/api/scan-history?limit=50").then((r) => (r.ok ? r.json() : [])).catch(() => []),
@@ -376,6 +377,12 @@ export default function History() {
       })
       .finally(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetchData();
+    const id = setInterval(fetchData, 60_000);
+    return () => clearInterval(id);
+  }, [fetchData]);
 
   if (isLoading) {
     return (
