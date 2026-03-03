@@ -390,6 +390,7 @@ def get_learning():
 def get_journal():
     """Get all journal entries."""
     entries = load_journal()
+    logger.info("GET /api/journal: returning %d entries", len(entries))
     return [e.model_dump(mode="json") for e in entries]
 
 
@@ -578,6 +579,15 @@ def health():
         status["dependencies"]["trades_file"] = "ok" if trades_file.exists() else "missing"
         status["dependencies"]["journal_file"] = "ok" if journal_file.exists() else "missing"
         status["persistence"] = "json_files"
+
+    # Data counts for diagnostic (lightweight — just load and count)
+    try:
+        status["data_counts"] = {
+            "trades": len(load_trades()),
+            "journal_entries": len(load_journal()),
+        }
+    except Exception:
+        status["data_counts"] = "error"
 
     # Degraded only if the critical API key is missing
     if status["dependencies"].get("anthropic_key") == "missing":

@@ -68,19 +68,53 @@ def _write_json_locked(path: Path, data: list) -> None:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+def _parse_trades(raw: list, source: str) -> list[TradeRecommendation]:
+    """Parse raw dicts into TradeRecommendation, skipping invalid entries."""
+    trades: list[TradeRecommendation] = []
+    for i, t in enumerate(raw):
+        try:
+            trades.append(TradeRecommendation(**t))
+        except Exception as exc:
+            logger.warning(
+                "Skipping invalid trade #%d from %s (ticker=%s): %s",
+                i, source, t.get("ticker", "?") if isinstance(t, dict) else "?", exc,
+            )
+    return trades
+
+
 def load_trades() -> list[TradeRecommendation]:
-    """Load all historical trades."""
+    """Load all historical trades.
+
+    Resilient: skips individual entries that fail to parse.
+    Falls back to JSON if PG returns empty (un-migrated data).
+    """
     if is_pg_enabled():
         try:
             from .database import pg_load_trades
             raw = pg_load_trades()
-            return [TradeRecommendation(**t) for t in raw]
+            trades = _parse_trades(raw, "PG")
+            if trades:
+                return trades
+            if not raw:
+                logger.info("PG trades table is empty, trying JSON fallback")
         except Exception as exc:
             logger.error("Failed to load trades from PostgreSQL: %s", exc)
-            return []
+
+    # JSON fallback (or primary path when PG is disabled)
     try:
         raw = _read_json_locked(TRADES_FILE)
-        return [TradeRecommendation(**t) for t in raw]
+        trades = _parse_trades(raw, "JSON")
+        # Auto-migrate JSON → PG if PG is enabled but was empty
+        if trades and is_pg_enabled():
+            logger.info("Auto-migrating %d trades from JSON to PostgreSQL", len(trades))
+            try:
+                from .database import pg_save_trade
+                for t in trades:
+                    pg_save_trade(t.model_dump(mode="json"))
+                logger.info("Auto-migration of trades complete")
+            except Exception as exc:
+                logger.error("Auto-migration of trades failed: %s", exc)
+        return trades
     except Exception as exc:
         logger.error("Failed to load trades: %s", exc)
         return []

@@ -44,16 +44,39 @@ def _ensure_file() -> None:
         SCAN_HISTORY_FILE.write_text("[]")
 
 
+def _parse_scan_entries(raw: list, source: str) -> list[ScanHistoryEntry]:
+    """Parse raw dicts into ScanHistoryEntry, skipping invalid entries."""
+    entries: list[ScanHistoryEntry] = []
+    for i, e in enumerate(raw):
+        try:
+            entries.append(ScanHistoryEntry(**e))
+        except Exception as exc:
+            logger.warning(
+                "Skipping invalid scan history entry #%d from %s: %s",
+                i, source, exc,
+            )
+    return entries
+
+
 def load_scan_history() -> list[ScanHistoryEntry]:
-    """Load all scan history entries."""
+    """Load all scan history entries.
+
+    Resilient: skips individual entries that fail to parse.
+    Falls back to JSON if PG returns empty (un-migrated data).
+    """
     if is_pg_enabled():
         try:
             from .database import pg_load_scan_history
             raw = pg_load_scan_history()
-            return [ScanHistoryEntry(**e) for e in raw]
+            entries = _parse_scan_entries(raw, "PG")
+            if entries:
+                return entries
+            if not raw:
+                logger.info("PG scan_history table is empty, trying JSON fallback")
         except Exception as exc:
             logger.error("Failed to load scan history from PostgreSQL: %s", exc)
-            return []
+
+    # JSON fallback (or primary path when PG is disabled)
     _ensure_file()
     try:
         with open(SCAN_HISTORY_FILE, "r") as f:
@@ -62,7 +85,21 @@ def load_scan_history() -> list[ScanHistoryEntry]:
                 raw = json.load(f)
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
-        return [ScanHistoryEntry(**e) for e in raw]
+        entries = _parse_scan_entries(raw, "JSON")
+        # Auto-migrate JSON → PG if PG is enabled but was empty
+        if entries and is_pg_enabled():
+            logger.info(
+                "Auto-migrating %d scan history entries from JSON to PostgreSQL",
+                len(entries),
+            )
+            try:
+                from .database import pg_save_scan_history_entry
+                for e in entries:
+                    pg_save_scan_history_entry(e.model_dump(mode="json"))
+                logger.info("Auto-migration of scan history complete")
+            except Exception as exc:
+                logger.error("Auto-migration of scan history failed: %s", exc)
+        return entries
     except (json.JSONDecodeError, Exception) as exc:
         logger.error("Failed to load scan history: %s", exc)
         return []

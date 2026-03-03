@@ -39,22 +39,68 @@ def _ensure_journal_file() -> None:
 
 
 def load_journal() -> list[JournalEntry]:
-    """Load all journal entries."""
+    """Load all journal entries.
+
+    Resilient: skips individual entries that fail to parse instead of
+    returning an empty list.  If PostgreSQL returns zero entries but the
+    JSON file has data, falls back to JSON (handles un-migrated data).
+    """
+    entries: list[JournalEntry] = []
+
     if is_pg_enabled():
         try:
             from .database import pg_load_journal
             raw = pg_load_journal()
-            return [JournalEntry(**e) for e in raw]
+            for i, e in enumerate(raw):
+                try:
+                    entries.append(JournalEntry(**e))
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping invalid journal entry #%d from PG (ticker=%s): %s",
+                        i, e.get("ticker", "?"), exc,
+                    )
+            if entries:
+                return entries
+            # PG returned 0 valid entries — fall through to JSON as fallback
+            if raw:
+                logger.warning(
+                    "PG has %d raw rows but 0 valid entries — check data integrity",
+                    len(raw),
+                )
+            else:
+                logger.info("PG journal_entries table is empty, trying JSON fallback")
         except Exception as exc:
             logger.error("Failed to load journal from PostgreSQL: %s", exc)
-            return []
+
+    # JSON fallback (or primary path when PG is disabled)
     _ensure_journal_file()
     try:
         raw = json.loads(JOURNAL_FILE.read_text())
-        return [JournalEntry(**e) for e in raw]
+        for i, e in enumerate(raw):
+            try:
+                entries.append(JournalEntry(**e))
+            except Exception as exc:
+                logger.warning(
+                    "Skipping invalid journal entry #%d from JSON (ticker=%s): %s",
+                    i, e.get("ticker", "?") if isinstance(e, dict) else "?", exc,
+                )
+        # Auto-migrate JSON → PG if PG is enabled but was empty
+        if entries and is_pg_enabled():
+            logger.info(
+                "Auto-migrating %d journal entries from JSON to PostgreSQL", len(entries),
+            )
+            try:
+                from .database import pg_save_journal_entries
+                pg_save_journal_entries(
+                    [e.model_dump(mode="json") for e in entries]
+                )
+                logger.info("Auto-migration of journal entries complete")
+            except Exception as exc:
+                logger.error("Auto-migration of journal entries failed: %s", exc)
     except (json.JSONDecodeError, Exception) as exc:
-        logger.error("Failed to load journal: %s", exc)
-        return []
+        logger.error("Failed to load journal from JSON: %s", exc)
+
+    return entries
 
 
 def _save_journal(entries: list[JournalEntry]) -> None:
