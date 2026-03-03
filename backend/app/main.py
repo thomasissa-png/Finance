@@ -172,8 +172,14 @@ def _run_us_session_scan() -> None:
 def _run_daily_journal() -> None:
     """Run daily journal in background thread (same reason as scans)."""
     def _journal_worker():
+        global _last_scans
         try:
             run_daily_journal()
+            # Clear scan cache after journal — trades are closed, dashboard should
+            # show a clean slate the next morning instead of stale yesterday's trades.
+            _last_scans = {}
+            _save_scans_cache(_last_scans)
+            logger.info("Scan cache cleared after daily journal")
         except Exception as exc:
             logger.error("Daily journal failed: %s", exc)
 
@@ -397,7 +403,13 @@ def get_journal_by_date(date: str):
 @app.post("/api/journal/trigger")
 def trigger_journal():
     """Manually trigger the daily journal (for testing)."""
-    return run_daily_journal()
+    global _last_scans
+    result = run_daily_journal()
+    # Clear scan cache — trades are closed, dashboard should reset
+    _last_scans = {}
+    _save_scans_cache(_last_scans)
+    logger.info("Scan cache cleared after manual journal trigger")
+    return result
 
 
 # ── Scan history endpoints ────────────────────────────────────────

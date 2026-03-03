@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 
 const RESULT_LABELS = {
   TP_HIT: { label: "TP", cls: "tp" },
@@ -37,48 +37,80 @@ export default function Journal() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [triggerMsg, setTriggerMsg] = useState(null);
 
-  useEffect(() => {
-    fetch("/api/journal")
-      .then((r) => (r.ok ? r.json() : []))
-      .then(setEntries)
-      .catch(() => setEntries([]))
-      .finally(() => setIsLoading(false));
+  const fetchEntries = useCallback(async () => {
+    // Skip polling when tab is not visible
+    if (document.hidden) return;
+    try {
+      const res = await fetch("/api/journal");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          setEntries(data);
+        }
+      }
+    } catch {
+      /* backend not yet started — silent */
+    }
   }, []);
+
+  // Initial load + periodic polling (entries may change after 22h journal)
+  useEffect(() => {
+    fetchEntries().finally(() => setIsLoading(false));
+    const interval = setInterval(fetchEntries, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchEntries]);
 
   const triggerJournal = async () => {
     setLoading(true);
+    setTriggerMsg(null);
     try {
       const res = await fetch("/api/journal/trigger", { method: "POST" });
       if (res.ok) {
-        const all = await fetch("/api/journal");
-        if (all.ok) setEntries(await all.json());
+        const newEntries = await res.json();
+        if (Array.isArray(newEntries) && newEntries.length > 0) {
+          setTriggerMsg({ type: "success", text: `${newEntries.length} entree(s) ajoutee(s) au journal.` });
+        } else {
+          setTriggerMsg({ type: "warning", text: "Aucun trade PENDING a cloturer." });
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setTriggerMsg({ type: "error", text: err.detail || "Erreur lors de la generation du journal." });
       }
     } catch (err) {
       console.error("Journal trigger failed:", err);
-    } finally {
-      setLoading(false);
+      setTriggerMsg({ type: "error", text: "Erreur reseau." });
     }
+    // Always refetch entries after trigger, regardless of outcome
+    await fetchEntries();
+    setLoading(false);
   };
 
   // (F6) Memoize grouping and sorting to avoid re-computing on every render
+  // Filter out entries with missing date field (defensive)
+  const validEntries = useMemo(
+    () => entries.filter((e) => e && e.date),
+    [entries]
+  );
+
   const sortedDates = useMemo(() => {
     const byDate = {};
-    entries.forEach((e) => {
+    validEntries.forEach((e) => {
       if (!byDate[e.date]) byDate[e.date] = [];
       byDate[e.date].push(e);
     });
     return Object.keys(byDate).sort().reverse();
-  }, [entries]);
+  }, [validEntries]);
 
   const byDate = useMemo(() => {
     const grouped = {};
-    entries.forEach((e) => {
+    validEntries.forEach((e) => {
       if (!grouped[e.date]) grouped[e.date] = [];
       grouped[e.date].push(e);
     });
     return grouped;
-  }, [entries]);
+  }, [validEntries]);
 
   if (isLoading) {
     return (
@@ -89,7 +121,7 @@ export default function Journal() {
     );
   }
 
-  if (entries.length === 0) {
+  if (validEntries.length === 0) {
     return (
       <div>
         <div className="trigger-section">
@@ -98,15 +130,20 @@ export default function Journal() {
             onClick={triggerJournal}
             disabled={loading}
           >
-            {loading ? "Génération..." : "Générer journal (22h)"}
+            {loading ? "Generation..." : "Generer journal (22h)"}
           </button>
         </div>
+        {triggerMsg && (
+          <div className={`journal-trigger-msg ${triggerMsg.type}`}>
+            {triggerMsg.text}
+          </div>
+        )}
         <div className="no-trade">
           <div className="no-trade-icon">--</div>
           {/* (D13) Personalized empty state */}
-          <div className="no-trade-title">Aucune entrée de journal</div>
+          <div className="no-trade-title">Aucune entree de journal</div>
           <div className="no-trade-reason">
-            Le journal est généré automatiquement à 22h00 CET chaque jour ouvré.
+            Le journal est genere automatiquement a 22h00 CET chaque jour ouvre.
           </div>
           <div className="no-trade-meta">
             <span className="no-trade-tag">Auto : 22h00 CET</span>
@@ -125,13 +162,19 @@ export default function Journal() {
           onClick={triggerJournal}
           disabled={loading}
         >
-          {loading ? "Génération..." : "Générer journal (22h)"}
+          {loading ? "Generation..." : "Generer journal (22h)"}
         </button>
         {/* (D17) Export button — outline style */}
         <a href="/api/export/journal" className="trigger-btn export" style={{ textDecoration: "none" }}>
           Export CSV
         </a>
       </div>
+
+      {triggerMsg && (
+        <div className={`journal-trigger-msg ${triggerMsg.type}`}>
+          {triggerMsg.text}
+        </div>
+      )}
 
       {sortedDates.map((date) => (
         <div key={date} className="journal-day">
@@ -147,26 +190,26 @@ export default function Journal() {
                   <th>Score</th>
                   <th>Actif</th>
                   <th>Dir.</th>
-                  <th>Entrée</th>
+                  <th>Entree</th>
                   <th>Sortie</th>
                   <th>High/Low</th>
-                  <th>Résultat</th>
+                  <th>Resultat</th>
                   <th>Bilan</th>
                 </tr>
               </thead>
               <tbody>
-                {byDate[date].map((e) => {
+                {(byDate[date] || []).map((e) => {
                   const r = RESULT_LABELS[e.result] || RESULT_LABELS.PENDING;
                   return (
                     <tr key={`${e.entry_time}-${e.ticker}`}>
                       <td className="journal-news-cell">
-                        <div className="journal-news-title">{e.news_title}</div>
-                        <div className="journal-news-source">{e.news_source}</div>
+                        <div className="journal-news-title">{e.news_title || "--"}</div>
+                        <div className="journal-news-source">{e.news_source || "--"}</div>
                         {e.news_category && e.news_category !== "other" && (
                           <div className="journal-cat-badge">{e.news_category}</div>
                         )}
                       </td>
-                      <td className="journal-reasoning-cell">{e.reasoning}</td>
+                      <td className="journal-reasoning-cell">{e.reasoning || "--"}</td>
                       <td className="journal-score">
                         <span
                           style={{
@@ -178,13 +221,13 @@ export default function Journal() {
                                   : "var(--red)",
                           }}
                         >
-                          {e.score}
+                          {e.score ?? "--"}
                         </span>
                       </td>
                       <td>
-                        <div>{e.asset_name}</div>
+                        <div>{e.asset_name || "--"}</div>
                         <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                          {e.ticker}
+                          {e.ticker || "--"}
                         </div>
                         {e.asset_category && (
                           <div className="journal-cat-badge">{e.asset_category}</div>
@@ -195,11 +238,11 @@ export default function Journal() {
                           className={`direction-badge ${e.direction === "LONG" ? "long" : "short"}`}
                           style={{ fontSize: 11, padding: "2px 6px" }}
                         >
-                          {e.direction}
+                          {e.direction || "--"}
                         </span>
                       </td>
                       <td>
-                        <div style={{ color: "var(--cyan)" }}>{e.entry_price}</div>
+                        <div style={{ color: "var(--cyan)" }}>{e.entry_price ?? "--"}</div>
                         <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
                           {formatTime(e.entry_time)}
                         </div>
@@ -236,7 +279,7 @@ export default function Journal() {
                         )}
                       </td>
                       <td className="journal-review-cell">
-                        {e.review}
+                        {e.review || "--"}
                         {e.binary_event_warning && (
                           <div className="trade-warning-inline">
                             {e.binary_event_warning}
@@ -252,17 +295,17 @@ export default function Journal() {
 
           {/* (D8) Mobile card layout — shown only on small screens */}
           <div className="journal-mobile-list">
-            {byDate[date].map((e) => {
+            {(byDate[date] || []).map((e) => {
               const r = RESULT_LABELS[e.result] || RESULT_LABELS.PENDING;
               return (
                 <div key={`m-${e.entry_time}-${e.ticker}`} className="journal-mobile-card">
                   <div className="journal-mobile-card-header">
                     <div>
                       <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-                        {e.asset_name}
+                        {e.asset_name || "--"}
                       </div>
                       <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                        {e.ticker}
+                        {e.ticker || "--"}
                         {e.news_category && e.news_category !== "other" && (
                           <span className="journal-cat-badge" style={{ marginLeft: 6 }}>
                             {e.news_category}
@@ -275,15 +318,15 @@ export default function Journal() {
                         className={`direction-badge ${e.direction === "LONG" ? "long" : "short"}`}
                         style={{ fontSize: 10, padding: "2px 6px" }}
                       >
-                        {e.direction}
+                        {e.direction || "--"}
                       </span>
                       <span className={`result-badge ${r.cls}`}>{r.label}</span>
                     </div>
                   </div>
                   <div className="journal-mobile-card-body">
                     <div>
-                      <div className="journal-mobile-label">Entrée</div>
-                      <div style={{ color: "var(--cyan)" }}>{e.entry_price}</div>
+                      <div className="journal-mobile-label">Entree</div>
+                      <div style={{ color: "var(--cyan)" }}>{e.entry_price ?? "--"}</div>
                     </div>
                     <div>
                       <div className="journal-mobile-label">Sortie</div>
@@ -295,7 +338,7 @@ export default function Journal() {
                         color: e.score >= 70 ? "var(--green)" : e.score >= 50 ? "var(--yellow)" : "var(--red)",
                         fontWeight: 700,
                       }}>
-                        {e.score}
+                        {e.score ?? "--"}
                       </div>
                     </div>
                     <div>
@@ -314,7 +357,7 @@ export default function Journal() {
                             {e.news_title}
                           </div>
                         )}
-                        {e.review}
+                        {e.review || "--"}
                       </div>
                     )}
                   </div>

@@ -1117,6 +1117,33 @@ a:focus:not(:focus-visible) {
   }
 }
 
+/* Journal trigger feedback message */
+.journal-trigger-msg {
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.journal-trigger-msg.success {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: var(--green);
+}
+
+.journal-trigger-msg.warning {
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  color: var(--yellow);
+}
+
+.journal-trigger-msg.error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--red);
+}
+
 /* On desktop, hide mobile journal cards and show table */
 .journal-mobile-list {
   display: none;
