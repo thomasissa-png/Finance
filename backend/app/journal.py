@@ -64,66 +64,162 @@ def _save_journal(entries: list[JournalEntry]) -> None:
     )
 
 
-def _fetch_day_prices(ticker: str, date: str | None = None) -> tuple[float | None, float | None, float | None]:
-    """Fetch day's high, low, and closing price for a ticker.
+def _fetch_intraday_prices(
+    ticker: str, trade_date: str,
+) -> tuple[float | None, float | None, float | None, list | None]:
+    """Fetch intraday 1h bars for a specific trading day.
 
-    If date is provided (YYYY-MM-DD), fetches historical prices for that date.
-    Otherwise fetches today's prices.
+    Uses 1h bars so that:
+    1. We can filter to ONLY bars AFTER the trade entry time
+    2. We can determine chronologically whether TP or SL was hit first
 
-    Returns (day_high, day_low, close).
+    Returns (full_day_high, full_day_low, session_close, bars).
+    bars = list of (timestamp, bar_high, bar_low) for chronological TP/SL.
+    Returns (None, None, None, None) if data unavailable.
     """
+    from datetime import date as date_type, timedelta
+
+    target = date_type.fromisoformat(trade_date)
+    # end is exclusive in yfinance — +2 days to handle timezone offsets safely
+    end = target + timedelta(days=2)
+
     try:
-        if date:
-            data = yf.Ticker(ticker).history(start=date, period="2d")
-        else:
-            data = yf.Ticker(ticker).history(period="1d")
+        data = yf.Ticker(ticker).history(
+            start=str(target), end=str(end), interval="1h",
+        )
+
         if data.empty:
-            return None, None, None
-        row = data.iloc[-1]
-        return float(row["High"]), float(row["Low"]), float(row["Close"])
+            # Fallback: daily bar with explicit start/end (no more period="2d" bug)
+            daily = yf.Ticker(ticker).history(
+                start=str(target), end=str(target + timedelta(days=1)),
+            )
+            if daily.empty:
+                return None, None, None, None
+            row = daily.iloc[-1]
+            return float(row["High"]), float(row["Low"]), float(row["Close"]), None
+
+        # Keep only bars from the target date
+        target_str = trade_date
+        mask = [idx.strftime("%Y-%m-%d") == target_str for idx in data.index]
+        data = data.loc[mask]
+
+        if data.empty:
+            return None, None, None, None
+
+        full_high = float(data["High"].max())
+        full_low = float(data["Low"].min())
+        session_close = float(data["Close"].iloc[-1])
+
+        bars = []
+        for idx, row in data.iterrows():
+            bars.append((idx, float(row["High"]), float(row["Low"])))
+
+        return full_high, full_low, session_close, bars
     except Exception as exc:
-        logger.warning("Day price fetch failed for %s: %s", ticker, exc)
-        return None, None, None
+        logger.warning("Intraday price fetch failed for %s (%s): %s", ticker, trade_date, exc)
+        return None, None, None, None
+
+
+def _filter_post_entry(
+    bars: list | None, entry_time: datetime,
+) -> list | None:
+    """Filter intraday bars to keep only those at or after the trade entry time.
+
+    This ensures we don't count price extremes that happened BEFORE the trade
+    was recommended — a high at 06:00 is irrelevant for a trade entered at 07:50.
+    """
+    if not bars:
+        return None
+    entry_utc = entry_time if entry_time.tzinfo else entry_time.replace(tzinfo=timezone.utc)
+    filtered = [(ts, h, low) for ts, h, low in bars if ts >= entry_utc]
+    return filtered if filtered else None
+
+
+def _compute_pnl(
+    trade: TradeRecommendation, exit_price: float,
+) -> float:
+    """Compute PnL percentage for a trade."""
+    if trade.direction == Direction.LONG:
+        return round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
+    return round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
 
 
 def _determine_result(
     trade: TradeRecommendation,
-    day_high: float | None,
-    day_low: float | None,
+    post_high: float | None,
+    post_low: float | None,
     close: float | None,
+    post_entry_bars: list | None = None,
 ) -> tuple[TradeResult, float | None, float | None]:
-    """Determine trade outcome based on day price action.
+    """Determine trade outcome from POST-ENTRY price action.
 
-    TP is checked first (user preference: focus on TP).
+    post_high/post_low are computed from bars AFTER the trade was recommended.
+    When both TP and SL are reachable within the post-entry range, uses
+    intraday bars to check chronologically which was hit FIRST.
+    Falls back to SL (conservative) when intraday data is unavailable.
+
     Returns (result, exit_price, pnl_pct).
     """
-    if day_high is None or day_low is None or close is None:
+    if post_high is None or post_low is None or close is None:
         return TradeResult.EXPIRED, close, None
 
+    # Check if TP/SL are reachable from POST-ENTRY high/low
     if trade.direction == Direction.LONG:
-        # Check TP first (priority)
-        if day_high >= trade.target_price:
-            exit_price = trade.target_price
-            pnl = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
-            return TradeResult.TP_HIT, exit_price, pnl
-        if day_low <= trade.stop_price:
-            exit_price = trade.stop_price
-            pnl = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
-            return TradeResult.SL_HIT, exit_price, pnl
-        pnl = round((close - trade.entry_price) / trade.entry_price * 100, 4)
-        return TradeResult.EXPIRED, close, pnl
+        tp_reachable = post_high >= trade.target_price
+        sl_reachable = post_low <= trade.stop_price
     else:
-        # SHORT — TP first
-        if day_low <= trade.target_price:
-            exit_price = trade.target_price
-            pnl = round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
-            return TradeResult.TP_HIT, exit_price, pnl
-        if day_high >= trade.stop_price:
-            exit_price = trade.stop_price
-            pnl = round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
-            return TradeResult.SL_HIT, exit_price, pnl
-        pnl = round((trade.entry_price - close) / trade.entry_price * 100, 4)
-        return TradeResult.EXPIRED, close, pnl
+        tp_reachable = post_low <= trade.target_price
+        sl_reachable = post_high >= trade.stop_price
+
+    # ── Case 1: Only TP reachable ──
+    if tp_reachable and not sl_reachable:
+        pnl = _compute_pnl(trade, trade.target_price)
+        return TradeResult.TP_HIT, trade.target_price, pnl
+
+    # ── Case 2: Only SL reachable ──
+    if sl_reachable and not tp_reachable:
+        pnl = _compute_pnl(trade, trade.stop_price)
+        return TradeResult.SL_HIT, trade.stop_price, pnl
+
+    # ── Case 3: BOTH reachable — need chronological resolution ──
+    if tp_reachable and sl_reachable:
+        if post_entry_bars:
+            # Walk bars chronologically to find which was hit first
+            for _ts, bar_high, bar_low in post_entry_bars:
+                if trade.direction == Direction.LONG:
+                    tp_hit = bar_high >= trade.target_price
+                    sl_hit = bar_low <= trade.stop_price
+                else:
+                    tp_hit = bar_low <= trade.target_price
+                    sl_hit = bar_high >= trade.stop_price
+
+                if tp_hit and not sl_hit:
+                    pnl = _compute_pnl(trade, trade.target_price)
+                    return TradeResult.TP_HIT, trade.target_price, pnl
+                if sl_hit and not tp_hit:
+                    pnl = _compute_pnl(trade, trade.stop_price)
+                    return TradeResult.SL_HIT, trade.stop_price, pnl
+                if tp_hit and sl_hit:
+                    # Both hit in same 1h bar — can't determine order,
+                    # be conservative: assume SL was hit first
+                    logger.info(
+                        "TP+SL both hit in same bar for %s — conservative SL",
+                        trade.ticker,
+                    )
+                    pnl = _compute_pnl(trade, trade.stop_price)
+                    return TradeResult.SL_HIT, trade.stop_price, pnl
+
+        # No intraday resolution — conservative: SL first
+        logger.info(
+            "TP+SL both reachable for %s but no intraday data — conservative SL",
+            trade.ticker,
+        )
+        pnl = _compute_pnl(trade, trade.stop_price)
+        return TradeResult.SL_HIT, trade.stop_price, pnl
+
+    # ── Case 4: Neither hit — EXPIRED at session close ──
+    pnl = _compute_pnl(trade, close)
+    return TradeResult.EXPIRED, close, pnl
 
 
 def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: float | None) -> str:
@@ -239,25 +335,28 @@ def run_daily_journal() -> list[dict]:
 
     new_entries: list[JournalEntry] = []
 
-    # (I7) Pre-fetch all day prices in parallel to speed up journal closure
+    # (I7) Pre-fetch intraday prices in parallel to speed up journal closure
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    price_tasks: dict[tuple[str, str | None], TradeRecommendation] = {}
+    # Collect unique (ticker, trade_date) pairs for parallel fetching
+    price_tasks: dict[tuple[str, str], TradeRecommendation] = {}
     for trade in pending:
         trade_date = trade.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
         trade_key = (trade.ticker, trade.timestamp.isoformat())
         if trade_key in existing_keys:
             continue
-        fetch_date = trade_date if trade_date != today else None
-        price_tasks[(trade.ticker, fetch_date)] = trade
+        cache_key = (trade.ticker, trade_date)
+        if cache_key not in price_tasks:
+            price_tasks[cache_key] = trade
 
-    price_cache: dict[tuple[str, str | None], tuple[float | None, float | None, float | None]] = {}
+    # Fetch intraday 1h bars (not daily) for accurate post-entry price tracking
+    price_cache: dict[tuple[str, str], tuple] = {}
     if price_tasks:
         # max_workers capped at 3: Replit kills process on too many concurrent threads.
         with ThreadPoolExecutor(max_workers=min(3, len(price_tasks))) as executor:
             futures = {
-                executor.submit(_fetch_day_prices, ticker, date): (ticker, date)
-                for ticker, date in price_tasks
+                executor.submit(_fetch_intraday_prices, ticker, trade_date): (ticker, trade_date)
+                for ticker, trade_date in price_tasks
             }
             for future in as_completed(futures):
                 key = futures[future]
@@ -265,7 +364,7 @@ def run_daily_journal() -> list[dict]:
                     price_cache[key] = future.result(timeout=15)
                 except Exception as exc:
                     logger.warning("Parallel price fetch failed for %s: %s", key[0], exc)
-                    price_cache[key] = (None, None, None)
+                    price_cache[key] = (None, None, None, None)
 
     for trade in pending:
         trade_date = trade.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
@@ -279,10 +378,35 @@ def run_daily_journal() -> list[dict]:
         if trade_date != today:
             logger.info("Force-closing old pending trade: %s from %s", trade.ticker, trade_date)
 
-        # Use pre-fetched prices from parallel cache
-        fetch_date = trade_date if trade_date != today else None
-        day_high, day_low, close = price_cache.get((trade.ticker, fetch_date), (None, None, None))
-        result, exit_price, pnl_pct = _determine_result(trade, day_high, day_low, close)
+        # Get intraday data and filter to ONLY post-entry bars
+        cache_key = (trade.ticker, trade_date)
+        _full_high, _full_low, session_close, all_bars = price_cache.get(
+            cache_key, (None, None, None, None),
+        )
+        post_bars = _filter_post_entry(all_bars, trade.timestamp)
+
+        # Compute high/low from POST-ENTRY bars only (ignore price action before trade)
+        if post_bars:
+            day_high = max(h for _, h, _ in post_bars)
+            day_low = min(l for _, _, l in post_bars)
+        else:
+            # No post-entry bars — fall back to full day data
+            day_high, day_low = _full_high, _full_low
+
+        close = session_close
+
+        logger.info(
+            "Price check %s (%s): entry=%.4f, post_high=%s, post_low=%s, close=%s, bars=%d",
+            trade.ticker, trade_date, trade.entry_price,
+            f"{day_high:.4f}" if day_high else "N/A",
+            f"{day_low:.4f}" if day_low else "N/A",
+            f"{close:.4f}" if close else "N/A",
+            len(post_bars) if post_bars else 0,
+        )
+
+        result, exit_price, pnl_pct = _determine_result(
+            trade, day_high, day_low, close, post_bars,
+        )
 
         # P1-#6: Compute actual pricing time and delay accuracy
         actual_pricing_hours = None

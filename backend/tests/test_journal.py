@@ -59,7 +59,7 @@ def _with_temp_file(data, target_attr):
 
 def test_determine_result_long_tp_hit():
     trade = _make_trade(direction=Direction.LONG, entry_price=100, target_price=105, stop_price=97)
-    result, exit_price, pnl = _determine_result(trade, day_high=106, day_low=99, close=104)
+    result, exit_price, pnl = _determine_result(trade, 106, 99, 104)
     assert result == TradeResult.TP_HIT
     assert exit_price == 105
     assert pnl == 5.0
@@ -67,7 +67,7 @@ def test_determine_result_long_tp_hit():
 
 def test_determine_result_long_sl_hit():
     trade = _make_trade(direction=Direction.LONG, entry_price=100, target_price=105, stop_price=97)
-    result, exit_price, pnl = _determine_result(trade, day_high=101, day_low=96, close=97)
+    result, exit_price, pnl = _determine_result(trade, 101, 96, 97)
     assert result == TradeResult.SL_HIT
     assert exit_price == 97
     assert pnl == -3.0
@@ -75,22 +75,22 @@ def test_determine_result_long_sl_hit():
 
 def test_determine_result_long_expired():
     trade = _make_trade(direction=Direction.LONG, entry_price=100, target_price=105, stop_price=97)
-    result, exit_price, pnl = _determine_result(trade, day_high=103, day_low=99, close=102)
+    result, exit_price, pnl = _determine_result(trade, 103, 99, 102)
     assert result == TradeResult.EXPIRED
     assert exit_price == 102
     assert pnl == 2.0
 
 
-def test_determine_result_long_tp_priority():
-    """When both TP and SL could be hit in the same day, TP takes priority."""
+def test_determine_result_both_reachable_no_bars():
+    """When both TP and SL are reachable but no intraday bars, conservative SL."""
     trade = _make_trade(direction=Direction.LONG, entry_price=100, target_price=105, stop_price=97)
-    result, exit_price, pnl = _determine_result(trade, day_high=106, day_low=96, close=101)
-    assert result == TradeResult.TP_HIT
+    result, exit_price, pnl = _determine_result(trade, 106, 96, 101)
+    assert result == TradeResult.SL_HIT
 
 
 def test_determine_result_short_tp_hit():
     trade = _make_trade(direction=Direction.SHORT, entry_price=100, target_price=95, stop_price=103)
-    result, exit_price, pnl = _determine_result(trade, day_high=101, day_low=94, close=96)
+    result, exit_price, pnl = _determine_result(trade, 101, 94, 96)
     assert result == TradeResult.TP_HIT
     assert exit_price == 95
     assert pnl == 5.0
@@ -98,7 +98,7 @@ def test_determine_result_short_tp_hit():
 
 def test_determine_result_short_sl_hit():
     trade = _make_trade(direction=Direction.SHORT, entry_price=100, target_price=95, stop_price=103)
-    result, exit_price, pnl = _determine_result(trade, day_high=104, day_low=99, close=103)
+    result, exit_price, pnl = _determine_result(trade, 104, 99, 103)
     assert result == TradeResult.SL_HIT
     assert exit_price == 103
     assert pnl == -3.0
@@ -106,7 +106,7 @@ def test_determine_result_short_sl_hit():
 
 def test_determine_result_short_expired():
     trade = _make_trade(direction=Direction.SHORT, entry_price=100, target_price=95, stop_price=103)
-    result, exit_price, pnl = _determine_result(trade, day_high=102, day_low=97, close=98)
+    result, exit_price, pnl = _determine_result(trade, 102, 97, 98)
     assert result == TradeResult.EXPIRED
     assert exit_price == 98
     assert pnl == 2.0
@@ -268,7 +268,7 @@ def test_run_daily_journal_with_pending_trade():
 
     with _with_temp_file([], "backend.app.journal.JOURNAL_FILE"), \
          patch("backend.app.journal.load_trades", return_value=[trade]), \
-         patch("backend.app.journal._fetch_day_prices", return_value=(810.0, 795.0, 805.0)), \
+         patch("backend.app.journal._fetch_intraday_prices", return_value=(810.0, 795.0, 805.0, None)), \
          patch("backend.app.journal.update_trade_result") as mock_update, \
          patch("backend.app.journal.compute_learning_adjustments", return_value={}), \
          patch("backend.app.journal.invalidate_learning_cache"):
@@ -327,7 +327,7 @@ def test_run_daily_journal_binary_event_propagated():
 
     with _with_temp_file([], "backend.app.journal.JOURNAL_FILE"), \
          patch("backend.app.journal.load_trades", return_value=[trade]), \
-         patch("backend.app.journal._fetch_day_prices", return_value=(810.0, 795.0, 805.0)), \
+         patch("backend.app.journal._fetch_intraday_prices", return_value=(810.0, 795.0, 805.0, None)), \
          patch("backend.app.journal.update_trade_result"), \
          patch("backend.app.journal.compute_learning_adjustments", return_value={}), \
          patch("backend.app.journal.invalidate_learning_cache"):

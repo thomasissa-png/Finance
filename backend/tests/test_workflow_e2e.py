@@ -445,12 +445,12 @@ class TestJournalClosure:
         assert exit_p == 71.5
         assert pnl < 0
 
-    def test_tp_priority_over_sl(self):
-        """When both TP and SL hit same day, TP wins (our design choice)."""
+    def test_both_reachable_no_bars_conservative_sl(self):
+        """When both TP and SL reachable but no intraday bars, conservative SL."""
         trade = _make_trade(direction=Direction.LONG, entry_price=70,
                             target_price=72, stop_price=69)
         result, _, _ = _determine_result(trade, 73.0, 68.0, 70.0)
-        assert result == TradeResult.TP_HIT
+        assert result == TradeResult.SL_HIT
 
     def test_no_data_gives_expired(self):
         trade = _make_trade()
@@ -499,8 +499,8 @@ class TestJournalClosure:
 
         with _with_temp_journal([]), \
              patch("backend.app.journal.load_trades", return_value=[trade]), \
-             patch("backend.app.journal._fetch_day_prices",
-                   return_value=(73.0, 69.5, 71.0)), \
+             patch("backend.app.journal._fetch_intraday_prices",
+                   return_value=(73.0, 69.5, 71.0, None)), \
              patch("backend.app.journal.update_trade_result") as mock_update, \
              patch("backend.app.journal.compute_learning_adjustments",
                    return_value={}), \
@@ -737,8 +737,8 @@ class TestFullPipelineIntegration:
 
         with _with_temp_journal([]), \
              patch("backend.app.journal.load_trades", return_value=[trade]), \
-             patch("backend.app.journal._fetch_day_prices",
-                   return_value=(73.0, 69.5, 71.0)), \
+             patch("backend.app.journal._fetch_intraday_prices",
+                   return_value=(73.0, 69.5, 71.0, None)), \
              patch("backend.app.journal.update_trade_result") as mock_update, \
              patch("backend.app.journal.compute_learning_adjustments",
                    return_value={}), \
