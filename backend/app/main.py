@@ -403,13 +403,43 @@ def get_journal_by_date(date: str):
 
 @app.post("/api/journal/trigger")
 def trigger_journal():
-    """Manually trigger the daily journal (for testing)."""
+    """Manually trigger the daily journal (for testing).
+
+    Returns diagnostic info so the user knows what happened.
+    """
     global _last_scans
+
+    # Pre-check: how many trades exist and how many are PENDING
+    from .models import TradeResult
+    all_trades = load_trades()
+    pending = [t for t in all_trades if t.result == TradeResult.PENDING]
+    logger.info(
+        "Journal trigger: %d total trades, %d PENDING",
+        len(all_trades), len(pending),
+    )
+
     result = run_daily_journal()
+
     # Clear scan cache — trades are closed, dashboard should reset
     _last_scans = {}
     _save_scans_cache(_last_scans)
     logger.info("Scan cache cleared after manual journal trigger")
+
+    # Return diagnostic wrapper if no entries were created
+    if not result:
+        return {
+            "entries": [],
+            "diagnostic": {
+                "total_trades": len(all_trades),
+                "pending_trades": len(pending),
+                "pending_tickers": [t.ticker for t in pending],
+                "message": (
+                    "Aucun trade PENDING a cloturer."
+                    if not pending
+                    else f"{len(pending)} trades PENDING trouves mais aucune entree journal creee."
+                ),
+            },
+        }
     return result
 
 

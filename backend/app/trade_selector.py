@@ -1,7 +1,7 @@
 """Selects the best trade from scored news and calibrates entry/TP/SL."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import yfinance as yf
 
@@ -35,6 +35,31 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Cross-day dedup: don't trade the same ticker within this many days
+RECENT_TRADE_COOLDOWN_DAYS = 3
+
+
+def _get_recently_traded_tickers(cooldown_days: int = RECENT_TRADE_COOLDOWN_DAYS) -> set[str]:
+    """Return tickers traded in the last N days (to avoid repeating the same trade).
+
+    Loads trades and checks which tickers have PENDING or recently-closed trades.
+    This prevents the system from proposing the same trade day after day on
+    persistent news (e.g., wheat drought story running for a week).
+    """
+    try:
+        from .learning import load_trades
+        cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
+        trades = load_trades()
+        return {
+            t.ticker
+            for t in trades
+            if t.timestamp >= cutoff
+        }
+    except Exception as exc:
+        logger.warning("Failed to load recent trades for cross-day dedup: %s", exc)
+        return set()
+
 
 TIME_WINDOWS = {
     ScanType.EUROPE: "09:00 — 20:00",
@@ -395,6 +420,12 @@ def select_trade(
                 logger.debug("Price pre-fetch failed for %s: %s", ticker_key, exc)
                 price_cache[ticker_key] = (None, 1.5, None, None)
 
+    # Cross-day dedup: load tickers traded in the last N days
+    recently_traded = _get_recently_traded_tickers()
+    if recently_traded:
+        logger.info("Cross-day dedup: %d tickers traded recently: %s",
+                     len(recently_traded), ", ".join(sorted(recently_traded)))
+
     # Try candidates until we find one with a valid price and R/R
     for rank, (best_news, best_score) in enumerate(candidates):
         ticker = next(t for t in best_news.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers)
@@ -411,6 +442,16 @@ def select_trade(
         if _check_correlation(ticker, existing_trade_ticker):
             reason = f"Correle avec trade existant {existing_trade_ticker}"
             logger.info("Skipping %s: correlated with existing trade %s", ticker, existing_trade_ticker)
+            rejection_log.append({
+                "title": best_news.news.title, "ticker": [ticker],
+                "reason": reason, "score": raw_score, "adjusted_score": best_score,
+            })
+            continue
+
+        # Cross-day dedup: skip tickers already traded in the last N days
+        if ticker in recently_traded:
+            reason = f"Deja trade dans les {RECENT_TRADE_COOLDOWN_DAYS} derniers jours"
+            logger.info("Skipping %s: %s", ticker, reason)
             rejection_log.append({
                 "title": best_news.news.title, "ticker": [ticker],
                 "reason": reason, "score": raw_score, "adjusted_score": best_score,

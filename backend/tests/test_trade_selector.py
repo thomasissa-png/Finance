@@ -1,13 +1,16 @@
 """Tests for trade selection logic."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
-from backend.app.models import Direction, NewsItem, ScanType, ScoredNews
+from backend.app.models import Direction, NewsItem, ScanType, ScoredNews, TradeRecommendation, TradeResult
 from backend.app.trade_selector import (
+    RECENT_TRADE_COOLDOWN_DAYS,
     _calibrate_trade,
     _check_binary_event,
     _check_correlation,
     _detect_pre_move,
+    _get_recently_traded_tickers,
     select_trade,
 )
 
@@ -187,3 +190,74 @@ def test_check_correlation_same_group():
 def test_check_correlation_different_groups():
     assert _check_correlation("MC.PA", "CL=F") is False
     assert _check_correlation("GC=F", "MC.PA") is False
+
+
+# ── Cross-day dedup tests ──────────────────────────────────────
+
+def _make_trade(ticker: str, days_ago: int = 0) -> TradeRecommendation:
+    """Create a minimal TradeRecommendation for dedup testing."""
+    return TradeRecommendation(
+        scan_type=ScanType.EUROPE,
+        timestamp=datetime.now(timezone.utc) - timedelta(days=days_ago),
+        ticker=ticker,
+        asset_name=ticker,
+        category="test",
+        direction=Direction.LONG,
+        catalyst="Test",
+        entry_price=100.0,
+        target_price=102.0,
+        stop_price=99.0,
+        target_pct=2.0,
+        stop_pct=1.0,
+        risk_reward=2.0,
+        confidence=70,
+        time_window="09:00 — 20:00",
+        result=TradeResult.PENDING,
+    )
+
+
+@patch("backend.app.learning.load_trades")
+def test_get_recently_traded_tickers_returns_recent(mock_load):
+    """Tickers traded within cooldown window should be returned."""
+    mock_load.return_value = [
+        _make_trade("ZW=F", days_ago=1),  # wheat yesterday
+        _make_trade("MC.PA", days_ago=0),  # today
+    ]
+    result = _get_recently_traded_tickers(cooldown_days=3)
+    assert "ZW=F" in result
+    assert "MC.PA" in result
+
+
+@patch("backend.app.learning.load_trades")
+def test_get_recently_traded_tickers_excludes_old(mock_load):
+    """Tickers traded before cooldown window should NOT be returned."""
+    mock_load.return_value = [
+        _make_trade("ZW=F", days_ago=5),  # 5 days ago — outside 3-day window
+        _make_trade("MC.PA", days_ago=1),  # yesterday — within window
+    ]
+    result = _get_recently_traded_tickers(cooldown_days=3)
+    assert "ZW=F" not in result
+    assert "MC.PA" in result
+
+
+@patch("backend.app.learning.load_trades")
+def test_get_recently_traded_tickers_empty_on_error(mock_load):
+    """Should return empty set if load_trades fails."""
+    mock_load.side_effect = Exception("DB error")
+    result = _get_recently_traded_tickers()
+    assert result == set()
+
+
+@patch("backend.app.trade_selector._get_recently_traded_tickers")
+def test_select_trade_rejects_recently_traded_ticker(mock_recent):
+    """A ticker traded recently should be rejected by select_trade."""
+    mock_recent.return_value = {"MC.PA"}
+    scored = [_make_scored("MC.PA", surprise=90, freshness=90, clarity=90,
+                           news_category="commodity")]
+    # Need high transmission_delay and low market_awareness for edge score
+    scored[0].transmission_delay = 80
+    scored[0].market_awareness = 10
+    result = select_trade(scored, ScanType.EUROPE)
+    assert not result.has_trade
+    # Check rejection log mentions the dedup reason
+    assert any("Deja trade" in r.get("reason", "") for r in result.rejection_log)

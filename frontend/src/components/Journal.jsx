@@ -49,9 +49,11 @@ export default function Journal() {
         if (Array.isArray(data)) {
           setEntries(data);
         }
+      } else {
+        console.error("Journal fetch error:", res.status);
       }
-    } catch {
-      /* backend not yet started — silent */
+    } catch (err) {
+      console.error("Journal fetch failed:", err);
     }
   }, []);
 
@@ -68,15 +70,23 @@ export default function Journal() {
     try {
       const res = await fetch("/api/journal/trigger", { method: "POST" });
       if (res.ok) {
-        const newEntries = await res.json();
-        if (Array.isArray(newEntries) && newEntries.length > 0) {
+        const data = await res.json();
+        // New format: { entries: [], diagnostic: {...} } or legacy: [...]
+        const newEntries = Array.isArray(data) ? data : (data.entries || []);
+        const diag = data.diagnostic;
+        if (newEntries.length > 0) {
           setTriggerMsg({ type: "success", text: `${newEntries.length} entree(s) ajoutee(s) au journal.` });
+        } else if (diag) {
+          setTriggerMsg({
+            type: "warning",
+            text: `${diag.message} (${diag.total_trades} trades total, ${diag.pending_trades} PENDING)`,
+          });
         } else {
           setTriggerMsg({ type: "warning", text: "Aucun trade PENDING a cloturer." });
         }
       } else {
         const err = await res.json().catch(() => ({}));
-        setTriggerMsg({ type: "error", text: err.detail || "Erreur lors de la generation du journal." });
+        setTriggerMsg({ type: "error", text: err.detail || `Erreur ${res.status} lors de la generation du journal.` });
       }
     } catch (err) {
       console.error("Journal trigger failed:", err);
