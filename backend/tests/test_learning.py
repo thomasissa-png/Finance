@@ -111,7 +111,11 @@ def test_learning_adjustments_not_enough_data():
     raw = [t1.model_dump(mode="json")]
     with _with_temp_trades(raw):
         adj = compute_learning_adjustments()
-    assert adj == {}  # Need >= 5 closed trades
+    # Need >= 5 closed trades — returns structured empty dict
+    assert adj["adjustments"] == {}
+    assert adj["session_adj"] == {}
+    assert adj["newscat_adj"] == {}
+    assert adj["regime_adj"] == {}
 
 
 def test_learning_adjustments_enough_data():

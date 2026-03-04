@@ -5,6 +5,7 @@ v4.0: PostgreSQL persistence (when DATABASE_URL is set, falls back to JSON files
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -85,6 +86,7 @@ def load_journal() -> list[JournalEntry]:
                     i, e.get("ticker", "?") if isinstance(e, dict) else "?", exc,
                 )
         # Auto-migrate JSON → PG if PG is enabled but was empty
+        # ON CONFLICT DO NOTHING protects against concurrent migrations
         if entries and is_pg_enabled():
             logger.info(
                 "Auto-migrating %d journal entries from JSON to PostgreSQL", len(entries),
@@ -94,7 +96,7 @@ def load_journal() -> list[JournalEntry]:
                 pg_save_journal_entries(
                     [e.model_dump(mode="json") for e in entries]
                 )
-                logger.info("Auto-migration of journal entries complete")
+                logger.info("Auto-migration of journal entries complete (duplicates ignored via ON CONFLICT)")
             except Exception as exc:
                 logger.error("Auto-migration of journal entries failed: %s", exc)
     except (json.JSONDecodeError, Exception) as exc:
@@ -176,8 +178,21 @@ def _filter_post_entry(
     """
     if not bars:
         return None
-    entry_utc = entry_time if entry_time.tzinfo else entry_time.replace(tzinfo=timezone.utc)
-    filtered = [(ts, h, low) for ts, h, low in bars if ts >= entry_utc]
+    # Normalize entry_time to UTC for consistent comparison
+    if entry_time.tzinfo is None:
+        entry_utc = entry_time.replace(tzinfo=timezone.utc)
+    else:
+        entry_utc = entry_time.astimezone(timezone.utc)
+
+    filtered = []
+    for ts, h, low in bars:
+        # Normalize bar timestamp to UTC
+        if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
+            ts_utc = ts.astimezone(timezone.utc)
+        else:
+            ts_utc = ts  # Assume UTC if naive
+        if ts_utc >= entry_utc:
+            filtered.append((ts, h, low))
     return filtered if filtered else None
 
 
@@ -188,6 +203,30 @@ def _compute_pnl(
     if trade.direction == Direction.LONG:
         return round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
     return round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
+
+
+def _find_hit_time(
+    trade: TradeRecommendation,
+    result: TradeResult,
+    bars: list,
+) -> datetime | None:
+    """Find the timestamp of the bar where TP or SL was hit.
+
+    Walks bars chronologically and returns the timestamp of the first bar
+    that triggered the given result. Returns None if not found.
+    """
+    for ts, bar_high, bar_low in bars:
+        if result == TradeResult.TP_HIT:
+            if trade.direction == Direction.LONG and bar_high >= trade.target_price:
+                return ts
+            if trade.direction == Direction.SHORT and bar_low <= trade.target_price:
+                return ts
+        elif result == TradeResult.SL_HIT:
+            if trade.direction == Direction.LONG and bar_low <= trade.stop_price:
+                return ts
+            if trade.direction == Direction.SHORT and bar_high >= trade.stop_price:
+                return ts
+    return None
 
 
 def _determine_result(
@@ -208,6 +247,11 @@ def _determine_result(
     """
     if post_high is None or post_low is None or close is None:
         return TradeResult.EXPIRED, close, None
+
+    # Guard against NaN/Inf from yfinance data corruption
+    if any(math.isnan(v) or math.isinf(v) for v in (post_high, post_low, close)):
+        logger.warning("NaN/Inf price detected for %s — treating as EXPIRED", trade.ticker)
+        return TradeResult.EXPIRED, None, None
 
     # Check if TP/SL are reachable from POST-ENTRY high/low
     if trade.direction == Direction.LONG:
@@ -457,17 +501,20 @@ def run_daily_journal() -> list[dict]:
         # P1-#6: Compute actual pricing time and delay accuracy
         actual_pricing_hours = None
         delay_accuracy = None
-        if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and trade.closed_at:
-            actual_pricing_hours = round(
-                (trade.closed_at - trade.timestamp).total_seconds() / 3600, 2
-            )
-        elif result in (TradeResult.TP_HIT, TradeResult.SL_HIT):
-            # Estimate: assume hit happened during trading day (~8h window for day trading)
-            actual_pricing_hours = 8.0  # conservative default
+        if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and post_bars:
+            # Use intraday bars to find when TP/SL was actually hit
+            hit_time = _find_hit_time(trade, result, post_bars)
+            if hit_time is not None:
+                actual_pricing_hours = round(
+                    (hit_time - trade.timestamp).total_seconds() / 3600, 2
+                )
+        if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and actual_pricing_hours is None:
+            # Fallback: estimate from entry to end of trading day (~8h window)
+            actual_pricing_hours = 8.0
 
         if trade.predicted_transmission_delay is not None and actual_pricing_hours is not None:
-            # Convert actual hours to 0-100 scale (6h = 100)
-            actual_delay_score = min(100, actual_pricing_hours / 6 * 100)
+            from .learning import TRANSMISSION_DELAY_BASELINE_HOURS
+            actual_delay_score = min(100, actual_pricing_hours / TRANSMISSION_DELAY_BASELINE_HOURS * 100)
             delay_accuracy = round(trade.predicted_transmission_delay - actual_delay_score, 1)
 
         # Update the trade in the learning system (with P1-#6 delay accuracy)

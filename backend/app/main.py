@@ -49,6 +49,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 SCANS_CACHE_FILE = DATA_DIR / "last_scans.json"
 
 _last_scans: dict[str, dict] = {}
+_scans_lock = threading.Lock()
 
 # (#35) Rate limiting for triggers
 _last_trigger_times: dict[str, float] = {}
@@ -116,13 +117,14 @@ def _keepalive_loop() -> None:
 def _get_existing_trade_tickers(exclude_key: str) -> list[str]:
     """Collect trade tickers from all other active scans for portfolio correlation."""
     tickers = []
-    for key, scan_data in _last_scans.items():
-        if key == exclude_key:
-            continue
-        if scan_data.get("has_trade") and scan_data.get("recommendation"):
-            ticker = scan_data["recommendation"].get("ticker")
-            if ticker:
-                tickers.append(ticker)
+    with _scans_lock:
+        for key, scan_data in _last_scans.items():
+            if key == exclude_key:
+                continue
+            if scan_data.get("has_trade") and scan_data.get("recommendation"):
+                ticker = scan_data["recommendation"].get("ticker")
+                if ticker:
+                    tickers.append(ticker)
     return tickers
 
 
@@ -143,8 +145,9 @@ def _run_scheduled_scan(scan_key: str) -> None:
             scan_type = ScanType(scan_type_str)
             existing = _get_existing_trade_tickers(scan_key)
             result = run_scan(scan_type, existing_trade_ticker=existing or None)
-            _last_scans[scan_key] = result
-            _save_scans_cache(_last_scans)
+            with _scans_lock:
+                _last_scans[scan_key] = result
+                _save_scans_cache(_last_scans)
         except Exception as exc:
             logger.error("Scheduled scan '%s' failed: %s", scan_key, exc)
 
@@ -177,8 +180,9 @@ def _run_daily_journal() -> None:
             run_daily_journal()
             # Clear scan cache after journal — trades are closed, dashboard should
             # show a clean slate the next morning instead of stale yesterday's trades.
-            _last_scans = {}
-            _save_scans_cache(_last_scans)
+            with _scans_lock:
+                _last_scans = {}
+                _save_scans_cache(_last_scans)
             logger.info("Scan cache cleared after daily journal")
         except Exception as exc:
             logger.error("Daily journal failed: %s", exc)
@@ -193,9 +197,10 @@ async def lifespan(app: FastAPI):
     # Initialize PostgreSQL tables if DATABASE_URL is set
     init_db()
     # (#34) Load cached scans on startup
-    _last_scans = _load_scans_cache()
-    if _last_scans:
-        logger.info("Restored %d cached scan results", len(_last_scans))
+    with _scans_lock:
+        _last_scans = _load_scans_cache()
+        if _last_scans:
+            logger.info("Restored %d cached scan results", len(_last_scans))
 
     # Schedule scans: 4 scans/day, weekdays only (markets closed on weekends)
     # misfire_grace_time=60 (1 min) — short grace period prevents crash loops:
@@ -220,6 +225,12 @@ async def lifespan(app: FastAPI):
 
     _keepalive_stop.set()
     bg_scheduler.shutdown()
+    # Close PostgreSQL connection pool if active
+    try:
+        from .database import close_pool
+        close_pool()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="OneShot News Trading", version="2.0.0", lifespan=lifespan)
@@ -270,13 +281,15 @@ def root():
 @app.get("/api/scan/latest")
 def get_latest_scans():
     """Get the most recent scan results (europe + us)."""
-    return _last_scans
+    with _scans_lock:
+        return dict(_last_scans)
 
 
 @app.get("/api/scan/latest/{scan_type}")
 def get_latest_scan(scan_type: str):
     """Get the latest result for a specific scan type."""
-    return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectué"})
+    with _scans_lock:
+        return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectué"})
 
 
 PARIS_TZ = ZoneInfo("Europe/Paris")
@@ -290,18 +303,20 @@ def _run_triggered_scan(scan_type: str, st: ScanType, existing_ticker: list[str]
     """
     try:
         result = run_scan(st, existing_trade_ticker=existing_ticker)
-        _last_scans[scan_type] = result
-        _save_scans_cache(_last_scans)
+        with _scans_lock:
+            _last_scans[scan_type] = result
+            _save_scans_cache(_last_scans)
         logger.info("Background scan %s completed (trade=%s)", scan_type, result.get("has_trade"))
     except Exception as exc:
         logger.error("Background scan %s failed: %s", scan_type, exc)
-        _last_scans[scan_type] = {
-            "scan_type": scan_type,
-            "has_trade": False,
-            "reason_no_trade": f"Scan échoué : {exc}",
-            "news_analyzed": 0,
-        }
-        _save_scans_cache(_last_scans)
+        with _scans_lock:
+            _last_scans[scan_type] = {
+                "scan_type": scan_type,
+                "has_trade": False,
+                "reason_no_trade": f"Scan échoué : {exc}",
+                "news_analyzed": 0,
+            }
+            _save_scans_cache(_last_scans)
 
 
 @app.post("/api/scan/trigger/{scan_type}")
@@ -421,8 +436,9 @@ def trigger_journal():
     result = run_daily_journal()
 
     # Clear scan cache — trades are closed, dashboard should reset
-    _last_scans = {}
-    _save_scans_cache(_last_scans)
+    with _scans_lock:
+        _last_scans = {}
+        _save_scans_cache(_last_scans)
     logger.info("Scan cache cleared after manual journal trigger")
 
     # Return diagnostic wrapper if no entries were created

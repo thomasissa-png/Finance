@@ -40,9 +40,15 @@ FOMC_DATES_2026 = [
     date(2026, 6, 17), date(2026, 7, 29), date(2026, 9, 16),
     date(2026, 10, 28), date(2026, 12, 16),
 ]
-FOMC_DATES = set(FOMC_DATES_2025 + FOMC_DATES_2026)
+FOMC_DATES_2027 = [
+    # Official Fed tentative schedule (announced Sep 2025)
+    date(2027, 1, 27), date(2027, 3, 17), date(2027, 4, 28),
+    date(2027, 6, 9), date(2027, 7, 28), date(2027, 9, 15),
+    date(2027, 10, 27), date(2027, 12, 8),
+]
+FOMC_DATES = set(FOMC_DATES_2025 + FOMC_DATES_2026 + FOMC_DATES_2027)
 
-# ── ECB meeting dates 2025-2026 ──────────────────────────────────────
+# ── ECB meeting dates 2025-2027 ──────────────────────────────────────
 # Announcement at 14:15 CET
 ECB_DATES_2025 = [
     date(2025, 1, 30), date(2025, 3, 6), date(2025, 4, 17),
@@ -54,9 +60,16 @@ ECB_DATES_2026 = [
     date(2026, 6, 4), date(2026, 7, 16), date(2026, 9, 10),
     date(2026, 10, 29), date(2026, 12, 17),
 ]
-ECB_DATES = set(ECB_DATES_2025 + ECB_DATES_2026)
+ECB_DATES_2027 = [
+    # Estimated from 2025-2026 pattern (~6 weeks apart, Thursdays)
+    # Update with official dates when ECB publishes them
+    date(2027, 1, 21), date(2027, 3, 4), date(2027, 4, 15),
+    date(2027, 6, 3), date(2027, 7, 22), date(2027, 9, 9),
+    date(2027, 10, 28), date(2027, 12, 16),
+]
+ECB_DATES = set(ECB_DATES_2025 + ECB_DATES_2026 + ECB_DATES_2027)
 
-# ── BOE meeting dates 2025-2026 ──────────────────────────────────────
+# ── BOE meeting dates 2025-2027 ──────────────────────────────────────
 BOE_DATES_2025 = [
     date(2025, 2, 6), date(2025, 3, 20), date(2025, 5, 8),
     date(2025, 6, 19), date(2025, 8, 7), date(2025, 9, 18),
@@ -67,7 +80,13 @@ BOE_DATES_2026 = [
     date(2026, 6, 18), date(2026, 8, 6), date(2026, 9, 17),
     date(2026, 11, 5), date(2026, 12, 17),
 ]
-BOE_DATES = set(BOE_DATES_2025 + BOE_DATES_2026)
+BOE_DATES_2027 = [
+    # Official BOE provisional dates
+    date(2027, 2, 4), date(2027, 3, 18), date(2027, 4, 29),
+    date(2027, 6, 17), date(2027, 7, 29), date(2027, 9, 16),
+    date(2027, 11, 4), date(2027, 12, 16),
+]
+BOE_DATES = set(BOE_DATES_2025 + BOE_DATES_2026 + BOE_DATES_2027)
 
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
@@ -105,7 +124,15 @@ CPI_DATES_2026 = [
     date(2026, 7, 14), date(2026, 8, 12), date(2026, 9, 15),
     date(2026, 10, 13), date(2026, 11, 12), date(2026, 12, 10),
 ]
-CPI_DATES = set(CPI_DATES_2025 + CPI_DATES_2026)
+CPI_DATES_2027 = [
+    # Estimated from BLS pattern (~2nd week of each month, Tue/Wed)
+    # Update with official dates when BLS publishes them
+    date(2027, 1, 13), date(2027, 2, 10), date(2027, 3, 10),
+    date(2027, 4, 13), date(2027, 5, 12), date(2027, 6, 10),
+    date(2027, 7, 13), date(2027, 8, 11), date(2027, 9, 14),
+    date(2027, 10, 13), date(2027, 11, 10), date(2027, 12, 10),
+]
+CPI_DATES = set(CPI_DATES_2025 + CPI_DATES_2026 + CPI_DATES_2027)
 
 
 def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -> list[EconomicEvent]:

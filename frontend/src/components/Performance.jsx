@@ -1,16 +1,23 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 
 export default function Performance() {
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchStats = useCallback(() => {
+    if (document.hidden) return;
     fetch("/api/performance")
       .then((r) => (r.ok ? r.json() : null))
       .then(setStats)
       .catch(() => setStats(null))
       .finally(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetchStats();
+    const id = setInterval(fetchStats, 60_000);
+    return () => clearInterval(id);
+  }, [fetchStats]);
 
   if (isLoading) {
     return (

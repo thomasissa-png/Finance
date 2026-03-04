@@ -164,7 +164,7 @@ def test_trade_recommendation_defaults():
     assert trade.chain_reactions is None
     # v3 fields
     assert trade.raw_claude_score is None
-    assert trade.learning_multiplier is None
+    assert trade.learning_multiplier == 1.0
     assert trade.vix_at_trade is None
     assert trade.market_regime is None
     assert trade.day_of_week is None

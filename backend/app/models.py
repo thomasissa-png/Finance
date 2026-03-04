@@ -66,9 +66,9 @@ class ScoredNews(BaseModel):
         - market_awareness faible = peu de monde a vu -> boost
         - category_score_mult penalise les earnings/macro, booste commodity/weather
 
-        edge_factor = transmission_delay/100 * (1 - market_awareness/100)
-        Un earnings (delay=5, awareness=95) -> edge_factor = 0.05 * 0.05 = 0.0025
-        Un rapport meteo (delay=80, awareness=10) -> edge_factor = 0.8 * 0.9 = 0.72
+        edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.05)
+        Un earnings (delay=5, awareness=95) -> raw = 0.05 * 0.05 = 0.0025 -> floor 0.05
+        Un rapport meteo (delay=80, awareness=10) -> 0.8 * 0.9 = 0.72
 
         NOTE: freshness n'est PAS dans la formule car Claude voit deja l'age
         de la news ("[il y a X.Xh]") et ajuste surprise/transmission_delay
@@ -134,7 +134,7 @@ class TradeRecommendation(BaseModel):
     chain_reactions: list[dict] | None = None  # Second-order impacts detected
     # ── P0-#4: Raw score decomposition (diagnose Claude vs formula vs learning)
     raw_claude_score: float | None = None      # Score brut avant learning adjustments
-    learning_multiplier: float | None = None   # Multiplicateur learning appliqué
+    learning_multiplier: float = 1.0           # Multiplicateur learning appliqué (1.0 = no adjustment)
     # ── P1-#13: Contextual features at time of trade
     vix_at_trade: float | None = None
     market_regime: str | None = None           # calm/normal/elevated/stress

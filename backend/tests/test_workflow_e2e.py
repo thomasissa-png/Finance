@@ -554,7 +554,8 @@ class TestLearningPipeline:
         raw = [t.model_dump(mode="json") for t in trades]
         with _with_temp_trades(raw):
             adj = compute_learning_adjustments()
-        assert adj == {}
+        # Returns structured empty dict when not enough data
+        assert adj["adjustments"] == {}
 
     def test_winning_ticker_boosted(self):
         """A ticker with mostly wins should get multiplier > 1.0."""

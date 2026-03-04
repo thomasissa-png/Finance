@@ -58,6 +58,18 @@ def _get_pool():
     return _pool
 
 
+def close_pool():
+    """Close the connection pool on shutdown to release all connections."""
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.closeall()
+            logger.info("PostgreSQL connection pool closed")
+        except Exception as exc:
+            logger.warning("Error closing PostgreSQL pool: %s", exc)
+        _pool = None
+
+
 @contextmanager
 def get_conn():
     """Get a connection from the pool as a context manager.

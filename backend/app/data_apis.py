@@ -1275,6 +1275,8 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
         "BNP.PA": "BNP Paribas",
         "SAN.PA": "Sanofi",
         "AI.PA": "Air Liquide",
+        "OR.PA": "L'Oréal",
+        "RMS.PA": "Hermès",
         # US index ETFs — smart money positioning
         "SPY": "S&P 500 ETF",
         "QQQ": "Nasdaq 100 ETF",
@@ -1520,9 +1522,8 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
         params = {"days": 3, "status": "open", "limit": 20}
         resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
 
-        # EONET sometimes returns 503 under load — retry once
+        # EONET sometimes returns 503 under load — retry once (no blocking sleep)
         if resp.status_code == 503:
-            time.sleep(2)
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
 
         if resp.status_code != 200:

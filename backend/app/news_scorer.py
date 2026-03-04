@@ -475,17 +475,19 @@ def _score_batch(
                                 transmission_delay, item.title[:60])
                     transmission_delay = 5
                     market_awareness = max(market_awareness, 95)
-            elif _is_major_speaker and transmission_delay > 40:
-                # Major speaker (Powell, Lagarde) — widely followed
-                logger.info("Central bank major-speech hard-cap: forcing transmission_delay %d -> 25 for '%s'",
-                            transmission_delay, item.title[:60])
-                transmission_delay = 25
+            elif _is_major_speaker:
+                # Major speaker (Powell, Lagarde) — widely followed, cap at 25
+                if transmission_delay > 25:
+                    logger.info("Central bank major-speech hard-cap: forcing transmission_delay %d -> 25 for '%s'",
+                                transmission_delay, item.title[:60])
+                    transmission_delay = 25
                 market_awareness = max(market_awareness, 70)
-            elif transmission_delay > 60:
-                # Secondary official — less attention, more edge
-                logger.info("Central bank secondary hard-cap: forcing transmission_delay %d -> 45 for '%s'",
-                            transmission_delay, item.title[:60])
-                transmission_delay = 45
+            else:
+                # Secondary official — less attention, more edge, cap at 45
+                if transmission_delay > 45:
+                    logger.info("Central bank secondary hard-cap: forcing transmission_delay %d -> 45 for '%s'",
+                                transmission_delay, item.title[:60])
+                    transmission_delay = 45
                 market_awareness = max(market_awareness, 50)
         elif news_cat == "m_a":
             # Distinguish M&A rumor (high edge) vs confirmed deal (zero edge)
@@ -504,11 +506,12 @@ def _score_batch(
                                 transmission_delay, item.title[:60])
                     transmission_delay = 5
                     market_awareness = max(market_awareness, 90)
-            elif transmission_delay > 50:
-                # M&A rumor — cap less aggressively (rumors still have edge)
-                logger.info("M&A rumor hard-cap: forcing transmission_delay %d -> 40 for '%s'",
-                            transmission_delay, item.title[:60])
-                transmission_delay = 40
+            else:
+                # M&A rumor — cap at 40 (rumors still have some edge)
+                if transmission_delay > 40:
+                    logger.info("M&A rumor hard-cap: forcing transmission_delay %d -> 40 for '%s'",
+                                transmission_delay, item.title[:60])
+                    transmission_delay = 40
                 market_awareness = max(market_awareness, 50)
 
         # Apply category score multiplier (edge priority)

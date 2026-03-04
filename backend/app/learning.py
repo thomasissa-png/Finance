@@ -35,6 +35,9 @@ DECAY_HALF_LIFE_DAYS_HIGH = 30.0  # When many trades
 DECAY_TRANSITION_START = 50       # Start transitioning at 50 closed trades
 DECAY_TRANSITION_END = 200        # Fully transitioned at 200 closed trades
 
+# Baseline hours for converting actual_pricing_time_hours to 0-100 delay score
+TRANSMISSION_DELAY_BASELINE_HOURS = 6.0  # 6h of pricing time = delay score 100
+
 
 def _ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -328,15 +331,19 @@ def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float =
     Returns None if not significant, else a multiplier in [bounds].
     """
     if len(entries) < 2:
+        logger.debug("_compute_adjustment: not enough entries (%d < 2)", len(entries))
         return None
     total_w = sum(w for _, w in entries)
     if total_w == 0:
+        logger.warning("_compute_adjustment: zero total weight (possible data issue)")
         return None
 
     # P0-#12: Significance check on raw PnL values
     pnl_values = [p for p, _ in entries]
     if not _is_significant(pnl_values, min_samples=min_significant,
                            t_threshold=t_threshold):
+        logger.debug("_compute_adjustment: not significant (n=%d, t_thresh=%.1f)",
+                      len(pnl_values), t_threshold)
         return None
 
     # v3.4 #6: PnL-signed signal — decay-weighted average PnL
@@ -377,7 +384,14 @@ def compute_learning_adjustments() -> dict:
     closed = [t for t in trades if t.result != TradeResult.PENDING]
 
     if len(closed) < 5:
-        return {}  # Not enough data to learn from
+        logger.info("Not enough closed trades for learning: %d < 5", len(closed))
+        return {
+            "adjustments": {},
+            "session_adj": {},
+            "newscat_adj": {},
+            "regime_adj": {},
+            "decomposition": {},
+        }
 
     # (#30) Adaptive decay
     half_life = _get_decay_half_life(len(closed))
@@ -594,8 +608,8 @@ def build_performance_summary(max_recent: int = 15) -> str:
         predicted = getattr(t, "predicted_transmission_delay", None)
         actual_h = getattr(t, "actual_pricing_time_hours", None)
         if predicted is not None and actual_h is not None:
-            # Convert actual hours to 0-100 scale (6h = 100)
-            actual_score = min(100, actual_h / 6 * 100)
+            # Convert actual hours to 0-100 scale
+            actual_score = min(100, actual_h / TRANSMISSION_DELAY_BASELINE_HOURS * 100)
             delay_errors.append(predicted - actual_score)
 
     if len(delay_errors) >= 5:
