@@ -44,6 +44,15 @@ logger = logging.getLogger(__name__)
 # Cross-day dedup: don't trade the same ticker within this many days
 RECENT_TRADE_COOLDOWN_DAYS = 3
 
+# P1-4: Adaptive cooldown — persistent physical signals (weather, supply_chain)
+# get shorter cooldowns because the signal genuinely persists across days.
+# A drought worsening daily = valid re-entry, not a duplicate.
+CATEGORY_COOLDOWN_DAYS: dict[str, int] = {
+    "weather": 1,        # Weather events persist — re-entry after 1 day
+    "supply_chain": 1,   # Supply disruptions persist
+    "commodity": 2,      # Physical commodity signals — moderate persistence
+}
+
 
 def _get_recently_traded_tickers(cooldown_days: int = RECENT_TRADE_COOLDOWN_DAYS) -> set[str]:
     """Return tickers traded in the last N days (to avoid repeating the same trade).
@@ -64,6 +73,45 @@ def _get_recently_traded_tickers(cooldown_days: int = RECENT_TRADE_COOLDOWN_DAYS
     except Exception as exc:
         logger.warning("Failed to load recent trades for cross-day dedup: %s", exc)
         return set()
+
+
+def _get_recently_traded_tickers_by_category(news_category: str) -> set[str]:
+    """Return tickers traded recently, with category-adaptive cooldown (P1-4).
+
+    Weather/supply_chain signals persist across days — use shorter cooldown
+    to allow re-entry on genuinely persistent signals.
+    """
+    cooldown = CATEGORY_COOLDOWN_DAYS.get(news_category, RECENT_TRADE_COOLDOWN_DAYS)
+    return _get_recently_traded_tickers(cooldown_days=cooldown)
+
+
+def _check_reentry_eligible(ticker: str, news_category: str) -> bool:
+    """P2-6: Check if a stopped trade is eligible for re-entry.
+
+    If a trade was stopped out today but the fundamental signal is still active
+    (weather, supply_chain categories), allow re-entry with the next scan.
+    This prevents missing multi-day moves after a false stop-out.
+    """
+    if news_category not in ("weather", "supply_chain", "commodity"):
+        return False
+    try:
+        from .learning import load_trades
+        from .models import TradeResult
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        trades = load_trades()
+        for t in trades:
+            if t.ticker != ticker:
+                continue
+            if t.timestamp.strftime("%Y-%m-%d") != today:
+                continue
+            # Only allow re-entry if the trade was stopped (not TP hit — signal exhausted)
+            if t.result == TradeResult.SL_HIT:
+                logger.info("P2-6: Re-entry eligible for %s (stopped today, signal category: %s)",
+                            ticker, news_category)
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _count_today_trades() -> int:
@@ -209,16 +257,23 @@ def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | No
 
     for existing in tickers_to_check:
         # Static correlation group check (fast)
+        in_static_group = False
         for group_tickers in CORRELATION_GROUPS.values():
             if ticker in group_tickers and existing in group_tickers:
                 return True
-        # Dynamic correlation check (slow — only if not caught by static groups)
-        # Skip dynamic check for same-category assets (already handled by static groups)
-        dyn_corr = _compute_dynamic_correlation(ticker, existing)
-        if dyn_corr is not None and abs(dyn_corr) > DYNAMIC_CORRELATION_THRESHOLD:
-            logger.info("Dynamic correlation block: %s vs %s = %.3f (threshold: %.1f)",
-                        ticker, existing, dyn_corr, DYNAMIC_CORRELATION_THRESHOLD)
-            return True
+            # P3-6: Track if either is in the same static group (skip dynamic then)
+            if ticker in group_tickers or existing in group_tickers:
+                if ticker in group_tickers and existing in group_tickers:
+                    in_static_group = True
+
+        # P3-6: Only run dynamic check if not already covered by static groups
+        # Dynamic correlation is slow (2 yfinance calls per pair) — avoid when unnecessary
+        if not in_static_group:
+            dyn_corr = _compute_dynamic_correlation(ticker, existing)
+            if dyn_corr is not None and abs(dyn_corr) > DYNAMIC_CORRELATION_THRESHOLD:
+                logger.info("Dynamic correlation block: %s vs %s = %.3f (threshold: %.1f)",
+                            ticker, existing, dyn_corr, DYNAMIC_CORRELATION_THRESHOLD)
+                return True
     return False
 
 
@@ -278,11 +333,17 @@ def _calibrate_trade(
     )
 
 
-def _compute_position_size(score: float, confidence: int, rr: float) -> float:
+def _compute_position_size(
+    score: float, confidence: int, rr: float,
+    market_context: dict | None = None, day_of_week: int | None = None,
+) -> float:
     """Compute position size as % of capital using Kelly-inspired formula.
 
     Higher score + higher R/R = larger position. Capped at MAX_POSITION_SIZE_PCT.
     Uses quarter-Kelly for safety.
+
+    P2-7: Dynamic VIX-based regime sizing — reduce in stress, increase in calm.
+    P3-7: Friday risk management — reduce position Friday afternoon.
 
     Formula: base_size * (score/100) * kelly_fraction * min(rr/1.5, 2.0)
     """
@@ -291,6 +352,31 @@ def _compute_position_size(score: float, confidence: int, rr: float) -> float:
     size = BASE_POSITION_SIZE_PCT * score_factor * KELLY_FRACTION * rr_factor
     # Additional confidence scaling
     size *= (confidence / 100.0)
+
+    # P2-7: Volatility regime adjustment
+    if market_context:
+        regime = market_context.get("regime", "normal")
+        vix = market_context.get("vix")
+        if regime == "stress" or (vix and vix >= 30):
+            size *= 0.5   # Halve position in high-vol regime
+            logger.info("Position size reduced 50%% — stress regime (VIX=%.1f)", vix or 0)
+        elif regime == "elevated" or (vix and vix >= 20):
+            size *= 0.75  # Reduce 25% in elevated regime
+        elif regime == "calm" or (vix and vix <= 13):
+            size *= 1.2   # Boost 20% in calm regime (trend more reliable)
+
+    # P3-7: Friday risk management — reduce position size Friday
+    # Weekend gap risk: markets can gap 1-3% on Monday open
+    if day_of_week == 4:  # Friday
+        from zoneinfo import ZoneInfo
+        now_paris = datetime.now(ZoneInfo("Europe/Paris"))
+        if now_paris.hour >= 14:  # Friday afternoon: even more aggressive reduction
+            size *= 0.6
+            logger.info("Position size reduced 40%% — Friday afternoon (weekend gap risk)")
+        else:
+            size *= 0.8
+            logger.info("Position size reduced 20%% — Friday (weekend gap risk)")
+
     return round(max(MIN_POSITION_SIZE_PCT, min(MAX_POSITION_SIZE_PCT, size)), 2)
 
 
@@ -588,9 +674,13 @@ def select_trades(
             })
             continue
 
-        # Cross-day dedup: skip tickers already traded in the last N days
-        if ticker in recently_traded:
-            reason = f"Deja trade dans les {RECENT_TRADE_COOLDOWN_DAYS} derniers jours"
+        # Cross-day dedup: skip tickers already traded recently
+        # P1-4: Use category-adaptive cooldown (weather/supply_chain = 1 day)
+        # P2-6: Allow re-entry if trade was stopped and signal persists
+        cat_recently_traded = _get_recently_traded_tickers_by_category(best_news.news_category)
+        effective_cooldown = CATEGORY_COOLDOWN_DAYS.get(best_news.news_category, RECENT_TRADE_COOLDOWN_DAYS)
+        if ticker in cat_recently_traded and not _check_reentry_eligible(ticker, best_news.news_category):
+            reason = f"Deja trade dans les {effective_cooldown} derniers jours (categorie: {best_news.news_category})"
             logger.info("Skipping %s: %s", ticker, reason)
             rejection_log.append({
                 "title": best_news.news.title, "ticker": [ticker],
@@ -701,7 +791,11 @@ def select_trades(
         confidence = min(100, int(best_score))
 
         # v3.6: Position sizing (with IV filter K — reduce size if vol elevated)
-        position_size = _compute_position_size(best_score, confidence, rr)
+        # P2-7: pass market_context for VIX regime sizing, P3-7: pass day_of_week for Friday
+        position_size = _compute_position_size(
+            best_score, confidence, rr,
+            market_context=market_context, day_of_week=now.weekday(),
+        )
         if avg_range > 3.0:  # K: IV proxy — high vol = reduce position
             iv_reduction = min(0.5, (avg_range - 3.0) / 10.0)
             position_size *= (1.0 - iv_reduction)

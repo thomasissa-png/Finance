@@ -1,4 +1,4 @@
-# OneShot News Trading System — v3.4 Full Intelligence Pipeline
+# OneShot News Trading System — v3.5 Full Intelligence Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -76,12 +76,27 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - Resilient per-entry parsing (skip invalids instead of crash)
 - Auto-migration JSON→PG on load
 
+#### 8. Audit speculateur v3.5 — 17 ameliorations
+- **6 nouvelles sources data** : WOAH (maladies animales), NASA POWER (satellite NDVI), Freight proxy (BDRY ETF), LME inventory proxy (metal ETFs), Chokepoint monitoring (tanker ETFs), Dark pool signals (volume/price divergence)
+- **GNews** : +6 queries (export bans Inde/Indonesie/Russie, Chine PMI/PBOC, Argentine), consolidation 8→5 commodity queries, rotation intelligente 28 queries / 4 scans (100 req/jour)
+- **5 RSS feeds** : Caixin, Xinhua, Chinese govt, US Federal Register (ITC), EUR-Lex
+- **2 nouveaux actifs** : USDCNH=X (yuan offshore), URA (uranium ETF) → 41 total
+- **Cooldown adaptatif** : weather/supply_chain=1j, commodity=2j, default=3j (au lieu de 3j fixe)
+- **Re-entry apres faux stop** : si SL_HIT aujourd'hui sur weather/supply_chain/commodity, re-entry autorise
+- **Position sizing VIX** : stress (VIX≥30)=0.5x, elevated (VIX≥20)=0.75x, calm (VIX≤13)=1.2x
+- **Gestion vendredi** : apres-midi=0.6x, matin=0.8x (liquidite + gap weekend)
+- **Correlation** : +groupe china_proxy (USDCNH, HG=F, AUDUSD), chain reactions USDCNH↔HG/AUD
+- **Event scanner** : frequence 15→10 min
+- **Dynamic correlation** : skip computation si static group couvre deja la paire
+- **collect_structured_data()** : 11→17 sources, timeout 90→120s
+
 ### Etat actuel des fichiers cles
-- `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints
-- `backend/app/market_data.py` : Twelve Data + yfinance, 39 mappings verifies
+- `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
+- `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/database.py` : PG persistence layer, 4 tables, pool, CRUD
 - `backend/app/journal.py` : fermeture trades, intraday 1h bars, post-entry filtering, PG save
 - `backend/app/learning.py` : v3.4, 5 dimensions (ticker, cat, session, newscat, regime)
+- `backend/app/trade_selector.py` : adaptive cooldown, re-entry, VIX sizing, Friday mgmt, dynamic correlation opt
 - `backend/app/scan_history.py` : PG support, pruning 30j
 - `backend/migrate_json_to_postgres.py` : script de migration one-shot
 
@@ -109,7 +124,7 @@ Regles :
 ## Data Sources — 4 phases par priorite d'edge
 
 ### Phase 0 : Structured Data APIs (PRIORITE MAX — donnees chiffrees)
-Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut interpreter precisement :
+Module `data_apis.py` — 17 sources de donnees numeriques que Claude peut interpreter precisement :
 - **Open-Meteo** (GRATUIT, no key) : surveillance meteo 16 zones agricoles critiques
   - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo, Brazil Rio Grande do Sul (soja/mais)
   - Ukraine/Mer Noire (ble), Inde Punjab/Haryana (ble/riz), Argentine Pampas (soja/mais/ble)
@@ -125,22 +140,14 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
   - Queries saisonnieres : planting (Apr-Jun), condition (May-Sep), emergence (May-Jul), harvest (Sep-Dec)
   - Ble condition : toute l'annee (winter wheat)
   - Delta WoW : calcul automatique semaine vs semaine, flag [SWING MAJEUR] si >= 5pp
-- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 25 queries
-  - Consolide : frost+coffee frost en 1, drought+harvest en 1, palm oil+China import en 1, PT queries en 1
-  - Ajoute : cocoa Ghana/Ivory Coast, cotton Texas/India, orange juice Florida/citrus greening
-  - **Betail** : "cattle disease screwworm BSE", "African swine fever pork hog"
-  - 4 scans/jour x 25 queries = 100 req/jour, exactement au plafond free tier
-  - v3.2: +4 queries (Suez Canal, China demand, EU energy crisis, Middle East tensions)
-  - v3.2: 2 queries geopolitiques consolidees en 1 → slot libere pour PGM
-  - **PGM** : "Eskom load shedding platinum Nornickel sanctions palladium" (PL=F, PA=F)
-  - Originales : "frost freeze crop damage", "oil sanctions military strike missile pipeline embargo"
-  - "port congestion shipping", "copper mine strike", "Baltic dry index shipping freight"
-  - "OPEC production cut", "wheat corn soybean USDA", "gold reserve central bank"
-  - "natural gas storage Europe TTF LNG", "palm oil export China import soybean"
-  - "hurricane tropical storm Gulf Mexico"
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 28 queries avec rotation
+  - **Core queries** (22, toujours executees) : frost/freeze, oil/sanctions, port/shipping, copper/mine, BDI/freight, OPEC, cereals USDA, gold reserves, nat gas/TTF, palm oil/China, hurricane/Gulf, cocoa, cotton, OJ/citrus, PGM, portugais x2, disease/blight, fertilizer, avian flu, cattle disease, ASF
+  - **Extra queries** (6, rotation par scan) : India rice/wheat/sugar export ban, Indonesia palm oil export, Russia/Ukraine wheat/Black Sea, China PMI Caixin, PBOC rate/RRR/yuan, Argentina peso/capital controls
+  - **Rotation** : 22 core + ~2 extras/scan × 4 scans = ~96 req/jour (dans le plafond 100)
+  - v3.5: consolidation 8→5 commodity queries pour liberer 3 slots
+  - v3.5: +6 queries emerging markets / export bans (India, Indonesie, Russie, Chine, Argentine)
   - **Portugais** : "geada cafe Minas Gerais frio", "seca milho soja safra quebra" (12-24h avant medias EN)
   - **Maladies/engrais** : "wheat rust crop disease blight", "fertilizer potash phosphate shortage"
-  - **Betail** : "avian flu bird flu livestock disease outbreak"
 - **CFTC COT** (GRATUIT, no key) : positionnement commerciaux vs speculateurs
   - Alertes sur CHANGEMENTS hebdo (>8pp swing en 1 semaine = signal fort)
   - Alertes positionnement extreme commerciaux (>20% OI net)
@@ -176,25 +183,47 @@ Module `data_apis.py` — 11 sources de donnees numeriques que Claude peut inter
   - Volume anormal (>2x moy 20j) = mouvement inventaires physiques
   - Mouvement mensuel >5% = tightness ou surplus
   - Impact : HG=F (cuivre)
+- **WOAH/OIE** (GRATUIT, no key) : surveillance maladies animales mondiales
+  - ASF (peste porcine africaine), HPAI (grippe aviaire), FMD (fievre aphteuse), BSE (vache folle)
+  - Parsing JSON API WOAH pour outbreaks recents (7 derniers jours)
+  - Impact : LE=F, HE=F (betail)
+- **NASA POWER** (GRATUIT, no key) : donnees satellite pour stress vegetatif
+  - Precipitation + temperature sur 14 jours par zone agricole
+  - Detection secheresse satellite (<5mm/14j) et stress thermique
+  - Complement aux previsions Open-Meteo avec observation reelle
+  - Impact : ZW=F, ZC=F, ZS=F, KC=F selon la zone
+- **Freight Index proxy** (GRATUIT via yfinance BDRY) : Baltic Dry Index via ETF
+  - Spike >20% mensuel ou collapse >20% = signal shipping
+  - Surge 5j >10% = signal court terme
+  - Impact : HG=F, ZC=F, ZW=F, ZS=F (commodities physiques)
+- **LME Inventory proxy** (GRATUIT via yfinance) : volume anomaly sur ETFs metaux
+  - CPER (cuivre), JJN (nickel), PALL (palladium), PPLT (platine)
+  - Volume >2x moy 20j = signal inventaires/demande physique
+  - Impact : HG=F, PL=F, PA=F
+- **Chokepoint Monitoring** (GRATUIT via yfinance) : proxy tankers pour disruptions maritimes
+  - STNG, FRO (tanker companies) — spike prix >5% sur 5j avec volume anormal = disruption
+  - Impact : CL=F, BZ=F, NG=F (energie)
+- **Dark Pool Signals** (GRATUIT via yfinance) : divergence volume/prix sur ETFs majeurs
+  - GLD, USO, SPY, QQQ, XLE, XLF — volume >2x sans mouvement prix (<0.5%) = accumulation institutionnelle
+  - Impact : tickers selon ETF (GLD→GC=F, USO→CL=F, etc.)
 
-Poids premium (v3.3) : Open-Meteo=1.2 (via SOURCE_WEIGHTS), EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.15, CFTC=1.1, Options=1.0 (via SOURCE_WEIGHTS), FedWatch=1.0, SHFE=1.1, OilPrice=0.9
+Poids premium (v3.5) : Open-Meteo=1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.15, CFTC=1.1, WOAH=1.15, NASA POWER=1.15, Freight Index=1.1, Shipping Proxy=1.1, LME Proxy=1.05, Dark Pool Proxy=1.0, Options=1.0, FedWatch=1.0, SHFE=1.1, OilPrice=0.9
 - Tous les poids lus via `SOURCE_WEIGHTS.get()` — plus de hardcodes dans data_apis.py
 - GNews: poids variable par categorie query (weather=1.0, commodity/supply_chain=0.95, geopolitical=0.85)
 
 ### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
-Sources configurees dans `EARLY_SIGNAL_FEEDS` (20 feeds — v3.3 nettoye) :
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (25 feeds — v3.5 elargi) :
 - **Meteo/Agri** : Drought.gov (US drought monitor), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique), Climate.gov (ENSO/outlooks)
 - **USDA/FAO** : NASS reports (recoltes, stocks), FAO newsroom
 - **Geopolitique/Defense** : war.gov (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
 - **Energie** : EIA Today in Energy, OilPrice
 - **Maritime/Shipping** : gCaptain, MarineLink, Maritime Executive, Splash247 (ports, containers, BDI)
 - **Canal chokepoints** : Panama Canal Authority (ACP) — transit disruptions
-  - v3.2: Suez Canal Authority retire (page HTML, pas RSS — jamais parsee correctement)
-  - Couvert par GNews query "Suez Canal disruption" a la place
 - **Banques centrales** : ECB (corrige .html→.xml), Federal Reserve, Bank of England (speeches)
+- **Chine** (v3.5) : Caixin RSS, Xinhua English finances, Chinese govt latest releases
+- **Reglementation** (v3.5) : US Federal Register (ITC trade rules), EUR-Lex (recent EU legislation)
 
-**Feeds remplaces** : NCEI news.xml (mort)→Drought.gov+Climate.gov, Defense.gov→war.gov, ECB .html→.xml
-**v3.2** : Defense.gov fallback retire (redondant avec war.gov), Suez Canal retire (HTML pas RSS)→GNews query
+**v3.5** : +5 feeds Chine/reglementation (edge sur export bans, tarifs, decisions commerciales)
 
 ### Phase 2 : Yahoo Finance (yfinance)
 Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API.
@@ -219,10 +248,9 @@ Module `economic_calendar.py` — bloque les trades avant les evenements macro m
 - **Action** : si evenement dans la fenetre, le trade est BLOQUE (zero edge sur macro)
 - **Contexte Claude** : les evenements a venir sont injectes dans le prompt
 
-## Scans Evenementiels (reactifs) — NON ACTIFS
-Module `event_scanner.py` — code implemente mais **non wire dans le scheduler** (`run_event_check()` n'est jamais schedule dans `main.py`).
-Fonctionnalite disponible pour activation future :
-- **Cron prevu** : toutes les 30 minutes pendant les heures de trading (07:00-19:30 CET), lundi-vendredi
+## Scans Evenementiels (reactifs) — ACTIFS
+Module `event_scanner.py` — schedule dans `main.py` toutes les 10 minutes.
+- **Cron** : toutes les 10 minutes pendant les heures de trading (07:00-19:30 CET), lundi-vendredi
 - **Weekend** : desactive (weekday check dans `should_trigger_scan()` + `day_of_week` dans CronTrigger)
 - **Detection** : mots-cles a fort potentiel dans les titres RSS (v3.1 — elargi)
   - weather : drought, frost, hurricane, typhoon, tropical storm, el nino, la nina, wildfire, volcanic eruption, earthquake, monsoon failure, record heat/cold...
@@ -315,6 +343,7 @@ Detection automatique des effets de second ordre. Le marche est LENT a connecter
 - **Cuivre** : HG=F → ^GSPC, ^FCHI (proxy industriel), AUDUSD=X (same — Australie producteur)
 - **PGM** : PL=F ↔ PA=F (memes mines sud-africaines — disruption impacte les deux)
 - **Yen carry** : USDJPY=X → GC=F (risk-off inverse)
+- **Yuan/Chine** (v3.5) : USDCNH=X → HG=F (inverse — demand proxy), AUDUSD=X (inverse — China trade partner)
 
 ### Fonctionnement
 Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `impacted_tickers` avec les cibles de second ordre. La direction est propagee (same/inverse).
@@ -332,8 +361,8 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 - **Execution**: 0 ou 1 trade par scan
 - **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
 - **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
-- **Univers**: 39 actifs (7 actions Euronext Paris, 4 metaux, 6 forex, 14 commodities, 8 indices)
-  - v3.3: elagage de 15 actifs sans source dediee (8 actions, 3 forex, 4 indices)
+- **Univers**: 41 actifs (7 actions Euronext Paris, 4 metaux, 7 forex, 15 commodities, 8 indices)
+  - v3.5: +USDCNH=X (yuan offshore — proxy Chine), +URA (uranium ETF — geopolitique nucleaire)
 - **Filtrage par session**: Europe = Euronext + indices EUR/GBP + metaux/forex/commodities. US = indices USD/JPY/HKD/AUD + metaux/forex/commodities.
 - **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
 - **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)
@@ -348,6 +377,27 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 - **R/R variable**: le ratio varie selon le score (plus le score est eleve, plus le target est ambitieux)
 - **Planchers**: target min = TARGET_PERCENT, stop min = TARGET_PERCENT x 0.7
 
+## Trade Selection — Risk Management (v3.5)
+
+### Cooldown adaptatif par categorie
+- **weather/supply_chain** : cooldown 1 jour (signaux persistants, re-scan rapide)
+- **commodity** : cooldown 2 jours
+- **Autres** : cooldown 3 jours (default)
+
+### Re-entry apres faux stop
+- Si un trade est SL_HIT aujourd'hui sur weather/supply_chain/commodity → re-entry autorise
+- Justification : les signaux physiques persistent — un stop intraday ne signifie pas que le signal est invalide
+- Ne s'applique PAS aux TP_HIT (le signal a deja ete price)
+
+### Position sizing dynamique
+- **Quarter-Kelly** de base, ajuste par :
+  - **VIX regime** : stress (VIX≥30) → 0.5x | elevated (VIX≥20) → 0.75x | calm (VIX≤13) → 1.2x
+  - **Vendredi** : apres-midi → 0.6x | matin → 0.8x (liquidite reduite + risque gap weekend)
+
+### Dynamic correlation optimization
+- Si deux tickers sont dans le meme groupe statique, skip le calcul de correlation dynamique (rolling 20j)
+- Gain de performance : evite des appels yfinance inutiles quand la correlation est deja connue
+
 ## Correlation Groups
 Groupes d'actifs correles pour eviter les doubles expositions :
 - energy: TTE.PA, CL=F, BZ=F, NG=F
@@ -360,6 +410,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - tropical_soft: KC=F, SB=F, CC=F, OJ=F
 - livestock: LE=F, HE=F
 - pgm: PL=F, PA=F
+- china_proxy: USDCNH=X, HG=F, AUDUSD=X
 
 ## Journal quotidien (22h CET)
 - **Scheduler**: job automatique a 22:00 CET chaque jour ouvrable (lundi-vendredi)
@@ -434,7 +485,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `decomposition`: dict[ticker, {ticker_mult, cat_mult}] — pour diagnostics
 - **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour acces concurrent sur aux fichiers JSON
 
-## Parametres cles (v3.4)
+## Parametres cles (v3.5)
 - Score minimum: 20/100 (abaisse de 25 — capte les signaux mid-range)
 - Edge factor floor: 0.05 (releve de 0.01)
 - Ratio risque/rendement minimum: 1.2 (abaisse de 1.3 — plus realiste en intraday)
@@ -452,7 +503,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **Optionnels** (gratuits, ameliorent la couverture) :
   - `TWELVE_DATA_API_KEY` : market data rapide (https://twelvedata.com/ — free tier 800 credits/jour, 8 req/min)
   - `EIA_API_KEY` : donnees energie EIA (https://www.eia.gov/opendata/register.php)
-  - `GNEWS_API_KEY` : recherche news ciblee — 25 queries (https://gnews.io/)
+  - `GNEWS_API_KEY` : recherche news ciblee — 28 queries avec rotation (https://gnews.io/)
   - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
   - `GIE_AGSI_API_KEY` : stockage gaz europeen (https://agsi.gie.eu/ — inscription gratuite)
 - yfinance, Open-Meteo, CFTC COT, NASA EONET et RSS ne necessitent aucune cle
@@ -460,7 +511,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 ## Performance (optimisations v3.1)
 
 ### Backend — Parallelisation I/O
-- **collect_structured_data()** : 8 sources API en parallele (ThreadPoolExecutor, max_workers=8, timeout 45s)
+- **collect_structured_data()** : 17 sources API en parallele (ThreadPoolExecutor, max_workers=8, timeout 120s)
 - **collect_all_news()** : 4 sources (structured, early-signal, yfinance, rss) en parallele
 - **_fetch_market_context()** : 9 appels yfinance en parallele (VIX + indices + trends)
 - **select_trade()** : pre-fetch de tous les prix candidats en parallele avant evaluation

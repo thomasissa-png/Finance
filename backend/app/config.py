@@ -81,6 +81,7 @@ CORRELATION_GROUPS: dict[str, list[str]] = {
     "tropical_soft": ["KC=F", "SB=F", "CC=F", "OJ=F"],  # Same tropical zones (Brazil, West Africa)
     "livestock": ["LE=F", "HE=F"],  # Same disease/feed cost drivers
     "pgm": ["PL=F", "PA=F"],  # Platinum Group Metals — same South African mines
+    "china_proxy": ["USDCNH=X", "HG=F", "AUDUSD=X"],  # P3-2: China demand complex
 }
 
 # ── Chain reactions: effets de second ordre ─────────────────────
@@ -161,6 +162,12 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
         {"ticker": "^GSPC", "direction": "same", "reason": "Cuivre = proxy activite industrielle"},
         {"ticker": "^FCHI", "direction": "same", "reason": "Cuivre = proxy activite industrielle EU"},
         {"ticker": "AUDUSD=X", "direction": "same", "reason": "Australie 4e producteur cuivre — AUD correle"},
+        {"ticker": "USDCNH=X", "direction": "inverse", "reason": "Chine 1er importateur cuivre — CNH monte quand demande forte"},
+    ],
+    # P3-2: China yuan — demand indicator
+    "USDCNH=X": [
+        {"ticker": "HG=F", "direction": "inverse", "reason": "Yuan fort = Chine achete plus de commodities"},
+        {"ticker": "AUDUSD=X", "direction": "inverse", "reason": "Yuan deprecie = AUD sous pression (Chine 1er client)"},
     ],
 }
 
@@ -205,6 +212,8 @@ ASSETS: list[Asset] = [
     Asset("USDCHF=X", "USD/CHF", "forex", "CHF"),
     # Removed: USDCAD=X, NZDUSD=X, EURGBP=X — no dedicated source, no chain reaction
     Asset("EURJPY=X", "EUR/JPY", "forex", "JPY"),
+    # P3-2: China offshore yuan — key for China demand/policy signals
+    Asset("USDCNH=X", "USD/CNH", "forex", "CNH"),
     # ── COMMODITIES (14) ──────────────────────────────────────────
     Asset("CL=F", "Pétrole WTI", "commodities", "USD"),
     Asset("BZ=F", "Pétrole Brent", "commodities", "USD"),
@@ -220,6 +229,8 @@ ASSETS: list[Asset] = [
     Asset("HG=F", "Cuivre", "commodities", "USD"),
     Asset("LE=F", "Bétail Vivant", "commodities", "USD"),
     Asset("HE=F", "Porc Maigre", "commodities", "USD"),
+    # P3-2: Uranium — energy transition + geopolitical hedge
+    Asset("URA", "Uranium ETF", "commodities", "USD"),
     # ── INDICES (8) ──────────────────────────────────────────────
     Asset("^FCHI", "CAC 40", "indices", "EUR"),
     Asset("^GSPC", "S&P 500", "indices", "USD"),
@@ -247,7 +258,7 @@ CATEGORIES = {
 # Europe scan: Euronext + EUR/GBP indices + global (metals, forex, commodities)
 # US scan: USD/JPY/HKD/AUD indices + global (metals, forex, commodities)
 EUROPE_INDEX_CURRENCIES = {"EUR", "GBP"}
-US_INDEX_CURRENCIES = {"USD", "JPY", "HKD", "AUD"}
+US_INDEX_CURRENCIES = {"USD", "JPY", "HKD", "AUD", "CNH"}
 
 
 def assets_for_session(scan_type_value: str) -> set[str]:
@@ -318,6 +329,13 @@ EARLY_SIGNAL_FEEDS = [
     "https://www.ecb.europa.eu/rss/press.xml",                     # ECB: press releases RSS (was .html — returned HTML not XML)
     "https://www.federalreserve.gov/feeds/press_all.xml",
     "https://www.bankofengland.co.uk/rss/speeches",                 # BoE: verified working (200)
+    # ── P2-1: China data sources — key demand driver for commodities ──
+    "https://www.caixin.com/api/dataapi/index.jsp?type=rss",       # Caixin: China business/economics (EN when available)
+    "http://www.xinhuanet.com/english/rss/finances.xml",           # Xinhua Finance: official China economic news
+    "http://english.www.gov.cn/policies/latestreleases/rss.xml",   # China State Council: policy announcements, trade decisions
+    # ── P3-3: Government gazettes — export bans, tariffs, regulations ──
+    "https://www.federalregister.gov/documents/search.atom?conditions%5Bagencies%5D%5B%5D=international-trade-commission&conditions%5Btype%5D%5B%5D=RULE",  # US Federal Register: trade rules, tariffs
+    "https://eur-lex.europa.eu/collection/eu-law/legislation/recent.atom",  # EU Official Journal: trade/agri regulations
 ]
 
 # ── Source weights: early-signal sources get premium weight ──────
@@ -389,4 +407,23 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "Investing.com": 0.7,
     "investing": 0.7,
     "Yahoo Finance": 0.8,
+    # P1-5: WOAH animal disease alerts
+    "WOAH": 1.15,
+    "woah": 1.15,
+    # P2-2: Satellite vegetation monitoring
+    "NASA POWER": 1.15,
+    # P2-3: Freight/shipping
+    "Freight Index": 1.1,
+    # P2-4: LME proxy
+    "LME Proxy": 1.05,
+    # P3-1: Chokepoint/shipping
+    "Shipping Proxy": 1.1,
+    # P3-5: Dark pool
+    "Dark Pool Proxy": 1.0,
+    # P2-1: China sources
+    "Caixin": 1.0,
+    "caixin": 1.0,
+    "NBS China": 1.05,
+    "PBOC": 1.0,
+    "Xinhua Finance": 0.95,
 }

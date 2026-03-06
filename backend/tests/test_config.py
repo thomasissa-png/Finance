@@ -18,9 +18,9 @@ from backend.app.config import (
 )
 
 
-def test_39_assets():
-    """39 assets after pruning zero-edge assets without dedicated sources."""
-    assert len(ASSETS) == 39
+def test_asset_count():
+    """41 assets: 39 original + USDCNH=X + URA (P3-2 expanded universe)."""
+    assert len(ASSETS) == 41
 
 
 def test_categories_coverage():
@@ -34,8 +34,8 @@ def test_category_counts():
         counts[a.category] = counts.get(a.category, 0) + 1
     assert counts["actions_europe"] == 7  # Was 10, removed SU.PA, SAF.PA, RI.PA (no source, no chain)
     assert counts["metaux"] == 4  # PL=F and PA=F kept (now covered by GNews mine strike query)
-    assert counts["forex"] == 6  # Was 9, removed USDCAD, NZDUSD, EURGBP
-    assert counts["commodities"] == 14
+    assert counts["forex"] == 7  # +USDCNH=X (China yuan proxy)
+    assert counts["commodities"] == 15  # +URA (uranium ETF)
     assert counts["indices"] == 8  # Was 12, removed IBEX, FTSEMIB, HSI, AXJO
 
 

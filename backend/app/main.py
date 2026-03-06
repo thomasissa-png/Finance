@@ -310,14 +310,15 @@ async def lifespan(app: FastAPI):
     # so crash loops are not a concern. A long grace period ensures the journal runs even
     # after prolonged downtime (e.g., Replit kills the app from 21:00 to 23:30).
     bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=3600)
-    # Event-driven scanner: every 15 min during trading hours (07:00-19:30 CET, weekdays)
-    bg_scheduler.add_job(_run_event_check, CronTrigger(minute="*/15", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="event_check", misfire_grace_time=60)
+    # P2-5: Event-driven scanner: every 10 min during trading hours (was 15min)
+    # Faster detection = less edge lost waiting for next check
+    bg_scheduler.add_job(_run_event_check, CronTrigger(minute="*/10", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="event_check", misfire_grace_time=60)
     # Position monitor: every 15 min during trading hours — trailing stop + time stop
     bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,22,37,52", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
     # Conditional post-EIA scan: Wednesday 16:45 CET (EIA petroleum report at 16:30)
     bg_scheduler.add_job(_run_post_eia_scan, CronTrigger(hour=16, minute=45, day_of_week="wed", timezone="Europe/Paris"), id="post_eia_scan", misfire_grace_time=60)
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check q15min, position monitor q15min, post-EIA Wed 16:45, journal at 22:00 CET (weekdays only)")
+    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check q10min, position monitor q15min, post-EIA Wed 16:45, journal at 22:00 CET (weekdays only)")
 
     # Startup recovery: close any old PENDING trades that were missed by the 22:00 journal
     # (e.g., app was down overnight, Replit killed the process before journal ran)
