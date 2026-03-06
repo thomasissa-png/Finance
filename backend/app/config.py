@@ -18,7 +18,7 @@ SCAN_KEY_TO_TYPE: dict[str, str] = {
     "us_session": "us",
 }
 
-TARGET_PERCENT = 1.0  # Objectif minimum de mouvement en %
+TARGET_PERCENT = 0.5  # Objectif minimum de mouvement en % (baisse de 1.0 — adapte levier 5-10x, 0.5% x 10x = 5%)
 MIN_RISK_REWARD = 1.2  # Ratio risque/rendement minimum (ex 1.3 — 1.2 plus realiste en intraday)
 NEWS_MAX_AGE_HOURS = 8  # Ignorer les news de plus de 8h (ex 6h — elargi pour capter overnight US au scan Europe 07:50)
 NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h

@@ -252,6 +252,7 @@ def _calibrate_trade(
     target_move_pct = max(TARGET_PERCENT, avg_range * score_factor)
 
     # Stop: fraction of ATR adapted to volatility, independent of target
+    # Floor at TARGET_PERCENT * 0.7 = 0.35% — adapte levier (0.35% x 10x = 3.5% perte max)
     stop_move_pct = max(TARGET_PERCENT * 0.7, avg_range * stop_fraction)
 
     # (#7) Apply news category multipliers
@@ -606,6 +607,9 @@ def select_trades(
             continue
 
         # (#4) News déjà pricée detection — direction-aware, category-adaptive
+        # v3.7: Instead of rejecting partially-priced moves, REDUCE the target.
+        # "Si une tendance est déjà commencée, 1% de gain est une super victoire" (levier 5-10x).
+        # Only reject if >95% of expected move is already priced (truly exhausted).
         if avg_range < 1.0:
             _pre_factor = 0.35 + (best_news.total_score / 100) * 0.55
         elif avg_range > 5.0:
@@ -615,23 +619,29 @@ def select_trades(
         target_move_expected = avg_range * _pre_factor
         pre_move_pct = _detect_pre_move(price, prev_close, target_move_expected)
         pre_move_ratio = PRE_MOVE_THRESHOLDS.get(asset.category, 0.8)
+        pre_move_reduction = 1.0  # Factor to reduce target if trend already started
         if pre_move_pct is not None:
-            if best_news.direction == Direction.LONG and pre_move_pct > target_move_expected * pre_move_ratio:
-                reason = f"LONG deja price: pre-move +{pre_move_pct:.2f}% > seuil {target_move_expected * pre_move_ratio:.2f}% ({asset.category})"
-                logger.info("Skipping %s: %s", ticker, reason)
-                rejection_log.append({
-                    "title": best_news.news.title, "ticker": [ticker],
-                    "reason": reason, "score": raw_score, "pre_move_pct": pre_move_pct,
-                })
-                continue
-            elif best_news.direction == Direction.SHORT and pre_move_pct < -target_move_expected * pre_move_ratio:
-                reason = f"SHORT deja price: pre-move {pre_move_pct:.2f}% < seuil -{target_move_expected * pre_move_ratio:.2f}% ({asset.category})"
-                logger.info("Skipping %s: %s", ticker, reason)
-                rejection_log.append({
-                    "title": best_news.news.title, "ticker": [ticker],
-                    "reason": reason, "score": raw_score, "pre_move_pct": pre_move_pct,
-                })
-                continue
+            directional_pre_move = pre_move_pct if best_news.direction == Direction.LONG else -pre_move_pct
+            if directional_pre_move > 0 and target_move_expected > 0:
+                consumed_ratio = directional_pre_move / target_move_expected
+                if consumed_ratio > 0.95:
+                    # >95% consumed: truly exhausted, reject
+                    reason = f"Move epuise: pre-move {pre_move_pct:+.2f}% = {consumed_ratio*100:.0f}% du move attendu ({asset.category})"
+                    logger.info("Skipping %s: %s", ticker, reason)
+                    rejection_log.append({
+                        "title": best_news.news.title, "ticker": [ticker],
+                        "reason": reason, "score": raw_score, "pre_move_pct": pre_move_pct,
+                    })
+                    continue
+                elif consumed_ratio > pre_move_ratio:
+                    # Partially priced: reduce target to remaining move + continuation potential
+                    # e.g., 70% consumed → reduce target to 50% (remaining 30% + 20% continuation)
+                    remaining = 1.0 - consumed_ratio
+                    pre_move_reduction = max(0.3, remaining + 0.2)  # Floor at 30% of original target
+                    logger.info(
+                        "Pre-move reduction for %s: %+.2f%% consumed (%.0f%%) → target reduced to %.0f%%",
+                        ticker, pre_move_pct, consumed_ratio * 100, pre_move_reduction * 100,
+                    )
 
         # v3.6 (D): Price at publication tracking
         price_at_pub = None
@@ -666,6 +676,18 @@ def select_trades(
             best_news.direction, price, avg_range, best_news.total_score,
             news_category=best_news.news_category,
         )
+
+        # v3.7: Apply pre-move reduction to target (trend already started → smaller target)
+        if pre_move_reduction < 1.0:
+            target_pct = round(target_pct * pre_move_reduction, 2)
+            target_pct = max(TARGET_PERCENT, target_pct)  # Never below floor
+            if best_news.direction == Direction.LONG:
+                target_price = round(price * (1 + target_pct / 100), 4)
+            else:
+                target_price = round(price * (1 - target_pct / 100), 4)
+            rr = round(target_pct / stop_pct, 2) if stop_pct > 0 else 0
+            logger.info("Pre-move adjusted target for %s: %.2f%% (reduction %.0f%%), R/R=%.2f",
+                        ticker, target_pct, pre_move_reduction * 100, rr)
 
         if rr < MIN_RISK_REWARD:
             reason = f"R/R {rr:.2f} < seuil {MIN_RISK_REWARD}"

@@ -23,11 +23,13 @@ logger = logging.getLogger(__name__)
 
 PARIS_TZ = ZoneInfo("Europe/Paris")
 
-# ── Trailing stop thresholds ──────────────────────────────────────
-# At +50% of TP move: move SL to breakeven (entry price)
-TRAILING_BREAKEVEN_THRESHOLD = 0.50
-# At +75% of TP move: move SL to lock in 50% of current move
-TRAILING_LOCK_THRESHOLD = 0.75
+# ── Trailing stop thresholds (v3.7 — adapte levier 5-10x) ────────
+# At +35% of TP move: move SL to breakeven (entry price)
+# Baisse de 50% → 35% : avec levier 5x, +0.35% = +1.75% deja securise
+TRAILING_BREAKEVEN_THRESHOLD = 0.35
+# At +60% of TP move: move SL to lock in 50% of current move
+# Baisse de 75% → 60% : verrouille les gains plus tot
+TRAILING_LOCK_THRESHOLD = 0.60
 TRAILING_LOCK_FRACTION = 0.50
 
 # ── Time stop thresholds ──────────────────────────────────────────
