@@ -48,25 +48,22 @@ def td_available() -> bool:
 
 
 # ── Ticker mapping: yfinance format → (td_symbol, extra_params) ──
+# Verified against TD /indices, /forex_pairs, /commodities endpoints (2026-03).
 _TICKER_MAP: dict[str, tuple[str, dict]] = {
-    # Indices
-    "^GSPC": ("SPX", {}),
-    "^DJI": ("DJI", {}),
-    "^IXIC": ("IXIC", {}),
-    "^FCHI": ("CAC 40", {}),
-    "^GDAXI": ("DAX", {}),
-    "^FTSE": ("FTSE 100", {}),
-    "^N225": ("NI225", {}),
-    "^RUT": ("RUT", {}),
-    "^VIX": ("VIX", {}),
-    # Forex
+    # Indices — verified via /indices endpoint
+    "^FCHI": ("FCHI", {}),       # CAC 40
+    "^GDAXI": ("GDAXI", {}),    # DAX
+    "^FTSE": ("FTSE", {}),       # FTSE 100
+    "^N225": ("N225", {}),       # Nikkei 225
+    # Note: ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX are NOT on TD — blacklisted below
+    # Forex — all verified correct via /forex_pairs endpoint
     "EURUSD=X": ("EUR/USD", {}),
     "USDJPY=X": ("USD/JPY", {}),
     "GBPUSD=X": ("GBP/USD", {}),
     "USDCHF=X": ("USD/CHF", {}),
     "EURJPY=X": ("EUR/JPY", {}),
     "AUDUSD=X": ("AUD/USD", {}),
-    # Paris stocks (Euronext)
+    # Paris stocks (Euronext) — use mic_code=XPAR
     "TTE.PA": ("TTE", {"mic_code": "XPAR"}),
     "MC.PA": ("MC", {"mic_code": "XPAR"}),
     "BNP.PA": ("BNP", {"mic_code": "XPAR"}),
@@ -74,25 +71,40 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "AI.PA": ("AI", {"mic_code": "XPAR"}),
     "OR.PA": ("OR", {"mic_code": "XPAR"}),
     "RMS.PA": ("RMS", {"mic_code": "XPAR"}),
-    # Commodities / Futures
-    "CL=F": ("CL", {}), "BZ=F": ("BZ", {}),
-    "GC=F": ("GC", {}), "SI=F": ("SI", {}),
-    "NG=F": ("NG", {}), "HG=F": ("HG", {}),
-    "ZC=F": ("ZC", {}), "ZW=F": ("ZW", {}),
-    "ZS=F": ("ZS", {}), "KC=F": ("KC", {}),
-    "SB=F": ("SB", {}), "CC=F": ("CC", {}),
-    "OJ=F": ("OJ", {}), "LE=F": ("LE", {}),
-    "HE=F": ("HE", {}), "PL=F": ("PL", {}),
-    "PA=F": ("PA", {}), "CT=F": ("CT", {}),
-    # ETFs
+    # Commodities / Futures — verified via /commodities endpoint
+    # Energy
+    "CL=F": ("CL1", {}),        # WTI Crude (front month)
+    "BZ=F": ("CO1", {}),        # Brent Crude (front month)
+    "NG=F": ("NG1", {}),        # Natural Gas
+    # Precious metals — TD uses forex-style symbols
+    "GC=F": ("XAU/USD", {}),    # Gold
+    "SI=F": ("XAG/USD", {}),    # Silver
+    "PL=F": ("XPT/USD", {}),    # Platinum
+    "PA=F": ("XPD/USD", {}),    # Palladium
+    # Base metals
+    "HG=F": ("HG1", {}),        # Copper
+    # Agriculture — TD uses exchange notation
+    "ZC=F": ("C_1", {}),        # Corn
+    "ZW=F": ("W_1", {}),        # Wheat
+    "ZS=F": ("S_1", {}),        # Soybeans
+    "KC=F": ("KC1", {}),        # Coffee
+    "SB=F": ("SB1", {}),        # Sugar
+    "CC=F": ("CC1", {}),        # Cocoa
+    "CT=F": ("CT1", {}),        # Cotton
+    "OJ=F": ("JO1", {}),        # Orange Juice
+    # Livestock
+    "LE=F": ("LC1", {}),        # Live Cattle
+    "HE=F": ("LH1", {}),        # Lean Hogs
+    # ETFs — standard US equity symbols, work as-is on TD
     "SPY": ("SPY", {}), "QQQ": ("QQQ", {}),
     "USO": ("USO", {}), "GLD": ("GLD", {}),
     "SLV": ("SLV", {}), "CORN": ("CORN", {}),
     "WEAT": ("WEAT", {}),
 }
 
-# Tickers known to not work on Twelve Data — skip to yfinance directly
-_td_blacklist: set[str] = {"ZQ=F"}
+# Tickers known to not work on Twelve Data — skip to yfinance directly.
+# US indices (SPX/DJI/IXIC/RUT) and VIX are not available on TD free tier.
+_td_blacklist: set[str] = {"ZQ=F", "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX"}
 _blacklist_lock = threading.Lock()
 
 
@@ -103,13 +115,12 @@ def _map_ticker(yf_ticker: str) -> tuple[str, dict] | None:
             return None
     if yf_ticker in _TICKER_MAP:
         return _TICKER_MAP[yf_ticker]
-    # Dynamic mapping
+    # Dynamic mapping for unlisted Paris stocks
     if yf_ticker.endswith(".PA"):
         return (yf_ticker.replace(".PA", ""), {"mic_code": "XPAR"})
-    if ".CBT" in yf_ticker:
-        return None  # CME-specific contract codes, not on TD
-    if yf_ticker.endswith("=F"):
-        return (yf_ticker.replace("=F", ""), {})
+    # Futures not in _TICKER_MAP: don't guess — fall back to yfinance
+    if yf_ticker.endswith("=F") or ".CBT" in yf_ticker:
+        return None
     return (yf_ticker, {})
 
 
