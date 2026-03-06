@@ -134,6 +134,54 @@ CPI_DATES_2027 = [
 ]
 CPI_DATES = set(CPI_DATES_2025 + CPI_DATES_2026 + CPI_DATES_2027)
 
+# ── WASDE report dates (USDA — monthly, typically 10th-12th) ─────
+# Most market-moving agricultural report
+WASDE_DATES_2025 = [
+    date(2025, 1, 10), date(2025, 2, 11), date(2025, 3, 11),
+    date(2025, 4, 10), date(2025, 5, 12), date(2025, 6, 12),
+    date(2025, 7, 11), date(2025, 8, 12), date(2025, 9, 12),
+    date(2025, 10, 10), date(2025, 11, 11), date(2025, 12, 10),
+]
+WASDE_DATES_2026 = [
+    date(2026, 1, 12), date(2026, 2, 10), date(2026, 3, 10),
+    date(2026, 4, 9), date(2026, 5, 12), date(2026, 6, 11),
+    date(2026, 7, 10), date(2026, 8, 12), date(2026, 9, 11),
+    date(2026, 10, 9), date(2026, 11, 10), date(2026, 12, 10),
+]
+WASDE_DATES_2027 = [
+    date(2027, 1, 12), date(2027, 2, 9), date(2027, 3, 9),
+    date(2027, 4, 9), date(2027, 5, 11), date(2027, 6, 10),
+    date(2027, 7, 12), date(2027, 8, 12), date(2027, 9, 10),
+    date(2027, 10, 12), date(2027, 11, 9), date(2027, 12, 9),
+]
+WASDE_DATES = set(WASDE_DATES_2025 + WASDE_DATES_2026 + WASDE_DATES_2027)
+
+# ── USDA Quarterly Grain Stocks / Prospective Plantings ──────────
+# Released end of March, June, September, January
+USDA_QUARTERLY_DATES_2025 = [
+    date(2025, 1, 10), date(2025, 3, 31), date(2025, 6, 30), date(2025, 9, 30),
+]
+USDA_QUARTERLY_DATES_2026 = [
+    date(2026, 1, 12), date(2026, 3, 31), date(2026, 6, 30), date(2026, 9, 30),
+]
+USDA_QUARTERLY_DATES_2027 = [
+    date(2027, 1, 12), date(2027, 3, 31), date(2027, 6, 30), date(2027, 9, 30),
+]
+USDA_QUARTERLY_DATES = set(
+    USDA_QUARTERLY_DATES_2025 + USDA_QUARTERLY_DATES_2026 + USDA_QUARTERLY_DATES_2027
+)
+
+
+def _generate_eia_weekly_dates(year: int) -> list[date]:
+    """EIA Weekly Petroleum Status Report is released every Wednesday at 16:30 CET."""
+    dates = []
+    d = date(year, 1, 1)
+    while d.year == year:
+        if d.weekday() == 2:  # Wednesday
+            dates.append(d)
+        d += timedelta(days=1)
+    return dates
+
 
 def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -> list[EconomicEvent]:
     """Get economic events within window_days of target_date.
@@ -217,6 +265,49 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 hours_before=1.0,
                 hours_after=1.0,
             ))
+
+    # WASDE — monthly USDA report, blocks commodity trades
+    for d in WASDE_DATES:
+        if window_start <= d <= window_end:
+            events.append(EconomicEvent(
+                name="USDA WASDE Report",
+                date=d,
+                time_cet=time(18, 0),  # 12:00 ET = 18:00 CET
+                impact="high",
+                currency="USD",
+                blocks_trade=True,
+                hours_before=1.0,
+                hours_after=1.0,
+            ))
+
+    # USDA Quarterly (Grain Stocks / Prospective Plantings)
+    for d in USDA_QUARTERLY_DATES:
+        if window_start <= d <= window_end:
+            events.append(EconomicEvent(
+                name="USDA Quarterly Grain Stocks",
+                date=d,
+                time_cet=time(18, 0),
+                impact="high",
+                currency="USD",
+                blocks_trade=True,
+                hours_before=1.0,
+                hours_after=1.5,
+            ))
+
+    # EIA Weekly Petroleum — Wednesdays at 16:30 CET (medium impact, doesn't block)
+    for year in (target_date.year - 1, target_date.year, target_date.year + 1):
+        for d in _generate_eia_weekly_dates(year):
+            if window_start <= d <= window_end:
+                events.append(EconomicEvent(
+                    name="EIA Weekly Petroleum Status",
+                    date=d,
+                    time_cet=time(16, 30),
+                    impact="medium",
+                    currency="USD",
+                    blocks_trade=False,  # Doesn't block — our post-EIA scan captures this
+                    hours_before=0.5,
+                    hours_after=0.5,
+                ))
 
     events.sort(key=lambda e: (e.date, e.time_cet))
     return events

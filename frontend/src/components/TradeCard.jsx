@@ -145,6 +145,28 @@ export default function TradeCard({ scan, label }) {
           </div>
         )}
 
+        {/* v3.6: Position size + convergence info */}
+        {(t.position_size_pct != null || t.convergence_count > 0) && (
+          <div className="trade-info-row">
+            {t.position_size_pct != null && (
+              <span className="trade-info-badge cyan-bg">
+                Taille: {t.position_size_pct}%
+              </span>
+            )}
+            {t.convergence_count > 0 && (
+              <span className="trade-info-badge positive">
+                {t.convergence_count} sources convergentes
+                {t.convergence_boost && ` (${t.convergence_boost.toFixed(2)}x)`}
+              </span>
+            )}
+            {t.publication_move_pct != null && (
+              <span className="trade-info-badge neutral">
+                Move depuis pub: {t.publication_move_pct > 0 ? "+" : ""}{t.publication_move_pct.toFixed(2)}%
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Volume + Pre-move info row */}
         {(t.volume_confirmed != null || t.pre_move_pct != null) && (
           <div className="trade-info-row">

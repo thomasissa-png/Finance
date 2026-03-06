@@ -7,8 +7,12 @@ from .market_data import fetch_history
 
 from .config import (
     ASSET_BY_TICKER,
+    BASE_POSITION_SIZE_PCT,
     CORRELATION_GROUPS,
+    KELLY_FRACTION,
+    MAX_POSITION_SIZE_PCT,
     MAX_TRADES_PER_DAY,
+    MIN_POSITION_SIZE_PCT,
     MIN_RISK_REWARD,
     MIN_SCORE_THRESHOLD,
     NEWS_CATEGORY_MULTIPLIERS,
@@ -157,6 +161,33 @@ def _check_binary_event(news_title: str, reasoning: str) -> str | None:
     return None
 
 
+def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20) -> float | None:
+    """Compute 20-day rolling correlation between two tickers (G. dynamic correlation).
+
+    Returns correlation coefficient (-1 to 1), or None if data unavailable.
+    """
+    try:
+        data1 = fetch_history(ticker1, period_days=lookback + 5, interval="1day")
+        data2 = fetch_history(ticker2, period_days=lookback + 5, interval="1day")
+        if data1 is None or data2 is None or len(data1) < lookback or len(data2) < lookback:
+            return None
+        returns1 = data1["Close"].pct_change().dropna().tail(lookback)
+        returns2 = data2["Close"].pct_change().dropna().tail(lookback)
+        if len(returns1) < 10 or len(returns2) < 10:
+            return None
+        # Align by date
+        common = returns1.index.intersection(returns2.index)
+        if len(common) < 10:
+            return None
+        corr = returns1.loc[common].corr(returns2.loc[common])
+        return round(corr, 3) if corr == corr else None  # NaN check
+    except Exception:
+        return None
+
+
+DYNAMIC_CORRELATION_THRESHOLD = 0.7  # Block if rolling correlation > 0.7
+
+
 def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | None) -> bool:
     """Check if a ticker is correlated with ANY existing trade (#22).
 
@@ -177,9 +208,17 @@ def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | No
         return True
 
     for existing in tickers_to_check:
+        # Static correlation group check (fast)
         for group_tickers in CORRELATION_GROUPS.values():
             if ticker in group_tickers and existing in group_tickers:
                 return True
+        # Dynamic correlation check (slow — only if not caught by static groups)
+        # Skip dynamic check for same-category assets (already handled by static groups)
+        dyn_corr = _compute_dynamic_correlation(ticker, existing)
+        if dyn_corr is not None and abs(dyn_corr) > DYNAMIC_CORRELATION_THRESHOLD:
+            logger.info("Dynamic correlation block: %s vs %s = %.3f (threshold: %.1f)",
+                        ticker, existing, dyn_corr, DYNAMIC_CORRELATION_THRESHOLD)
+            return True
     return False
 
 
@@ -236,6 +275,22 @@ def _calibrate_trade(
         round(stop_move_pct, 2),
         risk_reward,
     )
+
+
+def _compute_position_size(score: float, confidence: int, rr: float) -> float:
+    """Compute position size as % of capital using Kelly-inspired formula.
+
+    Higher score + higher R/R = larger position. Capped at MAX_POSITION_SIZE_PCT.
+    Uses quarter-Kelly for safety.
+
+    Formula: base_size * (score/100) * kelly_fraction * min(rr/1.5, 2.0)
+    """
+    score_factor = score / 100.0
+    rr_factor = min(rr / 1.5, 2.0)  # R/R boost, capped at 2x
+    size = BASE_POSITION_SIZE_PCT * score_factor * KELLY_FRACTION * rr_factor
+    # Additional confidence scaling
+    size *= (confidence / 100.0)
+    return round(max(MIN_POSITION_SIZE_PCT, min(MAX_POSITION_SIZE_PCT, size)), 2)
 
 
 def _build_scored_news_log(scored_news: list[ScoredNews]) -> list[dict]:
@@ -427,6 +482,15 @@ def select_trades(
         multiplier = max(0.5, min(1.5, multiplier))  # Clamp
 
         adjusted_score = sn.total_score * multiplier
+
+        # v3.6 (I): Multi-source convergence boost
+        convergence_boost = 1.0
+        if hasattr(sn, 'convergence_count') and sn.convergence_count >= 2:
+            convergence_boost = min(1.5, 1.0 + sn.convergence_count * 0.15)
+            adjusted_score *= convergence_boost
+            logger.info("Convergence boost for '%s': %d sources → %.2fx",
+                        sn.news.title[:60], sn.convergence_count, convergence_boost)
+
         candidates.append((sn, adjusted_score))
 
     candidates.sort(key=lambda x: x[1], reverse=True)
@@ -493,6 +557,10 @@ def select_trades(
     regime_val = market_context.get("regime") if market_context else None
 
     for rank, (best_news, best_score) in enumerate(candidates):
+        # Recompute convergence boost for this candidate (needed for TradeRecommendation)
+        _cand_convergence_boost = 1.0
+        if hasattr(best_news, 'convergence_count') and best_news.convergence_count >= 2:
+            _cand_convergence_boost = min(1.5, 1.0 + best_news.convergence_count * 0.15)
         # Daily cap reached during iteration
         if len(selected_trades) >= daily_slots_remaining:
             decision_parts.append(f"Cap journalier atteint apres {len(selected_trades)} trades ce scan")
@@ -565,13 +633,34 @@ def select_trades(
                 })
                 continue
 
-        # (#13) Gap buffer for morning scans
+        # v3.6 (D): Price at publication tracking
+        price_at_pub = None
+        pub_move_pct = None
+        if best_news.news.published and prev_close is not None:
+            # Estimate: use prev_close as proxy for price at publication time
+            # (exact intraday price at arbitrary timestamp would require tick data)
+            pub_age_hours = (now - best_news.news.published).total_seconds() / 3600
+            if pub_age_hours < 24:
+                price_at_pub = prev_close
+                if prev_close > 0:
+                    pub_move_pct = round((price - prev_close) / prev_close * 100, 4)
+
+        # (#13) Gap buffer for morning scans + (M) overnight gap detection
         gap_buffer_applied = False
         if prev_close is not None:
             gap_pct = abs((price - prev_close) / prev_close * 100) if prev_close > 0 else 0
             if gap_pct > 0.5:
                 gap_buffer_applied = True
                 logger.info("Gap buffer applied for %s: gap=%.2f%%", ticker, gap_pct)
+            # M: Overnight gap detection — large gaps for EU stocks suggest news already priced
+            if asset.category == "actions_europe" and gap_pct > 2.0:
+                reason = f"Overnight gap trop large pour {ticker}: {gap_pct:.2f}% (seuil: 2.0%)"
+                logger.info("Skipping %s: %s", ticker, reason)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": [ticker],
+                    "reason": reason, "score": raw_score, "gap_pct": gap_pct,
+                })
+                continue
 
         target_price, stop_price, target_pct, stop_pct, rr = _calibrate_trade(
             best_news.direction, price, avg_range, best_news.total_score,
@@ -588,6 +677,13 @@ def select_trades(
             continue
 
         confidence = min(100, int(best_score))
+
+        # v3.6: Position sizing (with IV filter K — reduce size if vol elevated)
+        position_size = _compute_position_size(best_score, confidence, rr)
+        if avg_range > 3.0:  # K: IV proxy — high vol = reduce position
+            iv_reduction = min(0.5, (avg_range - 3.0) / 10.0)
+            position_size *= (1.0 - iv_reduction)
+            position_size = round(max(MIN_POSITION_SIZE_PCT, position_size), 2)
 
         # (#24) Binary event check
         binary_warning = _check_binary_event(best_news.news.title, best_news.reasoning)
@@ -663,6 +759,15 @@ def select_trades(
             volume_ratio=round(volume_ratio, 2) if volume_ratio is not None else None,
             # P1-#6: Store predicted transmission delay for later validation
             predicted_transmission_delay=best_news.transmission_delay,
+            # v3.6: Position sizing
+            position_size_pct=position_size,
+            # v3.6: Multi-source convergence
+            convergence_count=getattr(best_news, 'convergence_count', 0),
+            convergence_boost=_cand_convergence_boost if _cand_convergence_boost > 1.0 else None,
+            # v3.6: Price at publication
+            price_at_publication=price_at_pub,
+            price_at_scan=round(price, 4),
+            publication_move_pct=pub_move_pct,
         )
 
         selected_trades.append(recommendation)

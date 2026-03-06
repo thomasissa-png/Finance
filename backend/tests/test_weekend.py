@@ -129,10 +129,11 @@ class TestCronTriggerWeekday:
 
         source = inspect.getsource(lifespan)
         # Count CronTrigger occurrences and day_of_week occurrences
+        # All jobs must have a day_of_week restriction (mon-fri or specific day like wed)
         cron_count = source.count("CronTrigger(")
-        weekday_count = source.count('day_of_week="mon-fri"')
+        weekday_count = source.count("day_of_week=")
         assert cron_count == weekday_count, (
             f"Found {cron_count} CronTrigger definitions but only "
-            f"{weekday_count} have day_of_week='mon-fri'"
+            f"{weekday_count} have day_of_week restriction (no weekend scans!)"
         )
         assert cron_count >= 5, f"Expected at least 5 CronTriggers, found {cron_count}"

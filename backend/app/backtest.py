@@ -1,6 +1,7 @@
 """Backtesting engine (#31): replay historical scans to evaluate parameters."""
 
 import logging
+import statistics
 from datetime import datetime, timezone
 
 from .config import ASSET_BY_TICKER, MIN_RISK_REWARD, MIN_SCORE_THRESHOLD, assets_for_session
@@ -108,6 +109,48 @@ def run_backtest(
         results["avg_pnl"] = round(results["total_pnl"] / results["total_trades"], 4)
         results["win_rate"] = round(results["wins"] / results["total_trades"] * 100, 1)
     results["total_pnl"] = round(results["total_pnl"], 4)
+
+    # v3.6 (J): Advanced backtesting metrics
+    pnl_series = [t["pnl_pct"] for t in results["trades"] if t["pnl_pct"] is not None]
+
+    # Sharpe ratio (annualized, assuming ~250 trading days)
+    if len(pnl_series) >= 2:
+        import statistics
+        mean_pnl = statistics.mean(pnl_series)
+        std_pnl = statistics.stdev(pnl_series)
+        if std_pnl > 0:
+            # Approximate annualization: sqrt(trades_per_year)
+            trades_per_year = min(250, len(pnl_series) * 4)  # rough estimate
+            results["sharpe_ratio"] = round(mean_pnl / std_pnl * (trades_per_year ** 0.5), 2)
+        else:
+            results["sharpe_ratio"] = 0.0
+    else:
+        results["sharpe_ratio"] = 0.0
+
+    # Max drawdown
+    if pnl_series:
+        cumulative = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for pnl in pnl_series:
+            cumulative += pnl
+            peak = max(peak, cumulative)
+            dd = peak - cumulative
+            max_dd = max(max_dd, dd)
+        results["max_drawdown_pct"] = round(max_dd, 4)
+    else:
+        results["max_drawdown_pct"] = 0.0
+
+    # Profit factor (gross wins / gross losses)
+    gross_wins = sum(p for p in pnl_series if p > 0)
+    gross_losses = abs(sum(p for p in pnl_series if p < 0))
+    results["profit_factor"] = round(gross_wins / gross_losses, 2) if gross_losses > 0 else float("inf") if gross_wins > 0 else 0.0
+
+    # Average win / average loss
+    wins_list = [p for p in pnl_series if p > 0]
+    losses_list = [p for p in pnl_series if p < 0]
+    results["avg_win_pct"] = round(statistics.mean(wins_list), 4) if wins_list else 0.0
+    results["avg_loss_pct"] = round(statistics.mean(losses_list), 4) if losses_list else 0.0
 
     return results
 

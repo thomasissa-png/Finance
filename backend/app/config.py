@@ -28,6 +28,12 @@ MIN_SCORE_THRESHOLD = 20  # Score minimum pour recommander un trade (ex 25 — c
 # No per-scan cap — all valid candidates pass. Only a daily cap limits exposure.
 MAX_TRADES_PER_DAY = 6  # Cap journalier global pour limiter l'exposition
 
+# ── Position sizing (v3.6) ──────────────────────────────────────
+BASE_POSITION_SIZE_PCT = 2.0    # Base position size: 2% of capital
+KELLY_FRACTION = 0.25           # Quarter-Kelly for safety
+MAX_POSITION_SIZE_PCT = 5.0     # Never risk more than 5% on a single trade
+MIN_POSITION_SIZE_PCT = 0.5     # Minimum position size
+
 DEFAULT_SOURCE_WEIGHT = 0.75
 
 # ── Edge-priority: score multipliers par categorie ──────────────

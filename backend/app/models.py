@@ -56,6 +56,7 @@ class ScoredNews(BaseModel):
     news_category: str = "other"
     category_score_mult: float = 1.0  # Edge-priority multiplier from config
     chain_reactions: list[ChainReaction] = Field(default_factory=list)
+    convergence_count: int = 0  # v3.6: number of independent sources confirming signal
 
     @property
     def total_score(self) -> float:
@@ -144,6 +145,15 @@ class TradeRecommendation(BaseModel):
     predicted_transmission_delay: int | None = None  # Claude's estimate at scoring time
     actual_pricing_time_hours: float | None = None   # Measured: hours from trade to TP/SL
     delay_accuracy: float | None = None              # Difference predicted vs actual
+    # ── v3.6: Position sizing
+    position_size_pct: float | None = None           # % of capital to risk (Kelly-based)
+    # ── v3.6: Multi-source convergence
+    convergence_count: int | None = None             # Number of independent sources confirming signal
+    convergence_boost: float | None = None           # Multiplier applied from convergence
+    # ── v3.6: Price at publication
+    price_at_publication: float | None = None        # Ticker price when news was published
+    price_at_scan: float | None = None               # Ticker price when scan ran
+    publication_move_pct: float | None = None        # Move from publication to scan
 
 
 class ScanResult(BaseModel):

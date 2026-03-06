@@ -24,6 +24,48 @@ from .models import ChainReaction, Direction, NewsItem, ScanType, ScoredNews
 
 logger = logging.getLogger(__name__)
 
+# ── v3.6 (N): Cross-day signal accumulation ─────────────────────
+# Physical signals (weather, supply_chain) that persist across days should
+# accumulate rather than be deduped. A drought worsening over 3 days = stronger signal.
+_signal_accumulator: dict[str, dict] = {}  # key: (category, ticker_set_key) -> {count, first_seen, last_seen}
+ACCUMULATION_CATEGORIES = {"weather", "supply_chain", "commodity"}
+ACCUMULATION_BOOST_PER_DAY = 0.1  # +10% per additional day the signal persists
+ACCUMULATION_MAX_BOOST = 1.5      # Cap at 50% boost
+
+
+def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[str]) -> float:
+    """Check if this signal has been seen on previous days and compute boost.
+
+    Returns a multiplier >= 1.0 (1.0 = no boost, up to ACCUMULATION_MAX_BOOST).
+    """
+    if news_category not in ACCUMULATION_CATEGORIES:
+        return 1.0
+    if not impacted_tickers:
+        return 1.0
+
+    key = f"{news_category}:{','.join(sorted(impacted_tickers[:3]))}"
+    now = datetime.now(timezone.utc)
+
+    if key in _signal_accumulator:
+        entry = _signal_accumulator[key]
+        days_active = (now - entry["first_seen"]).total_seconds() / 86400
+        entry["count"] += 1
+        entry["last_seen"] = now
+        boost = min(ACCUMULATION_MAX_BOOST, 1.0 + days_active * ACCUMULATION_BOOST_PER_DAY)
+        if boost > 1.0:
+            logger.info("Signal accumulation: %s active for %.1f days → %.2fx boost",
+                        key, days_active, boost)
+        return boost
+    else:
+        _signal_accumulator[key] = {"count": 1, "first_seen": now, "last_seen": now}
+        # Prune old entries (> 7 days)
+        cutoff = now - __import__("datetime").timedelta(days=7)
+        stale = [k for k, v in _signal_accumulator.items() if v["last_seen"] < cutoff]
+        for k in stale:
+            del _signal_accumulator[k]
+        return 1.0
+
+
 TICKER_LIST = ", ".join(f"{a.ticker} ({a.name})" for a in ASSETS)
 CATEGORY_LIST = ", ".join(NEWS_CATEGORIES)
 
@@ -536,6 +578,11 @@ def _score_batch(
         # Apply category score multiplier (edge priority)
         cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
 
+        # v3.6 (N): Cross-day signal accumulation boost for persistent physical signals
+        accum_boost = _get_signal_accumulation_boost(news_cat, impacted)
+        if accum_boost > 1.0:
+            cat_mult *= accum_boost
+
         # Detect chain reactions for impacted tickers
         impacted = entry.get("impacted_tickers", [])
         chain_reactions = _detect_chain_reactions(impacted, direction)
@@ -543,6 +590,9 @@ def _score_batch(
         for cr in chain_reactions:
             if cr.ticker not in impacted:
                 impacted.append(cr.ticker)
+
+        # v3.6: Count independent sources confirming same signal (convergence)
+        convergence_count = _count_convergence(item, impacted, direction, batch_items)
 
         scored.append(ScoredNews(
             news=item,
@@ -557,6 +607,7 @@ def _score_batch(
             news_category=news_cat,
             category_score_mult=cat_mult,
             chain_reactions=chain_reactions,
+            convergence_count=convergence_count,
         ))
 
     if scored and len(scored) < len(batch_items):
@@ -564,6 +615,38 @@ def _score_batch(
                        len(scored), len(batch_items))
 
     return scored
+
+
+def _count_convergence(
+    item: NewsItem,
+    impacted_tickers: list[str],
+    direction: Direction,
+    all_items: list[NewsItem],
+) -> int:
+    """Count independent sources confirming the same signal (I. convergence detection).
+
+    Two items converge if they:
+    1. Come from different sources
+    2. Impact at least one common ticker
+    3. Have the same directional implication
+
+    Returns count of additional confirming sources (0 = no convergence).
+    """
+    count = 0
+    item_source = item.source.lower()
+    item_tickers = set(impacted_tickers)
+
+    for other in all_items:
+        if other is item:
+            continue
+        if other.source.lower() == item_source:
+            continue  # Same source = not independent
+        # Check if related_tickers overlap with impacted_tickers
+        other_tickers = set(other.related_tickers)
+        if item_tickers & other_tickers:
+            count += 1
+
+    return count
 
 
 def _detect_chain_reactions(impacted_tickers: list[str], direction: Direction) -> list[ChainReaction]:

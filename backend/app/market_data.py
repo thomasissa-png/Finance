@@ -523,6 +523,65 @@ def fetch_history_batch(
     return result
 
 
+def fetch_quote(ticker: str) -> dict | None:
+    """Fetch real-time quote for spread/liquidity analysis.
+
+    Returns dict with 'price' and 'intraday_range_pct' or None.
+    Uses Twelve Data /quote when available, falls back to history-based estimate.
+    """
+    cache_key = f"quote:{ticker}"
+    cached = _cache_get_or_miss(cache_key)
+    if cached is not _CACHE_MISS:
+        return cached
+
+    result = None
+
+    # Try Twelve Data /quote
+    mapping = _map_ticker(ticker)
+    if mapping and td_available():
+        td_sym, extra_params = mapping
+        params = {"symbol": td_sym, **extra_params}
+        data = _td_request("quote", params)
+        if data and "close" in data:
+            try:
+                price = float(data.get("close", 0))
+                high = float(data.get("high", price))
+                low = float(data.get("low", price))
+                if price > 0 and high > low:
+                    intraday_range_pct = (high - low) / price * 100
+                    result = {
+                        "price": price,
+                        "high": high,
+                        "low": low,
+                        "intraday_range_pct": round(intraday_range_pct, 4),
+                    }
+            except (ValueError, KeyError):
+                pass
+
+    if result is None:
+        # Fallback: estimate from recent daily bars
+        try:
+            df = fetch_history(ticker, period_days=5, interval="1day")
+            if df is not None and not df.empty:
+                price = float(df["Close"].iloc[-1])
+                if price > 0:
+                    ranges = []
+                    for _, row in df.iterrows():
+                        h, l = float(row["High"]), float(row["Low"])
+                        if h > 0 and l > 0:
+                            ranges.append((h - l) / price * 100)
+                    avg_range = sum(ranges) / len(ranges) if ranges else 0
+                    result = {
+                        "price": price,
+                        "intraday_range_pct": round(avg_range, 4),
+                    }
+        except Exception:
+            pass
+
+    _cache_set(cache_key, result, CACHE_TTL_SHORT)
+    return result
+
+
 def get_provider_status() -> dict:
     """Return status info about the market data provider for health checks."""
     with _blacklist_lock:

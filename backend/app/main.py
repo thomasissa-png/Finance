@@ -33,8 +33,9 @@ from .learning import (
     update_trade_result,
 )
 from .models import ScanType, TradeResult
+from .position_monitor import monitor_positions
 from .scan_history import load_scan_history
-from .scheduler import run_scan
+from .scheduler import run_scan, run_event_check
 
 load_dotenv()
 
@@ -227,6 +228,44 @@ def _run_us_session_scan() -> None:
     _run_scheduled_scan("us_session")
 
 
+def _run_event_check() -> None:
+    """Run event-driven scan check in background thread."""
+    def _event_worker():
+        try:
+            result = run_event_check()
+            if result and result.get("has_trade"):
+                scan_key = result.get("scan_type", "europe")
+                with _scans_lock:
+                    _last_scans[scan_key] = result
+                    _save_scans_cache(_last_scans)
+                logger.info("Event-driven scan produced trade(s) for %s", scan_key)
+        except Exception as exc:
+            logger.error("Event check failed: %s", exc)
+
+    thread = threading.Thread(target=_event_worker, daemon=True, name="event-check")
+    thread.start()
+
+
+def _run_position_monitor() -> None:
+    """Run position monitor in background thread."""
+    def _monitor_worker():
+        try:
+            actions = monitor_positions()
+            if actions:
+                logger.info("Position monitor took %d action(s)", len(actions))
+        except Exception as exc:
+            logger.error("Position monitor failed: %s", exc)
+
+    thread = threading.Thread(target=_monitor_worker, daemon=True, name="position-monitor")
+    thread.start()
+
+
+def _run_post_eia_scan() -> None:
+    """Run conditional post-EIA scan on Wednesdays at 16:45 CET."""
+    _run_scheduled_scan("us_session")
+    logger.info("Post-EIA conditional scan triggered (Wednesday 16:45 CET)")
+
+
 def _run_daily_journal() -> None:
     """Run daily journal in background thread (same reason as scans)."""
     def _journal_worker():
@@ -271,8 +310,14 @@ async def lifespan(app: FastAPI):
     # so crash loops are not a concern. A long grace period ensures the journal runs even
     # after prolonged downtime (e.g., Replit kills the app from 21:00 to 23:30).
     bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=3600)
+    # Event-driven scanner: every 15 min during trading hours (07:00-19:30 CET, weekdays)
+    bg_scheduler.add_job(_run_event_check, CronTrigger(minute="*/15", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="event_check", misfire_grace_time=60)
+    # Position monitor: every 15 min during trading hours — trailing stop + time stop
+    bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,22,37,52", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
+    # Conditional post-EIA scan: Wednesday 16:45 CET (EIA petroleum report at 16:30)
+    bg_scheduler.add_job(_run_post_eia_scan, CronTrigger(hour=16, minute=45, day_of_week="wed", timezone="Europe/Paris"), id="post_eia_scan", misfire_grace_time=60)
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, journal at 22:00 CET (weekdays only)")
+    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check q15min, position monitor q15min, post-EIA Wed 16:45, journal at 22:00 CET (weekdays only)")
 
     # Startup recovery: close any old PENDING trades that were missed by the 22:00 journal
     # (e.g., app was down overnight, Replit killed the process before journal ran)
@@ -665,6 +710,13 @@ def export_journal_csv():
 
 
 # ── Economic calendar endpoints ───────────────────────────────────
+
+
+@app.get("/api/positions/monitor")
+def api_position_monitor():
+    """Manually trigger position monitor (for testing)."""
+    actions = monitor_positions()
+    return {"actions": actions, "count": len(actions)}
 
 
 @app.get("/api/calendar")
