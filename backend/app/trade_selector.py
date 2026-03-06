@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timezone, timedelta
 
-import yfinance as yf
+from .market_data import fetch_history
 
 from .config import (
     ASSET_BY_TICKER,
@@ -83,8 +83,8 @@ def _get_price_and_range(ticker: str, days: int = 20) -> tuple[float | None, flo
     avg_volume_ratio = today's volume / 20d avg volume (None if unavailable).
     """
     try:
-        data = yf.Ticker(ticker).history(period=f"{days + 5}d")
-        if data.empty:
+        data = fetch_history(ticker, period_days=days + 5, interval="1day")
+        if data is None or data.empty:
             return None, 1.5, None, None
         current_price = float(data["Close"].iloc[-1])
         if len(data) < 5:

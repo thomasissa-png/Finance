@@ -610,9 +610,17 @@ def health():
 
     # API key checks — instant, no I/O
     status["dependencies"]["anthropic_key"] = "configured" if os.environ.get("ANTHROPIC_API_KEY") else "missing"
+    status["dependencies"]["twelve_data_key"] = "configured" if os.environ.get("TWELVE_DATA_API_KEY") else "not_set (optional)"
     status["dependencies"]["eia_key"] = "configured" if os.environ.get("EIA_API_KEY") else "not_set (optional)"
     status["dependencies"]["gnews_key"] = "configured" if os.environ.get("GNEWS_API_KEY") else "not_set (optional)"
     status["dependencies"]["usda_key"] = "configured" if os.environ.get("USDA_API_KEY") else "not_set (optional)"
+
+    # Market data provider status (instant — no I/O, just internal state)
+    try:
+        from .market_data import get_provider_status
+        status["market_data"] = get_provider_status()
+    except Exception:
+        status["market_data"] = {"primary": "yfinance"}
 
     # Data storage checks
     if is_pg_enabled():

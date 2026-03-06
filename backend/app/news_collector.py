@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import feedparser
 import requests
-import yfinance as yf
+import yfinance as yf  # Keep yfinance for news — Twelve Data has no news endpoint
 
 from .config import ASSETS, DEFAULT_SOURCE_WEIGHT, EARLY_SIGNAL_FEEDS, NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS
 from .data_apis import collect_structured_data

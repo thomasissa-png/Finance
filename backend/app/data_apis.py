@@ -1890,17 +1890,17 @@ def fetch_fedwatch_implied() -> list[NewsItem]:
     Significant shifts in implied rate vs current target = repricing signal.
     Impacts: GC=F (gold inverse), EURUSD=X, ^GSPC.
     """
-    import yfinance as yf
+    from .market_data import fetch_history
 
     items: list[NewsItem] = []
 
     try:
         # Current effective Fed Funds rate target midpoint
         # We use the 30-day Fed Funds futures (nearest month)
-        ticker = yf.Ticker("ZQ=F")
-        hist = ticker.history(period="5d")
+        # ZQ=F is blacklisted on TD (not available), goes straight to yfinance
+        hist = fetch_history("ZQ=F", period_days=5, interval="1day")
 
-        if hist.empty:
+        if hist is None or hist.empty:
             logger.debug("FedWatch: no ZQ=F data available")
             return []
 
@@ -1952,9 +1952,8 @@ def fetch_fedwatch_implied() -> list[NewsItem]:
             _fwd_tickers.append(f"ZQ{_cme_month_codes[_m]}{str(_y)[-2:]}.CBT")
         for i, suffix in enumerate(_fwd_tickers, start=1):
             try:
-                fwd = yf.Ticker(suffix)
-                fwd_hist = fwd.history(period="2d")
-                if not fwd_hist.empty:
+                fwd_hist = fetch_history(suffix, period_days=2, interval="1day")
+                if fwd_hist is not None and not fwd_hist.empty:
                     fwd_rate = 100.0 - fwd_hist["Close"].iloc[-1]
                     # If forward rate diverges significantly from near-month, that's a signal
                     if abs(fwd_rate - implied_rate) >= 0.15:  # 15+ bps spread
@@ -2018,19 +2017,19 @@ def fetch_shfe_inventories() -> list[NewsItem]:
     try:
         # Use LME copper inventory as proxy — publicly available, correlated with SHFE
         # We detect unusual volume + price action as inventory proxy
-        import yfinance as yf
 
         # Check copper, zinc for unusual moves suggesting inventory shifts
         metals_to_check = [
             {"ticker": "HG=F", "name": "Cuivre", "tickers": ["HG=F"]},
         ]
 
+        from .market_data import fetch_history
+
         for metal in metals_to_check:
             try:
-                t = yf.Ticker(metal["ticker"])
-                hist = t.history(period="1mo")
+                hist = fetch_history(metal["ticker"], period_days=30, interval="1day")
 
-                if hist.empty or len(hist) < 10:
+                if hist is None or hist.empty or len(hist) < 10:
                     continue
 
                 # Detect unusual volume (>2x 20-day average) = possible inventory event

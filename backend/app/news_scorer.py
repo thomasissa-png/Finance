@@ -7,7 +7,8 @@ import time
 from datetime import datetime, timezone
 
 import anthropic
-import yfinance as yf
+
+from .market_data import fetch_history, fetch_history_batch
 
 from .config import (
     ASSETS,
@@ -173,19 +174,20 @@ def _compute_freshness(published: datetime | None) -> int:
 def _fetch_market_context() -> dict:
     """Fetch current market context: VIX, major index changes, regime (#5, #8).
 
-    Fully sequential — no ThreadPoolExecutor. Replit kills the process when
-    too many threads exist, even with low max_workers, because of zombie threads
-    from prior collection phases (shutdown(wait=False) doesn't join them).
-    Sequential is ~20s slower but guarantees 0 extra threads.
-    Each call is wrapped in try/except — market context is nice-to-have, not critical.
+    Uses Twelve Data batch API when available (1 HTTP request for all tickers),
+    falls back to yfinance per-ticker. Market context is nice-to-have, not critical.
     """
     context = {"vix": None, "regime": "normal", "indices": {}, "trends": {}}
 
+    # Batch fetch: VIX + indices (2d history) in one call
+    short_tickers = ["^VIX", "^GSPC", "^FCHI", "^DJI"]
+    short_data = fetch_history_batch(short_tickers, period_days=5, interval="1day")
+
     # VIX
-    try:
-        data = yf.Ticker("^VIX").history(period="2d")
-        if not data.empty:
-            vix_val = round(float(data["Close"].iloc[-1]), 1)
+    vix_df = short_data.get("^VIX")
+    if vix_df is not None and not vix_df.empty:
+        try:
+            vix_val = round(float(vix_df["Close"].iloc[-1]), 1)
             context["vix"] = vix_val
             if vix_val >= 30:
                 context["regime"] = "stress"
@@ -193,33 +195,36 @@ def _fetch_market_context() -> dict:
                 context["regime"] = "elevated"
             elif vix_val <= 13:
                 context["regime"] = "calm"
-    except Exception as exc:
-        logger.warning("Failed to fetch VIX: %s", exc)
+        except Exception as exc:
+            logger.warning("Failed to parse VIX: %s", exc)
 
     # Index changes
     for ticker, name in [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("^DJI", "DowJones")]:
-        try:
-            data = yf.Ticker(ticker).history(period="2d")
-            if len(data) >= 2:
-                prev = float(data["Close"].iloc[-2])
-                curr = float(data["Close"].iloc[-1])
+        df = short_data.get(ticker)
+        if df is not None and len(df) >= 2:
+            try:
+                prev = float(df["Close"].iloc[-2])
+                curr = float(df["Close"].iloc[-1])
                 context["indices"][name] = round((curr - prev) / prev * 100, 2)
-        except Exception as exc:
-            logger.debug("Failed to fetch index %s: %s", name, exc)
+            except Exception as exc:
+                logger.debug("Failed to parse index %s: %s", name, exc)
 
-    # Trends
+    # Trends (need 25d of data) — batch fetch
+    trend_tickers = ["^GSPC", "^FCHI", "GC=F", "CL=F", "EURUSD=X"]
+    trend_data = fetch_history_batch(trend_tickers, period_days=25, interval="1day")
+
     for ticker, name in [("^GSPC", "S&P500"), ("^FCHI", "CAC40"), ("GC=F", "Or"), ("CL=F", "WTI"), ("EURUSD=X", "EURUSD")]:
-        try:
-            data = yf.Ticker(ticker).history(period="25d")
-            if len(data) >= 20:
-                close_now = float(data["Close"].iloc[-1])
-                close_5d = float(data["Close"].iloc[-5])
-                close_20d = float(data["Close"].iloc[0])
+        df = trend_data.get(ticker)
+        if df is not None and len(df) >= 20:
+            try:
+                close_now = float(df["Close"].iloc[-1])
+                close_5d = float(df["Close"].iloc[-5])
+                close_20d = float(df["Close"].iloc[0])
                 trend_5d = "haussier" if close_now > close_5d * 1.005 else ("baissier" if close_now < close_5d * 0.995 else "neutre")
                 trend_20d = "haussier" if close_now > close_20d * 1.01 else ("baissier" if close_now < close_20d * 0.99 else "neutre")
                 context["trends"][name] = {"5d": trend_5d, "20d": trend_20d}
-        except Exception as exc:
-            logger.debug("Failed to fetch trend %s: %s", name, exc)
+            except Exception as exc:
+                logger.debug("Failed to parse trend %s: %s", name, exc)
 
     return context
 

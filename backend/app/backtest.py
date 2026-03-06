@@ -3,10 +3,9 @@
 import logging
 from datetime import datetime, timezone
 
-import yfinance as yf
-
 from .config import ASSET_BY_TICKER, MIN_RISK_REWARD, MIN_SCORE_THRESHOLD, assets_for_session
 from .journal import _determine_result
+from .market_data import fetch_history_range
 from .models import Direction, ScanType, TradeRecommendation, TradeResult
 from .trade_selector import _calibrate_trade
 
@@ -14,15 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 def _fetch_historical_prices(ticker: str, start: str, end: str) -> list[dict]:
-    """Fetch historical OHLCV data for a ticker."""
+    """Fetch historical OHLCV data for a ticker.
+
+    Uses Twelve Data (primary) with yfinance fallback via market_data module.
+    """
     try:
-        data = yf.Ticker(ticker).history(start=start, end=end)
-        if data.empty:
+        data = fetch_history_range(ticker, start=start, end=end, interval="1day")
+        if data is None or data.empty:
             return []
         rows = []
-        for date, row in data.iterrows():
+        for dt, row in data.iterrows():
             rows.append({
-                "date": date.strftime("%Y-%m-%d"),
+                "date": dt.strftime("%Y-%m-%d"),
                 "open": float(row["Open"]),
                 "high": float(row["High"]),
                 "low": float(row["Low"]),

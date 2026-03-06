@@ -10,9 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import yfinance as yf
-
 from .database import is_pg_enabled
+from .market_data import fetch_history_range
 from .learning import load_trades, update_trade_result, compute_learning_adjustments
 from .models import Direction, JournalEntry, TradeRecommendation, TradeResult
 
@@ -128,20 +127,19 @@ def _fetch_intraday_prices(
     from datetime import date as date_type, timedelta
 
     target = date_type.fromisoformat(trade_date)
-    # end is exclusive in yfinance — +2 days to handle timezone offsets safely
+    # end is exclusive — +2 days to handle timezone offsets safely
     end = target + timedelta(days=2)
 
     try:
-        data = yf.Ticker(ticker).history(
-            start=str(target), end=str(end), interval="1h",
-        )
+        # Primary: Twelve Data 1h bars, fallback: yfinance (handled by market_data)
+        data = fetch_history_range(ticker, start=target, end=end, interval="1h")
 
-        if data.empty:
-            # Fallback: daily bar with explicit start/end (no more period="2d" bug)
-            daily = yf.Ticker(ticker).history(
-                start=str(target), end=str(target + timedelta(days=1)),
+        if data is None or data.empty:
+            # Fallback: daily bar
+            daily = fetch_history_range(
+                ticker, start=target, end=target + timedelta(days=1), interval="1day",
             )
-            if daily.empty:
+            if daily is None or daily.empty:
                 return None, None, None, None
             row = daily.iloc[-1]
             return float(row["High"]), float(row["Low"]), float(row["Close"]), None
