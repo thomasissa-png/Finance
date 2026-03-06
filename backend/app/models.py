@@ -147,11 +147,18 @@ class TradeRecommendation(BaseModel):
 
 
 class ScanResult(BaseModel):
-    """Full result of a scan — either a trade or a pass."""
+    """Full result of a scan — may contain multiple trades (v3.5).
+
+    v3.5: A scan can now produce 0..N trades (no per-scan cap).
+    - `recommendations`: list of all selected trades (primary field)
+    - `recommendation`: first trade for backward compatibility (API consumers, frontend < v3.5)
+    - `has_trade`: True if at least one trade was selected
+    """
     scan_type: ScanType
     timestamp: datetime
     has_trade: bool
-    recommendation: TradeRecommendation | None = None
+    recommendation: TradeRecommendation | None = None  # Backward compat: first trade
+    recommendations: list[TradeRecommendation] = Field(default_factory=list)  # v3.5: all trades
     reason_no_trade: str = ""
     news_analyzed: int = 0
     # (#5) Market context included in scoring
@@ -168,14 +175,16 @@ class ScanHistoryEntry(BaseModel):
 
     Stored in data/scan_history.json after each scan. Keeps a full audit trail
     of what was evaluated, what was rejected, and why — even when no trade was taken.
+    v3.5: supports multiple recommendations per scan.
     """
     timestamp: datetime
     scan_type: ScanType
     has_trade: bool
     news_analyzed: int = 0
     reason_no_trade: str = ""
-    # Trade recommendation (if any)
+    # Trade recommendation (if any) — backward compat: first trade
     recommendation: dict | None = None
+    recommendations: list[dict] = Field(default_factory=list)  # v3.5: all trades
     # Full decision trace
     all_scored_news: list[dict] = Field(default_factory=list)
     rejection_log: list[dict] = Field(default_factory=list)

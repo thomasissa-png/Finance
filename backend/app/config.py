@@ -24,6 +24,10 @@ NEWS_MAX_AGE_HOURS = 8  # Ignorer les news de plus de 8h (ex 6h — elargi pour 
 NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h
 MIN_SCORE_THRESHOLD = 20  # Score minimum pour recommander un trade (ex 25 — capte les signaux mid-range)
 
+# ── Multi-trade per scan (v3.5) ──────────────────────────────────
+# No per-scan cap — all valid candidates pass. Only a daily cap limits exposure.
+MAX_TRADES_PER_DAY = 6  # Cap journalier global pour limiter l'exposition
+
 DEFAULT_SOURCE_WEIGHT = 0.75
 
 # ── Edge-priority: score multipliers par categorie ──────────────

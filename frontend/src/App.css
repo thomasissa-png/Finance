@@ -191,6 +191,17 @@ a:focus:not(:focus-visible) {
   color: var(--text-muted);
 }
 
+/* v3.5: Multi-trade per scan header */
+.scan-multi-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cyan);
+  padding: 6px 12px;
+  border-left: 3px solid var(--cyan);
+  background: rgba(0, 188, 212, 0.05);
+  border-radius: 0 4px 4px 0;
+}
+
 .scan-time {
   font-size: 12px;
   color: var(--text-muted);

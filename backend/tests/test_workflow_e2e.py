@@ -60,6 +60,7 @@ from backend.app.trade_selector import (
     _check_correlation,
     _detect_pre_move,
     select_trade,
+    select_trades,
 )
 
 
@@ -847,3 +848,157 @@ class TestErrorResilience:
         """If last_scans.json is a list (not dict), extraction should not crash."""
         trace = _extract_scan_trace({"europe": [1, 2]}, "europe")
         assert trace == {}
+
+
+# ════════════════════════════════════════════════════════════════
+# Phase 8: Multi-trade per scan (v3.5)
+# ════════════════════════════════════════════════════════════════
+
+
+class TestMultiTradeSelection:
+    """Verify v3.5 multi-trade: multiple trades per scan, daily cap, intra-scan correlation."""
+
+    def test_multi_trade_two_uncorrelated(self):
+        """Two uncorrelated candidates should both be selected."""
+        scored = [
+            _make_scored(
+                news=_make_news(title="Oil supply disruption", source="EIA", source_weight=1.15),
+                surprise=80, delay=75, awareness=10, tickers=["CL=F"], category="commodity",
+            ),
+            _make_scored(
+                news=_make_news(title="Frost in Brazil coffee", source="Open-Meteo", source_weight=1.2),
+                surprise=75, delay=80, awareness=8, tickers=["KC=F"], category="weather",
+            ),
+        ]
+        # prev_close very close to price to avoid pre-move rejection
+        with patch("backend.app.trade_selector._get_price_and_range",
+                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+             patch("backend.app.trade_selector._count_today_trades", return_value=0), \
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+            result = select_trades(scored, ScanType.EUROPE)
+        assert result.has_trade is True
+        assert len(result.recommendations) == 2
+        tickers = {r.ticker for r in result.recommendations}
+        assert "CL=F" in tickers
+        assert "KC=F" in tickers
+        # Backward compat: recommendation is the first one
+        assert result.recommendation == result.recommendations[0]
+
+    def test_multi_trade_intra_scan_correlation_blocks(self):
+        """Two correlated tickers (CL=F and BZ=F) should not both be selected in same scan."""
+        scored = [
+            _make_scored(
+                news=_make_news(title="Oil crisis", source="EIA"),
+                surprise=85, delay=75, awareness=10, tickers=["CL=F"], category="commodity",
+            ),
+            _make_scored(
+                news=_make_news(title="Brent follows WTI", source="OilPrice"),
+                surprise=70, delay=70, awareness=15, tickers=["BZ=F"], category="commodity",
+            ),
+        ]
+        with patch("backend.app.trade_selector._get_price_and_range",
+                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+             patch("backend.app.trade_selector._count_today_trades", return_value=0), \
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+            result = select_trades(scored, ScanType.EUROPE)
+        assert result.has_trade is True
+        # Only CL=F should be selected (higher score), BZ=F rejected (correlated)
+        assert len(result.recommendations) == 1
+        assert result.recommendations[0].ticker == "CL=F"
+
+    def test_multi_trade_daily_cap_enforced(self):
+        """Daily cap should limit total trades across scans."""
+        scored = [
+            _make_scored(
+                news=_make_news(title="Weather 1"),
+                surprise=80, delay=75, awareness=10, tickers=["CL=F"], category="commodity",
+            ),
+            _make_scored(
+                news=_make_news(title="Weather 2"),
+                surprise=75, delay=80, awareness=8, tickers=["KC=F"], category="weather",
+            ),
+        ]
+        # Simulate 6 trades already taken today (MAX_TRADES_PER_DAY=6)
+        with patch("backend.app.trade_selector._get_price_and_range",
+                   return_value=(70.0, 2.5, 69.0, 1.5)), \
+             patch("backend.app.trade_selector._count_today_trades", return_value=6), \
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+            result = select_trades(scored, ScanType.EUROPE)
+        assert result.has_trade is False
+        assert "Cap journalier" in result.reason_no_trade
+
+    def test_multi_trade_daily_cap_partial(self):
+        """Daily cap should stop iteration when reached mid-scan."""
+        scored = [
+            _make_scored(
+                news=_make_news(title="Oil crisis"),
+                surprise=85, delay=75, awareness=10, tickers=["CL=F"], category="commodity",
+            ),
+            _make_scored(
+                news=_make_news(title="Frost coffee"),
+                surprise=75, delay=80, awareness=8, tickers=["KC=F"], category="weather",
+            ),
+            _make_scored(
+                news=_make_news(title="Gold spike"),
+                surprise=70, delay=70, awareness=12, tickers=["GC=F"], category="commodity",
+            ),
+        ]
+        # 5 trades already → only 1 slot remaining
+        with patch("backend.app.trade_selector._get_price_and_range",
+                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+             patch("backend.app.trade_selector._count_today_trades", return_value=5), \
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+            result = select_trades(scored, ScanType.EUROPE)
+        assert result.has_trade is True
+        assert len(result.recommendations) == 1  # Only 1 slot available
+
+    def test_multi_trade_cross_scan_correlation(self):
+        """Existing trades from other scans should block correlated tickers."""
+        scored = [
+            _make_scored(
+                news=_make_news(title="Oil news"),
+                surprise=80, delay=75, awareness=10, tickers=["BZ=F"], category="commodity",
+            ),
+            _make_scored(
+                news=_make_news(title="Gold signal"),
+                surprise=75, delay=70, awareness=12, tickers=["GC=F"], category="commodity",
+            ),
+        ]
+        # CL=F already selected in another scan → BZ=F should be blocked (energy group)
+        with patch("backend.app.trade_selector._get_price_and_range",
+                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+             patch("backend.app.trade_selector._count_today_trades", return_value=1), \
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+            result = select_trades(scored, ScanType.EUROPE, existing_trade_ticker=["CL=F"])
+        assert result.has_trade is True
+        # BZ=F blocked (correlated with CL=F), only GC=F should pass
+        assert len(result.recommendations) == 1
+        assert result.recommendations[0].ticker == "GC=F"
+
+    def test_multi_trade_backward_compat_select_trade(self):
+        """select_trade() wrapper should still work and return same result as select_trades()."""
+        scored = [
+            _make_scored(
+                news=_make_news(title="Oil supply disruption"),
+                surprise=80, delay=75, awareness=10, tickers=["CL=F"], category="commodity",
+            ),
+        ]
+        with patch("backend.app.trade_selector._get_price_and_range",
+                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+             patch("backend.app.trade_selector._count_today_trades", return_value=0), \
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+            result = select_trade(scored, ScanType.EUROPE)
+        assert result.has_trade is True
+        assert result.recommendation is not None
+        assert len(result.recommendations) == 1
+        assert result.recommendation == result.recommendations[0]
+
+    def test_scan_result_recommendations_empty_on_no_trade(self):
+        """When no trade is found, recommendations should be an empty list."""
+        scored = [_make_scored(direction=Direction.NEUTRAL)]
+        with patch("backend.app.trade_selector._get_price_and_range",
+                   return_value=(70.0, 2.0, 69.0, 1.5)):
+            result = select_trades(scored, ScanType.EUROPE)
+        assert result.has_trade is False
+        assert result.recommendations == []
+        assert result.recommendation is None

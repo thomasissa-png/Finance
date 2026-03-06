@@ -112,7 +112,14 @@ export default function Dashboard() {
         const result = await res.json();
         setScans((prev) => ({ ...prev, [scanType]: result }));
         if (result.has_trade) {
-          addToast(`Trade détecté : ${result.recommendation?.ticker}`, "success");
+          const recs = result.recommendations || [];
+          const count = recs.length || (result.recommendation ? 1 : 0);
+          if (count > 1) {
+            const tickers = recs.map(r => r.ticker).join(", ");
+            addToast(`${count} trades détectés : ${tickers}`, "success");
+          } else {
+            addToast(`Trade détecté : ${result.recommendation?.ticker}`, "success");
+          }
         } else {
           addToast(`Scan ${scanType} terminé — pas de trade`, "warning");
         }
@@ -164,9 +171,29 @@ export default function Dashboard() {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        {SCAN_DEFS.map((s) => (
-          <TradeCard key={s.key} scan={scans[s.key]} label={s.label} />
-        ))}
+        {SCAN_DEFS.map((s) => {
+          const scan = scans[s.key];
+          const recs = scan?.recommendations || [];
+          // v3.5: If multiple trades, render one TradeCard per trade
+          if (scan?.has_trade && recs.length > 1) {
+            return (
+              <div key={s.key} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div className="scan-multi-label">
+                  {s.label} — {recs.length} trades
+                </div>
+                {recs.map((rec, i) => (
+                  <TradeCard
+                    key={`${s.key}-${rec.ticker}-${i}`}
+                    scan={{ ...scan, recommendation: rec }}
+                    label={`${s.label} #${i + 1}`}
+                  />
+                ))}
+              </div>
+            );
+          }
+          // Single trade or no trade: render as before
+          return <TradeCard key={s.key} scan={scan} label={s.label} />;
+        })}
       </div>
 
       {/* (D6) Toast container */}

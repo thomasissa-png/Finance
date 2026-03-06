@@ -157,13 +157,26 @@ def _keepalive_loop() -> None:
 
 
 def _get_existing_trade_tickers(exclude_key: str) -> list[str]:
-    """Collect trade tickers from all other active scans for portfolio correlation."""
+    """Collect trade tickers from all other active scans for portfolio correlation.
+
+    v3.5: Collects tickers from all recommendations (multi-trade per scan).
+    """
     tickers = []
     with _scans_lock:
         for key, scan_data in _last_scans.items():
             if key == exclude_key:
                 continue
-            if scan_data.get("has_trade") and scan_data.get("recommendation"):
+            if not scan_data.get("has_trade"):
+                continue
+            # v3.5: collect from recommendations list first
+            recs = scan_data.get("recommendations", [])
+            if recs:
+                for rec in recs:
+                    ticker = rec.get("ticker") if isinstance(rec, dict) else None
+                    if ticker:
+                        tickers.append(ticker)
+            elif scan_data.get("recommendation"):
+                # Backward compat: single recommendation
                 ticker = scan_data["recommendation"].get("ticker")
                 if ticker:
                     tickers.append(ticker)
@@ -409,7 +422,7 @@ def trigger_scan(scan_type: str):
     )
     thread.start()
 
-    return {"status": "scan_started", "scan_type": scan_type, "message": "Scan lance en arriere-plan. Consultez GET /api/scan/latest pour les resultats."}
+    return {"status": "scan_started", "scan_type": scan_type, "message": "Scan lance en arriere-plan. Consultez GET /api/scan/latest pour les resultats (v3.5: multi-trade)."}
 
 
 @app.get("/api/trades")

@@ -8,6 +8,7 @@ from .market_data import fetch_history
 from .config import (
     ASSET_BY_TICKER,
     CORRELATION_GROUPS,
+    MAX_TRADES_PER_DAY,
     MIN_RISK_REWARD,
     MIN_SCORE_THRESHOLD,
     NEWS_CATEGORY_MULTIPLIERS,
@@ -59,6 +60,19 @@ def _get_recently_traded_tickers(cooldown_days: int = RECENT_TRADE_COOLDOWN_DAYS
     except Exception as exc:
         logger.warning("Failed to load recent trades for cross-day dedup: %s", exc)
         return set()
+
+
+def _count_today_trades() -> int:
+    """Count how many trades were already taken today (for daily cap)."""
+    try:
+        from .learning import load_trades
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d")
+        trades = load_trades()
+        return sum(1 for t in trades if t.timestamp.strftime("%Y-%m-%d") == today)
+    except Exception as exc:
+        logger.warning("Failed to count today's trades: %s", exc)
+        return 0
 
 
 TIME_WINDOWS = {
@@ -253,9 +267,27 @@ def select_trade(
     existing_trade_ticker: list[str] | str | None = None,
     market_context: dict | None = None,
 ) -> ScanResult:
-    """Pick the single best trade from scored news.
+    """Backward-compatible wrapper — calls select_trades() internally."""
+    return select_trades(
+        scored_news, scan_type, learning_adjustments,
+        existing_trade_ticker=existing_trade_ticker,
+        market_context=market_context,
+    )
 
-    v3: Enriched with full decision trace for journal learning.
+
+def select_trades(
+    scored_news: list[ScoredNews],
+    scan_type: ScanType,
+    learning_adjustments: dict | None = None,
+    existing_trade_ticker: list[str] | str | None = None,
+    market_context: dict | None = None,
+) -> ScanResult:
+    """Select all valid trades from scored news (v3.5 — multi-trade).
+
+    No per-scan cap: all candidates that pass filtering are selected.
+    Daily cap (MAX_TRADES_PER_DAY) limits total exposure across all scans.
+    Intra-scan correlation prevents selecting correlated tickers in the same scan.
+
     v3.4: learning_adjustments is now a dict with sub-keys:
       - "adjustments": per-ticker base multipliers
       - "session_adj": per-scan-type multipliers (applied by current scan)
@@ -267,11 +299,11 @@ def select_trade(
         scored_news: News scored by the LLM, sorted by total_score desc.
         scan_type: europe or us scan.
         learning_adjustments: Learning data from compute_learning_adjustments().
-        existing_trade_ticker: Ticker from the other scan (for correlation check #22).
+        existing_trade_ticker: Tickers from other scans (for correlation check #22).
         market_context: Market context from news_scorer (#5).
 
     Returns:
-        ScanResult with either a trade recommendation or a pass.
+        ScanResult with recommendations list (0..N trades).
     """
     now = datetime.now(timezone.utc)
 
@@ -330,6 +362,22 @@ def select_trade(
             timestamp=now,
             has_trade=False,
             reason_no_trade=f"Événement macro imminent : {event_conflict.name} — zéro edge, trade bloqué",
+            news_analyzed=len(scored_news),
+            market_context=market_context,
+            all_scored_news=all_scored_log,
+            learning_state=learning_state_for_log,
+        )
+
+    # ── Daily cap check ──────────────────────────────────────────
+    today_count = _count_today_trades()
+    daily_slots_remaining = max(0, MAX_TRADES_PER_DAY - today_count)
+    if daily_slots_remaining == 0:
+        logger.info("Daily cap reached (%d trades today) — no more trades", today_count)
+        return ScanResult(
+            scan_type=scan_type,
+            timestamp=now,
+            has_trade=False,
+            reason_no_trade=f"Cap journalier atteint ({MAX_TRADES_PER_DAY} trades aujourd'hui)",
             news_analyzed=len(scored_news),
             market_context=market_context,
             all_scored_news=all_scored_log,
@@ -426,8 +474,30 @@ def select_trade(
         logger.info("Cross-day dedup: %d tickers traded recently: %s",
                      len(recently_traded), ", ".join(sorted(recently_traded)))
 
-    # Try candidates until we find one with a valid price and R/R
+    # ── v3.5: Multi-trade selection ──────────────────────────────
+    # Iterate all candidates and select all valid ones (no per-scan cap).
+    # Intra-scan correlation prevents picking correlated tickers.
+    selected_trades: list[TradeRecommendation] = []
+    # Track tickers selected in THIS scan for intra-scan correlation
+    scan_selected_tickers: list[str] = []
+    # Combine existing cross-scan tickers with intra-scan ones for correlation checks
+    if isinstance(existing_trade_ticker, str):
+        cross_scan_tickers = [existing_trade_ticker]
+    elif existing_trade_ticker:
+        cross_scan_tickers = list(existing_trade_ticker)
+    else:
+        cross_scan_tickers = []
+
+    # P1-#13: Extract VIX and regime from market_context (same for all trades in scan)
+    vix_val = market_context.get("vix") if market_context else None
+    regime_val = market_context.get("regime") if market_context else None
+
     for rank, (best_news, best_score) in enumerate(candidates):
+        # Daily cap reached during iteration
+        if len(selected_trades) >= daily_slots_remaining:
+            decision_parts.append(f"Cap journalier atteint apres {len(selected_trades)} trades ce scan")
+            break
+
         ticker = next(t for t in best_news.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers)
         asset = ASSET_BY_TICKER[ticker]
         raw_score = best_news.total_score
@@ -438,10 +508,11 @@ def select_trade(
         multiplier = base_mult * current_session_mult * nc_mult * current_regime_mult
         multiplier = max(0.5, min(1.5, multiplier))
 
-        # (#22) Correlation check
-        if _check_correlation(ticker, existing_trade_ticker):
-            reason = f"Correle avec trade existant {existing_trade_ticker}"
-            logger.info("Skipping %s: correlated with existing trade %s", ticker, existing_trade_ticker)
+        # (#22) Correlation check — cross-scan + intra-scan
+        all_existing = cross_scan_tickers + scan_selected_tickers
+        if _check_correlation(ticker, all_existing):
+            reason = f"Correle avec trade existant {all_existing}"
+            logger.info("Skipping %s: correlated with existing trades %s", ticker, all_existing)
             rejection_log.append({
                 "title": best_news.news.title, "ticker": [ticker],
                 "reason": reason, "score": raw_score, "adjusted_score": best_score,
@@ -467,8 +538,6 @@ def select_trade(
             continue
 
         # (#4) News déjà pricée detection — direction-aware, category-adaptive
-        # Use same volatility-regime factors as _calibrate_trade
-        # Pre-move threshold adapts to asset category (forex tighter, commodities looser)
         if avg_range < 1.0:
             _pre_factor = 0.35 + (best_news.total_score / 100) * 0.55
         elif avg_range > 5.0:
@@ -477,7 +546,6 @@ def select_trade(
             _pre_factor = 0.25 + (best_news.total_score / 100) * 0.45
         target_move_expected = avg_range * _pre_factor
         pre_move_pct = _detect_pre_move(price, prev_close, target_move_expected)
-        # Category-adaptive pre-move threshold (default 0.8 = 80% of expected move)
         pre_move_ratio = PRE_MOVE_THRESHOLDS.get(asset.category, 0.8)
         if pre_move_pct is not None:
             if best_news.direction == Direction.LONG and pre_move_pct > target_move_expected * pre_move_ratio:
@@ -544,9 +612,9 @@ def select_trade(
         if multiplier != 1.0:
             learning_helped = multiplier > 1.0  # True = learning boosted this trade
 
-        # v3.4 #8: Build decision summary with full decomposition
+        # v3.5: Build decision summary for each selected trade
         decision_parts.append(
-            f"SELECTIONNE #{rank+1}: {ticker} {best_news.direction.value} | "
+            f"SELECTIONNE #{len(selected_trades)+1}: {ticker} {best_news.direction.value} | "
             f"Score brut Claude={raw_score:.1f}, learning_mult={multiplier:.3f} "
             f"(base={base_mult:.3f}, session={current_session_mult:.3f}, "
             f"newscat={nc_mult:.3f}, regime={current_regime_mult:.3f}), "
@@ -554,15 +622,6 @@ def select_trade(
             f"News: '{best_news.news.title[:80]}' | "
             f"Categorie: {best_news.news_category}, edge={best_news.transmission_delay}/{best_news.market_awareness}"
         )
-        if len(candidates) > 1:
-            runner_up = candidates[1] if rank == 0 else candidates[0]
-            decision_parts.append(
-                f"Alternative proche: score={runner_up[1]:.1f} '{runner_up[0].news.title[:60]}'"
-            )
-
-        # P1-#13: Extract VIX and regime from market_context
-        vix_val = market_context.get("vix") if market_context else None
-        regime_val = market_context.get("regime") if market_context else None
 
         recommendation = TradeRecommendation(
             scan_type=scan_type,
@@ -606,11 +665,23 @@ def select_trade(
             predicted_transmission_delay=best_news.transmission_delay,
         )
 
+        selected_trades.append(recommendation)
+        scan_selected_tickers.append(ticker)
+        logger.info(
+            "Trade #%d selected: %s %s %s (score=%.1f, confidence=%d%%)",
+            len(selected_trades), recommendation.direction.value,
+            ticker, asset.name, best_score, confidence,
+        )
+
+    # ── Build final ScanResult ──────────────────────────────────
+    if selected_trades:
+        decision_parts.append(f"TOTAL: {len(selected_trades)} trade(s) selectionne(s) ce scan")
         return ScanResult(
             scan_type=scan_type,
             timestamp=now,
             has_trade=True,
-            recommendation=recommendation,
+            recommendation=selected_trades[0],  # Backward compat: first trade
+            recommendations=selected_trades,     # v3.5: all trades
             news_analyzed=len(scored_news),
             market_context=market_context,
             all_scored_news=all_scored_log,
@@ -619,7 +690,7 @@ def select_trade(
             learning_state=learning_state_for_log,
         )
 
-    # All candidates failed price/R/R checks
+    # All candidates failed checks
     decision_parts.append("AUCUN candidat n'a passe les checks prix/R/R")
     return ScanResult(
         scan_type=scan_type,

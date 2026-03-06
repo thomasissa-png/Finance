@@ -190,24 +190,33 @@ def run_scan(scan_type: ScanType, max_retries: int = 1, existing_trade_ticker: l
             # Step 3: Get learning adjustments (#26 — cached)
             learning_data = get_learning_adjustments()
 
-            # Step 4: Select trade (with correlation check #22)
+            # Step 4: Select trades (v3.5 — multi-trade, with correlation check #22)
             result = select_trade(
                 scored, scan_type, learning_data,
                 existing_trade_ticker=existing_trade_ticker,
                 market_context=market_ctx,
             )
 
-            # Step 5: Save if trade found
-            if result.has_trade and result.recommendation:
+            # Step 5: Save all selected trades (v3.5 — multiple possible)
+            if result.has_trade and result.recommendations:
+                for rec in result.recommendations:
+                    save_trade(rec)
+                    logger.info(
+                        "Trade selected: %s %s %s (confidence: %d%%, volume: %s, binary: %s)",
+                        rec.direction, rec.ticker, rec.asset_name,
+                        rec.confidence, rec.volume_confirmed,
+                        rec.binary_event_warning or "none",
+                    )
+                logger.info("Total trades this scan: %d", len(result.recommendations))
+            elif result.has_trade and result.recommendation:
+                # Backward compat fallback
                 save_trade(result.recommendation)
                 logger.info(
-                    "Trade selected: %s %s %s (confidence: %d%%, volume: %s, binary: %s)",
+                    "Trade selected: %s %s %s (confidence: %d%%)",
                     result.recommendation.direction,
                     result.recommendation.ticker,
                     result.recommendation.asset_name,
                     result.recommendation.confidence,
-                    result.recommendation.volume_confirmed,
-                    result.recommendation.binary_event_warning or "none",
                 )
             else:
                 logger.info("No trade: %s", result.reason_no_trade)

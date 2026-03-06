@@ -194,6 +194,7 @@ def append_scan_result(scan_result: dict) -> None:
             news_analyzed=scan_result.get("news_analyzed", 0),
             reason_no_trade=scan_result.get("reason_no_trade", ""),
             recommendation=scan_result.get("recommendation"),
+            recommendations=scan_result.get("recommendations") or [],
             all_scored_news=scan_result.get("all_scored_news") or [],
             rejection_log=scan_result.get("rejection_log") or [],
             decision_summary=scan_result.get("decision_summary"),
