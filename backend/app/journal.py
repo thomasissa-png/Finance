@@ -516,12 +516,15 @@ def run_daily_journal() -> list[dict]:
             delay_accuracy = round(trade.predicted_transmission_delay - actual_delay_score, 1)
 
         # Update the trade in the learning system (with P1-#6 delay accuracy)
-        if exit_price is not None:
-            update_trade_result(
-                trade.timestamp, trade.ticker, result, exit_price,
-                actual_pricing_time_hours=actual_pricing_hours,
-                delay_accuracy=delay_accuracy,
-            )
+        # Always update result even when exit_price is None (price fetch failed).
+        # This prevents trades from staying PENDING forever — they get marked EXPIRED
+        # so subsequent journal runs don't try to reprocess them.
+        update_trade_result(
+            trade.timestamp, trade.ticker, result,
+            exit_price if exit_price is not None else trade.entry_price,
+            actual_pricing_time_hours=actual_pricing_hours,
+            delay_accuracy=delay_accuracy,
+        )
 
         now = datetime.now(timezone.utc)
         review = _build_review(trade, result, pnl_pct)

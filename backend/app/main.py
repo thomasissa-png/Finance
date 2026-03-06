@@ -91,6 +91,48 @@ def _save_scans_cache(scans: dict[str, dict]) -> None:
 
 bg_scheduler = BackgroundScheduler(timezone="Europe/Paris")
 
+PARIS_TZ = ZoneInfo("Europe/Paris")
+
+
+def _recover_pending_trades_on_startup() -> None:
+    """Close old PENDING trades that were missed by the 22:00 journal.
+
+    On Replit, the app can be killed overnight and restarted the next morning.
+    If the 22:00 journal was missed, trades from previous days stay PENDING forever.
+    This function detects and closes them on startup, in a background thread.
+    """
+    def _worker():
+        try:
+            now_paris = datetime.now(PARIS_TZ)
+            today = now_paris.strftime("%Y-%m-%d")
+            trades = load_trades()
+            old_pending = []
+            for t in trades:
+                if t.result != TradeResult.PENDING:
+                    continue
+                trade_date = t.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
+                if trade_date < today:
+                    old_pending.append(t)
+
+            if not old_pending:
+                logger.info("Startup recovery: no old PENDING trades found")
+                return
+
+            logger.info(
+                "Startup recovery: found %d old PENDING trade(s) — running journal to close them",
+                len(old_pending),
+            )
+            new_entries = run_daily_journal()
+            logger.info(
+                "Startup recovery: journal created %d entries", len(new_entries),
+            )
+        except Exception as exc:
+            logger.error("Startup recovery failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="startup-recovery")
+    thread.start()
+
+
 # ── Self-ping keepalive ──────────────────────────────────────
 # Replit autoscale kills apps with no inbound traffic.
 # This thread pings /api/health every 4 minutes to keep the process alive
@@ -212,9 +254,16 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=60)
     bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=60)
     # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
-    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=60)
+    # misfire_grace_time=3600 (1h) — journal is pure data processing (no external API calls),
+    # so crash loops are not a concern. A long grace period ensures the journal runs even
+    # after prolonged downtime (e.g., Replit kills the app from 21:00 to 23:30).
+    bg_scheduler.add_job(_run_daily_journal, CronTrigger(hour=22, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="daily_journal", misfire_grace_time=3600)
     bg_scheduler.start()
     logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, journal at 22:00 CET (weekdays only)")
+
+    # Startup recovery: close any old PENDING trades that were missed by the 22:00 journal
+    # (e.g., app was down overnight, Replit killed the process before journal ran)
+    _recover_pending_trades_on_startup()
 
     # Start keepalive thread to prevent Replit autoscale from killing the app
     keepalive_thread = threading.Thread(target=_keepalive_loop, daemon=True, name="keepalive")
@@ -290,9 +339,6 @@ def get_latest_scan(scan_type: str):
     """Get the latest result for a specific scan type."""
     with _scans_lock:
         return _last_scans.get(scan_type, {"has_trade": False, "reason_no_trade": "Aucun scan effectué"})
-
-
-PARIS_TZ = ZoneInfo("Europe/Paris")
 
 
 def _run_triggered_scan(scan_type: str, st: ScanType, existing_ticker: list[str] | str | None) -> None:
@@ -405,8 +451,58 @@ def get_learning():
 def get_journal():
     """Get all journal entries."""
     entries = load_journal()
-    logger.info("GET /api/journal: returning %d entries", len(entries))
+    logger.info("GET /api/journal: returning %d entries (PG=%s)", len(entries), is_pg_enabled())
     return [e.model_dump(mode="json") for e in entries]
+
+
+@app.get("/api/journal/debug")
+def get_journal_debug():
+    """Diagnostic endpoint: raw journal state from PG/JSON for debugging."""
+    from .journal import JOURNAL_FILE
+    import json as _json
+
+    diag = {"pg_enabled": is_pg_enabled(), "pg_raw_count": 0, "pg_parse_errors": [],
+            "json_raw_count": 0, "json_parse_errors": [], "final_count": 0,
+            "pending_trades": 0, "all_trades": 0}
+
+    all_trades = load_trades()
+    diag["all_trades"] = len(all_trades)
+    diag["pending_trades"] = sum(1 for t in all_trades if t.result == TradeResult.PENDING)
+    diag["pending_details"] = [
+        {"ticker": t.ticker, "date": t.timestamp.isoformat(), "scan_type": t.scan_type.value}
+        for t in all_trades if t.result == TradeResult.PENDING
+    ]
+
+    if is_pg_enabled():
+        try:
+            from .database import pg_load_journal
+            raw = pg_load_journal()
+            diag["pg_raw_count"] = len(raw)
+            from .models import JournalEntry as JE
+            for i, e in enumerate(raw):
+                try:
+                    JE(**e)
+                except Exception as exc:
+                    diag["pg_parse_errors"].append({"index": i, "ticker": e.get("ticker"), "error": str(exc)})
+        except Exception as exc:
+            diag["pg_error"] = str(exc)
+
+    try:
+        if JOURNAL_FILE.exists():
+            raw = _json.loads(JOURNAL_FILE.read_text())
+            diag["json_raw_count"] = len(raw)
+            from .models import JournalEntry as JE
+            for i, e in enumerate(raw):
+                try:
+                    JE(**e)
+                except Exception as exc:
+                    diag["json_parse_errors"].append({"index": i, "ticker": e.get("ticker") if isinstance(e, dict) else None, "error": str(exc)})
+    except Exception as exc:
+        diag["json_error"] = str(exc)
+
+    entries = load_journal()
+    diag["final_count"] = len(entries)
+    return diag
 
 
 @app.get("/api/journal/{date}")
@@ -441,7 +537,7 @@ def trigger_journal():
         _save_scans_cache(_last_scans)
     logger.info("Scan cache cleared after manual journal trigger")
 
-    # Return diagnostic wrapper if no entries were created
+    # Always return consistent format: { entries: [...], diagnostic: {...} }
     if not result:
         return {
             "entries": [],
@@ -456,7 +552,15 @@ def trigger_journal():
                 ),
             },
         }
-    return result
+    return {
+        "entries": result,
+        "diagnostic": {
+            "total_trades": len(all_trades),
+            "pending_trades": len(pending),
+            "pending_tickers": [t.ticker for t in pending],
+            "message": f"{len(result)} entree(s) journal creee(s).",
+        },
+    }
 
 
 # ── Scan history endpoints ────────────────────────────────────────

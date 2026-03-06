@@ -48,6 +48,10 @@ export default function Journal() {
         const data = await res.json();
         if (Array.isArray(data)) {
           setEntries(data);
+        } else {
+          // Unexpected format — log for debugging
+          console.error("Journal API returned non-array:", typeof data, data);
+          setEntries([]);
         }
       } else {
         console.error("Journal fetch error:", res.status);
@@ -71,15 +75,15 @@ export default function Journal() {
       const res = await fetch("/api/journal/trigger", { method: "POST" });
       if (res.ok) {
         const data = await res.json();
-        // New format: { entries: [], diagnostic: {...} } or legacy: [...]
+        // Format: { entries: [...], diagnostic: {...} } or legacy: [...]
         const newEntries = Array.isArray(data) ? data : (data.entries || []);
-        const diag = data.diagnostic;
+        const diag = Array.isArray(data) ? null : data.diagnostic;
         if (newEntries.length > 0) {
           setTriggerMsg({ type: "success", text: `${newEntries.length} entree(s) ajoutee(s) au journal.` });
         } else if (diag) {
           setTriggerMsg({
             type: "warning",
-            text: `${diag.message} (${diag.total_trades} trades total, ${diag.pending_trades} PENDING)`,
+            text: `${diag.message}`,
           });
         } else {
           setTriggerMsg({ type: "warning", text: "Aucun trade PENDING a cloturer." });
