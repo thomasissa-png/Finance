@@ -1,4 +1,4 @@
-# OneShot News Trading System — v3.2 Full Intelligence Pipeline
+# OneShot News Trading System — v3.4 Full Intelligence Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -17,7 +17,73 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 ## Architecture
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite
-- **Persistence**: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` (flat files, file locking via `fcntl`)
+- **Persistence**: PostgreSQL (primary, via `DATABASE_URL`) avec fallback JSON flat files
+  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans
+  - Fallback: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` (file locking via `fcntl`)
+  - Auto-migration JSON→PG au demarrage si PG est vide mais JSON a des donnees
+- **Market Data**: Twelve Data (primary) + yfinance (fallback) — module `market_data.py`
+
+## Branche active : `claude/json-to-postgres-migration-ToNVq`
+
+### Travail effectue sur cette branche (20 commits)
+
+#### 1. Migration JSON → PostgreSQL (`database.py`, `migrate_json_to_postgres.py`)
+- 4 tables PG : `trades`, `journal_entries`, `scan_history`, `last_scans`
+- CRUD complet avec `psycopg2.extras.RealDictCursor` et JSONB pour champs complexes
+- `ON CONFLICT DO NOTHING` pour dedup (trades: ticker+timestamp, journal: ticker+entry_time)
+- `is_pg_enabled()` → True si psycopg2 importe ET DATABASE_URL set
+- Script de migration : `python -m backend.migrate_json_to_postgres`
+- Tous les modules (journal, learning, scan_history, scheduler, main) utilisent PG quand disponible
+- Auto-migration : si PG est vide mais JSON a des donnees, migration automatique au load
+
+#### 2. Migration Market Data vers Twelve Data (`market_data.py`)
+- Module unifie : Twelve Data (primary) + yfinance (fallback)
+- Rate limiter thread-safe : 7 req/min (free tier = 8)
+- TTL cache 3 niveaux : 2min (quotes), 10min (daily), 30min (intraday)
+- Mapping complet des 39 tickers yfinance → Twelve Data, verifie via API :
+  - **Indices** : ^FCHI→FCHI, ^GDAXI→GDAXI, ^FTSE→FTSE, ^N225→N225
+  - **US indices blacklistes** : ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX → yfinance only (licences S&P)
+  - **Forex** : EURUSD=X→EUR/USD, USDJPY=X→USD/JPY, etc.
+  - **Paris stocks** : TTE.PA→TTE (mic_code=XPAR), MC.PA→MC, etc.
+  - **Energie** : CL=F→CL1, BZ=F→CO1, NG=F→NG/USD
+  - **Metaux** : GC=F→XAU/USD, SI=F→XAG/USD, HG=F→HG1, PL=F→XPT/USD, PA=F→XPD/USD
+  - **Agriculture** : ZC=F→C_1, ZW=F→W_1, ZS=F→S_1, KC=F→KC1, SB=F→SB1, CC=F→CC1, CT=F→CT1, OJ=F→JO1
+  - **Livestock** : LE=F→LC1, HE=F→LH1
+- Fonctions : `fetch_price()`, `fetch_history()`, `fetch_history_range()`, `fetch_intraday()`
+- Secret optionnel : `TWELVE_DATA_API_KEY` (free tier 800 credits/jour)
+
+#### 3. Fixes Journal (4 root causes corrigees — commit 389b649)
+- **misfire_grace_time** : 60s → 3600s pour le job journal 22h (pas de risque crash loop — pur data processing)
+- **Startup recovery** : `_recover_pending_trades_on_startup()` detecte et ferme les vieux trades PENDING au boot
+- **Trades stuck PENDING** : `update_trade_result()` toujours appele meme si exit_price=None (fallback entry_price)
+- **Trigger format** : reponse toujours `{entries: [...], diagnostic: {...}}` (plus de format inconsistant)
+- **Debug endpoint** : `GET /api/journal/debug` — inspecte PG vs JSON, parse errors, pending trades
+
+#### 4. Audit complet — 17 fixes (commit 1c15010)
+- Scoring: freshness retiree de la formule, edge_factor floor 0.05, category multipliers recalibres
+- Journal: post-entry price tracking (1h bars, filtre bars avant l'entree du trade)
+- Threading: shutdown(wait=False, cancel_futures=True) partout
+- Calendar: dates 2025-2026 hardcodees FOMC/ECB/BOE
+
+#### 5. Learning v3.4 — audit ML (commit 42709d2)
+- 10 fixes : structured return format, session/newscat/regime adj separees, per-ticker stricter significance
+- Signal PnL-signe, t-stat configurable, decay temporel adaptatif, anti-double-counting
+
+#### 6. Cross-day dedup + Journal diagnostics (commit ffc965b)
+- Dedup Jaccard ticker cross-day, diagnostic wrapper pour trigger
+
+#### 7. Resilient data loading (commit 688271d)
+- Resilient per-entry parsing (skip invalids instead of crash)
+- Auto-migration JSON→PG on load
+
+### Etat actuel des fichiers cles
+- `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints
+- `backend/app/market_data.py` : Twelve Data + yfinance, 39 mappings verifies
+- `backend/app/database.py` : PG persistence layer, 4 tables, pool, CRUD
+- `backend/app/journal.py` : fermeture trades, intraday 1h bars, post-entry filtering, PG save
+- `backend/app/learning.py` : v3.4, 5 dimensions (ticker, cat, session, newscat, regime)
+- `backend/app/scan_history.py` : PG support, pruning 30j
+- `backend/migrate_json_to_postgres.py` : script de migration one-shot
 
 ## REGLE ABSOLUE — Protection des donnees de production
 
@@ -297,16 +363,30 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 
 ## Journal quotidien (22h CET)
 - **Scheduler**: job automatique a 22:00 CET chaque jour ouvrable (lundi-vendredi)
-- **Actions**: ferme tous les trades PENDING, recupere les prix reels du jour (high/low/close via yfinance)
-- **Resultat auto**: TP verifie en priorite (TP > SL quand les deux sont touches le meme jour), puis SL, puis EXPIRED
+  - `misfire_grace_time=3600` (1h) — le journal est du pur data processing, pas de risque crash loop
+  - Si le job est rate (app down), la startup recovery ferme les vieux trades au redemarrage
+- **Startup recovery** : `_recover_pending_trades_on_startup()` dans `main.py`
+  - Au demarrage, detecte les trades PENDING de jours precedents
+  - Lance automatiquement `run_daily_journal()` pour les fermer
+  - Evite les trades bloques PENDING quand l'app est tuee avant 22h
+- **Actions**: ferme tous les trades PENDING, recupere les prix reels du jour (1h bars via Twelve Data/yfinance)
+- **Resultat auto**: TP verifie en priorite via bars chronologiques (1h), puis SL, puis EXPIRED
+  - Bars filtrees pour ne garder que post-entry (ignore les extremes d'avant le trade)
+  - Si TP et SL touches dans la meme barre 1h → conservatif SL
 - **Dedup**: verifie `(ticker, entry_time)` pour eviter les doublons lors de triggers manuels
 - **Trades anciens**: recupere les prix historiques pour la date reelle du trade (pas seulement aujourd'hui)
-- **Persistence**: `data/journal.json` (flat file avec file locking)
+- **Persistence**: PostgreSQL (primary) ou `data/journal.json` (fallback)
+  - Resilient: si une entree echoue au parsing, elle est skippee (pas de crash)
+  - Auto-migration JSON→PG si PG est vide mais JSON a des donnees
+- **Prix indisponibles** : si le fetch de prix echoue, le trade est marque EXPIRED avec entry_price comme fallback
+  - `update_trade_result()` est TOUJOURS appele (plus de trades stuck PENDING)
 - **Categories de news**: earnings, macro, geopolitical, regulatory, m_a, sector, commodity, weather, supply_chain, central_bank_subtle, other
 - **Categories d'actifs**: actions_europe, metaux, forex, commodities, indices
 - **Learning**: apres chaque cloture, les resultats alimentent `compute_learning_adjustments()`
 - **Frontend**: onglet "Journal" avec tableau groupe par date, badges categorie news et actif
-- **API**: `GET /api/journal`, `GET /api/journal/{date}`, `POST /api/journal/trigger`
+- **API**: `GET /api/journal`, `GET /api/journal/{date}`, `POST /api/journal/trigger`, `GET /api/journal/debug`
+  - `/api/journal/trigger` retourne toujours `{entries: [...], diagnostic: {...}}`
+  - `/api/journal/debug` : diagnostic PG vs JSON, parse errors, pending trades details
 - **Decision trace** (v3): chaque entree journal stocke le raisonnement complet :
   - `all_scored_news` : toutes les news scorees par Claude avec scores et reasoning
   - `rejection_log` : pourquoi chaque candidat a ete rejete (NEUTRAL, score bas, correle, deja price, R/R)
@@ -368,7 +448,9 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 
 ## Secrets (Replit)
 - **Requis** : `ANTHROPIC_API_KEY`
+- **Auto** : `DATABASE_URL` (cree automatiquement par Replit quand on ajoute PostgreSQL)
 - **Optionnels** (gratuits, ameliorent la couverture) :
+  - `TWELVE_DATA_API_KEY` : market data rapide (https://twelvedata.com/ — free tier 800 credits/jour, 8 req/min)
   - `EIA_API_KEY` : donnees energie EIA (https://www.eia.gov/opendata/register.php)
   - `GNEWS_API_KEY` : recherche news ciblee — 25 queries (https://gnews.io/)
   - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
@@ -386,7 +468,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **scan_feeds_for_triggers()** : 8 early-signal feeds en parallele (event scanner)
 - **Claude API** : timeout 90s par batch, pre-filtrage a 50 items max, batching automatique si > 50
 - **Scheduler** : retry immediat (pas de `time.sleep()` qui bloquerait le thread scheduler)
-- **Scheduler** : `misfire_grace_time=600` sur tous les jobs (evite de rater le scan si l'app demarre en retard)
+- **Scheduler** : `misfire_grace_time=60` scans (evite crash loops), `misfire_grace_time=3600` journal (safe, pur data processing)
 - **Trigger scan** : non-bloquant — execute en background thread (evite timeout HTTP)
 - **RSS** : `requests.get(url, timeout=15)` + `feedparser.parse(content)` (au lieu de `feedparser.parse(url)` qui n'a pas de timeout reseau)
 - **RSS** : User-Agent navigateur pour eviter les 403 (CNBC, gCaptain, BoE)
@@ -411,7 +493,9 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Plateforme cible: Replit
 - Backend: `uvicorn backend.app.main:app`
 - Frontend: Vite dev server ou build statique
-- **ATTENTION** : `data/*.json` est dans `.gitignore` — les donnees de production vivent sur le disque Replit, PAS dans git. Un `git checkout` ou redeploy ne doit JAMAIS ecraser ces fichiers.
+- **PostgreSQL** : ajouter une base PostgreSQL sur Replit → `DATABASE_URL` auto-set. Au premier demarrage, `init_db()` cree les tables. Pour migrer les donnees existantes : `python -m backend.migrate_json_to_postgres`
+- **Twelve Data** : ajouter `TWELVE_DATA_API_KEY` dans les secrets Replit (optionnel, yfinance fallback)
+- **ATTENTION** : `data/*.json` est dans `.gitignore` — les donnees de production vivent sur le disque Replit (ou PG), PAS dans git. Un `git checkout` ou redeploy ne doit JAMAIS ecraser ces fichiers.
 
 ## Tests
 - Framework: pytest
@@ -428,3 +512,5 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Phase 6 : integration multi-jours (score → select → save → journal → learn)
   - Phase 7 : resilience erreurs (corrupt files, missing data, empty inputs)
 - **test_weekend.py** : verification que scans, event checks et triggers sont bloques le week-end
+- **test_data_persistence.py** : PG fallback, JSON guard, corrupt file resilience, auto-migration
+- **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data
