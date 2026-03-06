@@ -4,8 +4,6 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-import anthropic
-
 from .event_scanner import determine_scan_type, should_trigger_scan
 from .learning import compute_learning_adjustments, load_trades, save_trade
 from .models import ScanType, TradeResult
@@ -100,11 +98,12 @@ def run_event_check() -> dict | None:
     return result
 
 
-def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: list[str] | str | None = None) -> dict:
+def run_scan(scan_type: ScanType, max_retries: int = 1, existing_trade_ticker: list[str] | str | None = None) -> dict:
     """Execute a full scan pipeline: collect → score → select → save.
 
-    Retries up to max_retries times. No sleep between retries to avoid blocking
-    the scheduler thread (which would cause other scheduled jobs to be missed).
+    Retries up to max_retries times for non-API errors (file I/O, etc.).
+    API errors are handled inside the scorer with their own retry logic —
+    the scorer returns [] on API failure so the scan completes gracefully.
     Returns the ScanResult as a dict.
     """
     for attempt in range(max_retries + 1):
@@ -164,6 +163,19 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
             scored, market_ctx = score_news_batch(news_items, scan_type)
             logger.info("Scored %d news items", len(scored))
 
+            if not scored:
+                reason = "API Claude hors service — les news n'ont pas pu etre scorees. Reessai au prochain scan."
+                logger.warning(reason)
+                result_dict = {
+                    "scan_type": scan_type.value,
+                    "has_trade": False,
+                    "reason_no_trade": reason,
+                    "news_analyzed": len(news_items),
+                    "all_scored_news": [],
+                }
+                append_scan_result(result_dict)
+                return result_dict
+
             # Log scored results with scores for traceability
             if scored:
                 logger.info("--- Scored news (%d) ---", len(scored))
@@ -206,22 +218,6 @@ def run_scan(scan_type: ScanType, max_retries: int = 2, existing_trade_ticker: l
             append_scan_result(result_dict)
 
             return result_dict
-
-        except anthropic.APIError as exc:
-            # Surface API errors (credit exhaustion, auth, rate limit) distinctly
-            logger.error("Claude API error during %s scan (attempt %d/%d): %s",
-                         scan_type.value, attempt + 1, max_retries + 1, exc)
-            if attempt < max_retries:
-                logger.info("Retrying immediately (attempt %d)...", attempt + 2)
-            else:
-                error_type = type(exc).__name__
-                return {
-                    "scan_type": scan_type.value,
-                    "has_trade": False,
-                    "reason_no_trade": f"Erreur API Claude ({error_type}): {exc}",
-                    "news_analyzed": 0,
-                    "api_error": error_type,
-                }
 
         except Exception as exc:
             logger.error("Scan %s failed (attempt %d/%d): %s",

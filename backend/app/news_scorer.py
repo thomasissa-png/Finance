@@ -269,10 +269,12 @@ def _build_context_string(market_ctx: dict, scan_type: ScanType) -> str:
     return " | ".join(parts)
 
 
-def _call_claude_with_retry(client, headlines, session_context, max_retries=2):
+def _call_claude_with_retry(client, headlines, session_context, max_retries=3):
     """Call Claude API with tool_use (#9) for structured output.
 
     Returns parsed scores list, or empty list on failure.
+    Never raises — API errors are logged and return [] so the scan
+    completes gracefully (no trade) instead of crashing.
     """
     user_message = f"""Contexte : {session_context}
 
@@ -290,7 +292,7 @@ Headlines :
                 messages=[{"role": "user", "content": user_message}],
                 tools=[SCORING_TOOL],
                 tool_choice={"type": "tool", "name": "submit_news_scores"},
-                timeout=90.0,  # 90s timeout — 50 items ~30s processing, margin for API queueing
+                timeout=120.0,  # 120s timeout — generous margin for API congestion
             )
 
             # Detect truncation — if max_tokens was hit, scores are likely incomplete
@@ -329,13 +331,25 @@ Headlines :
                 time.sleep(2 ** attempt)
                 continue
             return []
-        except anthropic.APIError as exc:
-            logger.error("Claude API error (attempt %d): %s", attempt + 1, exc)
+        except anthropic.APITimeoutError as exc:
+            # Specific handling for timeouts — use longer backoff since API is likely congested
+            wait = min(4 * (2 ** attempt), 30)  # 4s, 8s, 16s, 30s
+            logger.error("Claude API timeout (attempt %d/%d, wait %ds): %s",
+                         attempt + 1, max_retries + 1, wait, exc)
             if attempt < max_retries:
-                time.sleep(2 ** attempt)
+                time.sleep(wait)
                 continue
-            # Re-raise after all retries so callers can surface the error
-            raise
+            logger.error("Claude API timeout after %d attempts — scan will proceed without scores", max_retries + 1)
+            return []
+        except anthropic.APIError as exc:
+            wait = 2 ** attempt  # 1s, 2s, 4s, 8s
+            logger.error("Claude API error (attempt %d/%d, wait %ds): %s",
+                         attempt + 1, max_retries + 1, wait, exc)
+            if attempt < max_retries:
+                time.sleep(wait)
+                continue
+            logger.error("Claude API error after %d attempts — scan will proceed without scores", max_retries + 1)
+            return []
 
     return []
 
