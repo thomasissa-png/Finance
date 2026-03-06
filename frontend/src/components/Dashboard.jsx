@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { timeAgo } from "../utils/format";
 import TradeCard from "./TradeCard";
 
-// (D6) Toast notification system
+// (O5) Dismissable toast system
 function useToasts() {
   const [toasts, setToasts] = useState([]);
   const idRef = useRef(0);
@@ -10,14 +11,24 @@ function useToasts() {
     const id = ++idRef.current;
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3200);
+      setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 250);
+    }, 4000);
   }, []);
 
-  return { toasts, addToast };
+  const dismissToast = useCallback((id) => {
+    setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, exiting: true } : t)));
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 250);
+  }, []);
+
+  return { toasts, addToast, dismissToast };
 }
 
-// (D3) Compute next scan time — 4 scans/day
+// Next scan time
 const SCAN_SCHEDULE = [
   { h: 7, m: 50, label: "07:50 CET (Europe)" },
   { h: 11, m: 15, label: "11:15 CET (Mid-Session)" },
@@ -27,25 +38,24 @@ const SCAN_SCHEDULE = [
 
 function getNextScanInfo() {
   const now = new Date();
-  const day = now.getDay();
-  // Weekend
+  const paris = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Paris" }));
+  const day = paris.getDay();
   if (day === 0 || day === 6) {
     return { text: "Prochain scan : lundi 07:50 CET", cls: "weekend" };
   }
-  const totalMin = now.getHours() * 60 + now.getMinutes();
+  const totalMin = paris.getHours() * 60 + paris.getMinutes();
   for (const s of SCAN_SCHEDULE) {
     if (totalMin < s.h * 60 + s.m) {
       return { text: `Prochain scan : aujourd'hui ${s.label}`, cls: "online" };
     }
   }
   if (day === 5) {
-    // Friday after last scan
     return { text: "Prochain scan : lundi 07:50 CET", cls: "offline" };
   }
   return { text: "Prochain scan : demain 07:50 CET (Europe)", cls: "offline" };
 }
 
-// Scan configuration: key, label, button label, css class
+// Scan configuration
 const SCAN_DEFS = [
   { key: "europe", label: "SCAN EUROPE — 07:50 CET", btn: "Europe (07:50)", cls: "europe" },
   { key: "mid_session", label: "SCAN MID-SESSION — 11:15 CET", btn: "Mid-Session (11:15)", cls: "europe" },
@@ -53,14 +63,14 @@ const SCAN_DEFS = [
   { key: "us_session", label: "SCAN US SESSION — 17:00 CET", btn: "US Session (17:00)", cls: "us" },
 ];
 
-// Detect API errors from any scan result
+// (C2) Scan progress steps
+const PROGRESS_STEPS = ["Collecte RSS", "Analyse Claude", "Sélection trade"];
+
+// Detect API errors
 function getApiError(scans) {
   for (const key of Object.keys(scans)) {
     const scan = scans[key];
-    if (scan?.api_error) {
-      return scan;
-    }
-    // Also detect credit issues from reason_no_trade text
+    if (scan?.api_error) return scan;
     const reason = scan?.reason_no_trade || "";
     if (reason.includes("API Claude") || reason.includes("AuthenticationError") || reason.includes("RateLimitError")) {
       return scan;
@@ -73,30 +83,32 @@ export default function Dashboard() {
   const [scans, setScans] = useState({});
   const [loading, setLoading] = useState({});
   const [scanInfo, setScanInfo] = useState(getNextScanInfo);
-  const { toasts, addToast } = useToasts();
+  const [lastUpdate, setLastUpdate] = useState(null);
+  // (C2) Track scan progress per scan key
+  const [progress, setProgress] = useState({});
+  const { toasts, addToast, dismissToast } = useToasts();
 
   const apiErrorScan = getApiError(scans);
 
   const fetchScans = useCallback(async () => {
-    // (F2) Skip polling when tab is not visible
     if (document.hidden) return;
     try {
       const res = await fetch("/api/scan/latest");
       if (res.ok) {
         setScans(await res.json());
+        setLastUpdate(new Date());
       }
     } catch {
-      /* backend not yet started — silent */
+      /* backend not yet started */
     }
   }, []);
 
   useEffect(() => {
     fetchScans();
-    const interval = setInterval(fetchScans, 60_000); // poll every minute
+    const interval = setInterval(fetchScans, 60_000);
     return () => clearInterval(interval);
   }, [fetchScans]);
 
-  // Update scan info every minute
   useEffect(() => {
     const interval = setInterval(() => setScanInfo(getNextScanInfo()), 60_000);
     return () => clearInterval(interval);
@@ -104,18 +116,22 @@ export default function Dashboard() {
 
   const triggerScan = async (scanType) => {
     setLoading((prev) => ({ ...prev, [scanType]: true }));
+    // (C2) Simulate progress steps
+    setProgress((prev) => ({ ...prev, [scanType]: 0 }));
+    const stepTimer1 = setTimeout(() => setProgress((prev) => ({ ...prev, [scanType]: 1 })), 3000);
+    const stepTimer2 = setTimeout(() => setProgress((prev) => ({ ...prev, [scanType]: 2 })), 8000);
+
     try {
-      const res = await fetch(`/api/scan/trigger/${scanType}`, {
-        method: "POST",
-      });
+      const res = await fetch(`/api/scan/trigger/${scanType}`, { method: "POST" });
       if (res.ok) {
         const result = await res.json();
         setScans((prev) => ({ ...prev, [scanType]: result }));
+        setLastUpdate(new Date());
         if (result.has_trade) {
           const recs = result.recommendations || [];
           const count = recs.length || (result.recommendation ? 1 : 0);
           if (count > 1) {
-            const tickers = recs.map(r => r.ticker).join(", ");
+            const tickers = recs.map((r) => r.ticker).join(", ");
             addToast(`${count} trades détectés : ${tickers}`, "success");
           } else {
             addToast(`Trade détecté : ${result.recommendation?.ticker}`, "success");
@@ -131,7 +147,14 @@ export default function Dashboard() {
       console.error("Trigger failed:", err);
       addToast("Erreur réseau", "error");
     } finally {
+      clearTimeout(stepTimer1);
+      clearTimeout(stepTimer2);
       setLoading((prev) => ({ ...prev, [scanType]: false }));
+      setProgress((prev) => {
+        const next = { ...prev };
+        delete next[scanType];
+        return next;
+      });
     }
   };
 
@@ -141,17 +164,18 @@ export default function Dashboard() {
       {apiErrorScan && (
         <div className="api-error-banner">
           <strong>API Claude hors service</strong>
-          <span>{apiErrorScan.api_error === "AuthenticationError"
-            ? "Cle API invalide ou credits epuises. Verifiez ANTHROPIC_API_KEY."
-            : apiErrorScan.api_error === "RateLimitError"
-            ? "Limite de requetes atteinte. Verifiez vos credits Anthropic."
-            : `Erreur API : ${apiErrorScan.reason_no_trade || apiErrorScan.api_error}`
-          }</span>
+          <span>
+            {apiErrorScan.api_error === "AuthenticationError"
+              ? "Clé API invalide ou crédits épuisés. Vérifiez ANTHROPIC_API_KEY."
+              : apiErrorScan.api_error === "RateLimitError"
+                ? "Limite de requêtes atteinte. Vérifiez vos crédits Anthropic."
+                : `Erreur API : ${apiErrorScan.reason_no_trade || apiErrorScan.api_error}`}
+          </span>
           <span>Les scans ne peuvent pas scorer les news tant que l'API est indisponible.</span>
         </div>
       )}
 
-      {/* (D3) Scan status bar */}
+      {/* Scan status bar */}
       <div className="scan-status-bar">
         <span className={`status-dot ${scanInfo.cls}`} />
         {scanInfo.text}
@@ -165,16 +189,42 @@ export default function Dashboard() {
             onClick={() => triggerScan(s.key)}
             disabled={loading[s.key]}
           >
-            {loading[s.key] ? "Scan en cours..." : `Scan ${s.btn}`}
+            {loading[s.key] ? (
+              <>
+                <span className="spinner spinner-inline" />
+                Scan en cours...
+              </>
+            ) : (
+              `Scan ${s.btn}`
+            )}
           </button>
         ))}
       </div>
+
+      {/* (C2) Active scan progress */}
+      {Object.keys(progress).length > 0 &&
+        Object.entries(progress).map(([key, step]) => (
+          <div key={key} className="scan-progress">
+            {PROGRESS_STEPS.map((label, i) => (
+              <React.Fragment key={i}>
+                {i > 0 && <span className="scan-progress-separator" />}
+                <span
+                  className={`scan-progress-step ${
+                    i < step ? "done" : i === step ? "active" : ""
+                  }`}
+                >
+                  <span className="scan-progress-dot" />
+                  {label}
+                </span>
+              </React.Fragment>
+            ))}
+          </div>
+        ))}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         {SCAN_DEFS.map((s) => {
           const scan = scans[s.key];
           const recs = scan?.recommendations || [];
-          // v3.5: If multiple trades, render one TradeCard per trade
           if (scan?.has_trade && recs.length > 1) {
             return (
               <div key={s.key} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -191,17 +241,24 @@ export default function Dashboard() {
               </div>
             );
           }
-          // Single trade or no trade: render as before
           return <TradeCard key={s.key} scan={scan} label={s.label} />;
         })}
       </div>
 
-      {/* (D6) Toast container */}
+      {/* (O1) Last update timestamp */}
+      {lastUpdate && (
+        <div className="last-update">MAJ {timeAgo(lastUpdate)}</div>
+      )}
+
+      {/* Toast container — (O5) dismissable */}
       {toasts.length > 0 && (
         <div className="toast-container">
           {toasts.map((t) => (
-            <div key={t.id} className={`toast ${t.type}`}>
-              {t.message}
+            <div key={t.id} className={`toast ${t.type} ${t.exiting ? "exiting" : ""}`}>
+              <span>{t.message}</span>
+              <button className="toast-dismiss" onClick={() => dismissToast(t.id)}>
+                &times;
+              </button>
             </div>
           ))}
         </div>

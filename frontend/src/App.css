@@ -4,6 +4,7 @@
   --bg-primary: #0a0e17;
   --bg-card: #111827;
   --bg-card-hover: #1a2332;
+  --bg-surface: #1e1e2e;
   --border: #1e293b;
   --border-accent: #0ea5e9;
 
@@ -21,6 +22,23 @@
 
   --font-mono: "JetBrains Mono", monospace;
   --font-sans: "Inter", system-ui, sans-serif;
+
+  --radius: 8px;
+  --radius-sm: 4px;
+  --transition: 0.15s ease;
+}
+
+/* (O7) Light theme */
+.light {
+  --bg-primary: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --bg-surface: #e2e8f0;
+  --border: #cbd5e1;
+  --border-accent: #0284c7;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
 }
 
 * {
@@ -34,6 +52,7 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   min-height: 100vh;
+  transition: background var(--transition), color var(--transition);
 }
 
 /* (D15) Focus-visible accessibility */
@@ -47,20 +66,70 @@ a:focus:not(:focus-visible) {
   outline: none;
 }
 
-/* (D11) Fade-in animation for tab content */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
+/* ── Animations ───────────────────────────────────────────────── */
+
+/* (O4) Better tab transition */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 .tab-content {
-  animation: fadeIn 0.2s ease-out;
+  animation: fadeSlideIn 0.3s ease-out;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--red); }
+  50% { border-color: rgba(239, 68, 68, 0.4); }
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes toastOut {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(24px); }
+}
+
+/* (O8) Skeleton pulse */
+@keyframes shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-card-hover) 50%, var(--bg-card) 75%);
+  background-size: 200px 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-card {
+  height: 140px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+}
+
+.skeleton-row {
+  height: 44px;
+  margin-bottom: 4px;
+}
+
+.skeleton-kpi {
+  height: 90px;
+  border-radius: var(--radius);
 }
 
 /* ── Layout ──────────────────────────────────────────────────── */
 
 .app {
-  max-width: 960px;
+  max-width: 1060px;
   margin: 0 auto;
   padding: 24px 16px;
 }
@@ -70,7 +139,7 @@ a:focus:not(:focus-visible) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--border);
 }
@@ -89,6 +158,12 @@ a:focus:not(:focus-visible) {
   font-family: var(--font-mono);
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .header-status {
   display: flex;
   align-items: center;
@@ -96,6 +171,27 @@ a:focus:not(:focus-visible) {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
+}
+
+/* (O7) Theme toggle */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: all var(--transition);
+}
+
+.theme-toggle:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
 }
 
 .status-dot {
@@ -120,7 +216,32 @@ a:focus:not(:focus-visible) {
   box-shadow: 0 0 6px rgba(234, 179, 8, 0.4);
 }
 
-/* ── Tabs (D2) ──────────────────────────────────────────────── */
+/* (M3) Backend disconnect banner */
+.disconnect-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--red);
+}
+
+/* (O1) Last update timestamp */
+.last-update {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 4px 0;
+  opacity: 0.7;
+}
+
+/* ── Tabs ────────────────────────────────────────────────────── */
 
 .tabs {
   display: flex;
@@ -129,7 +250,6 @@ a:focus:not(:focus-visible) {
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  /* (D18) Scroll fade indicators */
   mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
   -webkit-mask-image: linear-gradient(to right, transparent 0, black 8px, black calc(100% - 8px), transparent 100%);
 }
@@ -143,7 +263,7 @@ a:focus:not(:focus-visible) {
   font-size: 13px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
-  transition: all 0.15s;
+  transition: all var(--transition);
   white-space: nowrap;
   position: relative;
 }
@@ -156,6 +276,14 @@ a:focus:not(:focus-visible) {
   color: var(--cyan);
   border-bottom-color: var(--cyan);
   background: rgba(6, 182, 212, 0.05);
+}
+
+/* (N4) Keyboard shortcut hint */
+.tab-shortcut {
+  font-size: 9px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  margin-left: 4px;
 }
 
 .tab-badge {
@@ -173,7 +301,7 @@ a:focus:not(:focus-visible) {
 .trade-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -191,7 +319,6 @@ a:focus:not(:focus-visible) {
   color: var(--text-muted);
 }
 
-/* v3.5: Multi-trade per scan header */
 .scan-multi-label {
   font-size: 13px;
   font-weight: 600;
@@ -217,11 +344,55 @@ a:focus:not(:focus-visible) {
   padding: 20px;
 }
 
+/* (M6) Trade card summary — always visible */
+.trade-summary-section {
+  /* Main visible section: asset + direction + headline */
+}
+
+/* (M6) Trade card details — accordion */
+.trade-details-section {
+  overflow: hidden;
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+}
+
+.trade-details-section.collapsed {
+  max-height: 0;
+  opacity: 0;
+}
+
+.trade-details-section.expanded {
+  max-height: 2000px;
+  opacity: 1;
+}
+
+.trade-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  margin-top: 12px;
+  background: rgba(6, 182, 212, 0.05);
+  border: 1px dashed rgba(6, 182, 212, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.trade-toggle-btn:hover {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.4);
+}
+
 .trade-main-row {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   flex-wrap: wrap;
 }
 
@@ -256,7 +427,7 @@ a:focus:not(:focus-visible) {
 .direction-badge {
   display: inline-block;
   padding: 4px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 700;
@@ -274,7 +445,12 @@ a:focus:not(:focus-visible) {
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
-/* (D5) News headline — distinct from catalyst */
+.direction-badge.sm {
+  font-size: 10px;
+  padding: 1px 5px;
+}
+
+/* (D5) News headline */
 .trade-headline {
   font-size: 14px;
   font-weight: 500;
@@ -287,23 +463,23 @@ a:focus:not(:focus-visible) {
   background: rgba(6, 182, 212, 0.08);
   border-left: 3px solid var(--cyan);
   padding: 12px 16px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-secondary);
 }
 
-/* (#24) Binary event warning */
+/* Binary event warning */
 .trade-warning {
   background: rgba(249, 115, 22, 0.1);
   border: 1px solid rgba(249, 115, 22, 0.3);
   border-left: 3px solid var(--orange);
   padding: 10px 16px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--orange);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .trade-warning-inline {
@@ -313,11 +489,11 @@ a:focus:not(:focus-visible) {
   font-style: italic;
 }
 
-/* (#10, #4) Trade info badges */
+/* Trade info badges */
 .trade-info-row {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   flex-wrap: wrap;
 }
 
@@ -326,7 +502,7 @@ a:focus:not(:focus-visible) {
   padding: 3px 8px;
   font-family: var(--font-mono);
   font-size: 11px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }
 
@@ -409,7 +585,7 @@ a:focus:not(:focus-visible) {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .trade-metric {
@@ -438,7 +614,7 @@ a:focus:not(:focus-visible) {
 .trade-metric-value.red { color: var(--red); }
 .trade-metric-value.cyan { color: var(--cyan); }
 
-/* (D10) Confidence bar — thicker */
+/* (N5) Confidence bar with context */
 .confidence-row {
   display: flex;
   align-items: center;
@@ -474,14 +650,21 @@ a:focus:not(:focus-visible) {
   text-align: right;
 }
 
-/* ── No Trade / Waiting (D4, D13) ──────────────────────────── */
+.confidence-context {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  min-width: 40px;
+}
+
+/* ── No Trade / Waiting ──────────────────────────────────────── */
 
 .no-trade {
   text-align: center;
   padding: 48px 20px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .no-trade-icon {
@@ -518,7 +701,7 @@ a:focus:not(:focus-visible) {
   padding: 3px 10px;
   font-family: var(--font-mono);
   font-size: 11px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-card-hover);
   color: var(--text-muted);
   border: 1px solid var(--border);
@@ -547,12 +730,7 @@ a:focus:not(:focus-visible) {
   letter-spacing: 0.5px;
 }
 
-@keyframes pulse-border {
-  0%, 100% { border-color: var(--red); }
-  50% { border-color: rgba(239, 68, 68, 0.4); }
-}
-
-/* ── (D3) Next scan status bar ─────────────────────────────── */
+/* ── Scan status bar ─────────────────────────────────────── */
 
 .scan-status-bar {
   display: flex;
@@ -574,7 +752,7 @@ a:focus:not(:focus-visible) {
   height: 6px;
 }
 
-/* ── Trigger Button (D6, D17) ──────────────────────────────── */
+/* ── Trigger Buttons ─────────────────────────────────────── */
 
 .trigger-section {
   display: flex;
@@ -593,7 +771,7 @@ a:focus:not(:focus-visible) {
   font-size: 12px;
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--transition);
 }
 
 .trigger-btn:hover {
@@ -605,7 +783,6 @@ a:focus:not(:focus-visible) {
   cursor: not-allowed;
 }
 
-/* (D6) Colored scan buttons */
 .trigger-btn.europe {
   background: rgba(59, 130, 246, 0.1);
   border-color: rgba(59, 130, 246, 0.3);
@@ -626,7 +803,6 @@ a:focus:not(:focus-visible) {
   background: rgba(168, 85, 247, 0.2);
 }
 
-/* (D17) Export button — outline style */
 .trigger-btn.export {
   background: transparent;
   border: 1px solid var(--border);
@@ -638,7 +814,18 @@ a:focus:not(:focus-visible) {
   color: var(--text-secondary);
 }
 
-/* (D6) Toast notifications */
+.trigger-btn.danger {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--red);
+}
+
+.trigger-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+/* ── Toast notifications ────────────────────────────────── */
+
 .toast-container {
   position: fixed;
   bottom: 24px;
@@ -653,38 +840,248 @@ a:focus:not(:focus-visible) {
   padding: 12px 20px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-secondary);
-  animation: toastIn 0.25s ease-out, toastOut 0.25s ease-in 2.75s forwards;
-  max-width: 320px;
+  animation: toastIn 0.25s ease-out;
+  max-width: 340px;
   border-left: 3px solid var(--cyan);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
 }
 
-.toast.success {
-  border-left-color: var(--green);
+.toast.exiting {
+  animation: toastOut 0.25s ease-in forwards;
 }
 
-.toast.error {
-  border-left-color: var(--red);
+.toast.success { border-left-color: var(--green); }
+.toast.error { border-left-color: var(--red); }
+.toast.warning { border-left-color: var(--yellow); }
+
+/* (O5) Dismiss button */
+.toast-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
-.toast.warning {
-  border-left-color: var(--yellow);
+.toast-dismiss:hover {
+  color: var(--text-primary);
 }
 
-@keyframes toastIn {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+/* ── (C2) Scan progress stepper ─────────────────────────── */
+
+.scan-progress {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
-@keyframes toastOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
+.scan-progress-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
 }
 
-/* ── History Table (D7) ───────────────────────────────────── */
+.scan-progress-step.active {
+  color: var(--cyan);
+  font-weight: 600;
+}
+
+.scan-progress-step.done {
+  color: var(--green);
+}
+
+.scan-progress-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.scan-progress-step.active .scan-progress-dot {
+  background: var(--cyan);
+  box-shadow: 0 0 4px rgba(6, 182, 212, 0.5);
+}
+
+.scan-progress-step.done .scan-progress-dot {
+  background: var(--green);
+}
+
+.scan-progress-separator {
+  width: 12px;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Filters bar (C5) ───────────────────────────────────── */
+
+.filters-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.filter-input {
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 120px;
+  transition: border-color var(--transition);
+}
+
+.filter-input:focus {
+  border-color: var(--cyan);
+}
+
+.filter-input::placeholder {
+  color: var(--text-muted);
+}
+
+.filter-select {
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-select:focus {
+  border-color: var(--cyan);
+}
+
+.filter-clear {
+  padding: 6px 10px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.filter-clear:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* ── Pagination (M2) ────────────────────────────────────── */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pagination-btn {
+  padding: 6px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.pagination-btn:hover:not(:disabled) {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  color: var(--text-muted);
+  min-width: 80px;
+  text-align: center;
+}
+
+/* ── (M5) Confirmation Modal ────────────────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  animation: fadeSlideIn 0.2s ease-out;
+}
+
+.modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 420px;
+  width: 90%;
+}
+
+.modal-title {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.modal-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ── Tables (D7) ────────────────────────────────────────── */
+
+.table-wrapper {
+  overflow-x: auto;
+}
 
 .history-table {
   width: 100%;
@@ -702,6 +1099,22 @@ a:focus:not(:focus-visible) {
   letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  cursor: default;
+}
+
+/* (C5) Sortable column header */
+.history-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.history-table th.sortable:hover {
+  color: var(--cyan);
+}
+
+.sort-arrow {
+  margin-left: 4px;
+  font-size: 10px;
 }
 
 .history-table td {
@@ -710,7 +1123,6 @@ a:focus:not(:focus-visible) {
   color: var(--text-secondary);
 }
 
-/* (D7) Zebra striping */
 .history-table tbody tr:nth-child(even) td {
   background: rgba(17, 24, 39, 0.5);
 }
@@ -719,10 +1131,10 @@ a:focus:not(:focus-visible) {
   background: var(--bg-card-hover);
 }
 
-/* (D16) Result badges — more visible */
+/* Result badges */
 .result-badge {
   padding: 3px 10px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.3px;
@@ -733,14 +1145,29 @@ a:focus:not(:focus-visible) {
 .result-badge.expired { background: rgba(234, 179, 8, 0.15); color: var(--yellow); }
 .result-badge.pending { background: rgba(59, 130, 246, 0.15); color: var(--blue); }
 
-/* (D14) Flat P&L for near-zero values */
+.result-badge.sm {
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
 .pnl-flat {
   color: var(--text-muted) !important;
 }
 
-/* ── Performance Stats (D9) ───────────────────────────────── */
+/* ── Category badge (O9 — centralized) ───────────────────── */
 
-/* Primary KPIs — larger */
+.cat-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* ── Performance Stats ───────────────────────────────────── */
+
 .perf-kpi-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -751,7 +1178,7 @@ a:focus:not(:focus-visible) {
 .perf-card-primary {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 20px;
   text-align: center;
 }
@@ -765,7 +1192,6 @@ a:focus:not(:focus-visible) {
   margin-top: 4px;
 }
 
-/* Secondary stats — smaller grid */
 .perf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -776,7 +1202,7 @@ a:focus:not(:focus-visible) {
 .perf-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 14px 12px;
   text-align: center;
 }
@@ -794,7 +1220,68 @@ a:focus:not(:focus-visible) {
   font-family: var(--font-mono);
 }
 
-/* ── Journal Table (D7) ───────────────────────────────────── */
+/* (C1) Chart container */
+.chart-container {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.chart-title {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+/* (M8) Period toggle */
+.period-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+}
+
+.period-btn {
+  padding: 5px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.period-btn:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.period-btn:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.period-btn:not(:first-child) {
+  border-left: none;
+}
+
+.period-btn.active {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.3);
+  color: var(--cyan);
+}
+
+/* ── Section header ──────────────────────────────────────── */
+
+.section-header {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+/* ── Journal ─────────────────────────────────────────────── */
 
 .journal-day {
   margin-bottom: 32px;
@@ -810,6 +1297,128 @@ a:focus:not(:focus-visible) {
   border-bottom: 1px solid var(--border);
 }
 
+/* (C4) Journal compact row */
+.journal-compact-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: all var(--transition);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.journal-compact-row:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(6, 182, 212, 0.2);
+}
+
+.journal-compact-row.expanded {
+  border-color: rgba(6, 182, 212, 0.3);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  margin-bottom: 0;
+}
+
+.journal-compact-ticker {
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 80px;
+}
+
+.journal-compact-time {
+  color: var(--text-muted);
+  min-width: 50px;
+}
+
+.journal-compact-spacer {
+  flex: 1;
+}
+
+.journal-compact-pnl {
+  font-weight: 600;
+  min-width: 60px;
+  text-align: right;
+}
+
+.journal-compact-chevron {
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.journal-compact-row.expanded .journal-compact-chevron {
+  transform: rotate(180deg);
+}
+
+/* (C4) Journal expanded detail */
+.journal-detail {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 16px;
+  margin-bottom: 4px;
+}
+
+.journal-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.journal-detail-item {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.journal-detail-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.journal-detail-value {
+  color: var(--text-primary);
+}
+
+.journal-detail-news {
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+}
+
+.journal-detail-news-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.journal-detail-news-source {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.journal-detail-review {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+  line-height: 1.5;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* Legacy journal table (kept for fallback) */
 .journal-table {
   width: 100%;
   border-collapse: collapse;
@@ -835,7 +1444,6 @@ a:focus:not(:focus-visible) {
   vertical-align: top;
 }
 
-/* (D7) Zebra striping */
 .journal-table tbody tr:nth-child(even) td {
   background: rgba(17, 24, 39, 0.5);
 }
@@ -844,86 +1452,122 @@ a:focus:not(:focus-visible) {
   background: var(--bg-card-hover);
 }
 
-.journal-news-cell {
-  max-width: 180px;
-}
+/* ── Scan history (M1 — extracted from inline styles) ────── */
 
-.journal-news-title {
-  font-size: 12px;
-  color: var(--text-primary);
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+.scan-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
-.journal-news-source {
+.scan-card-header {
+  padding: 10px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  transition: background var(--transition);
+}
+
+.scan-card-header:hover {
+  background: var(--bg-card-hover);
+}
+
+.scan-card-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.scan-card-date {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 110px;
+}
+
+.scan-card-signals {
+  font-size: 13px;
+}
+
+.scan-card-chevron {
+  color: var(--text-muted);
+  font-size: 14px;
+  transition: transform 0.2s;
+}
+
+.scan-card.expanded .scan-card-chevron {
+  transform: rotate(180deg);
+}
+
+.scan-card-detail {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.scan-decision-summary {
+  margin: 10px 0;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.scan-news-headline {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-news-row-rejected {
+  opacity: 0.6;
+}
+
+.scan-news-row-selected td {
+  background: rgba(76, 175, 80, 0.08);
+}
+
+.scan-rejection-reason {
   font-size: 10px;
   color: var(--text-muted);
-  margin-top: 4px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.journal-reasoning-cell {
-  max-width: 200px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-muted);
-}
+/* ── (O6) History mobile cards ──────────────────────────── */
 
-.journal-score {
-  font-weight: 700;
-  font-size: 14px;
-  text-align: center;
-}
-
-.journal-review-cell {
-  max-width: 200px;
-  font-size: 11px;
-  line-height: 1.4;
-  font-style: italic;
-  color: var(--text-muted);
-}
-
-.journal-cat-badge {
-  display: inline-block;
-  margin-top: 3px;
-  padding: 1px 5px;
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  border-radius: 3px;
-  background: var(--bg-card-hover);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-}
-
-/* (D8) Journal mobile card layout */
-.journal-mobile-card {
+.trade-mobile-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 12px;
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 8px;
 }
 
-.journal-mobile-card-header {
+.trade-mobile-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
-  gap: 8px;
+  margin-bottom: 10px;
 }
 
-.journal-mobile-card-body {
+.trade-mobile-card-body {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
-.journal-mobile-label {
+.trade-mobile-label {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -931,207 +1575,13 @@ a:focus:not(:focus-visible) {
   margin-bottom: 2px;
 }
 
-.journal-mobile-review {
-  grid-column: 1 / -1;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  font-style: italic;
-  color: var(--text-muted);
-  line-height: 1.4;
+/* Mobile views visibility */
+.mobile-only {
+  display: none;
 }
 
-/* ── Loading / Spinner ───────────────────────────────────────── */
-
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 20px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--cyan);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-/* ── (#39) Responsive Design ─────────────────────────────────── */
-
-@media (max-width: 768px) {
-  .app {
-    padding: 16px 12px;
-  }
-
-  .app-header {
-    margin-bottom: 20px;
-    padding-bottom: 12px;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-
-  .app-title {
-    font-size: 18px;
-  }
-
-  .tabs {
-    gap: 2px;
-    margin-bottom: 16px;
-  }
-
-  .tab {
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-
-  /* Trade card responsive */
-  .trade-card-header {
-    padding: 12px 16px;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-
-  .trade-card-body {
-    padding: 16px;
-  }
-
-  .trade-asset {
-    font-size: 18px;
-  }
-
-  .trade-grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-  }
-
-  .trade-metric {
-    padding: 8px 4px;
-  }
-
-  .trade-metric-label {
-    font-size: 9px;
-  }
-
-  .trade-metric-value {
-    font-size: 13px;
-  }
-
-  .catalyst {
-    font-size: 13px;
-    padding: 10px 12px;
-  }
-
-  /* Tables: horizontal scroll with all info visible */
-  .history-table,
-  .journal-table {
-    font-size: 11px;
-    min-width: 700px;
-  }
-
-  .history-table th,
-  .history-table td {
-    padding: 8px 6px;
-  }
-
-  .journal-table th,
-  .journal-table td {
-    padding: 6px 6px;
-  }
-
-  .journal-news-cell {
-    max-width: 140px;
-  }
-
-  .journal-reasoning-cell {
-    max-width: 150px;
-  }
-
-  .journal-review-cell {
-    max-width: 150px;
-  }
-
-  /* (D8) Journal: show cards instead of table on mobile */
-  .journal-desktop-table {
-    display: none;
-  }
-
-  .journal-mobile-list {
-    display: block;
-  }
-
-  /* Performance grid */
-  .perf-kpi-row {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-  }
-
-  .perf-card-primary {
-    padding: 14px 8px;
-  }
-
-  .perf-card-primary .perf-card-value {
-    font-size: 22px;
-  }
-
-  .perf-card-primary .perf-card-label {
-    font-size: 11px;
-  }
-
-  .perf-grid {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-  }
-
-  .perf-card {
-    padding: 12px 8px;
-  }
-
-  .perf-card-value {
-    font-size: 18px;
-  }
-
-  .perf-card-label {
-    font-size: 10px;
-  }
-
-  /* No-trade card */
-  .no-trade {
-    padding: 32px 16px;
-  }
-
-  /* Trigger buttons */
-  .trigger-section {
-    flex-wrap: wrap;
-  }
-
-  .trigger-btn {
-    font-size: 11px;
-    padding: 6px 12px;
-  }
-
-  /* Toast mobile */
-  .toast-container {
-    bottom: 16px;
-    right: 16px;
-    left: 16px;
-  }
-
-  .toast {
-    max-width: 100%;
-  }
+.journal-mobile-list {
+  display: none;
 }
 
 /* Journal trigger feedback message */
@@ -1161,36 +1611,185 @@ a:focus:not(:focus-visible) {
   color: var(--red);
 }
 
-/* On desktop, hide mobile journal cards and show table */
-.journal-mobile-list {
-  display: none;
+/* ── Loading / Spinner ──────────────────────────────────── */
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner-inline {
+  width: 12px;
+  height: 12px;
+  border-width: 1.5px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+/* ── Tab toggle (inside History) ─────────────────────────── */
+
+.sub-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+}
+
+.sub-tab {
+  padding: 7px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition);
+  min-width: 120px;
+  text-align: center;
+}
+
+.sub-tab:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.sub-tab:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.sub-tab:not(:first-child) {
+  border-left: none;
+}
+
+.sub-tab.active {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.3);
+  color: var(--cyan);
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .app {
+    padding: 16px 12px;
+  }
+
+  .app-header {
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .app-title {
+    font-size: 18px;
+  }
+
+  .tabs {
+    gap: 2px;
+    margin-bottom: 16px;
+  }
+
+  .tab {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .tab-shortcut { display: none; }
+
+  /* Trade card responsive */
+  .trade-card-header {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .trade-card-body { padding: 16px; }
+  .trade-asset { font-size: 18px; }
+
+  .trade-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .trade-metric { padding: 8px 4px; }
+  .trade-metric-label { font-size: 9px; }
+  .trade-metric-value { font-size: 13px; }
+  .catalyst { font-size: 13px; padding: 10px 12px; }
+
+  /* Tables: horizontal scroll */
+  .history-table,
+  .journal-table {
+    font-size: 11px;
+    min-width: 700px;
+  }
+
+  .history-table th, .history-table td { padding: 8px 6px; }
+  .journal-table th, .journal-table td { padding: 6px 6px; }
+
+  /* Show mobile views */
+  .mobile-only { display: block; }
+  .desktop-only { display: none; }
+  .journal-mobile-list { display: block; }
+  .journal-desktop-view { display: none; }
+
+  /* Performance grid */
+  .perf-kpi-row {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .perf-card-primary { padding: 14px 8px; }
+  .perf-card-primary .perf-card-value { font-size: 22px; }
+  .perf-card-primary .perf-card-label { font-size: 11px; }
+
+  .perf-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .perf-card { padding: 12px 8px; }
+  .perf-card-value { font-size: 18px; }
+  .perf-card-label { font-size: 10px; }
+
+  .no-trade { padding: 32px 16px; }
+
+  .trigger-section { flex-wrap: wrap; }
+  .trigger-btn { font-size: 11px; padding: 6px 12px; }
+
+  .toast-container { bottom: 16px; right: 16px; left: 16px; }
+  .toast { max-width: 100%; }
+
+  .filters-bar { gap: 6px; }
+  .filter-input { min-width: 100px; font-size: 11px; }
+  .filter-select { font-size: 11px; }
 }
 
 @media (max-width: 480px) {
-  .trade-grid {
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 6px;
-  }
-
-  .trade-metric-value {
-    font-size: 12px;
-    word-break: break-all;
-  }
-
-  .perf-kpi-row {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-
-  .perf-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .confidence-label {
-    min-width: 60px;
-    font-size: 11px;
-  }
-
-  .confidence-value {
-    font-size: 12px;
-  }
+  .trade-grid { gap: 6px; }
+  .trade-metric-value { font-size: 12px; word-break: break-all; }
+  .perf-grid { grid-template-columns: repeat(2, 1fr); }
+  .confidence-label { min-width: 60px; font-size: 11px; }
+  .confidence-value { font-size: 12px; }
+  .trade-mobile-card-body { grid-template-columns: 1fr 1fr; }
 }
