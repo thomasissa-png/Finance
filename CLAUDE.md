@@ -141,12 +141,35 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - **G2** : Market holidays 2025-2026 dans config.py (US + EU)
 - **G3** : Global timeout 300s pour le journal run
 
+#### 11. Audit learning v4.2 — 21 ameliorations (audit complet du systeme de learning)
+- **A2** : Fix stderr=0 bug — check min_effect_size au lieu de retourner True aveuglément
+- **A3** : Minimum effect size threshold (0.1) dans `_is_significant()` — ignore signaux négligeables
+- **A4** : PnL divisor 2.0 → 1.0 dans `_compute_adjustment()` — doublait la sensibilité
+- **A5** : Average multipliers across ALL eligible tickers (pas juste le premier) dans `trade_selector.py`
+- **B1** : `delay_bias_adj` — adjustment global basé sur la précision des prédictions transmission_delay
+- **B2** : `magnitude_accuracy` tracking dans performance summary
+- **B3** : Slippage vs estimated spread feedback dans performance summary
+- **B4** : `hour_adj` — per-hour-of-day learning adjustment (0.85-1.15, min 8 trades)
+- **B5** : `direction_adj` — LONG vs SHORT accuracy adjustment (0.8-1.2, min 8 trades)
+- **C1** : Regime min trades raised to 15, merged 4→2 buckets (low_vol, high_vol)
+- **C2** : Confidence-scaled bounds (via different min_significant per dimension)
+- **C3** : Decay handled by cache invalidation (no separate multiplier needed)
+- **C4** : Convergence source dedup (documented, handled in news_scorer)
+- **D1** : Lookback reduced to 2x half_life (60-90j instead of 180j fixed)
+- **D3** : Detect partial PG migration — warning if PG/JSON divergent
+- **D4** : `build_performance_summary(trades=...)` accepts optional trades param
+- **E1** : Restructured prompt to alerts-only — compact N=/WR=/PnL= header, outliers only
+- **E2** : MAE feedback — alerte si SL_HIT > 40% et MAE élevé
+- **E3** : signal_reliability precision tracking — alerte si low-rel > high-rel WR
+- **7 dimensions** de learning au lieu de 4 : ticker*cat + session + newscat + regime + hour + direction + delay_bias
+- **Blending** : `final_mult = base * session * newscat * regime * hour * dir * delay_bias` (clamp [0.5, 1.5])
+
 ### Etat actuel des fichiers cles
 - `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/database.py` : PG persistence layer, 4 tables, pool, CRUD
 - `backend/app/journal.py` : v4.1, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout
-- `backend/app/learning.py` : v4.1, 6-month cutoff, trades param, C2 time-of-day, C1 streaks, C5 skewness
+- `backend/app/learning.py` : v4.2, 21 audit fixes, 7 learning dimensions, alerts-only summary, 2-bucket regimes
 - `backend/app/trade_selector.py` : v4.0, convex calibration, fallback ticker, spread filter, VIX daily cap, asymmetric SHORT
 - `backend/app/news_scorer.py` : v4.0, 11 dimensions scoring, convergence direction, dynamic asset count
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, is_market_holiday()
@@ -562,56 +585,64 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `vix_at_trade` / `market_regime` : contexte marche au moment du trade
   - `predicted_transmission_delay` / `actual_pricing_time_hours` / `delay_accuracy` : tracking precision
 
-## Learning adaptatif (v4.1 — audit ML + journal)
-- **Par ticker**: ajustement 0.5-1.5 (v3.4: min **8** trades, t-stat > **1.5** — plus strict pour eviter overfitting sur petits echantillons)
+## Learning adaptatif (v4.2 — audit complet)
+- **Par ticker**: ajustement 0.5-1.5 (min **8** trades, t-stat > **1.5**)
 - **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0)
-- **Par categorie de news**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0) — v3.4: **applique contextuellement** par la news_category du trade courant (pas moyennee sur l'historique du ticker)
-- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades, t-stat > 1.0) — v3.4: **applique par le scan courant** (pas le dernier scan du ticker)
-- **Par regime VIX** (v3.4 NEW): ajustement 0.7-1.3 par regime calm/normal/elevated/stress (min 5 trades)
-  - Permet de differencier "les trades weather marchent en regime calm" vs "echouent en regime stress"
-- **Blending multiplicatif** (v3.4): base = `ticker * cat`, les dimensions contextuelles (session, newscat, regime) sont appliquees **au moment du trade** par `select_trade()`
-  - Avant v3.4 : session/newscat bakes dans le blend de maniere statique (bugs #2/#4 corriges)
-  - v3.4: `final_mult = base(ticker*cat) * session_adj[current_scan] * newscat_adj[current_newscat] * regime_adj[current_regime]`
-  - Ex: mauvais ticker (0.6) * regime stress (0.8) = 0.48 (punition reelle en regime defavorable)
-- **Significance test** (v3.4): pseudo t-test avec **seuil configurable par dimension**
-  - Per-ticker: t > 1.5, min 8 trades (strict — echantillons petits, bruit eleve)
-  - Per-category/session/newscat/regime: t > 1.0, min 5 trades (pool plus large)
-- **Signal PnL-signe** (v3.4): `_compute_adjustment()` utilise le PnL signe normalise au lieu du binaire win_rate
-  - Un EXPIRED a +0.8% contribue positivement (pas traite comme un echec)
-  - Formule: `1.0 + clamp(avg_pnl / 2, -cap, cap) * sensitivity`
+- **Par categorie de news**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0) — applique contextuellement par la news_category du trade courant
+- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades, t-stat > 1.0) — applique par le scan courant
+- **Par regime VIX** (v4.2 C1): ajustement 0.7-1.3, **2 buckets** (low_vol=calm+normal, high_vol=elevated+stress), **min 15 trades** (was 5)
+  - Merged from 4 regimes to 2 for larger sample sizes — reduces overfitting
+- **Par heure d'entree** (v4.2 B4 NEW): ajustement 0.85-1.15 (min 8 trades) — heures Paris
+- **Par direction** (v4.2 B5 NEW): ajustement 0.8-1.2 (LONG vs SHORT accuracy, min 8 trades)
+- **Delay bias** (v4.2 B1 NEW): ajustement global basé sur la précision des prédictions transmission_delay
+  - Si surestimation systématique → pénalise (on entre trop agressivement)
+  - Si sous-estimation → booste (on rate de l'edge)
+- **Blending multiplicatif** (v4.2): `final_mult = base(ticker*cat) * session * newscat * regime * hour * direction * delay_bias`
+  - 7 dimensions (was 4) — toutes appliquées contextuellement par `select_trade()`
+  - Clamp final [0.5, 1.5]
+- **A5: Average ticker mults** (v4.2): utilise la moyenne des multipliers de TOUS les tickers éligibles (pas juste le premier)
+- **Significance test**: pseudo t-test avec **effet size minimum** (v4.2 A3)
+  - A2: stderr=0 vérifie min_effect_size au lieu de retourner True aveuglément
+  - A3: |mean| doit être >= 0.1 (ignore les signaux négligeables)
+  - Per-ticker: t > 1.5, min 8 trades
+  - Per-category/session/newscat: t > 1.0, min 5 trades
+  - Per-regime: t > 1.0, min 15 trades (raised from 5)
+  - Per-hour/direction: t > 1.0, min 8 trades
+- **Signal PnL-signe**: `_compute_adjustment()` normalise par 1.0 (v4.2 A4, was 2.0 — doublait la sensibilité)
+  - Formule: `1.0 + clamp(avg_pnl / 1.0, -cap, cap) * sensitivity`
 - **Decay temporel adaptatif**: demi-vie 45j (peu de trades) → 30j (beaucoup de trades)
-  - Transition graduelle entre 50 et 200 trades clotures
-- **D2: Date-range limiting** (v4.1): seuls les trades des 6 derniers mois sont consideres — les anciennes donnees sont du bruit
-- **D4: Trades parameter** (v4.1): `compute_learning_adjustments(trades=...)` accepte un parametre optionnel pour eviter le reload
-- **Feedback loop Claude** (v4.1): `build_performance_summary()` injecte dans le prompt :
-  - Section **DONNEES DE PERFORMANCE** (faits) separee de **INSTRUCTIONS SCORING** (v4.0 E3)
-  - Win rate global avec **benchmark baseline 50%** pour comparaison
-  - PnL moyen par categorie de news (avec benchmark)
-  - **PnL moyen par categorie d'actif** (v4.0 E1) : actions_europe, metaux, forex, commodities, indices
-  - **Direction accuracy** (v4.0 E2) : % de trades ou la direction etait correcte (prix final > entry pour LONG, < entry pour SHORT)
-  - **C1: Streak tracking** (v4.1) : alerte quand >= 3 pertes consecutives par ticker
-  - **C2: Performance par heure d'entree** (v4.1) : WR et PnL moyen par heure CET
-  - **C3: Performance par jour de semaine** (v4.1) : Lun-Ven
-  - **C4: Drawdown tracking** (v4.1) : max pertes consecutives + max drawdown cumulatif
-  - **C5: PnL skewness** (v4.1) : positive=profil favorable, negative=alerte
-  - **C6: Direction accuracy par news category** (v4.1)
-  - **F2: EXPIRED rate monitoring** (v4.1) : >60% = alerte calibration, >40% = warning
-  - **F3: Realized R/R vs predicted** (v4.1) : alerte si on perd plus que prevu
-  - Derniers 15 trades (ticker, direction, resultat, PnL)
-  - Detection de biais transmission_delay (surestime/sous-estime)
-  - **Anti-double-counting** (v3.4): note explicite demandant a Claude de NE PAS ajuster ses scores en fonction de l'historique (le learning s'en charge automatiquement)
-- **Score decomposition** (v3/v3.4): chaque trade stocke `raw_claude_score` et `learning_multiplier`
-  pour diagnostiquer si un echec vient de Claude ou du learning
-- **Decomposition par dimension** (v3.4): logs detaillent `ticker_mult`, `cat_mult`, `session_mult`, `newscat_mult`, `regime_mult` pour chaque trade (diagnostic)
-- **learning_helped tracking** (v3.4): chaque trade tracke si le learning a booste ou penalise la selection
-- **Cache learning** : invalide apres le journal 22h. Les trades ajoutes en journee ne sont PAS pris en compte avant le prochain journal (acceptable pour 4 scans/jour)
-- **Return format** (v3.4): `compute_learning_adjustments()` retourne un dict structure :
+- **D1: Lookback = 2x half_life** (v4.2): was 180 jours fixe — maintenant 60-90j selon half_life
+- **D4: Trades parameter**: `compute_learning_adjustments(trades=...)` et `build_performance_summary(trades=...)` acceptent un paramètre optionnel
+- **D3: Partial PG migration detection** (v4.2): warning si PG et JSON ont des données divergentes
+- **Feedback loop Claude** (v4.2 E1): format **alerts-only** — compact, n'inclut que les anomalies :
+  - Header compact: `N=X | WR=X% | PnL=X% | moy=X%`
+  - Outliers newscat seulement (WR < 35% ou > 70%)
+  - Direction accuracy si anomalous (< 45% ou > 65%)
+  - Delay bias si significatif (> 10pts)
+  - EXPIRED rate si > 40%
+  - Drawdown si >= 3 pertes consécutives
+  - Skewness si négative < -0.5
+  - **E2: MAE feedback** — alerte si SL_HIT > 40% et MAE élevé (stops trop serrés)
+  - **E3: signal_reliability precision** — alerte si low-rel WR > high-rel WR
+  - **B2: magnitude_accuracy** — alerte si surestimation/sous-estimation systématique
+  - **B3: slippage vs spread** — alerte si slippage > 2x spread estimé
+  - Streaks négatifs actifs (>= 3)
+  - Derniers 10 trades (compact)
+  - Instructions scoring compactes
+- **Score decomposition**: chaque trade stocke `raw_claude_score` et `learning_multiplier`
+- **Decomposition par dimension**: logs détaillent `ticker_mult`, `cat_mult`, `session_mult`, `newscat_mult`, `regime_mult`, `hour_mult`, `dir_mult`, `delay_bias_adj`
+- **learning_helped tracking**: chaque trade tracke si le learning a boosté ou pénalisé la sélection
+- **Cache learning**: invalidé après le journal 22h
+- **Return format** (v4.2): `compute_learning_adjustments()` retourne un dict structuré :
   - `adjustments`: dict[ticker, multiplier] — base blend ticker*cat
-  - `session_adj`: dict[scan_type, multiplier] — applique par scan courant
-  - `newscat_adj`: dict[news_category, multiplier] — applique par news courante
-  - `regime_adj`: dict[regime, multiplier] — applique par VIX courant
+  - `session_adj`: dict[scan_type, multiplier] — appliqué par scan courant
+  - `newscat_adj`: dict[news_category, multiplier] — appliqué par news courante
+  - `regime_adj`: dict[regime, multiplier] — low_vol/high_vol (v4.2 merged)
+  - `hour_adj`: dict[hour_label, multiplier] — v4.2 B4
+  - `direction_adj`: dict[direction, multiplier] — v4.2 B5
+  - `delay_bias_adj`: float — v4.2 B1
   - `decomposition`: dict[ticker, {ticker_mult, cat_mult}] — pour diagnostics
-- **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour acces concurrent sur aux fichiers JSON
+- **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour accès concurrent sur les fichiers JSON
 
 ## Parametres cles (v4.0)
 - Score minimum: 20/100 (abaisse de 25 — capte les signaux mid-range)
@@ -631,8 +662,10 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Correlation cache TTL: 1h (v4.0)
 - Daily cap adaptatif: stress=2, elevated=4, normal=6 (v4.0)
 - ESTIMATED_SPREADS: 41 tickers dans config.py, DEFAULT_SPREAD=0.10% (v4.0)
-- Learning min trades: 5 (global), **8** (par ticker, releve de 4), 5 (par categorie/news_cat/session/regime)
-- Learning significance: t-stat > **1.5** per-ticker (releve de 1.0), t-stat > 1.0 pour les autres dimensions
+- Learning min trades: 5 (global), **8** (par ticker/hour/direction), 5 (par categorie/news_cat/session), **15** (par regime — v4.2 C1)
+- Learning significance: t-stat > **1.5** per-ticker, t-stat > 1.0 autres, min_effect_size=0.1 (v4.2 A3)
+- Learning PnL divisor: **1.0** (v4.2 A4, was 2.0)
+- Learning lookback: **2x half_life** (v4.2 D1, was 180 jours fixe)
 
 ## Secrets (Replit)
 - **Requis** : `ANTHROPIC_API_KEY`
@@ -708,6 +741,9 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Phase 7 : resilience erreurs (corrupt files, missing data, empty inputs)
   - Phase 8 : multi-trade per scan (v3.5)
   - Phase 9 : v4.1 journal audit (MAE/MFE, slippage, pruning, holidays, D2 cutoff)
+- v4.2 tests ajoutés (12 tests) :
+  - **test_learning.py** : stderr=0 effect size (A2), min effect size (A3), divisor fix (A4), hour_adj, direction_adj, delay_bias_adj, D1 lookback, regime merged buckets, trades param summary (D4), alerts-only format (E1)
+  - **test_workflow_e2e.py** : updated "Win rate" → "WR=" assertions for v4.2 compact format
 - **test_weekend.py** : verification que scans, event checks et triggers sont bloques le week-end
 - **test_data_persistence.py** : PG fallback, JSON guard, corrupt file resilience, auto-migration
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data

@@ -499,6 +499,9 @@ def select_trades(
         session_adj = learning_adjustments.get("session_adj", {})
         newscat_adj = learning_adjustments.get("newscat_adj", {})
         regime_adj = learning_adjustments.get("regime_adj", {})
+        hour_adj = learning_adjustments.get("hour_adj", {})
+        direction_adj = learning_adjustments.get("direction_adj", {})
+        delay_bias_adj = learning_adjustments.get("delay_bias_adj", 1.0)
         learning_state_for_log = learning_adjustments
     elif isinstance(learning_adjustments, dict):
         # Backward compat: old flat format {ticker: multiplier}
@@ -506,20 +509,39 @@ def select_trades(
         session_adj = {}
         newscat_adj = {}
         regime_adj = {}
+        hour_adj = {}
+        direction_adj = {}
+        delay_bias_adj = 1.0
         learning_state_for_log = learning_adjustments
     else:
         ticker_adj = {}
         session_adj = {}
         newscat_adj = {}
         regime_adj = {}
+        hour_adj = {}
+        direction_adj = {}
+        delay_bias_adj = 1.0
         learning_state_for_log = None
 
     # v3.4 #2: Session multiplier from CURRENT scan type (not last trade)
     current_session_mult = session_adj.get(scan_type.value, 1.0)
 
-    # v3.4 #1: Regime multiplier from CURRENT market context
+    # v3.4 #1 + v4.2 C1: Regime multiplier — use merged buckets
     current_regime = market_context.get("regime", "normal") if market_context else "normal"
-    current_regime_mult = regime_adj.get(current_regime, 1.0)
+    # C1: Map 4-regime to 2-bucket for lookup
+    if current_regime in ("calm", "normal"):
+        regime_lookup = "low_vol"
+    else:
+        regime_lookup = "high_vol"
+    current_regime_mult = regime_adj.get(regime_lookup, 1.0)
+
+    # v4.2 B4: Hour multiplier from current time
+    try:
+        from zoneinfo import ZoneInfo
+        current_hour_label = f"{now.astimezone(ZoneInfo('Europe/Paris')).hour:02d}h"
+    except Exception:
+        current_hour_label = "unknown"
+    current_hour_mult = hour_adj.get(current_hour_label, 1.0)
 
     # Build the full scored news log for journal (all Claude reasoning)
     all_scored_log = _build_scored_news_log(scored_news) if scored_news else None
@@ -609,10 +631,15 @@ def select_trades(
             })
             continue
 
-        # v3.4: Contextual learning multiplier = base(ticker*cat) * session * newscat * regime
-        base_mult = ticker_adj.get(eligible_for_news[0], 1.0)
-        nc_mult = newscat_adj.get(sn.news_category, 1.0)  # v3.4 #4: direct from current news
-        multiplier = base_mult * current_session_mult * nc_mult * current_regime_mult
+        # v4.2 A5: Average multipliers across ALL eligible tickers (not just first)
+        ticker_mults = [ticker_adj.get(t, 1.0) for t in eligible_for_news]
+        base_mult = sum(ticker_mults) / len(ticker_mults)
+        nc_mult = newscat_adj.get(sn.news_category, 1.0)
+        dir_mult = direction_adj.get(sn.direction.value, 1.0)  # v4.2 B5
+        # v4.2: Full contextual multiplier with all dimensions
+        multiplier = (base_mult * current_session_mult * nc_mult
+                      * current_regime_mult * current_hour_mult
+                      * dir_mult * delay_bias_adj)
         multiplier = max(0.5, min(1.5, multiplier))  # Clamp
 
         adjusted_score = sn.total_score * multiplier
@@ -742,10 +769,13 @@ def select_trades(
             })
             continue
 
-        # v3.4: Recompute full contextual multiplier for this candidate
+        # v4.2: Recompute full contextual multiplier for this candidate
         nc_mult = newscat_adj.get(best_news.news_category, 1.0)
         base_mult = ticker_adj.get(ticker, 1.0)
-        multiplier = base_mult * current_session_mult * nc_mult * current_regime_mult
+        dir_mult = direction_adj.get(best_news.direction.value, 1.0)
+        multiplier = (base_mult * current_session_mult * nc_mult
+                      * current_regime_mult * current_hour_mult
+                      * dir_mult * delay_bias_adj)
         multiplier = max(0.5, min(1.5, multiplier))
 
         # v4.0 B4: Spread filter — reject if spread eats >40% of target
@@ -900,7 +930,8 @@ def select_trades(
             f"SELECTIONNE #{len(selected_trades)+1}: {ticker} {best_news.direction.value} | "
             f"Score brut Claude={raw_score:.1f}, learning_mult={multiplier:.3f} "
             f"(base={base_mult:.3f}, session={current_session_mult:.3f}, "
-            f"newscat={nc_mult:.3f}, regime={current_regime_mult:.3f}), "
+            f"newscat={nc_mult:.3f}, regime={current_regime_mult:.3f}, "
+            f"hour={current_hour_mult:.3f}, dir={dir_mult:.3f}, delay_bias={delay_bias_adj:.3f}), "
             f"score ajuste={best_score:.1f} | "
             f"News: '{best_news.news.title[:80]}' | "
             f"Categorie: {best_news.news_category}, edge={best_news.transmission_delay}/{best_news.market_awareness}"

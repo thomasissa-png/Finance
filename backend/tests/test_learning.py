@@ -116,6 +116,9 @@ def test_learning_adjustments_not_enough_data():
     assert adj["session_adj"] == {}
     assert adj["newscat_adj"] == {}
     assert adj["regime_adj"] == {}
+    assert adj["hour_adj"] == {}
+    assert adj["direction_adj"] == {}
+    assert adj["delay_bias_adj"] == 1.0
 
 
 def test_learning_adjustments_enough_data():
@@ -240,9 +243,20 @@ def test_is_significant_too_few_samples():
     assert _is_significant([1.0, 2.0], min_samples=4) is False
 
 
-def test_is_significant_all_identical():
-    """All identical values → stderr=0 → significant."""
+def test_is_significant_all_identical_nonzero():
+    """v4.2 A2: All identical non-zero values → stderr=0 → significant if effect size met."""
     assert _is_significant([1.0, 1.0, 1.0, 1.0], min_samples=4) is True
+
+
+def test_is_significant_all_zeros():
+    """v4.2 A2: All zero values → stderr=0 but effect size = 0 → NOT significant."""
+    assert _is_significant([0.0, 0.0, 0.0, 0.0], min_samples=4) is False
+
+
+def test_is_significant_min_effect_size():
+    """v4.2 A3: Very small mean below effect size threshold → not significant."""
+    # Mean ~0.05, below default min_effect_size=0.1
+    assert _is_significant([0.05, 0.05, 0.05, 0.05], min_samples=4) is False
 
 
 def test_is_significant_noisy_data():
@@ -287,6 +301,8 @@ def test_multiplicative_blending():
 
 def test_build_performance_summary_not_enough_data():
     """Summary should be empty with fewer than 5 closed trades."""
+    from backend.app.learning import invalidate_perf_summary_cache
+    invalidate_perf_summary_cache()
     trades = [_make_trade(result=TradeResult.TP_HIT, pnl_pct=1.0)]
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
@@ -296,6 +312,8 @@ def test_build_performance_summary_not_enough_data():
 
 def test_build_performance_summary_with_data():
     """Summary should contain key sections when enough data exists."""
+    from backend.app.learning import invalidate_perf_summary_cache
+    invalidate_perf_summary_cache()
     trades = []
     for i in range(6):
         pnl = 1.0 if i < 4 else -0.5
@@ -305,7 +323,7 @@ def test_build_performance_summary_with_data():
     with _with_temp_trades(raw):
         summary = build_performance_summary()
     assert "DONNEES DE PERFORMANCE" in summary
-    assert "Win rate" in summary
+    assert "WR=" in summary  # v4.2 E1: compact format
     assert "Derniers" in summary
 
 
@@ -313,7 +331,7 @@ def test_build_performance_summary_with_data():
 
 
 def test_v34_structured_return_format():
-    """v3.4: compute_learning_adjustments returns structured dict with all dimensions."""
+    """v4.2: compute_learning_adjustments returns structured dict with all dimensions."""
     trades = []
     for i in range(10):
         pnl = 1.0 if i < 7 else -0.5
@@ -322,12 +340,15 @@ def test_v34_structured_return_format():
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         result = compute_learning_adjustments()
-    # Must have all expected keys
+    # Must have all expected keys (v4.2: +hour_adj, direction_adj, delay_bias_adj)
     assert "adjustments" in result
     assert "session_adj" in result
     assert "newscat_adj" in result
     assert "regime_adj" in result
     assert "decomposition" in result
+    assert "hour_adj" in result
+    assert "direction_adj" in result
+    assert "delay_bias_adj" in result
 
 
 def test_v34_session_adj_returned_separately():
@@ -350,22 +371,23 @@ def test_v34_session_adj_returned_separately():
 
 
 def test_v34_regime_adj():
-    """v3.4 #1: Regime-conditional learning produces adjustments per VIX regime."""
+    """v4.2 C1: Regime merged to 2 buckets (low_vol, high_vol), min 15 trades."""
     trades = []
-    for i in range(10):
-        pnl = 1.5 if i < 8 else -0.5
+    # Need 15+ trades in same regime bucket to pass min_significant
+    for i in range(18):
+        pnl = 1.5 if i < 15 else -0.5
         result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
         trades.append(_make_trade(
             result=result, pnl_pct=pnl,
-            market_regime="calm",
+            market_regime="calm",  # Maps to "low_vol" bucket
         ))
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         result = compute_learning_adjustments()
     regime = result.get("regime_adj", {})
     if regime:
-        assert "calm" in regime
-        assert regime["calm"] > 1.0  # Mostly winning in calm → boost
+        assert "low_vol" in regime
+        assert regime["low_vol"] > 1.0  # Mostly winning → boost
 
 
 def test_v34_per_ticker_stricter_significance():
@@ -446,7 +468,9 @@ def test_v34_compute_adjustment_pnl_signed():
 
 
 def test_v34_performance_summary_benchmark():
-    """v3.4 #11: Performance summary includes baseline benchmark."""
+    """v4.2: Performance summary includes compact stats."""
+    from backend.app.learning import invalidate_perf_summary_cache
+    invalidate_perf_summary_cache()
     trades = []
     for i in range(6):
         pnl = 1.0 if i < 4 else -0.5
@@ -455,12 +479,14 @@ def test_v34_performance_summary_benchmark():
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         summary = build_performance_summary()
-    assert "baseline: 50%" in summary
-    assert "PnL moyen" in summary
+    assert "WR=" in summary
+    assert "moy=" in summary  # v4.2: compact format uses "moy="
 
 
 def test_v34_performance_summary_anti_double_counting():
     """v3.4 #7: Performance summary tells Claude NOT to adjust scores."""
+    from backend.app.learning import invalidate_perf_summary_cache
+    invalidate_perf_summary_cache()
     trades = []
     for i in range(6):
         pnl = 1.0 if i < 4 else -0.5
@@ -469,4 +495,141 @@ def test_v34_performance_summary_anti_double_counting():
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         summary = build_performance_summary()
-    assert "OBJECTIVEMENT" in summary  # v4.0 E3: restructured anti-double-counting instructions
+    assert "OBJECTIVEMENT" in summary
+
+
+# ── v4.2 audit tests ──────────────────────────────────────────────
+
+
+def test_v42_is_significant_stderr_zero_effect_size():
+    """v4.2 A2/A3: stderr=0 with small effect size → not significant."""
+    # All 0.05 values: stderr=0, but mean=0.05 < min_effect_size=0.1
+    assert _is_significant([0.05, 0.05, 0.05, 0.05], min_samples=4) is False
+    # All 0.5 values: stderr=0, mean=0.5 >= min_effect_size → significant
+    assert _is_significant([0.5, 0.5, 0.5, 0.5], min_samples=4) is True
+
+
+def test_v42_compute_adjustment_divisor_fixed():
+    """v4.2 A4: PnL divisor changed from 2.0 to 1.0 — stronger signal."""
+    entries = [(1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0), (1.0, 1.0)]
+    result = _compute_adjustment(entries, min_significant=4, sensitivity=0.5, pnl_cap=0.25)
+    assert result is not None
+    # With divisor=1.0 and avg_pnl=1.0, pnl_signal=min(0.25, 1.0)=0.25
+    # mult = 1.0 + 0.25 * 0.5 = 1.125
+    assert result >= 1.12  # Would have been ~1.06 with old divisor=2.0
+
+
+def test_v42_hour_adj_in_result():
+    """v4.2 B4: compute_learning_adjustments should include hour_adj."""
+    trades = []
+    for i in range(10):
+        pnl = 1.5 if i < 8 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    result = compute_learning_adjustments(trades=trades)
+    assert "hour_adj" in result
+    assert isinstance(result["hour_adj"], dict)
+
+
+def test_v42_direction_adj_in_result():
+    """v4.2 B5: compute_learning_adjustments should include direction_adj."""
+    trades = []
+    for i in range(10):
+        pnl = 1.5 if i < 8 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    result = compute_learning_adjustments(trades=trades)
+    assert "direction_adj" in result
+    assert isinstance(result["direction_adj"], dict)
+
+
+def test_v42_delay_bias_adj_default():
+    """v4.2 B1: delay_bias_adj should default to 1.0 when no delay data."""
+    trades = []
+    for i in range(10):
+        pnl = 1.0 if i < 7 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    result = compute_learning_adjustments(trades=trades)
+    assert result["delay_bias_adj"] == 1.0
+
+
+def test_v42_d1_lookback_reduced():
+    """v4.2 D1: Lookback reduced to 2x half_life instead of fixed 180 days."""
+    # Trades from 100 days ago — with half_life=45, lookback=90 days
+    # These should be filtered out
+    old_trades = []
+    base = datetime.now(timezone.utc) - timedelta(days=100)
+    for i in range(10):
+        old_trades.append(_make_trade(
+            result=TradeResult.TP_HIT, pnl_pct=2.0,
+            timestamp=base + timedelta(hours=i),
+        ))
+    # Recent losing trades
+    recent = datetime.now(timezone.utc) - timedelta(days=5)
+    for i in range(10):
+        old_trades.append(_make_trade(
+            result=TradeResult.SL_HIT, pnl_pct=-1.0,
+            timestamp=recent + timedelta(hours=i),
+        ))
+    result = compute_learning_adjustments(trades=old_trades)
+    # Only recent losses should matter → ticker should be penalized
+    if "MC.PA" in result.get("adjustments", {}):
+        assert result["adjustments"]["MC.PA"] < 1.0
+
+
+def test_v42_regime_merged_buckets():
+    """v4.2 C1: Regimes merged to low_vol (calm+normal) and high_vol (elevated+stress)."""
+    trades = []
+    base = datetime.now(timezone.utc) - timedelta(days=20)
+    # Mix of calm and normal → should merge into low_vol
+    for i in range(10):
+        trades.append(_make_trade(
+            result=TradeResult.TP_HIT, pnl_pct=1.5,
+            timestamp=base + timedelta(hours=i),
+            market_regime="calm" if i % 2 == 0 else "normal",
+        ))
+    for i in range(8):
+        trades.append(_make_trade(
+            result=TradeResult.TP_HIT, pnl_pct=1.5,
+            timestamp=base + timedelta(hours=10 + i),
+            market_regime="calm" if i % 2 == 0 else "normal",
+        ))
+    result = compute_learning_adjustments(trades=trades)
+    regime = result.get("regime_adj", {})
+    # Should have "low_vol" not "calm" or "normal"
+    assert "calm" not in regime
+    assert "normal" not in regime
+    if regime:
+        assert "low_vol" in regime
+
+
+def test_v42_build_performance_summary_trades_param():
+    """v4.2 D4: build_performance_summary accepts trades param."""
+    from backend.app.learning import invalidate_perf_summary_cache
+    invalidate_perf_summary_cache()
+    trades = []
+    for i in range(6):
+        pnl = 1.0 if i < 4 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    # Pass trades directly — should not need TRADES_FILE
+    summary = build_performance_summary(trades=trades)
+    assert "DONNEES DE PERFORMANCE" in summary
+
+
+def test_v42_alerts_only_format():
+    """v4.2 E1: Performance summary should be compact (alerts-only)."""
+    from backend.app.learning import invalidate_perf_summary_cache
+    invalidate_perf_summary_cache()
+    trades = []
+    for i in range(6):
+        pnl = 1.0 if i < 4 else -0.5
+        result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+    summary = build_performance_summary(trades=trades)
+    # Should have compact format
+    assert "N=" in summary
+    assert "WR=" in summary
+    # Instructions should be shorter
+    assert "INSTRUCTIONS SCORING" in summary

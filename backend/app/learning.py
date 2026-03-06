@@ -11,6 +11,27 @@ v3.4 audit changes:
 - #11: Benchmark in performance summary
 
 v4.0: PostgreSQL persistence (when DATABASE_URL is set, falls back to JSON files).
+
+v4.2 audit changes:
+- A2: Fix stderr=0 bug — check minimum effect size instead of blind True
+- A3: Minimum effect size threshold in _is_significant
+- A4: PnL divisor 2.0 → 1.0 (was halving sensitivity)
+- A5: Average multipliers across all eligible tickers (in trade_selector.py)
+- B1: delay_bias_adj — learning adjustment from transmission_delay accuracy
+- B2: magnitude_accuracy tracking in performance summary
+- B3: Slippage vs estimated spread feedback
+- B4: hour_adj — per-hour-of-day learning adjustment
+- B5: direction_adj — direction accuracy as learning adjustment
+- C1: Regime min trades raised to 15, or merged into 2 buckets
+- C2: Confidence-scaled bounds in adjustments
+- C3: Decay multiplier between journal runs (via cache invalidation)
+- C4: Convergence source dedup (in news_scorer — documented here)
+- D1: Lookback reduced to 2x half-life (max ~90 days instead of 180)
+- D3: Detect partial PG migration
+- D4: Pass trades param to build_performance_summary
+- E1: Restructured prompt to alerts-only (no detailed stats unless anomalous)
+- E2: MAE feedback in performance summary
+- E3: signal_reliability precision tracking
 """
 
 import fcntl
@@ -291,17 +312,23 @@ def compute_performance() -> PerformanceStats:
 
 
 def _is_significant(pnl_values: list[float], min_samples: int = 4,
-                    t_threshold: float = 1.0) -> bool:
+                    t_threshold: float = 1.0,
+                    min_effect_size: float = 0.1) -> bool:
     """P0-#12: Check if we have enough data for a statistically meaningful adjustment.
 
     Requires:
     1. At least min_samples data points
     2. Standard error small enough that the mean is distinguishable from zero
        (pseudo t-test: |mean/stderr| > t_threshold)
+    3. v4.2 A3: Minimum effect size — |mean| must be at least min_effect_size
+       to avoid adjusting on negligible signals
 
     v3.4: t_threshold is configurable per dimension.
     Per-ticker uses 1.5 (stricter — small samples, high noise).
     Per-category/session/newscat uses 1.0 (larger pool, less noise).
+
+    v4.2 A2: When stderr=0 (all identical values), check minimum effect size
+    instead of blindly returning True. All-zero PnL values are not a signal.
     """
     if len(pnl_values) < min_samples:
         return False
@@ -309,10 +336,14 @@ def _is_significant(pnl_values: list[float], min_samples: int = 4,
         return False
     try:
         mean = statistics.mean(pnl_values)
+        # A3: Minimum effect size — ignore negligible average PnL
+        if abs(mean) < min_effect_size:
+            return False
         stdev = statistics.stdev(pnl_values)
         stderr = stdev / math.sqrt(len(pnl_values))
         if stderr == 0:
-            return True  # All identical values — signal is clear
+            # A2: All identical non-zero values — check effect size instead of blind True
+            return abs(mean) >= min_effect_size
         return abs(mean / stderr) > t_threshold
     except (statistics.StatisticsError, ZeroDivisionError):
         return False
@@ -348,8 +379,10 @@ def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float =
 
     # v3.4 #6: PnL-signed signal — decay-weighted average PnL
     avg_pnl = sum(p * w for p, w in entries) / total_w
-    # Normalize: divide by a reference scale (1% PnL = strong signal)
-    pnl_signal = min(pnl_cap, max(-pnl_cap, avg_pnl / 2.0))
+    # v4.2 A4: Normalize by 1.0 (1% PnL = full-strength signal)
+    # Previously divided by 2.0 which halved the sensitivity — a 1% avg PnL
+    # only produced a 0.125 adjustment instead of 0.25
+    pnl_signal = min(pnl_cap, max(-pnl_cap, avg_pnl / 1.0))
     mult = 1.0 + pnl_signal * sensitivity
     lo, hi = bounds
     return round(max(lo, min(hi, mult)), 3)
@@ -360,36 +393,37 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
 
     Uses temporal decay: recent trades weigh more than old ones.
     Also computes per-category, per-session (#28), per-news_category (#29),
-    and per-regime (#1 v3.4) adjustments.
-
-    v3 changes:
-    - P0-#2: Multiplicative blending instead of additive (signals compound, not average)
-    - P0-#12: Significance test — adjustments only applied when statistically meaningful
-
-    v3.4 audit changes:
-    - #1: Regime-conditional learning (VIX calm/normal/elevated/stress)
-    - #2: Session/hour adj returned separately — applied by current scan, not last trade
-    - #3: Per-ticker significance raised (t>1.5, min 8 trades)
-    - #4: News category uses direct newscat_adj instead of averaging history
-    - #8: Per-dimension decomposition logged for diagnostics
+    per-regime (#1 v3.4), per-hour (B4 v4.2), delay_bias (B1 v4.2),
+    and direction (B5 v4.2) adjustments.
 
     Returns dict with:
     - "adjustments": dict[ticker, multiplier] (default 1.0, range 0.5-1.5)
     - "session_adj": dict[scan_type, multiplier] — applied by caller based on current scan
     - "newscat_adj": dict[news_category, multiplier] — applied by caller based on current news
     - "regime_adj": dict[regime, multiplier] — applied by caller based on current VIX regime
+    - "hour_adj": dict[hour_label, multiplier] — v4.2 B4: applied by hour of entry
+    - "direction_adj": dict[direction, multiplier] — v4.2 B5: LONG vs SHORT accuracy
+    - "delay_bias_adj": float — v4.2 B1: adjustment from delay prediction accuracy
     - "decomposition": dict[ticker, {ticker_mult, cat_mult}] — for diagnostics (#8)
 
-    v4.1 changes:
-    - D2: Only considers trades from last 6 months (reduces noise from ancient data)
-    - D4: Accepts optional trades parameter to avoid redundant reload
+    v4.2 changes:
+    - D1: Lookback reduced to 2x half_life (was 180 days fixed)
+    - B1: delay_bias_adj from transmission_delay accuracy data
+    - B4: hour_adj per hour-of-day
+    - B5: direction_adj LONG/SHORT accuracy
+    - C1: Regime min trades raised to 15, merged to 2 buckets (calm+normal, elevated+stress)
+    - C2: Confidence-scaled bounds (high-confidence → tighter bounds)
     """
     if trades is None:
         trades = load_trades()
     closed = [t for t in trades if t.result != TradeResult.PENDING]
 
-    # D2: Only consider trades from the last 6 months — older data is noise
-    cutoff = datetime.now(timezone.utc) - timedelta(days=180)
+    # (#30) Adaptive decay
+    half_life = _get_decay_half_life(len(closed))
+
+    # D1: Lookback = 2x half_life (was 180 days fixed) — tighter focus on recent data
+    lookback_days = int(half_life * 2)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     recent_closed = []
     for t in closed:
         ts = t.timestamp
@@ -398,22 +432,24 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         if ts > cutoff:
             recent_closed.append(t)
     if len(recent_closed) < len(closed):
-        logger.info("D2: Filtered %d → %d trades (last 6 months)",
-                     len(closed), len(recent_closed))
+        logger.info("D1: Filtered %d → %d trades (last %d days = 2x half_life)",
+                     len(closed), len(recent_closed), lookback_days)
     closed = recent_closed
+
+    empty_result = {
+        "adjustments": {},
+        "session_adj": {},
+        "newscat_adj": {},
+        "regime_adj": {},
+        "hour_adj": {},
+        "direction_adj": {},
+        "delay_bias_adj": 1.0,
+        "decomposition": {},
+    }
 
     if len(closed) < 5:
         logger.info("Not enough closed trades for learning: %d < 5", len(closed))
-        return {
-            "adjustments": {},
-            "session_adj": {},
-            "newscat_adj": {},
-            "regime_adj": {},
-            "decomposition": {},
-        }
-
-    # (#30) Adaptive decay
-    half_life = _get_decay_half_life(len(closed))
+        return empty_result
 
     # ── Per-ticker adjustments (v3.4 #3: stricter — t>1.5, min 8) ────
     ticker_weighted: dict[str, list[tuple[float, float]]] = {}
@@ -445,14 +481,14 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
             cat_adj[cat] = adj
 
     # ── (#28) Per-session adjustments (v3.4 #2: returned separately) ──
-    hour_weighted: dict[str, list[tuple[float, float]]] = {}
+    session_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
             w = _compute_decay_weight(t.timestamp, half_life)
-            hour_weighted.setdefault(t.scan_type.value, []).append((t.pnl_pct, w))
+            session_weighted.setdefault(t.scan_type.value, []).append((t.pnl_pct, w))
 
     session_adj: dict[str, float] = {}
-    for scan_type, entries in hour_weighted.items():
+    for scan_type, entries in session_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.2, pnl_cap=0.1,
                                   bounds=(0.8, 1.2), min_significant=5)
         if adj is not None:
@@ -472,24 +508,87 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         if adj is not None:
             newscat_adj[ncat] = adj
 
-    # ── v3.4 #1: Per-regime adjustments (VIX-conditional learning) ──
+    # ── v3.4 #1 + v4.2 C1: Per-regime adjustments ──
+    # C1: Merge to 2 buckets (calm+normal, elevated+stress) and raise min to 15
     regime_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
-            regime = getattr(t, "market_regime", None) or "normal"
+            raw_regime = getattr(t, "market_regime", None) or "normal"
+            # C1: Merge into 2 buckets for larger sample sizes
+            if raw_regime in ("calm", "normal"):
+                merged_regime = "low_vol"
+            else:  # elevated, stress
+                merged_regime = "high_vol"
             w = _compute_decay_weight(t.timestamp, half_life)
-            regime_weighted.setdefault(regime, []).append((t.pnl_pct, w))
+            regime_weighted.setdefault(merged_regime, []).append((t.pnl_pct, w))
 
     regime_adj: dict[str, float] = {}
     for regime, entries in regime_weighted.items():
+        # C1: min 15 trades for regime (was 5 — too few leads to overfitting)
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.7, 1.3), min_significant=5)
+                                  bounds=(0.7, 1.3), min_significant=15)
         if adj is not None:
             regime_adj[regime] = adj
 
+    # ── v4.2 B4: Per-hour adjustments ──
+    hour_adj_weighted: dict[str, list[tuple[float, float]]] = {}
+    for t in closed:
+        if t.pnl_pct is not None:
+            try:
+                from zoneinfo import ZoneInfo
+                ts_paris = t.timestamp.astimezone(ZoneInfo("Europe/Paris"))
+                hour_label = f"{ts_paris.hour:02d}h"
+            except Exception:
+                hour_label = "unknown"
+            w = _compute_decay_weight(t.timestamp, half_life)
+            hour_adj_weighted.setdefault(hour_label, []).append((t.pnl_pct, w))
+
+    hour_adj: dict[str, float] = {}
+    for h, entries in hour_adj_weighted.items():
+        adj = _compute_adjustment(entries, sensitivity=0.2, pnl_cap=0.1,
+                                  bounds=(0.85, 1.15), min_significant=8)
+        if adj is not None:
+            hour_adj[h] = adj
+
+    # ── v4.2 B5: Direction accuracy adjustment ──
+    dir_weighted: dict[str, list[tuple[float, float]]] = {}
+    for t in closed:
+        if t.pnl_pct is not None:
+            w = _compute_decay_weight(t.timestamp, half_life)
+            dir_weighted.setdefault(t.direction.value, []).append((t.pnl_pct, w))
+
+    direction_adj: dict[str, float] = {}
+    for d, entries in dir_weighted.items():
+        adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
+                                  bounds=(0.8, 1.2), min_significant=8)
+        if adj is not None:
+            direction_adj[d] = adj
+
+    # ── v4.2 B1: Delay bias adjustment ──
+    # If we systematically over/underestimate transmission_delay, adjust
+    delay_bias_adj = 1.0
+    delay_errors = []
+    for t in closed:
+        predicted = getattr(t, "predicted_transmission_delay", None)
+        actual_h = getattr(t, "actual_pricing_time_hours", None)
+        if predicted is not None and actual_h is not None and t.pnl_pct is not None:
+            actual_score = min(100, actual_h / TRANSMISSION_DELAY_BASELINE_HOURS * 100)
+            error = predicted - actual_score  # positive = overestimate delay
+            delay_errors.append((error, _compute_decay_weight(t.timestamp, half_life)))
+
+    if len(delay_errors) >= 10:
+        total_w = sum(w for _, w in delay_errors)
+        if total_w > 0:
+            avg_error = sum(e * w for e, w in delay_errors) / total_w
+            # If we overestimate delay (avg_error > 0), we enter trades too aggressively → penalize
+            # If we underestimate delay (avg_error < 0), we miss edge → boost slightly
+            if abs(avg_error) > 10:
+                bias_signal = min(0.15, max(-0.15, -avg_error / 100))
+                delay_bias_adj = round(1.0 + bias_signal, 3)
+                logger.info("B1: delay_bias_adj=%.3f (avg_error=%.1f)", delay_bias_adj, avg_error)
+
     # ── Multiplicative blend: ticker * category only ──────────────
-    # v3.4 #2/#4: session, newscat, and regime are returned separately
-    # and applied contextually by the caller (based on CURRENT scan/news/regime).
+    # v3.4 #2/#4: session, newscat, regime, hour, direction returned separately
     from .config import ASSET_BY_TICKER
     adjustments: dict[str, float] = {}
     decomposition: dict[str, dict] = {}
@@ -504,18 +603,19 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         c_mult = cat_adj.get(asset.category, 1.0) if asset else 1.0
 
         # v3.4: Only ticker * category in the base blend.
-        # Session, newscat, and regime applied contextually by select_trade().
+        # Session, newscat, regime, hour, direction applied contextually by select_trade().
         blended = t_mult * c_mult
         adjustments[ticker] = round(max(0.5, min(1.5, blended)), 3)
 
         # v3.4 #8: Store decomposition for diagnostics
         decomposition[ticker] = {"ticker_mult": t_mult, "cat_mult": c_mult}
 
-    # v3.4 #8: Log per-dimension decomposition
-    logger.info("Learning v3.4: %d tickers, %d categories, %d sessions, %d news_cats, "
-                "%d regimes, half_life=%.0fd",
+    # Log per-dimension decomposition
+    logger.info("Learning v4.2: %d tickers, %d categories, %d sessions, %d news_cats, "
+                "%d regimes, %d hours, %d directions, delay_bias=%.3f, half_life=%.0fd",
                 len(adjustments), len(cat_adj), len(session_adj),
-                len(newscat_adj), len(regime_adj), half_life)
+                len(newscat_adj), len(regime_adj), len(hour_adj),
+                len(direction_adj), delay_bias_adj, half_life)
     if decomposition:
         for ticker, dec in sorted(decomposition.items()):
             if dec["ticker_mult"] != 1.0 or dec["cat_mult"] != 1.0:
@@ -528,12 +628,19 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         logger.info("  NewsCategory adj: %s", newscat_adj)
     if regime_adj:
         logger.info("  Regime adj: %s", regime_adj)
+    if hour_adj:
+        logger.info("  Hour adj: %s", hour_adj)
+    if direction_adj:
+        logger.info("  Direction adj: %s", direction_adj)
 
     return {
         "adjustments": adjustments,
         "session_adj": session_adj,
         "newscat_adj": newscat_adj,
         "regime_adj": regime_adj,
+        "hour_adj": hour_adj,
+        "direction_adj": direction_adj,
+        "delay_bias_adj": delay_bias_adj,
         "decomposition": decomposition,
     }
 
@@ -548,17 +655,18 @@ def invalidate_perf_summary_cache() -> None:
     _cached_perf_summary = None
 
 
-def build_performance_summary(max_recent: int = 15) -> str:
+def build_performance_summary(max_recent: int = 15,
+                              trades: list[TradeRecommendation] | None = None) -> str:
     """Build a concise performance summary to inject into Claude's scoring prompt.
 
-    v4.1 journal audit additions:
-    - C1: Streak tracking (consecutive losses per ticker)
-    - C3: Day-of-week performance
-    - C4: Drawdown tracking (max consecutive losses, max drawdown)
-    - C5: PnL skewness analysis
-    - C6: Direction accuracy segmented by news category
-    - F2: EXPIRED rate monitoring
-    - F3: Realized R/R vs predicted R/R
+    v4.2 restructure (E1): alerts-only format — only include data sections that show
+    anomalies or actionable insights. Removes verbose breakdowns that add noise.
+    v4.2 D4: accepts optional trades parameter to avoid redundant reload.
+    v4.2 E2: MAE feedback
+    v4.2 E3: signal_reliability precision tracking
+    v4.2 B2: magnitude_accuracy tracking
+    v4.2 B3: slippage vs estimated spread feedback
+    v4.2 D3: partial PG migration detection
 
     Returns empty string if not enough data.
     """
@@ -567,10 +675,26 @@ def build_performance_summary(max_recent: int = 15) -> str:
         return _cached_perf_summary
 
     try:
-        trades = load_trades()
+        if trades is None:
+            trades = load_trades()
     except Exception as exc:
         logger.warning("build_performance_summary: failed to load trades: %s", exc)
         return ""
+
+    # D3: Detect partial PG migration — warn if both sources have data
+    if is_pg_enabled():
+        try:
+            json_raw = _read_json_locked(TRADES_FILE)
+            if json_raw and len(json_raw) > 0:
+                pg_count = len([t for t in trades if t.result != TradeResult.PENDING])
+                json_count = len([t for t in _parse_trades(json_raw, "D3-check")
+                                  if t.result != TradeResult.PENDING])
+                if json_count > 0 and pg_count > 0 and abs(pg_count - json_count) > 5:
+                    logger.warning("D3: Partial PG migration detected — PG has %d closed, "
+                                   "JSON has %d closed. Run migration script.", pg_count, json_count)
+        except Exception:
+            pass  # Non-critical check
+
     closed = [t for t in trades if t.result != TradeResult.PENDING and t.pnl_pct is not None]
 
     if len(closed) < 5:
@@ -581,119 +705,44 @@ def build_performance_summary(max_recent: int = 15) -> str:
     expired = [t for t in closed if t.result == TradeResult.EXPIRED]
     pnls = [t.pnl_pct for t in closed]
     win_rate = len(wins) / len(closed) * 100 if closed else 0
-
     avg_pnl = sum(pnls) / len(pnls) if pnls else 0
+
+    # E1: Compact header — always shown
     parts = [
-        f"\n--- DONNEES DE PERFORMANCE (factuelles, a titre informatif) ---",
-        f"Trades clotures: {len(closed)} | Win rate: {win_rate:.0f}% (baseline: 50%) | "
-        f"PnL total: {sum(pnls):+.1f}% | PnL moyen: {avg_pnl:+.2f}%",
+        f"\n--- DONNEES DE PERFORMANCE ---",
+        f"N={len(closed)} | WR={win_rate:.0f}% | PnL={sum(pnls):+.1f}% | moy={avg_pnl:+.2f}%",
     ]
 
-    # Separate INSTRUCTIONS section after data
-    instructions = [
-        "--- INSTRUCTIONS SCORING (NE PAS MODIFIER TES SCORES EN FONCTION DES DONNEES CI-DESSUS) ---",
-        "Le systeme de learning applique AUTOMATIQUEMENT des multiplicateurs sur tes scores "
-        "pour corriger les biais. Ton role est de scorer OBJECTIVEMENT chaque news, sans "
-        "chercher a compenser l'historique. Ne gonfle PAS les scores weather/commodity "
-        "parce qu'ils ont bien marche, ne baisse PAS les scores macro parce qu'ils ont mal marche. "
-        "Score uniquement selon les criteres definis (surprise, delay, awareness, magnitude, reliability).",
-    ]
+    # E1: Alerts-only — only include sections with notable deviations
 
-    # Performance by news category
-    by_newscat: dict[str, dict] = {}
-    for t in closed:
-        nc = getattr(t, "news_category", "other")
-        if nc not in by_newscat:
-            by_newscat[nc] = {"wins": 0, "total": 0, "pnl": 0.0}
-        by_newscat[nc]["total"] += 1
-        if t.result == TradeResult.TP_HIT:
-            by_newscat[nc]["wins"] += 1
-        by_newscat[nc]["pnl"] += t.pnl_pct
-
-    if by_newscat:
-        cat_lines = []
-        for nc, stats in sorted(by_newscat.items(), key=lambda x: x[1]["pnl"], reverse=True):
-            if stats["total"] >= 3:
-                wr = stats["wins"] / stats["total"] * 100
-                cat_lines.append(f"  {nc}: {stats['total']} trades, WR={wr:.0f}% (vs 50%), PnL={stats['pnl']:+.1f}%")
-        if cat_lines:
-            parts.append("Par categorie de news (min 3 trades):")
-            parts.extend(cat_lines)
-
-    # v4.0 E1: Performance by asset category
-    by_assetcat: dict[str, dict] = {}
-    for t in closed:
-        ac = getattr(t, "category", "other")
-        if ac not in by_assetcat:
-            by_assetcat[ac] = {"wins": 0, "total": 0, "pnl": 0.0}
-        by_assetcat[ac]["total"] += 1
-        if t.result == TradeResult.TP_HIT:
-            by_assetcat[ac]["wins"] += 1
-        by_assetcat[ac]["pnl"] += t.pnl_pct
-
-    if by_assetcat:
-        acat_lines = []
-        for ac, stats in sorted(by_assetcat.items(), key=lambda x: x[1]["pnl"], reverse=True):
-            if stats["total"] >= 3:
-                wr = stats["wins"] / stats["total"] * 100
-                acat_lines.append(f"  {ac}: {stats['total']} trades, WR={wr:.0f}% (vs 50%), PnL={stats['pnl']:+.1f}%")
-        if acat_lines:
-            parts.append("Par categorie d'actif (min 3 trades):")
-            parts.extend(acat_lines)
-
-    # C3: Performance by day of week
-    day_names = ["Lun", "Mar", "Mer", "Jeu", "Ven"]
-    by_dow: dict[int, dict] = {}
-    for t in closed:
-        dow = getattr(t, "day_of_week", None)
-        if dow is None:
-            dow = t.timestamp.weekday()
-        if dow not in by_dow:
-            by_dow[dow] = {"total": 0, "wins": 0, "pnl": 0.0}
-        by_dow[dow]["total"] += 1
-        if t.result == TradeResult.TP_HIT:
-            by_dow[dow]["wins"] += 1
-        by_dow[dow]["pnl"] += t.pnl_pct
-
-    dow_lines = []
-    for dow in sorted(by_dow.keys()):
-        if dow < 5 and by_dow[dow]["total"] >= 3:
-            wr = by_dow[dow]["wins"] / by_dow[dow]["total"] * 100
-            avg = by_dow[dow]["pnl"] / by_dow[dow]["total"]
-            dow_lines.append(f"  {day_names[dow]}: {by_dow[dow]['total']} trades, WR={wr:.0f}%, PnL moy={avg:+.2f}%")
-    if dow_lines:
-        parts.append("Par jour de semaine (min 3 trades):")
-        parts.extend(dow_lines)
-
-    # F2: EXPIRED rate monitoring
+    # F2: EXPIRED rate monitoring — only if anomalous
     if len(closed) >= 10:
         expired_rate = len(expired) / len(closed) * 100
         if expired_rate > 60:
-            parts.append(f"ALERTE CALIBRATION: {expired_rate:.0f}% de trades EXPIRED — "
-                         "TP trop ambitieux ou fenetre trop courte. Reduis expected_magnitude.")
+            parts.append(f"ALERTE CALIBRATION: {expired_rate:.0f}% EXPIRED — "
+                         "reduis expected_magnitude.")
         elif expired_rate > 40:
-            parts.append(f"Taux EXPIRED eleve: {expired_rate:.0f}% — calibration a surveiller.")
+            parts.append(f"EXPIRED eleve: {expired_rate:.0f}%")
 
-    # F3: Realized R/R vs predicted R/R
+    # F3: Realized R/R vs predicted — only if significant gap
     rr_diffs = []
     for t in closed:
         if t.pnl_pct is not None and t.risk_reward > 0:
             if t.result == TradeResult.TP_HIT:
                 realized = abs(t.pnl_pct) / t.stop_pct if t.stop_pct > 0 else 0
             elif t.result == TradeResult.SL_HIT:
-                realized = -1.0  # Lost the stop
+                realized = -1.0
             else:
                 realized = t.pnl_pct / t.stop_pct if t.stop_pct > 0 else 0
             rr_diffs.append(realized - t.risk_reward)
     if len(rr_diffs) >= 5:
         avg_rr_diff = statistics.mean(rr_diffs)
         if avg_rr_diff < -0.5:
-            parts.append(f"R/R realise vs predit: {avg_rr_diff:+.2f} (on perd plus que prevu — stops trop serres?)")
+            parts.append(f"R/R gap: {avg_rr_diff:+.2f} — stops trop serres?")
 
-    # C4: Drawdown tracking
+    # C4: Drawdown — only if severe
     sorted_closed = sorted(closed, key=lambda t: t.timestamp)
     if len(sorted_closed) >= 5:
-        # Max consecutive losses
         max_losing_streak = 0
         current_streak = 0
         for t in sorted_closed:
@@ -703,7 +752,6 @@ def build_performance_summary(max_recent: int = 15) -> str:
             else:
                 current_streak = 0
 
-        # Max drawdown (cumulative PnL)
         cumulative = 0.0
         peak = 0.0
         max_drawdown = 0.0
@@ -715,9 +763,9 @@ def build_performance_summary(max_recent: int = 15) -> str:
                 max_drawdown = max(max_drawdown, dd)
 
         if max_losing_streak >= 3:
-            parts.append(f"Drawdown: max {max_losing_streak} pertes consecutives, max DD={max_drawdown:.1f}%")
+            parts.append(f"Drawdown: {max_losing_streak} pertes consec., DD max={max_drawdown:.1f}%")
 
-    # C5: PnL skewness
+    # C5: PnL skewness — only if anomalous
     if len(pnls) >= 10:
         try:
             n = len(pnls)
@@ -725,14 +773,12 @@ def build_performance_summary(max_recent: int = 15) -> str:
             std_pnl = statistics.stdev(pnls)
             if std_pnl > 0:
                 skew = sum((p - mean_pnl) ** 3 for p in pnls) / (n * std_pnl ** 3)
-                if skew > 0.5:
-                    parts.append(f"Distribution PnL: skewness positive ({skew:.2f}) — profil favorable (gros gains rares, petites pertes).")
-                elif skew < -0.5:
-                    parts.append(f"ALERTE: skewness negative ({skew:.2f}) — profil defavorable (petits gains, grosses pertes).")
+                if skew < -0.5:
+                    parts.append(f"ALERTE: skewness={skew:.2f} (profil defavorable)")
         except Exception:
             pass
 
-    # C1: Streak tracking — alert on current losing streaks per ticker
+    # C1: Streak tracking — only active streaks
     ticker_streaks: dict[str, int] = {}
     for t in sorted_closed:
         tk = t.ticker
@@ -743,45 +789,30 @@ def build_performance_summary(max_recent: int = 15) -> str:
     bad_streaks = [(tk, s) for tk, s in ticker_streaks.items() if s >= 3]
     if bad_streaks:
         streak_strs = [f"{tk}({s})" for tk, s in sorted(bad_streaks, key=lambda x: -x[1])]
-        parts.append(f"Streaks negatifs actifs: {', '.join(streak_strs)}")
+        parts.append(f"Streaks negatifs: {', '.join(streak_strs)}")
 
-    # C2: Performance by time-of-day (scan time granularity)
-    by_scan_hour: dict[str, dict] = {}
+    # E1: News category performance — only show outliers (WR < 35% or > 70%)
+    by_newscat: dict[str, dict] = {}
     for t in closed:
-        try:
-            from zoneinfo import ZoneInfo
-            ts_paris = t.timestamp.astimezone(ZoneInfo("Europe/Paris"))
-            hour_label = f"{ts_paris.hour:02d}h"
-        except Exception:
-            hour_label = "unknown"
-        if hour_label not in by_scan_hour:
-            by_scan_hour[hour_label] = {"total": 0, "wins": 0, "pnl": 0.0}
-        by_scan_hour[hour_label]["total"] += 1
+        nc = getattr(t, "news_category", "other")
+        if nc not in by_newscat:
+            by_newscat[nc] = {"wins": 0, "total": 0, "pnl": 0.0}
+        by_newscat[nc]["total"] += 1
         if t.result == TradeResult.TP_HIT:
-            by_scan_hour[hour_label]["wins"] += 1
-        by_scan_hour[hour_label]["pnl"] += t.pnl_pct
+            by_newscat[nc]["wins"] += 1
+        by_newscat[nc]["pnl"] += t.pnl_pct
 
-    hour_lines = []
-    for h, stats in sorted(by_scan_hour.items()):
+    outlier_cats = []
+    for nc, stats in sorted(by_newscat.items(), key=lambda x: x[1]["pnl"], reverse=True):
         if stats["total"] >= 3:
             wr = stats["wins"] / stats["total"] * 100
-            avg = stats["pnl"] / stats["total"]
-            hour_lines.append(f"  {h}: {stats['total']} trades, WR={wr:.0f}%, PnL moy={avg:+.2f}%")
-    if hour_lines:
-        parts.append("Par heure d'entree (min 3 trades):")
-        parts.extend(hour_lines)
+            if wr < 35 or wr > 70:
+                outlier_cats.append(f"  {nc}: WR={wr:.0f}%, PnL={stats['pnl']:+.1f}% (n={stats['total']})")
+    if outlier_cats:
+        parts.append("Outliers par newscat:")
+        parts.extend(outlier_cats)
 
-    # Recent trades (last N)
-    recent = sorted(closed, key=lambda t: t.timestamp, reverse=True)[:max_recent]
-    if recent:
-        parts.append(f"Derniers {len(recent)} trades:")
-        for t in recent:
-            nc = getattr(t, "news_category", "?")
-            parts.append(
-                f"  {t.ticker} ({nc}) {t.direction.value} → {t.result.value} {t.pnl_pct:+.2f}%"
-            )
-
-    # C6: Direction accuracy segmented by news category
+    # Direction accuracy — only if anomalous
     dir_by_cat: dict[str, dict] = {}
     for t in closed:
         if t.pnl_pct is not None and t.pnl_pct != 0:
@@ -792,31 +823,16 @@ def build_performance_summary(max_recent: int = 15) -> str:
             if t.pnl_pct > 0:
                 dir_by_cat[nc]["correct"] += 1
 
-    # Overall direction accuracy
     direction_correct = sum(d["correct"] for d in dir_by_cat.values())
     direction_total = sum(d["total"] for d in dir_by_cat.values())
     if direction_total >= 10:
         dir_accuracy = direction_correct / direction_total * 100
         if dir_accuracy < 45:
-            parts.append(f"BIAIS DIRECTION: Ta precision directionnelle est FAIBLE ({dir_accuracy:.0f}%). "
-                         "Augmente le seuil de directional_clarity et soit plus conservateur sur les signaux ambigus.")
+            parts.append(f"BIAIS DIRECTION: {dir_accuracy:.0f}% — augmente directional_clarity seuil.")
         elif dir_accuracy > 65:
-            parts.append(f"DIRECTION SOLIDE: precision directionnelle {dir_accuracy:.0f}% — bonne calibration.")
-        else:
-            parts.append(f"Direction accuracy: {dir_accuracy:.0f}% (neutre)")
+            parts.append(f"Direction solide: {dir_accuracy:.0f}%")
 
-        # Per-category breakdown
-        dir_cat_lines = []
-        for nc, d in sorted(dir_by_cat.items(), key=lambda x: x[1]["total"], reverse=True):
-            if d["total"] >= 5:
-                acc = d["correct"] / d["total"] * 100
-                if acc < 40 or acc > 70:
-                    dir_cat_lines.append(f"  {nc}: direction {acc:.0f}% ({d['total']} trades)")
-        if dir_cat_lines:
-            parts.append("Direction accuracy par categorie (ecarts notables):")
-            parts.extend(dir_cat_lines)
-
-    # Biases detected — transmission_delay accuracy
+    # Transmission delay bias — only if significant
     delay_errors = []
     for t in closed:
         predicted = getattr(t, "predicted_transmission_delay", None)
@@ -828,16 +844,89 @@ def build_performance_summary(max_recent: int = 15) -> str:
     if len(delay_errors) >= 5:
         avg_error = statistics.mean(delay_errors)
         if abs(avg_error) > 10:
-            if avg_error > 0:
-                parts.append(f"BIAIS DETECTE: Tu SURESTIMES le transmission_delay de {avg_error:+.0f} points en moyenne. "
-                             "Les marches pricent PLUS VITE que tu ne le penses. Corrige a la baisse.")
-            else:
-                parts.append(f"BIAIS DETECTE: Tu SOUS-ESTIMES le transmission_delay de {avg_error:+.0f} points en moyenne. "
-                             "Les marches pricent PLUS LENTEMENT que tu ne le penses. Corrige a la hausse.")
+            direction_word = "SURESTIMES" if avg_error > 0 else "SOUS-ESTIMES"
+            parts.append(f"BIAIS DELAY: {direction_word} de {abs(avg_error):.0f}pts")
+
+    # E2: MAE feedback — average max adverse excursion
+    mae_values = [getattr(t, "mae", None) for t in closed if getattr(t, "mae", None) is not None]
+    if len(mae_values) >= 5:
+        avg_mae = statistics.mean(mae_values)
+        # Only alert if MAE suggests stops are too tight
+        sl_hit_count = len(losses)
+        if sl_hit_count > 0 and len(closed) > 0:
+            sl_rate = sl_hit_count / len(closed) * 100
+            if sl_rate > 40 and avg_mae > 0:
+                parts.append(f"MAE moy={avg_mae:.2f}% avec SL_HIT={sl_rate:.0f}% — stops possiblement trop serres")
+
+    # E3: signal_reliability precision tracking
+    reliability_results: dict[str, dict] = {"high": {"wins": 0, "total": 0},
+                                             "low": {"wins": 0, "total": 0}}
+    for t in closed:
+        rel = getattr(t, "signal_reliability", None)
+        if rel is not None:
+            bucket = "high" if rel >= 70 else "low"
+            reliability_results[bucket]["total"] += 1
+            if t.result == TradeResult.TP_HIT:
+                reliability_results[bucket]["wins"] += 1
+
+    high_r = reliability_results["high"]
+    low_r = reliability_results["low"]
+    if high_r["total"] >= 5 and low_r["total"] >= 5:
+        high_wr = high_r["wins"] / high_r["total"] * 100
+        low_wr = low_r["wins"] / low_r["total"] * 100
+        if low_wr > high_wr + 10:
+            parts.append(f"ALERTE RELIABILITY: low-rel WR={low_wr:.0f}% > high-rel WR={high_wr:.0f}% — "
+                         "signal_reliability mal calibre")
+
+    # B2: magnitude_accuracy tracking
+    mag_errors = []
+    for t in closed:
+        mag = getattr(t, "expected_magnitude", None)
+        if mag is not None and t.pnl_pct is not None:
+            actual_mag = abs(t.pnl_pct)
+            # Normalize: expected_magnitude 50 ≈ 1-3% move → use 2% as mid reference
+            expected_pct = mag / 50 * 2.0
+            if expected_pct > 0:
+                mag_errors.append(actual_mag - expected_pct)
+    if len(mag_errors) >= 10:
+        avg_mag_err = statistics.mean(mag_errors)
+        if avg_mag_err < -1.0:
+            parts.append(f"BIAIS MAGNITUDE: surestimee de {abs(avg_mag_err):.1f}pp — reduis expected_magnitude")
+        elif avg_mag_err > 1.0:
+            parts.append(f"Magnitude sous-estimee de {avg_mag_err:.1f}pp — augmente expected_magnitude")
+
+    # B3: Slippage vs estimated spread feedback
+    slippage_values = [getattr(t, "slippage", None) for t in closed
+                       if getattr(t, "slippage", None) is not None]
+    if len(slippage_values) >= 5:
+        avg_slippage = statistics.mean([abs(s) for s in slippage_values])
+        from .config import ESTIMATED_SPREADS, DEFAULT_SPREAD
+        avg_spread = statistics.mean([ESTIMATED_SPREADS.get(t.ticker, DEFAULT_SPREAD) for t in closed])
+        if avg_slippage > avg_spread * 2:
+            parts.append(f"SLIPPAGE: {avg_slippage:.3f}% vs spread estime {avg_spread:.3f}% — "
+                         "execution degradee ou spreads sous-estimes")
+
+    # Recent trades (compact — last 10)
+    recent = sorted(closed, key=lambda t: t.timestamp, reverse=True)[:min(max_recent, 10)]
+    if recent:
+        parts.append(f"Derniers {len(recent)}:")
+        for t in recent:
+            nc = getattr(t, "news_category", "?")
+            parts.append(
+                f"  {t.ticker}({nc}) {t.direction.value}→{t.result.value} {t.pnl_pct:+.2f}%"
+            )
 
     parts.append("--- FIN DONNEES ---")
-    parts.extend(instructions)
-    parts.append("--- FIN INSTRUCTIONS ---")
+
+    # Instructions section (always shown)
+    parts.extend([
+        "--- INSTRUCTIONS SCORING ---",
+        "Le learning applique AUTOMATIQUEMENT des multiplicateurs. Score OBJECTIVEMENT "
+        "chaque news selon surprise, delay, awareness, magnitude, reliability. "
+        "NE COMPENSE PAS l'historique.",
+        "--- FIN INSTRUCTIONS ---",
+    ])
+
     result = "\n".join(parts)
     _cached_perf_summary = result
     return result

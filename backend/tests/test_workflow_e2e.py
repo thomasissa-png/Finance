@@ -618,7 +618,7 @@ class TestLearningPipeline:
         with _with_temp_trades(raw):
             summary = build_performance_summary()
         assert "DONNEES DE PERFORMANCE" in summary
-        assert "Win rate" in summary
+        assert "WR=" in summary
         assert "Derniers" in summary
         assert "CL=F" in summary
 
@@ -730,7 +730,7 @@ class TestFullPipelineIntegration:
             # Verify performance summary is generated
             summary = build_performance_summary()
             assert "DONNEES DE PERFORMANCE" in summary
-            assert "Win rate" in summary
+            assert "WR=" in summary
 
     def test_delay_accuracy_tracking(self):
         """Verify predicted vs actual transmission delay tracking."""
