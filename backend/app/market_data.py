@@ -75,7 +75,7 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     # Energy
     "CL=F": ("CL1", {}),        # WTI Crude (front month)
     "BZ=F": ("CO1", {}),        # Brent Crude (front month)
-    "NG=F": ("NG1", {}),        # Natural Gas
+    "NG=F": ("NG/USD", {}),     # Natural Gas
     # Precious metals — TD uses forex-style symbols
     "GC=F": ("XAU/USD", {}),    # Gold
     "SI=F": ("XAG/USD", {}),    # Silver
