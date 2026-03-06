@@ -18,7 +18,7 @@ import json
 import logging
 import math
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .database import is_pg_enabled
@@ -355,7 +355,7 @@ def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float =
     return round(max(lo, min(hi, mult)), 3)
 
 
-def compute_learning_adjustments() -> dict:
+def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None) -> dict:
     """Compute per-ticker score multipliers based on historical performance.
 
     Uses temporal decay: recent trades weigh more than old ones.
@@ -379,9 +379,28 @@ def compute_learning_adjustments() -> dict:
     - "newscat_adj": dict[news_category, multiplier] — applied by caller based on current news
     - "regime_adj": dict[regime, multiplier] — applied by caller based on current VIX regime
     - "decomposition": dict[ticker, {ticker_mult, cat_mult}] — for diagnostics (#8)
+
+    v4.1 changes:
+    - D2: Only considers trades from last 6 months (reduces noise from ancient data)
+    - D4: Accepts optional trades parameter to avoid redundant reload
     """
-    trades = load_trades()
+    if trades is None:
+        trades = load_trades()
     closed = [t for t in trades if t.result != TradeResult.PENDING]
+
+    # D2: Only consider trades from the last 6 months — older data is noise
+    cutoff = datetime.now(timezone.utc) - timedelta(days=180)
+    recent_closed = []
+    for t in closed:
+        ts = t.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts > cutoff:
+            recent_closed.append(t)
+    if len(recent_closed) < len(closed):
+        logger.info("D2: Filtered %d → %d trades (last 6 months)",
+                     len(closed), len(recent_closed))
+    closed = recent_closed
 
     if len(closed) < 5:
         logger.info("Not enough closed trades for learning: %d < 5", len(closed))
@@ -530,10 +549,16 @@ def invalidate_perf_summary_cache() -> None:
 
 
 def build_performance_summary(max_recent: int = 15) -> str:
-    """P1-#1: Build a concise performance summary to inject into Claude's scoring prompt.
+    """Build a concise performance summary to inject into Claude's scoring prompt.
 
-    This creates the feedback loop: Claude sees its past performance so it can
-    calibrate better. Cached to avoid re-reading trades.json on every scan.
+    v4.1 journal audit additions:
+    - C1: Streak tracking (consecutive losses per ticker)
+    - C3: Day-of-week performance
+    - C4: Drawdown tracking (max consecutive losses, max drawdown)
+    - C5: PnL skewness analysis
+    - C6: Direction accuracy segmented by news category
+    - F2: EXPIRED rate monitoring
+    - F3: Realized R/R vs predicted R/R
 
     Returns empty string if not enough data.
     """
@@ -557,9 +582,7 @@ def build_performance_summary(max_recent: int = 15) -> str:
     pnls = [t.pnl_pct for t in closed]
     win_rate = len(wins) / len(closed) * 100 if closed else 0
 
-    # v3.4 #11: Benchmark — compare win rate to random baseline (50%)
     avg_pnl = sum(pnls) / len(pnls) if pnls else 0
-    # v4.0 E3: Clear separation between DATA (facts) and INSTRUCTIONS (what to do)
     parts = [
         f"\n--- DONNEES DE PERFORMANCE (factuelles, a titre informatif) ---",
         f"Trades clotures: {len(closed)} | Win rate: {win_rate:.0f}% (baseline: 50%) | "
@@ -597,7 +620,7 @@ def build_performance_summary(max_recent: int = 15) -> str:
             parts.append("Par categorie de news (min 3 trades):")
             parts.extend(cat_lines)
 
-    # v4.0 E1: Performance by asset category (actions_europe, forex, commodities, etc.)
+    # v4.0 E1: Performance by asset category
     by_assetcat: dict[str, dict] = {}
     for t in closed:
         ac = getattr(t, "category", "other")
@@ -618,6 +641,136 @@ def build_performance_summary(max_recent: int = 15) -> str:
             parts.append("Par categorie d'actif (min 3 trades):")
             parts.extend(acat_lines)
 
+    # C3: Performance by day of week
+    day_names = ["Lun", "Mar", "Mer", "Jeu", "Ven"]
+    by_dow: dict[int, dict] = {}
+    for t in closed:
+        dow = getattr(t, "day_of_week", None)
+        if dow is None:
+            dow = t.timestamp.weekday()
+        if dow not in by_dow:
+            by_dow[dow] = {"total": 0, "wins": 0, "pnl": 0.0}
+        by_dow[dow]["total"] += 1
+        if t.result == TradeResult.TP_HIT:
+            by_dow[dow]["wins"] += 1
+        by_dow[dow]["pnl"] += t.pnl_pct
+
+    dow_lines = []
+    for dow in sorted(by_dow.keys()):
+        if dow < 5 and by_dow[dow]["total"] >= 3:
+            wr = by_dow[dow]["wins"] / by_dow[dow]["total"] * 100
+            avg = by_dow[dow]["pnl"] / by_dow[dow]["total"]
+            dow_lines.append(f"  {day_names[dow]}: {by_dow[dow]['total']} trades, WR={wr:.0f}%, PnL moy={avg:+.2f}%")
+    if dow_lines:
+        parts.append("Par jour de semaine (min 3 trades):")
+        parts.extend(dow_lines)
+
+    # F2: EXPIRED rate monitoring
+    if len(closed) >= 10:
+        expired_rate = len(expired) / len(closed) * 100
+        if expired_rate > 60:
+            parts.append(f"ALERTE CALIBRATION: {expired_rate:.0f}% de trades EXPIRED — "
+                         "TP trop ambitieux ou fenetre trop courte. Reduis expected_magnitude.")
+        elif expired_rate > 40:
+            parts.append(f"Taux EXPIRED eleve: {expired_rate:.0f}% — calibration a surveiller.")
+
+    # F3: Realized R/R vs predicted R/R
+    rr_diffs = []
+    for t in closed:
+        if t.pnl_pct is not None and t.risk_reward > 0:
+            if t.result == TradeResult.TP_HIT:
+                realized = abs(t.pnl_pct) / t.stop_pct if t.stop_pct > 0 else 0
+            elif t.result == TradeResult.SL_HIT:
+                realized = -1.0  # Lost the stop
+            else:
+                realized = t.pnl_pct / t.stop_pct if t.stop_pct > 0 else 0
+            rr_diffs.append(realized - t.risk_reward)
+    if len(rr_diffs) >= 5:
+        avg_rr_diff = statistics.mean(rr_diffs)
+        if avg_rr_diff < -0.5:
+            parts.append(f"R/R realise vs predit: {avg_rr_diff:+.2f} (on perd plus que prevu — stops trop serres?)")
+
+    # C4: Drawdown tracking
+    sorted_closed = sorted(closed, key=lambda t: t.timestamp)
+    if len(sorted_closed) >= 5:
+        # Max consecutive losses
+        max_losing_streak = 0
+        current_streak = 0
+        for t in sorted_closed:
+            if t.pnl_pct is not None and t.pnl_pct < 0:
+                current_streak += 1
+                max_losing_streak = max(max_losing_streak, current_streak)
+            else:
+                current_streak = 0
+
+        # Max drawdown (cumulative PnL)
+        cumulative = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        for t in sorted_closed:
+            if t.pnl_pct is not None:
+                cumulative += t.pnl_pct
+                peak = max(peak, cumulative)
+                dd = peak - cumulative
+                max_drawdown = max(max_drawdown, dd)
+
+        if max_losing_streak >= 3:
+            parts.append(f"Drawdown: max {max_losing_streak} pertes consecutives, max DD={max_drawdown:.1f}%")
+
+    # C5: PnL skewness
+    if len(pnls) >= 10:
+        try:
+            n = len(pnls)
+            mean_pnl = statistics.mean(pnls)
+            std_pnl = statistics.stdev(pnls)
+            if std_pnl > 0:
+                skew = sum((p - mean_pnl) ** 3 for p in pnls) / (n * std_pnl ** 3)
+                if skew > 0.5:
+                    parts.append(f"Distribution PnL: skewness positive ({skew:.2f}) — profil favorable (gros gains rares, petites pertes).")
+                elif skew < -0.5:
+                    parts.append(f"ALERTE: skewness negative ({skew:.2f}) — profil defavorable (petits gains, grosses pertes).")
+        except Exception:
+            pass
+
+    # C1: Streak tracking — alert on current losing streaks per ticker
+    ticker_streaks: dict[str, int] = {}
+    for t in sorted_closed:
+        tk = t.ticker
+        if t.pnl_pct is not None and t.pnl_pct < 0:
+            ticker_streaks[tk] = ticker_streaks.get(tk, 0) + 1
+        else:
+            ticker_streaks[tk] = 0
+    bad_streaks = [(tk, s) for tk, s in ticker_streaks.items() if s >= 3]
+    if bad_streaks:
+        streak_strs = [f"{tk}({s})" for tk, s in sorted(bad_streaks, key=lambda x: -x[1])]
+        parts.append(f"Streaks negatifs actifs: {', '.join(streak_strs)}")
+
+    # C2: Performance by time-of-day (scan time granularity)
+    by_scan_hour: dict[str, dict] = {}
+    for t in closed:
+        try:
+            from zoneinfo import ZoneInfo
+            ts_paris = t.timestamp.astimezone(ZoneInfo("Europe/Paris"))
+            hour_label = f"{ts_paris.hour:02d}h"
+        except Exception:
+            hour_label = "unknown"
+        if hour_label not in by_scan_hour:
+            by_scan_hour[hour_label] = {"total": 0, "wins": 0, "pnl": 0.0}
+        by_scan_hour[hour_label]["total"] += 1
+        if t.result == TradeResult.TP_HIT:
+            by_scan_hour[hour_label]["wins"] += 1
+        by_scan_hour[hour_label]["pnl"] += t.pnl_pct
+
+    hour_lines = []
+    for h, stats in sorted(by_scan_hour.items()):
+        if stats["total"] >= 3:
+            wr = stats["wins"] / stats["total"] * 100
+            avg = stats["pnl"] / stats["total"]
+            hour_lines.append(f"  {h}: {stats['total']} trades, WR={wr:.0f}%, PnL moy={avg:+.2f}%")
+    if hour_lines:
+        parts.append("Par heure d'entree (min 3 trades):")
+        parts.extend(hour_lines)
+
     # Recent trades (last N)
     recent = sorted(closed, key=lambda t: t.timestamp, reverse=True)[:max_recent]
     if recent:
@@ -628,14 +781,20 @@ def build_performance_summary(max_recent: int = 15) -> str:
                 f"  {t.ticker} ({nc}) {t.direction.value} → {t.result.value} {t.pnl_pct:+.2f}%"
             )
 
-    # v4.0 E2: Direction accuracy — track if Claude predicted the right direction
-    direction_correct = 0
-    direction_total = 0
+    # C6: Direction accuracy segmented by news category
+    dir_by_cat: dict[str, dict] = {}
     for t in closed:
         if t.pnl_pct is not None and t.pnl_pct != 0:
-            direction_total += 1
+            nc = getattr(t, "news_category", "other")
+            if nc not in dir_by_cat:
+                dir_by_cat[nc] = {"correct": 0, "total": 0}
+            dir_by_cat[nc]["total"] += 1
             if t.pnl_pct > 0:
-                direction_correct += 1
+                dir_by_cat[nc]["correct"] += 1
+
+    # Overall direction accuracy
+    direction_correct = sum(d["correct"] for d in dir_by_cat.values())
+    direction_total = sum(d["total"] for d in dir_by_cat.values())
     if direction_total >= 10:
         dir_accuracy = direction_correct / direction_total * 100
         if dir_accuracy < 45:
@@ -646,13 +805,23 @@ def build_performance_summary(max_recent: int = 15) -> str:
         else:
             parts.append(f"Direction accuracy: {dir_accuracy:.0f}% (neutre)")
 
+        # Per-category breakdown
+        dir_cat_lines = []
+        for nc, d in sorted(dir_by_cat.items(), key=lambda x: x[1]["total"], reverse=True):
+            if d["total"] >= 5:
+                acc = d["correct"] / d["total"] * 100
+                if acc < 40 or acc > 70:
+                    dir_cat_lines.append(f"  {nc}: direction {acc:.0f}% ({d['total']} trades)")
+        if dir_cat_lines:
+            parts.append("Direction accuracy par categorie (ecarts notables):")
+            parts.extend(dir_cat_lines)
+
     # Biases detected — transmission_delay accuracy
     delay_errors = []
     for t in closed:
         predicted = getattr(t, "predicted_transmission_delay", None)
         actual_h = getattr(t, "actual_pricing_time_hours", None)
         if predicted is not None and actual_h is not None:
-            # Convert actual hours to 0-100 scale
             actual_score = min(100, actual_h / TRANSMISSION_DELAY_BASELINE_HOURS * 100)
             delay_errors.append(predicted - actual_score)
 

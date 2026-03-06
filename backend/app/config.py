@@ -308,6 +308,49 @@ def assets_for_session(scan_type_value: str) -> set[str]:
     return tickers
 
 
+# ── G2: Market holidays — journal skips these dates ────────────
+# Major market closures where no trading occurs.
+# US holidays (NYSE/CME closed) + Euronext closures.
+MARKET_HOLIDAYS_2025 = {
+    "2025-01-01",  # New Year's Day
+    "2025-01-20",  # MLK Jr Day (US)
+    "2025-02-17",  # Presidents' Day (US)
+    "2025-04-18",  # Good Friday (US+EU)
+    "2025-04-21",  # Easter Monday (EU)
+    "2025-05-01",  # Labour Day (EU)
+    "2025-05-26",  # Memorial Day (US)
+    "2025-06-19",  # Juneteenth (US)
+    "2025-07-04",  # Independence Day (US)
+    "2025-09-01",  # Labor Day (US)
+    "2025-11-27",  # Thanksgiving (US)
+    "2025-12-25",  # Christmas (US+EU)
+    "2025-12-26",  # Boxing Day (EU)
+}
+
+MARKET_HOLIDAYS_2026 = {
+    "2026-01-01",  # New Year's Day
+    "2026-01-19",  # MLK Jr Day (US)
+    "2026-02-16",  # Presidents' Day (US)
+    "2026-04-03",  # Good Friday (US+EU)
+    "2026-04-06",  # Easter Monday (EU)
+    "2026-05-01",  # Labour Day (EU)
+    "2026-05-25",  # Memorial Day (US)
+    "2026-06-19",  # Juneteenth (US)
+    "2026-07-03",  # Independence Day observed (US)
+    "2026-09-07",  # Labor Day (US)
+    "2026-11-26",  # Thanksgiving (US)
+    "2026-12-25",  # Christmas (US+EU)
+    "2026-12-26",  # Boxing Day (EU)
+}
+
+MARKET_HOLIDAYS = MARKET_HOLIDAYS_2025 | MARKET_HOLIDAYS_2026
+
+
+def is_market_holiday(date_str: str) -> bool:
+    """Check if a date string (YYYY-MM-DD) is a known market holiday."""
+    return date_str in MARKET_HOLIDAYS
+
+
 NEWS_CATEGORIES = [
     "earnings", "macro", "geopolitical", "regulatory",
     "m_a", "sector", "commodity", "weather",

@@ -253,6 +253,13 @@ class JournalEntry(BaseModel):
     predicted_transmission_delay: int | None = None
     actual_pricing_time_hours: float | None = None
     delay_accuracy: float | None = None
+    # ── v4.1: Journal audit improvements
+    slippage_pct: float | None = None           # Difference between scan price and next bar open
+    max_adverse_excursion: float | None = None   # Worst drawdown during trade before outcome
+    max_favorable_excursion: float | None = None # Best unrealized gain during trade
+    bar_coverage: int | None = None              # Number of post-entry bars available
+    bar_interval: str | None = None              # Bar interval used (15min, 1h, 1day)
+    realized_rr: float | None = None             # Actual risk/reward ratio achieved
 
 
 class PerformanceStats(BaseModel):

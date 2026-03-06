@@ -1,4 +1,4 @@
-# OneShot News Trading System — v4.0 Decision Audit Pipeline
+# OneShot News Trading System — v4.1 Journal Audit Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -109,16 +109,48 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - **E2** : Direction accuracy tracking dans le feedback Claude
 - **E3** : Separation DONNEES DE PERFORMANCE vs INSTRUCTIONS SCORING dans le prompt
 
+#### 10. Audit journal v4.1 — 27 ameliorations (audit complet du systeme de journal)
+- **A1** : File locking `fcntl.LOCK_EX` sur `_save_journal()` — evite corruption donnees
+- **A2** : Guard division par zero dans `_compute_pnl()` (entry_price=0)
+- **A3** : Sort explicite chronologique des bars + bars 5-tuple (ts, high, low, open, close)
+- **A4** : `exit_time` = timestamp reel du bar TP/SL (pas l'heure du journal run)
+- **B1** : Bars 15min en priorite (fallback 1h puis daily) — resolution TP/SL plus fine
+- **B2** : Correction midpoint sur `actual_pricing_hours` (+7.5min pour 15min, +30min pour 1h)
+- **B3** : Smart fallback `actual_pricing_hours` — utilise remaining trading window au lieu de 8h fixe
+- **B4** : EXPIRED utilise last post-entry bar close au lieu de session_close
+- **B5** : Slippage tracking — difference entry_price vs first post-entry bar open
+- **C1** : Streak tracking — alerte quand >= 3 pertes consecutives par ticker
+- **C2** : Performance par heure d'entree dans le feedback Claude
+- **C3** : Performance par jour de semaine (Lun-Ven) dans le feedback Claude
+- **C4** : Drawdown tracking — max pertes consecutives + max drawdown cumulatif
+- **C5** : PnL skewness — positive=profil favorable, negative=alerte
+- **C6** : Direction accuracy segmentee par categorie de news
+- **D1** : Suppression appel redundant `compute_learning_adjustments()` en fin de journal
+- **D2** : Date-range limiting — learning ne considere que les 6 derniers mois
+- **D3** : Journal pruning automatique des entries > 1 an
+- **D4** : `compute_learning_adjustments()` accepte parametre `trades` optionnel (evite reload)
+- **E1** : Metrics structurees — timing, taux succes fetch prix
+- **E2** : Alerte si > 50% des fetch prix echouent (possible API outage)
+- **E3** : Cross-check PnL entre journal entry et trade update (validation duale)
+- **E4** : Bar coverage tracking — nombre de bars post-entry disponibles
+- **F1** : Max Adverse Excursion (MAE) et Max Favorable Excursion (MFE)
+- **F2** : EXPIRED rate monitoring — alerte calibration si > 60%
+- **F3** : Realized R/R vs predicted R/R — alerte si stops trop serres
+- **F4** : Price anomaly detection — flag si mouvement > 20% (split/data error)
+- **G1** : DST-safe date filtering — conversion Paris timezone pour filtrage bars
+- **G2** : Market holidays 2025-2026 dans config.py (US + EU)
+- **G3** : Global timeout 300s pour le journal run
+
 ### Etat actuel des fichiers cles
 - `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/database.py` : PG persistence layer, 4 tables, pool, CRUD
-- `backend/app/journal.py` : fermeture trades, intraday 1h bars, post-entry filtering, PG save
-- `backend/app/learning.py` : v4.0, 5 dimensions + direction accuracy + PnL par asset category
+- `backend/app/journal.py` : v4.1, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout
+- `backend/app/learning.py` : v4.1, 6-month cutoff, trades param, C2 time-of-day, C1 streaks, C5 skewness
 - `backend/app/trade_selector.py` : v4.0, convex calibration, fallback ticker, spread filter, VIX daily cap, asymmetric SHORT
 - `backend/app/news_scorer.py` : v4.0, 11 dimensions scoring, convergence direction, dynamic asset count
-- `backend/app/config.py` : ESTIMATED_SPREADS pour 41 tickers, DEFAULT_SPREAD
-- `backend/app/models.py` : v4.0, expected_magnitude, signal_reliability, reliability_factor dans total_score
+- `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, is_market_holiday()
+- `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr)
 - `backend/app/scan_history.py` : PG support, pruning 30j
 - `backend/migrate_json_to_postgres.py` : script de migration one-shot
 
@@ -489,10 +521,24 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Au demarrage, detecte les trades PENDING de jours precedents
   - Lance automatiquement `run_daily_journal()` pour les fermer
   - Evite les trades bloques PENDING quand l'app est tuee avant 22h
-- **Actions**: ferme tous les trades PENDING, recupere les prix reels du jour (1h bars via Twelve Data/yfinance)
-- **Resultat auto**: TP verifie en priorite via bars chronologiques (1h), puis SL, puis EXPIRED
+- **Actions**: ferme tous les trades PENDING, recupere les prix reels du jour (15min bars preferred, 1h fallback via Twelve Data/yfinance)
+- **Resultat auto**: TP verifie en priorite via bars chronologiques (15min/1h), puis SL, puis EXPIRED
+  - Bars 5-tuple (timestamp, high, low, open, close) triees chronologiquement
   - Bars filtrees pour ne garder que post-entry (ignore les extremes d'avant le trade)
-  - Si TP et SL touches dans la meme barre 1h → conservatif SL
+  - Si TP et SL touches dans la meme barre → conservatif SL
+  - EXPIRED utilise le close de la derniere barre post-entry (pas le session close global)
+- **v4.1 Enrichissement journal** :
+  - Slippage tracking : entry_price vs first post-entry bar open
+  - MAE/MFE : Max Adverse/Favorable Excursion pendant le trade
+  - Bar coverage : nombre de bars post-entry disponibles + intervalle detecte
+  - Realized R/R : ratio risque/rendement realise vs predit
+  - Price anomaly detection : flag si mouvement > 20% (possible split/data error)
+  - PnL cross-check : validation duale entre journal et trade update
+  - DST-safe date filtering : conversion Paris timezone pour filtrage bars
+  - Global timeout 300s pour eviter les journal runs infinis
+  - Exit time = timestamp reel du bar TP/SL (pas l'heure du journal run)
+  - Midpoint correction sur actual_pricing_hours (+7.5min pour 15min, +30min pour 1h)
+- **Pruning** : entries > 1 an prunees automatiquement apres chaque journal run
 - **Dedup**: verifie `(ticker, entry_time)` pour eviter les doublons lors de triggers manuels
 - **Trades anciens**: recupere les prix historiques pour la date reelle du trade (pas seulement aujourd'hui)
 - **Persistence**: PostgreSQL (primary) ou `data/journal.json` (fallback)
@@ -516,7 +562,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `vix_at_trade` / `market_regime` : contexte marche au moment du trade
   - `predicted_transmission_delay` / `actual_pricing_time_hours` / `delay_accuracy` : tracking precision
 
-## Learning adaptatif (v3.4 — audit ML)
+## Learning adaptatif (v4.1 — audit ML + journal)
 - **Par ticker**: ajustement 0.5-1.5 (v3.4: min **8** trades, t-stat > **1.5** — plus strict pour eviter overfitting sur petits echantillons)
 - **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0)
 - **Par categorie de news**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0) — v3.4: **applique contextuellement** par la news_category du trade courant (pas moyennee sur l'historique du ticker)
@@ -535,12 +581,22 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Formule: `1.0 + clamp(avg_pnl / 2, -cap, cap) * sensitivity`
 - **Decay temporel adaptatif**: demi-vie 45j (peu de trades) → 30j (beaucoup de trades)
   - Transition graduelle entre 50 et 200 trades clotures
-- **Feedback loop Claude** (v4.0): `build_performance_summary()` injecte dans le prompt :
+- **D2: Date-range limiting** (v4.1): seuls les trades des 6 derniers mois sont consideres — les anciennes donnees sont du bruit
+- **D4: Trades parameter** (v4.1): `compute_learning_adjustments(trades=...)` accepte un parametre optionnel pour eviter le reload
+- **Feedback loop Claude** (v4.1): `build_performance_summary()` injecte dans le prompt :
   - Section **DONNEES DE PERFORMANCE** (faits) separee de **INSTRUCTIONS SCORING** (v4.0 E3)
   - Win rate global avec **benchmark baseline 50%** pour comparaison
   - PnL moyen par categorie de news (avec benchmark)
   - **PnL moyen par categorie d'actif** (v4.0 E1) : actions_europe, metaux, forex, commodities, indices
   - **Direction accuracy** (v4.0 E2) : % de trades ou la direction etait correcte (prix final > entry pour LONG, < entry pour SHORT)
+  - **C1: Streak tracking** (v4.1) : alerte quand >= 3 pertes consecutives par ticker
+  - **C2: Performance par heure d'entree** (v4.1) : WR et PnL moyen par heure CET
+  - **C3: Performance par jour de semaine** (v4.1) : Lun-Ven
+  - **C4: Drawdown tracking** (v4.1) : max pertes consecutives + max drawdown cumulatif
+  - **C5: PnL skewness** (v4.1) : positive=profil favorable, negative=alerte
+  - **C6: Direction accuracy par news category** (v4.1)
+  - **F2: EXPIRED rate monitoring** (v4.1) : >60% = alerte calibration, >40% = warning
+  - **F3: Realized R/R vs predicted** (v4.1) : alerte si on perd plus que prevu
   - Derniers 15 trades (ticker, direction, resultat, PnL)
   - Detection de biais transmission_delay (surestime/sous-estime)
   - **Anti-double-counting** (v3.4): note explicite demandant a Claude de NE PAS ajuster ses scores en fonction de l'historique (le learning s'en charge automatiquement)
@@ -639,7 +695,10 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - **test_models.py** : reliability_factor, reliability_floor, magnitude_defaults, trade_recommendation magnitude/reliability
   - **test_news_scorer.py** : tool schema magnitude/reliability, dynamic asset count, magnitude instructions, convergence direction param
   - **test_trade_selector.py** : convex_score_factor, short_asymmetric_stop, magnitude_scales_target, spread_stop_floor
-- **test_workflow_e2e.py** (64 tests) : backtest complet du pipeline end-to-end
+- v4.1 tests ajoutés (18 tests) :
+  - **TestJournalAuditV41** (11 tests) : PnL div-by-zero, MAE/MFE long/short, slippage, price anomaly, bar interval, v4.1 fields, EXPIRED last bar close, find_hit_time
+  - **TestLearningV41** (7 tests) : D2 old trades filtered, D4 trades param, C2 time-of-day, C3 day-of-week, F2 expired rate alert, G2 market holidays, D3 journal pruning
+- **test_workflow_e2e.py** (82 tests) : backtest complet du pipeline end-to-end
   - Phase 1 : scoring formula edge cases (weather vs earnings, stale vs fresh, etc.)
   - Phase 2 : trade selection (filtering, session, correlation, pre-move, R/R)
   - Phase 3 : chain reactions (same/inverse/NEUTRAL, dedup)
@@ -647,6 +706,8 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Phase 5 : learning (significance, blending, feedback loop, adjustments applied)
   - Phase 6 : integration multi-jours (score → select → save → journal → learn)
   - Phase 7 : resilience erreurs (corrupt files, missing data, empty inputs)
+  - Phase 8 : multi-trade per scan (v3.5)
+  - Phase 9 : v4.1 journal audit (MAE/MFE, slippage, pruning, holidays, D2 cutoff)
 - **test_weekend.py** : verification que scans, event checks et triggers sont bloques le week-end
 - **test_data_persistence.py** : PG fallback, JSON guard, corrupt file resilience, auto-migration
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data

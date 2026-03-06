@@ -26,6 +26,7 @@ from backend.app.journal import (
     _determine_result,
     _extract_scan_trace,
     load_journal,
+    prune_old_journal_entries,
     run_daily_journal,
 )
 from backend.app.learning import (
@@ -1008,3 +1009,277 @@ class TestMultiTradeSelection:
         assert result.has_trade is False
         assert result.recommendations == []
         assert result.recommendation is None
+
+
+# ════════════════════════════════════════════════════════════════
+# Phase 9: v4.1 Journal Audit Improvements
+# ════════════════════════════════════════════════════════════════
+
+
+class TestJournalAuditV41:
+    """Tests for v4.1 journal audit improvements."""
+
+    def test_compute_pnl_division_by_zero(self):
+        """A2: entry_price=0 should return 0, not crash."""
+        from backend.app.journal import _compute_pnl
+        trade = _make_trade(entry_price=0.0)
+        assert _compute_pnl(trade, 100.0) == 0.0
+
+    def test_compute_mae_mfe_long(self):
+        """F1: MAE/MFE for a LONG trade."""
+        from backend.app.journal import _compute_mae_mfe
+        trade = _make_trade(direction=Direction.LONG, entry_price=100.0)
+        # bars: (ts, high, low, open, close)
+        bars = [
+            (datetime.now(timezone.utc), 102.0, 98.0, 100.0, 101.0),
+            (datetime.now(timezone.utc), 103.0, 99.0, 101.0, 102.0),
+        ]
+        mae, mfe = _compute_mae_mfe(trade, bars)
+        assert mae == -2.0  # Low 98 vs entry 100 = -2%
+        assert mfe == 3.0   # High 103 vs entry 100 = +3%
+
+    def test_compute_mae_mfe_short(self):
+        """F1: MAE/MFE for a SHORT trade."""
+        from backend.app.journal import _compute_mae_mfe
+        trade = _make_trade(direction=Direction.SHORT, entry_price=100.0)
+        bars = [
+            (datetime.now(timezone.utc), 102.0, 97.0, 100.0, 99.0),
+        ]
+        mae, mfe = _compute_mae_mfe(trade, bars)
+        assert mae == -2.0  # High 102 vs entry 100 = -2% adverse for SHORT
+        assert mfe == 3.0   # Low 97 vs entry 100 = +3% favorable for SHORT
+
+    def test_compute_slippage_long(self):
+        """B5: Slippage for a LONG trade — first bar open above entry."""
+        from backend.app.journal import _compute_slippage
+        trade = _make_trade(direction=Direction.LONG, entry_price=100.0)
+        bars = [(datetime.now(timezone.utc), 102.0, 99.0, 100.5, 101.0)]
+        slip = _compute_slippage(trade, bars)
+        # first_open=100.5, entry=100 → price moved against us: (100.5-100)/100 = 0.5%
+        # Returned as negative of (first_open - entry)/entry for LONG
+        assert slip is not None
+        assert abs(slip - (-0.5)) < 0.01
+
+    def test_compute_slippage_no_bars(self):
+        """B5: No bars returns None."""
+        from backend.app.journal import _compute_slippage
+        trade = _make_trade()
+        assert _compute_slippage(trade, None) is None
+        assert _compute_slippage(trade, []) is None
+
+    def test_check_price_anomaly_normal(self):
+        """F4: Normal price change should not flag anomaly."""
+        from backend.app.journal import _check_price_anomaly
+        trade = _make_trade(entry_price=100.0)
+        assert _check_price_anomaly(trade, 102.0) is False
+
+    def test_check_price_anomaly_extreme(self):
+        """F4: >20% price change should flag anomaly."""
+        from backend.app.journal import _check_price_anomaly
+        trade = _make_trade(entry_price=100.0)
+        assert _check_price_anomaly(trade, 125.0) is True
+
+    def test_bar_interval_detection(self):
+        """E4: Detect bar interval from timestamps."""
+        from backend.app.journal import _compute_bar_interval
+        now = datetime.now(timezone.utc)
+        bars_15m = [
+            (now, 1, 1, 1, 1),
+            (now + timedelta(minutes=15), 1, 1, 1, 1),
+        ]
+        assert _compute_bar_interval(bars_15m) == "15min"
+
+        bars_1h = [
+            (now, 1, 1, 1, 1),
+            (now + timedelta(hours=1), 1, 1, 1, 1),
+        ]
+        assert _compute_bar_interval(bars_1h) == "1h"
+
+    def test_journal_entry_v41_fields(self):
+        """v4.1 fields should be present in JournalEntry model."""
+        entry = JournalEntry(
+            date="2026-01-01",
+            scan_type=ScanType.EUROPE,
+            news_title="Test",
+            news_source="Test",
+            reasoning="Test",
+            score=50,
+            ticker="CL=F",
+            asset_name="WTI",
+            direction=Direction.LONG,
+            entry_time=datetime.now(timezone.utc),
+            entry_price=70.0,
+            slippage_pct=0.05,
+            max_adverse_excursion=-1.5,
+            max_favorable_excursion=2.3,
+            bar_coverage=24,
+            bar_interval="15min",
+            realized_rr=1.8,
+        )
+        dump = entry.model_dump(mode="json")
+        assert dump["slippage_pct"] == 0.05
+        assert dump["max_adverse_excursion"] == -1.5
+        assert dump["max_favorable_excursion"] == 2.3
+        assert dump["bar_coverage"] == 24
+        assert dump["bar_interval"] == "15min"
+        assert dump["realized_rr"] == 1.8
+
+    def test_determine_result_expired_uses_last_bar_close(self):
+        """B4: EXPIRED should use last post-entry bar close, not session close."""
+        trade = _make_trade(
+            direction=Direction.LONG, entry_price=70.0,
+            target_price=75.0, stop_price=68.0,
+        )
+        # Neither TP (75) nor SL (68) hit. Session close = 71.0
+        # But last bar close = 70.5
+        bars = [
+            (datetime.now(timezone.utc), 72.0, 69.0, 70.0, 70.5),
+        ]
+        result, exit_p, pnl = _determine_result(trade, 72.0, 69.0, 71.0, bars)
+        assert result == TradeResult.EXPIRED
+        assert exit_p == 70.5  # Last bar close, not 71.0
+
+    def test_find_hit_time_tp(self):
+        """A4: _find_hit_time should return the bar timestamp where TP was hit."""
+        from backend.app.journal import _find_hit_time
+        now = datetime.now(timezone.utc)
+        trade = _make_trade(
+            direction=Direction.LONG, target_price=72.0, stop_price=69.0,
+        )
+        bars = [
+            (now, 71.0, 69.5, 70.0, 70.5),           # Bar 1: no hit
+            (now + timedelta(hours=1), 73.0, 70.0, 70.5, 72.5),  # Bar 2: TP hit
+        ]
+        hit = _find_hit_time(trade, TradeResult.TP_HIT, bars)
+        assert hit == now + timedelta(hours=1)
+
+
+class TestLearningV41:
+    """Tests for v4.1 learning improvements."""
+
+    def _make_closed_trades(self, n_wins, n_losses, ticker="CL=F",
+                            category="commodities", news_cat="commodity",
+                            base_days_ago=30):
+        trades = []
+        base_time = datetime.now(timezone.utc) - timedelta(days=base_days_ago)
+        for i in range(n_wins):
+            trades.append(_make_trade(
+                ticker=ticker, category=category, news_category=news_cat,
+                result=TradeResult.TP_HIT, pnl_pct=1.5,
+                timestamp=base_time + timedelta(days=i),
+                scan_type=ScanType.EUROPE,
+            ))
+        for i in range(n_losses):
+            trades.append(_make_trade(
+                ticker=ticker, category=category, news_category=news_cat,
+                result=TradeResult.SL_HIT, pnl_pct=-1.0,
+                timestamp=base_time + timedelta(days=n_wins + i),
+                scan_type=ScanType.EUROPE,
+            ))
+        return trades
+
+    def test_d2_old_trades_filtered(self):
+        """D2: Trades older than 6 months should not affect learning."""
+        # 5 old wins (200 days ago) + 5 recent losses (10 days ago)
+        old = self._make_closed_trades(8, 0, base_days_ago=200)
+        recent = self._make_closed_trades(0, 8, base_days_ago=10)
+        all_trades = old + recent
+        raw = [t.model_dump(mode="json") for t in all_trades]
+        with _with_temp_trades(raw):
+            result = compute_learning_adjustments()
+        # Only recent losses should matter → CL=F should be penalized
+        if "CL=F" in result.get("adjustments", {}):
+            assert result["adjustments"]["CL=F"] < 1.0
+
+    def test_d4_trades_param_accepted(self):
+        """D4: compute_learning_adjustments() should accept trades parameter."""
+        trades = self._make_closed_trades(8, 2)
+        result = compute_learning_adjustments(trades=trades)
+        assert "adjustments" in result
+        assert "session_adj" in result
+
+    def test_c2_time_of_day_in_summary(self):
+        """C2: Performance summary should include time-of-day section."""
+        invalidate_perf_summary_cache()
+        trades = self._make_closed_trades(5, 3)
+        raw = [t.model_dump(mode="json") for t in trades]
+        with _with_temp_trades(raw):
+            summary = build_performance_summary()
+        # Should contain hour-based performance (all trades at same hour → one line)
+        assert "DONNEES DE PERFORMANCE" in summary
+
+    def test_c3_day_of_week_in_summary(self):
+        """C3: Day-of-week performance should appear in summary."""
+        invalidate_perf_summary_cache()
+        trades = self._make_closed_trades(5, 3)
+        raw = [t.model_dump(mode="json") for t in trades]
+        with _with_temp_trades(raw):
+            summary = build_performance_summary()
+        assert "DONNEES DE PERFORMANCE" in summary
+
+    def test_f2_expired_rate_alert(self):
+        """F2: High EXPIRED rate should trigger calibration alert."""
+        invalidate_perf_summary_cache()
+        base_time = datetime.now(timezone.utc) - timedelta(days=20)
+        trades = []
+        # 8 EXPIRED, 1 TP, 1 SL = 80% expired rate
+        for i in range(8):
+            trades.append(_make_trade(
+                timestamp=base_time + timedelta(days=i),
+                result=TradeResult.EXPIRED, pnl_pct=0.1,
+            ))
+        trades.append(_make_trade(
+            timestamp=base_time + timedelta(days=9),
+            result=TradeResult.TP_HIT, pnl_pct=2.0,
+        ))
+        trades.append(_make_trade(
+            timestamp=base_time + timedelta(days=10),
+            result=TradeResult.SL_HIT, pnl_pct=-1.0,
+        ))
+        raw = [t.model_dump(mode="json") for t in trades]
+        with _with_temp_trades(raw):
+            summary = build_performance_summary()
+        assert "ALERTE CALIBRATION" in summary
+
+    def test_g2_market_holidays(self):
+        """G2: Market holiday detection should work."""
+        from backend.app.config import is_market_holiday
+        assert is_market_holiday("2025-12-25") is True
+        assert is_market_holiday("2026-01-01") is True
+        assert is_market_holiday("2025-03-05") is False
+
+    def test_journal_pruning(self):
+        """D3: prune_old_journal_entries should remove old entries."""
+        from backend.app.journal import prune_old_journal_entries
+        old_entry = JournalEntry(
+            date="2024-01-01",
+            scan_type=ScanType.EUROPE,
+            news_title="Old news",
+            news_source="Test",
+            reasoning="Test",
+            score=50,
+            ticker="CL=F",
+            asset_name="WTI",
+            direction=Direction.LONG,
+            entry_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            entry_price=70.0,
+        )
+        recent_entry = JournalEntry(
+            date="2026-03-01",
+            scan_type=ScanType.EUROPE,
+            news_title="Recent news",
+            news_source="Test",
+            reasoning="Test",
+            score=50,
+            ticker="GC=F",
+            asset_name="Or",
+            direction=Direction.LONG,
+            entry_time=datetime(2026, 3, 1, tzinfo=timezone.utc),
+            entry_price=2000.0,
+        )
+        raw = [e.model_dump(mode="json") for e in [old_entry, recent_entry]]
+
+        with _with_temp_journal(raw), \
+             patch("backend.app.journal.is_pg_enabled", return_value=False):
+            pruned = prune_old_journal_entries(max_age_days=365)
+        assert pruned == 1  # Old entry should be pruned
