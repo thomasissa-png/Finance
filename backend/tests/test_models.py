@@ -24,12 +24,13 @@ def test_scored_news_edge_weighted_score():
         directional_clarity=100,
         transmission_delay=80,   # Not yet priced
         market_awareness=10,     # Almost nobody has seen
+        signal_reliability=100,  # Confirmed fact
         direction=Direction.LONG,
         category_score_mult=1.0,
     )
     # edge_factor = 0.8 * 0.9 = 0.72
-    # score = surprise * clarity * edge_factor * source_weight * category_mult
-    # 80 * 1.0 * 0.72 * 1.0 * 1.0 = 57.6 (freshness NOT in formula)
+    # reliability_factor = 0.4 + 0.6 * 1.0 = 1.0
+    # score = 80 * 1.0 * 0.72 * 1.0 * 1.0 * 1.0 = 57.6
     assert scored.total_score == 57.6
 
 
@@ -43,11 +44,13 @@ def test_scored_news_zero_edge_earnings():
         directional_clarity=100,
         transmission_delay=5,    # Already priced by algos
         market_awareness=95,     # Everyone saw it
+        signal_reliability=100,  # Confirmed (published earnings)
         direction=Direction.LONG,
         category_score_mult=0.2,  # Earnings penalty
     )
-    # edge_factor = max(0.05 * 0.05, 0.05) = 0.05 (floor raised from 0.01 to 0.05)
-    # score = 80 * 1.0 * 0.05 * 1.0 * 0.2 = 0.8 (freshness NOT in formula)
+    # edge_factor = max(0.05 * 0.05, 0.05) = 0.05
+    # reliability_factor = 1.0
+    # score = 80 * 1.0 * 0.05 * 1.0 * 1.0 * 0.2 = 0.8
     assert scored.total_score == 0.8
 
 
@@ -61,12 +64,14 @@ def test_scored_news_weather_commodity():
         directional_clarity=90,
         transmission_delay=85,
         market_awareness=5,
+        signal_reliability=90,  # Observed drought = high reliability
         direction=Direction.LONG,
         category_score_mult=1.8,  # Weather category boost
     )
     # edge_factor = 0.85 * 0.95 = 0.8075
-    # score = 75 * 0.9 * 0.8075 * 1.1 * 1.8 = 96.55... (freshness NOT in formula)
-    assert scored.total_score > 90
+    # reliability_factor = 0.4 + 0.6 * 0.9 = 0.94
+    # score = 75 * 0.9 * 0.8075 * 0.94 * 1.1 * 1.8 = ~90.76
+    assert scored.total_score > 85
 
 
 def test_scored_news_stale_cap():
@@ -79,9 +84,11 @@ def test_scored_news_stale_cap():
         directional_clarity=100,
         transmission_delay=80,
         market_awareness=10,
+        signal_reliability=100,
         direction=Direction.LONG,
     )
-    # score = 100 * 1.0 * 0.72 * 1.0 * 1.0 = 72.0 (freshness NOT in formula)
+    # edge_factor = 0.8 * 0.9 = 0.72, reliability_factor = 1.0
+    # score = 100 * 1.0 * 0.72 * 1.0 * 1.0 * 1.0 = 72.0
     assert scored.total_score == 72.0
 
 
@@ -190,3 +197,70 @@ def test_news_item_defaults():
     assert item.published is None
     assert item.related_tickers == []
     assert item.source_weight == 0.75
+
+
+# ── v4.0 tests: reliability and magnitude ────────────────────
+
+
+def test_scored_news_reliability_factor():
+    """signal_reliability should scale the score — speculative rumor vs confirmed fact."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    base_kwargs = dict(surprise=80, freshness=100, directional_clarity=100,
+                       transmission_delay=80, market_awareness=10,
+                       direction=Direction.LONG, category_score_mult=1.0)
+
+    # Confirmed fact: reliability_factor = 0.4 + 0.6*1.0 = 1.0
+    confirmed = ScoredNews(news=news, signal_reliability=100, **base_kwargs)
+    # Rumor: reliability_factor = 0.4 + 0.6*0.0 = 0.4
+    rumor = ScoredNews(news=news, signal_reliability=0, **base_kwargs)
+
+    assert confirmed.total_score > rumor.total_score
+    # Confirmed should be ~2.5x higher than rumor (1.0/0.4)
+    assert confirmed.total_score / rumor.total_score > 2.0
+
+
+def test_scored_news_reliability_floor():
+    """Even a pure rumor (reliability=0) retains 40% of value."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    confirmed = ScoredNews(news=news, surprise=80, freshness=100, directional_clarity=100,
+                           transmission_delay=80, market_awareness=10,
+                           signal_reliability=100, direction=Direction.LONG, category_score_mult=1.0)
+    rumor = ScoredNews(news=news, surprise=80, freshness=100, directional_clarity=100,
+                       transmission_delay=80, market_awareness=10,
+                       signal_reliability=0, direction=Direction.LONG, category_score_mult=1.0)
+    # Rumor score should be 40% of confirmed
+    assert abs(rumor.total_score / confirmed.total_score - 0.4) < 0.01
+
+
+def test_scored_news_magnitude_defaults():
+    """Default expected_magnitude and signal_reliability should be 50."""
+    news = NewsItem(title="Test", source="Reuters")
+    scored = ScoredNews(news=news, surprise=50, freshness=50, directional_clarity=50,
+                        direction=Direction.LONG)
+    assert scored.expected_magnitude == 50
+    assert scored.signal_reliability == 50
+
+
+def test_trade_recommendation_has_magnitude_reliability():
+    """TradeRecommendation should store expected_magnitude and signal_reliability."""
+    trade = TradeRecommendation(
+        scan_type=ScanType.EUROPE,
+        timestamp=datetime.now(timezone.utc),
+        ticker="MC.PA",
+        asset_name="LVMH",
+        category="actions_europe",
+        direction=Direction.LONG,
+        catalyst="Test",
+        entry_price=800.0,
+        target_price=808.0,
+        stop_price=793.2,
+        target_pct=1.0,
+        stop_pct=0.85,
+        risk_reward=1.18,
+        confidence=75,
+        time_window="09:00 — 20:00",
+        expected_magnitude=70,
+        signal_reliability=85,
+    )
+    assert trade.expected_magnitude == 70
+    assert trade.signal_reliability == 85

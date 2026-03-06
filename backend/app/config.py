@@ -171,6 +171,33 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
     ],
 }
 
+# ── Estimated bid-ask spread by ticker (in %) ─────────────────
+# Used to filter out trades where the spread eats the target.
+# Also sets the minimum stop-loss floor (can't stop tighter than spread).
+ESTIMATED_SPREADS: dict[str, float] = {
+    # Forex: tight spreads (major pairs)
+    "EURUSD=X": 0.01, "GBPUSD=X": 0.02, "USDJPY=X": 0.01, "AUDUSD=X": 0.02,
+    "USDCHF=X": 0.02, "EURJPY=X": 0.03, "USDCNH=X": 0.05,
+    # Major indices: tight
+    "^GSPC": 0.02, "^DJI": 0.02, "^IXIC": 0.02, "^RUT": 0.05,
+    "^FCHI": 0.03, "^GDAXI": 0.03, "^FTSE": 0.03, "^N225": 0.05,
+    # Euronext stocks: moderate
+    "MC.PA": 0.05, "OR.PA": 0.05, "AI.PA": 0.05, "SAN.PA": 0.05,
+    "TTE.PA": 0.04, "BNP.PA": 0.05, "RMS.PA": 0.06,
+    # Energy: tight-moderate
+    "CL=F": 0.03, "BZ=F": 0.04, "NG=F": 0.10,
+    # Metals: moderate
+    "GC=F": 0.03, "SI=F": 0.05, "HG=F": 0.05,
+    "PL=F": 0.10, "PA=F": 0.15,  # PGM: illiquid
+    # Agri: moderate-wide
+    "ZC=F": 0.05, "ZW=F": 0.05, "ZS=F": 0.05,
+    "KC=F": 0.10, "SB=F": 0.08, "CC=F": 0.12, "CT=F": 0.08,
+    "OJ=F": 0.20, "LE=F": 0.10, "HE=F": 0.10,
+    # ETFs
+    "URA": 0.08,
+}
+DEFAULT_SPREAD = 0.10  # Default for unknown tickers
+
 # ── Scan trigger cooldown in seconds (#35) ────────────────────
 TRIGGER_COOLDOWN_SECONDS = 300  # 5 minutes entre deux triggers manuels
 

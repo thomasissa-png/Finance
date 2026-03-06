@@ -50,6 +50,8 @@ class ScoredNews(BaseModel):
     directional_clarity: int = Field(ge=0, le=100)
     transmission_delay: int = Field(default=50, ge=0, le=100)  # 0=already priced, 100=nobody saw it
     market_awareness: int = Field(default=50, ge=0, le=100)    # 0=nobody, 100=everyone
+    expected_magnitude: int = Field(default=50, ge=0, le=100)  # v4.0: expected move amplitude 0=noise, 100=shock
+    signal_reliability: int = Field(default=50, ge=0, le=100)  # v4.0: confirmed vs speculative 0=rumor, 100=fact
     direction: Direction = Direction.NEUTRAL
     impacted_tickers: list[str] = Field(default_factory=list)
     reasoning: str = ""
@@ -60,21 +62,24 @@ class ScoredNews(BaseModel):
 
     @property
     def total_score(self) -> float:
-        """Edge-weighted score: surprise * clarity * edge_factor * source_weight * category_mult.
+        """Edge-weighted score: surprise * clarity * edge_factor * reliability * source_weight * category_mult.
 
         La formule privilegie les news NON ENCORE PRICEES :
         - transmission_delay eleve = le marche n'a pas encore integre -> boost
         - market_awareness faible = peu de monde a vu -> boost
+        - signal_reliability eleve = signal confirme -> boost (v4.0)
         - category_score_mult penalise les earnings/macro, booste commodity/weather
 
         edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.05)
-        Un earnings (delay=5, awareness=95) -> raw = 0.05 * 0.05 = 0.0025 -> floor 0.05
-        Un rapport meteo (delay=80, awareness=10) -> 0.8 * 0.9 = 0.72
+        reliability_factor = 0.4 + 0.6 * (signal_reliability / 100)
+          → floor 0.4 pour ne pas ecraser les rumeurs interessantes,
+            mais un signal confirme vaut 1.5x plus qu'une rumeur pure
 
         NOTE: freshness n'est PAS dans la formule car Claude voit deja l'age
         de la news ("[il y a X.Xh]") et ajuste surprise/transmission_delay
         en consequence. L'inclure causerait une double penalisation.
-        freshness reste stocke pour le journal/tracing.
+        expected_magnitude n'est PAS dans la formule — il est utilise dans la
+        calibration target/stop (trade_selector) et dans la confidence.
         """
         clarity_factor = self.directional_clarity / 100
 
@@ -87,7 +92,11 @@ class ScoredNews(BaseModel):
         # but high enough that mid-range signals aren't obliterated
         edge_factor = max(edge_factor, 0.05)
 
-        score = self.surprise * clarity_factor * edge_factor
+        # v4.0: Reliability discount — speculative signals worth less than confirmed facts
+        # Floor 0.4: even a pure rumor (reliability=0) retains 40% of value
+        reliability_factor = 0.4 + 0.6 * (self.signal_reliability / 100)
+
+        score = self.surprise * clarity_factor * edge_factor * reliability_factor
         # Apply source reliability weight (#6)
         score *= self.news.source_weight
         # Apply category edge-priority multiplier
@@ -133,6 +142,9 @@ class TradeRecommendation(BaseModel):
     market_awareness: int | None = None    # 0=nobody, 100=everyone
     edge_score: float | None = None        # edge_factor used in scoring
     chain_reactions: list[dict] | None = None  # Second-order impacts detected
+    # ── v4.0: Magnitude and reliability
+    expected_magnitude: int | None = None       # Claude's estimate of expected move amplitude
+    signal_reliability: int | None = None       # Claude's estimate of signal confirmation level
     # ── P0-#4: Raw score decomposition (diagnose Claude vs formula vs learning)
     raw_claude_score: float | None = None      # Score brut avant learning adjustments
     learning_multiplier: float = 1.0           # Multiplicateur learning appliqué (1.0 = no adjustment)

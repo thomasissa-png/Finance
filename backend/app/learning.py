@@ -559,17 +559,22 @@ def build_performance_summary(max_recent: int = 15) -> str:
 
     # v3.4 #11: Benchmark — compare win rate to random baseline (50%)
     avg_pnl = sum(pnls) / len(pnls) if pnls else 0
+    # v4.0 E3: Clear separation between DATA (facts) and INSTRUCTIONS (what to do)
     parts = [
-        f"\n--- HISTORIQUE DE PERFORMANCE (feedback loop) ---",
+        f"\n--- DONNEES DE PERFORMANCE (factuelles, a titre informatif) ---",
         f"Trades clotures: {len(closed)} | Win rate: {win_rate:.0f}% (baseline: 50%) | "
         f"PnL total: {sum(pnls):+.1f}% | PnL moyen: {avg_pnl:+.2f}%",
     ]
 
-    # v3.4 #7: Anti-double-counting note — tell Claude NOT to adjust scores
-    # based on this history, because the learning system already does it.
-    parts.append("NOTE: N'ajuste PAS tes scores surprise/transmission_delay en fonction "
-                 "de cet historique — le systeme de learning applique deja des multiplicateurs "
-                 "automatiques. Ton role est de scorer OBJECTIVEMENT chaque news.")
+    # Separate INSTRUCTIONS section after data
+    instructions = [
+        "--- INSTRUCTIONS SCORING (NE PAS MODIFIER TES SCORES EN FONCTION DES DONNEES CI-DESSUS) ---",
+        "Le systeme de learning applique AUTOMATIQUEMENT des multiplicateurs sur tes scores "
+        "pour corriger les biais. Ton role est de scorer OBJECTIVEMENT chaque news, sans "
+        "chercher a compenser l'historique. Ne gonfle PAS les scores weather/commodity "
+        "parce qu'ils ont bien marche, ne baisse PAS les scores macro parce qu'ils ont mal marche. "
+        "Score uniquement selon les criteres definis (surprise, delay, awareness, magnitude, reliability).",
+    ]
 
     # Performance by news category
     by_newscat: dict[str, dict] = {}
@@ -592,6 +597,27 @@ def build_performance_summary(max_recent: int = 15) -> str:
             parts.append("Par categorie de news (min 3 trades):")
             parts.extend(cat_lines)
 
+    # v4.0 E1: Performance by asset category (actions_europe, forex, commodities, etc.)
+    by_assetcat: dict[str, dict] = {}
+    for t in closed:
+        ac = getattr(t, "category", "other")
+        if ac not in by_assetcat:
+            by_assetcat[ac] = {"wins": 0, "total": 0, "pnl": 0.0}
+        by_assetcat[ac]["total"] += 1
+        if t.result == TradeResult.TP_HIT:
+            by_assetcat[ac]["wins"] += 1
+        by_assetcat[ac]["pnl"] += t.pnl_pct
+
+    if by_assetcat:
+        acat_lines = []
+        for ac, stats in sorted(by_assetcat.items(), key=lambda x: x[1]["pnl"], reverse=True):
+            if stats["total"] >= 3:
+                wr = stats["wins"] / stats["total"] * 100
+                acat_lines.append(f"  {ac}: {stats['total']} trades, WR={wr:.0f}% (vs 50%), PnL={stats['pnl']:+.1f}%")
+        if acat_lines:
+            parts.append("Par categorie d'actif (min 3 trades):")
+            parts.extend(acat_lines)
+
     # Recent trades (last N)
     recent = sorted(closed, key=lambda t: t.timestamp, reverse=True)[:max_recent]
     if recent:
@@ -601,6 +627,24 @@ def build_performance_summary(max_recent: int = 15) -> str:
             parts.append(
                 f"  {t.ticker} ({nc}) {t.direction.value} → {t.result.value} {t.pnl_pct:+.2f}%"
             )
+
+    # v4.0 E2: Direction accuracy — track if Claude predicted the right direction
+    direction_correct = 0
+    direction_total = 0
+    for t in closed:
+        if t.pnl_pct is not None and t.pnl_pct != 0:
+            direction_total += 1
+            if t.pnl_pct > 0:
+                direction_correct += 1
+    if direction_total >= 10:
+        dir_accuracy = direction_correct / direction_total * 100
+        if dir_accuracy < 45:
+            parts.append(f"BIAIS DIRECTION: Ta precision directionnelle est FAIBLE ({dir_accuracy:.0f}%). "
+                         "Augmente le seuil de directional_clarity et soit plus conservateur sur les signaux ambigus.")
+        elif dir_accuracy > 65:
+            parts.append(f"DIRECTION SOLIDE: precision directionnelle {dir_accuracy:.0f}% — bonne calibration.")
+        else:
+            parts.append(f"Direction accuracy: {dir_accuracy:.0f}% (neutre)")
 
     # Biases detected — transmission_delay accuracy
     delay_errors = []
@@ -622,7 +666,9 @@ def build_performance_summary(max_recent: int = 15) -> str:
                 parts.append(f"BIAIS DETECTE: Tu SOUS-ESTIMES le transmission_delay de {avg_error:+.0f} points en moyenne. "
                              "Les marches pricent PLUS LENTEMENT que tu ne le penses. Corrige a la hausse.")
 
-    parts.append("--- FIN HISTORIQUE ---")
+    parts.append("--- FIN DONNEES ---")
+    parts.extend(instructions)
+    parts.append("--- FIN INSTRUCTIONS ---")
     result = "\n".join(parts)
     _cached_perf_summary = result
     return result

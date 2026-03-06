@@ -120,3 +120,46 @@ def test_scoring_tool_news_categories():
     assert "supply_chain" in news_cat_enum
     assert "central_bank_subtle" in news_cat_enum
     assert "other" in news_cat_enum
+
+
+# ── v4.0 tests: new scoring dimensions ─────────────────────
+
+
+def test_scoring_tool_has_magnitude_and_reliability():
+    """v4.0: Tool schema should include expected_magnitude and signal_reliability."""
+    items_schema = SCORING_TOOL["input_schema"]["properties"]["scores"]["items"]
+    assert "expected_magnitude" in items_schema["properties"]
+    assert "signal_reliability" in items_schema["properties"]
+    # Check they're required
+    assert "expected_magnitude" in items_schema["required"]
+    assert "signal_reliability" in items_schema["required"]
+    # Check bounds
+    assert items_schema["properties"]["expected_magnitude"]["minimum"] == 0
+    assert items_schema["properties"]["expected_magnitude"]["maximum"] == 100
+    assert items_schema["properties"]["signal_reliability"]["minimum"] == 0
+    assert items_schema["properties"]["signal_reliability"]["maximum"] == 100
+
+
+def test_system_prompt_dynamic_asset_count():
+    """v4.0 A3: System prompt should use dynamic asset count, not hardcoded 39."""
+    from backend.app.news_scorer import SYSTEM_PROMPT
+    from backend.app.config import ASSETS
+    assert f"Univers de {len(ASSETS)} actifs" in SYSTEM_PROMPT
+    # Should NOT contain the old hardcoded number
+    assert "Univers de 39 actifs" not in SYSTEM_PROMPT
+
+
+def test_system_prompt_has_magnitude_instructions():
+    """v4.0 B1: System prompt should include expected_magnitude scoring guidance."""
+    from backend.app.news_scorer import SYSTEM_PROMPT
+    assert "expected_magnitude" in SYSTEM_PROMPT
+    assert "signal_reliability" in SYSTEM_PROMPT
+
+
+def test_convergence_requires_direction_param():
+    """v4.0 A2: _count_convergence should accept scored_directions for direction validation."""
+    from backend.app.news_scorer import _count_convergence
+    from backend.app.models import Direction, NewsItem
+    import inspect
+    sig = inspect.signature(_count_convergence)
+    assert "all_scored_directions" in sig.parameters

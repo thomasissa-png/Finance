@@ -1,4 +1,4 @@
-# OneShot News Trading System — v3.5 Full Intelligence Pipeline
+# OneShot News Trading System — v4.0 Decision Audit Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -90,13 +90,35 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - **Dynamic correlation** : skip computation si static group couvre deja la paire
 - **collect_structured_data()** : 11→17 sources, timeout 90→120s
 
+#### 9. Audit decision v4.0 — 19 ameliorations (audit complet du pipeline de decisions)
+- **A1** : Bug fix `impacted` variable utilisee avant definition dans news_scorer.py
+- **A2** : Convergence direction — validation que les news convergent dans la meme direction
+- **A3** : Dynamic asset count dans le prompt (`len(ASSETS)` au lieu de 39 hardcode)
+- **B1+B2** : `expected_magnitude` et `signal_reliability` — 2 nouvelles dimensions scoring + `reliability_factor` dans la formule
+- **B3** : Confidence decorrellee du score (`reliability * clarity / 100`)
+- **B4** : Filtre spread — rejette si spread > 40% du target estime, `ESTIMATED_SPREADS` dans config.py
+- **B5** : Pre-move depuis `today_open` au lieu de `previous_close`
+- **C1** : ATR 5 jours (au lieu de 20) — plus reactif aux conditions recentes
+- **C2** : Stop SHORT asymetrique +20% (les squeezes haussiers sont plus violents)
+- **C3** : Stop floor adaptatif = max(ancien plancher, 2x estimated_spread)
+- **C4** : Score factor convexe `(score/100)^1.5` — recompense disproportionnellement les hauts scores
+- **D1** : Fallback ticker — essaie les tickers secondaires si le principal est bloque
+- **D3** : Cache correlation dynamique TTL 1h
+- **D4** : Daily cap adaptatif VIX (stress=2, elevated=4, normal=6)
+- **E1** : PnL par categorie d'actif dans le feedback Claude
+- **E2** : Direction accuracy tracking dans le feedback Claude
+- **E3** : Separation DONNEES DE PERFORMANCE vs INSTRUCTIONS SCORING dans le prompt
+
 ### Etat actuel des fichiers cles
 - `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/database.py` : PG persistence layer, 4 tables, pool, CRUD
 - `backend/app/journal.py` : fermeture trades, intraday 1h bars, post-entry filtering, PG save
-- `backend/app/learning.py` : v3.4, 5 dimensions (ticker, cat, session, newscat, regime)
-- `backend/app/trade_selector.py` : adaptive cooldown, re-entry, VIX sizing, Friday mgmt, dynamic correlation opt
+- `backend/app/learning.py` : v4.0, 5 dimensions + direction accuracy + PnL par asset category
+- `backend/app/trade_selector.py` : v4.0, convex calibration, fallback ticker, spread filter, VIX daily cap, asymmetric SHORT
+- `backend/app/news_scorer.py` : v4.0, 11 dimensions scoring, convergence direction, dynamic asset count
+- `backend/app/config.py` : ESTIMATED_SPREADS pour 41 tickers, DEFAULT_SPREAD
+- `backend/app/models.py` : v4.0, expected_magnitude, signal_reliability, reliability_factor dans total_score
 - `backend/app/scan_history.py` : PG support, pruning 30j
 - `backend/migrate_json_to_postgres.py` : script de migration one-shot
 
@@ -263,9 +285,9 @@ Module `event_scanner.py` — schedule dans `main.py` toutes les 10 minutes.
 - **Trigger** : si signal detecte → scan complet immediat (respecte cooldown par categorie)
 - **Scan type** : avant 14:00 = europe, apres 14:00 = us
 
-## Scoring — Formule Edge-Weighted (v3.1)
+## Scoring — Formule Edge-Weighted (v4.0)
 
-### Criteres d'evaluation (par Claude)
+### Criteres d'evaluation (par Claude) — 11 dimensions
 1. **surprise** (0-100) : A quel point l'info est inattendue
 2. **freshness** (0-100) : Calculee automatiquement (age de la news). **NON incluse dans la formule** — stockee pour le journal/tracing uniquement. Claude voit deja l'age "[il y a X.Xh]" et ajuste transmission_delay en consequence. L'inclure causerait une double penalisation.
 3. **directional_clarity** (0-100) : Clarte de la direction d'impact
@@ -283,12 +305,29 @@ Module `event_scanner.py` — schedule dans `main.py` toutes les 10 minutes.
 7. **impacted_tickers** : tickers directement impactes
 8. **news_category** : earnings, macro, geopolitical, regulatory, m_a, sector, commodity, weather, supply_chain, central_bank_subtle, other
 9. **reasoning** : explication incluant l'estimation du delai de pricing
+10. **expected_magnitude** (0-100, v4.0) : Amplitude attendue du mouvement prix
+    - 0 = bruit, mouvement negligeable
+    - 50 = mouvement notable 1-3%
+    - 100 = choc majeur > 3%
+11. **signal_reliability** (0-100, v4.0) : Fiabilite du signal
+    - 0 = rumeur/speculation non confirmee
+    - 50 = rapport de presse
+    - 100 = fait confirme / mesure officielle (USDA, EIA, NOAA)
 
-### Formule de score (v3.1 — freshness retiree)
+### Formule de score (v4.0 — reliability_factor ajoute)
 ```
 edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.05)
-score = surprise * (clarity/100) * edge_factor * source_weight * category_score_mult
+reliability_factor = 0.4 + 0.6 * (signal_reliability / 100)
+score = surprise * (clarity/100) * edge_factor * reliability_factor * source_weight * category_score_mult
 ```
+**Changements v4.0 vs v3.1 :**
+- **signal_reliability** ajoute : les faits confirmes (EIA, USDA) scorent 2.5x plus que les rumeurs
+- reliability_factor plancher a 0.4 (meme une rumeur garde 40% de valeur — utile si elle est vraie)
+- **expected_magnitude** ajoute : utilise dans la calibration R/R (pas dans le score)
+- **convergence direction** (A2) : validation que les news convergent dans la meme direction
+- **dynamic asset count** (A3) : prompt utilise `len(ASSETS)` au lieu de 39 hardcode
+- **bug fix A1** : `impacted` variable utilise avant definition — corrige
+
 **Changements v3.1 vs v2.0 :**
 - freshness retiree de la formule (evite double penalisation avec transmission_delay)
 - edge_factor floor releve de 0.01 → 0.05 (empeche l'ecrasement total des scores mid-range)
@@ -367,17 +406,23 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
 - **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
 - **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)
 
-## Calibration R/R (decorrellee)
-3 tiers de volatilite :
-- **Low-vol** (ATR < 1%, forex/large indices) : factor=0.35+score/100*0.55, stop=0.5 (plus large pour absorber le bruit)
-- **Normal** (ATR 1-5%) : factor=0.25+score/100*0.45, stop=0.4
-- **High-vol** (ATR > 5%, NG, small-cap) : factor=0.15+score/100*0.30, stop=0.3 (plus serre, target realiste)
-- **Target**: ATR x score_factor x news_category_target_mult — pondere par le score de confiance
-- **Stop**: ATR x stop_fraction x news_category_stop_mult — fixe, independant du target
-- **R/R variable**: le ratio varie selon le score (plus le score est eleve, plus le target est ambitieux)
-- **Planchers**: target min = TARGET_PERCENT, stop min = TARGET_PERCENT x 0.7
+## Calibration R/R (v4.0 — decorrellee, convexe)
+3 tiers de volatilite avec **facteur convexe** et **magnitude scaling** :
+- **Low-vol** (ATR < 1%, forex/large indices) : factor=0.30+(score/100)^1.5*0.60, stop=0.5
+- **Normal** (ATR 1-5%) : factor=0.20+(score/100)^1.5*0.50, stop=0.4
+- **High-vol** (ATR > 5%, NG, small-cap) : factor=0.10+(score/100)^1.5*0.35, stop=0.3
+- **Convexe** (v4.0 C4) : `(score/100)^1.5` au lieu de lineaire — les scores eleves sont disproportionnellement recompenses
+- **Magnitude factor** (v4.0 B1) : `0.7 + 0.6 * (expected_magnitude/100)` multiplie le score_factor
+- **ATR 5 jours** (v4.0 C1) : utilise les 5 derniers jours au lieu de 20 (plus reactif aux conditions recentes)
+- **Asymmetrie SHORT** (v4.0 C2) : stop SHORT +20% plus large (les squeezes sont plus violents a la hausse)
+- **Stop floor adaptatif** (v4.0 C3) : `max(TARGET_PERCENT * 0.7, spread_estime * 2)` — evite les stops en dessous du spread
+- **Target**: ATR x score_factor x magnitude_factor x news_category_target_mult
+- **Stop**: ATR x stop_fraction x news_category_stop_mult (x1.2 si SHORT)
+- **R/R variable**: le ratio varie selon le score (convexe, plus le score est eleve, plus le target est ambitieux)
+- **Planchers**: target min = TARGET_PERCENT, stop min = max(TARGET_PERCENT x 0.7, 2x estimated_spread)
+- **Spread filter** (v4.0 B4) : rejette les trades ou le spread represente >40% du target estime
 
-## Trade Selection — Risk Management (v3.5)
+## Trade Selection — Risk Management (v4.0)
 
 ### Cooldown adaptatif par categorie
 - **weather/supply_chain** : cooldown 1 jour (signaux persistants, re-scan rapide)
@@ -394,8 +439,32 @@ Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `i
   - **VIX regime** : stress (VIX≥30) → 0.5x | elevated (VIX≥20) → 0.75x | calm (VIX≤13) → 1.2x
   - **Vendredi** : apres-midi → 0.6x | matin → 0.8x (liquidite reduite + risque gap weekend)
 
+### Fallback ticker (v4.0 D1)
+- Si le ticker principal est bloque (correlation, cooldown, prix indisponible), essaie le ticker suivant dans `impacted_tickers`
+- Ordre : parcourt tous les tickers eligibles d'une news avant de rejeter le candidat
+- Evite de perdre des signaux valides quand seul le ticker primaire est bloque
+
+### Daily cap adaptatif VIX (v4.0 D4)
+- **stress** (VIX≥30) : max 2 trades/jour (MAX_TRADES_PER_DAY // 3)
+- **elevated** (VIX≥20) : max 4 trades/jour (MAX_TRADES_PER_DAY * 2/3)
+- **normal/calm** : max 6 trades/jour (MAX_TRADES_PER_DAY)
+
+### Confidence decorrellee (v4.0 B3)
+- `confidence = min(100, signal_reliability * directional_clarity / 100)`
+- Plus liee au score — reflete la fiabilite x clarte, pas le score total
+
+### Spread filter (v4.0 B4)
+- Avant calibration, estime le target potentiel
+- Rejette si spread > 40% du target estime (trade non profitable apres spread)
+- `ESTIMATED_SPREADS` dans config.py pour les 41 tickers
+
+### Pre-move depuis open (v4.0 B5)
+- Utilise `today_open` au lieu de `previous_close` pour detecter les pre-moves intraday
+- Plus precis pour le day trading (capte le mouvement depuis l'ouverture)
+
 ### Dynamic correlation optimization
 - Si deux tickers sont dans le meme groupe statique, skip le calcul de correlation dynamique (rolling 20j)
+- **Cache TTL 1h** (v4.0 D3) : resultats de correlation dynamique caches pendant 1h
 - Gain de performance : evite des appels yfinance inutiles quand la correlation est deja connue
 
 ## Correlation Groups
@@ -466,9 +535,12 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Formule: `1.0 + clamp(avg_pnl / 2, -cap, cap) * sensitivity`
 - **Decay temporel adaptatif**: demi-vie 45j (peu de trades) → 30j (beaucoup de trades)
   - Transition graduelle entre 50 et 200 trades clotures
-- **Feedback loop Claude** (v3.4): `build_performance_summary()` injecte dans le prompt :
+- **Feedback loop Claude** (v4.0): `build_performance_summary()` injecte dans le prompt :
+  - Section **DONNEES DE PERFORMANCE** (faits) separee de **INSTRUCTIONS SCORING** (v4.0 E3)
   - Win rate global avec **benchmark baseline 50%** pour comparaison
   - PnL moyen par categorie de news (avec benchmark)
+  - **PnL moyen par categorie d'actif** (v4.0 E1) : actions_europe, metaux, forex, commodities, indices
+  - **Direction accuracy** (v4.0 E2) : % de trades ou la direction etait correcte (prix final > entry pour LONG, < entry pour SHORT)
   - Derniers 15 trades (ticker, direction, resultat, PnL)
   - Detection de biais transmission_delay (surestime/sous-estime)
   - **Anti-double-counting** (v3.4): note explicite demandant a Claude de NE PAS ajuster ses scores en fonction de l'historique (le learning s'en charge automatiquement)
@@ -485,15 +557,24 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `decomposition`: dict[ticker, {ticker_mult, cat_mult}] — pour diagnostics
 - **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour acces concurrent sur aux fichiers JSON
 
-## Parametres cles (v3.5)
+## Parametres cles (v4.0)
 - Score minimum: 20/100 (abaisse de 25 — capte les signaux mid-range)
 - Edge factor floor: 0.05 (releve de 0.01)
+- Reliability factor floor: 0.4 (rumeur garde 40% de valeur)
 - Ratio risque/rendement minimum: 1.2 (abaisse de 1.3 — plus realiste en intraday)
 - Freshness peak: < 2h (stocke, non inclus dans la formule)
 - News max age: 8h (elargi de 6h pour capter overnight US au scan Europe 07:50)
 - Dedup Jaccard threshold: 0.65 (abaisse de 0.75 pour meilleure dedup)
 - Trigger cooldown: 300s (5 min entre deux triggers manuels)
 - Schema version: 3
+- ATR window: **5 jours** (reduit de 20 — plus reactif)
+- Score factor: **convexe** `(score/100)^1.5` (v4.0, au lieu de lineaire)
+- Magnitude factor: `0.7 + 0.6 * (expected_magnitude/100)` (v4.0)
+- SHORT stop asymmetrie: **+20%** (v4.0)
+- Spread filter seuil: spread > 40% du target estime → rejet (v4.0)
+- Correlation cache TTL: 1h (v4.0)
+- Daily cap adaptatif: stress=2, elevated=4, normal=6 (v4.0)
+- ESTIMATED_SPREADS: 41 tickers dans config.py, DEFAULT_SPREAD=0.10% (v4.0)
 - Learning min trades: 5 (global), **8** (par ticker, releve de 4), 5 (par categorie/news_cat/session/regime)
 - Learning significance: t-stat > **1.5** per-ticker (releve de 1.0), t-stat > 1.0 pour les autres dimensions
 
@@ -554,7 +635,11 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Couvre: config, models, news_scorer, trade_selector, journal, learning, economic_calendar, data_apis, event_scanner
 - v3 tests ajoutés : significance test, compute_adjustment, multiplicative blending, build_performance_summary
 - v3.4 tests ajoutés (10 tests) : structured return format, session_adj separate, regime_adj, per-ticker stricter significance, newscat_adj separate, decomposition, configurable t_threshold, PnL-signed adjustment, benchmark in summary, anti-double-counting
-- **test_workflow_e2e.py** (57 tests) : backtest complet du pipeline end-to-end
+- v4.0 tests ajoutés (12 tests) :
+  - **test_models.py** : reliability_factor, reliability_floor, magnitude_defaults, trade_recommendation magnitude/reliability
+  - **test_news_scorer.py** : tool schema magnitude/reliability, dynamic asset count, magnitude instructions, convergence direction param
+  - **test_trade_selector.py** : convex_score_factor, short_asymmetric_stop, magnitude_scales_target, spread_stop_floor
+- **test_workflow_e2e.py** (64 tests) : backtest complet du pipeline end-to-end
   - Phase 1 : scoring formula edge cases (weather vs earnings, stale vs fresh, etc.)
   - Phase 2 : trade selection (filtering, session, correlation, pre-move, R/R)
   - Phase 3 : chain reactions (same/inverse/NEUTRAL, dedup)

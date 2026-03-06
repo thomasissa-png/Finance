@@ -73,7 +73,7 @@ SYSTEM_PROMPT = f"""Tu es un speculateur expert en news trading depuis 20 ans, s
 de DISLOCATIONS NON ENCORE PRICEES par le marche. Ton edge, c'est d'identifier les news qui ne sont
 PAS ENCORE integrees dans les cours — les signaux en avance de phase.
 
-Univers de 39 actifs surveilles :
+Univers de {len(ASSETS)} actifs surveilles :
 {TICKER_LIST}
 
 Pour chaque news, tu dois evaluer :
@@ -104,13 +104,30 @@ Pour chaque news, tu dois evaluer :
    - 80 = tous les terminaux Bloomberg
    - 100 = tout le monde (headline CNN/BBC, trending sur Twitter)
 
-5. **direction** : "LONG", "SHORT", ou "NEUTRAL"
+5. **expected_magnitude** (0-100) : Quelle AMPLITUDE de move attends-tu sur les actifs impactes ?
+   - 0-10 = micro-impact, bruit statistique (<0.3%)
+   - 20-40 = impact modere, move normal (0.3-1%)
+   - 50-70 = impact significatif, move notable (1-3%)
+   - 80-100 = impact majeur, choc d'offre/demande (>3%)
+   Exemples :
+   - Rapport USDA routine, chiffres proches du consensus → 15 (bruit)
+   - Gel ponctuel Bresil, degats limites → 40 (modere)
+   - Secheresse severe Midwest pendant silking mais → 75 (significatif)
+   - Pipeline explosion majeure / embargo total → 90 (choc)
 
-6. **impacted_tickers** : tickers directement impactes de notre univers
+6. **signal_reliability** (0-100) : A quel point ce signal est CONFIRME vs SPECULATIF ?
+   - 0-20 = rumeur non sourcee, prevision a 10 jours, tweet non verifie
+   - 30-50 = prevision meteo 3-5 jours, article presse citant "sources proches"
+   - 60-80 = donnees officielles (EIA, USDA), rapport gouvernemental, evenement confirme
+   - 90-100 = fait observe/mesure (gel constate cette nuit, pipeline explose, stock draw publie)
 
-7. **news_category** : categorie parmi : {CATEGORY_LIST}
+7. **direction** : "LONG", "SHORT", ou "NEUTRAL"
 
-8. **reasoning** : explication en 1-2 phrases — INCLURE l'estimation du delai de pricing
+8. **impacted_tickers** : tickers directement impactes de notre univers
+
+9. **news_category** : categorie parmi : {CATEGORY_LIST}
+
+10. **reasoning** : explication en 1-2 phrases — INCLURE l'estimation du delai de pricing
 
 REGLES CRUCIALES — PHILOSOPHIE DU SYSTEME :
 
@@ -171,6 +188,14 @@ SCORING_TOOL = {
                             "type": "integer", "minimum": 0, "maximum": 100,
                             "description": "What % of market participants have already seen this? 0=nobody, 100=everyone",
                         },
+                        "expected_magnitude": {
+                            "type": "integer", "minimum": 0, "maximum": 100,
+                            "description": "Expected price move amplitude: 0=noise, 50=notable 1-3%, 100=major shock >3%",
+                        },
+                        "signal_reliability": {
+                            "type": "integer", "minimum": 0, "maximum": 100,
+                            "description": "How confirmed is this signal? 0=rumor/speculation, 50=press report, 100=confirmed fact/measurement",
+                        },
                         "direction": {"type": "string", "enum": ["LONG", "SHORT", "NEUTRAL"]},
                         "impacted_tickers": {"type": "array", "items": {"type": "string"}},
                         "news_category": {"type": "string", "enum": NEWS_CATEGORIES},
@@ -178,6 +203,7 @@ SCORING_TOOL = {
                     },
                     "required": ["index", "surprise", "directional_clarity",
                                  "transmission_delay", "market_awareness",
+                                 "expected_magnitude", "signal_reliability",
                                  "direction", "impacted_tickers", "news_category", "reasoning"],
                 },
             },
@@ -480,6 +506,16 @@ def _score_batch(
     if not scores:
         return []
 
+    # v4.0: Build direction map for convergence validation (first pass)
+    scored_directions: dict[int, Direction] = {}
+    for entry in scores:
+        idx = entry.get("index", 0) - 1
+        if 0 <= idx < len(batch_items):
+            try:
+                scored_directions[idx] = Direction(entry.get("direction", "NEUTRAL"))
+            except ValueError:
+                scored_directions[idx] = Direction.NEUTRAL
+
     # Map scores back to ScoredNews objects
     scored: list[ScoredNews] = []
     for entry in scores:
@@ -502,6 +538,9 @@ def _score_batch(
         # New edge-detection fields
         transmission_delay = max(0, min(100, entry.get("transmission_delay", 50)))
         market_awareness = max(0, min(100, entry.get("market_awareness", 50)))
+        # v4.0: Magnitude and reliability dimensions
+        expected_magnitude = max(0, min(100, entry.get("expected_magnitude", 50)))
+        signal_reliability = max(0, min(100, entry.get("signal_reliability", 50)))
 
         # Hard rejection: categories with unrealistic transmission_delay
         # These are priced quickly by algos — Claude sometimes overestimates delay
@@ -578,13 +617,13 @@ def _score_batch(
         # Apply category score multiplier (edge priority)
         cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
 
+        # Detect chain reactions for impacted tickers
+        impacted = entry.get("impacted_tickers", [])
+
         # v3.6 (N): Cross-day signal accumulation boost for persistent physical signals
         accum_boost = _get_signal_accumulation_boost(news_cat, impacted)
         if accum_boost > 1.0:
             cat_mult *= accum_boost
-
-        # Detect chain reactions for impacted tickers
-        impacted = entry.get("impacted_tickers", [])
         chain_reactions = _detect_chain_reactions(impacted, direction)
         # Add second-order tickers to impacted list
         for cr in chain_reactions:
@@ -592,7 +631,8 @@ def _score_batch(
                 impacted.append(cr.ticker)
 
         # v3.6: Count independent sources confirming same signal (convergence)
-        convergence_count = _count_convergence(item, impacted, direction, batch_items)
+        # v4.0: Pass scored directions to validate direction consistency
+        convergence_count = _count_convergence(item, impacted, direction, batch_items, scored_directions)
 
         scored.append(ScoredNews(
             news=item,
@@ -601,6 +641,8 @@ def _score_batch(
             directional_clarity=max(0, min(100, entry.get("directional_clarity", 0))),
             transmission_delay=transmission_delay,
             market_awareness=market_awareness,
+            expected_magnitude=expected_magnitude,
+            signal_reliability=signal_reliability,
             direction=direction,
             impacted_tickers=impacted,
             reasoning=entry.get("reasoning", ""),
@@ -622,13 +664,14 @@ def _count_convergence(
     impacted_tickers: list[str],
     direction: Direction,
     all_items: list[NewsItem],
+    all_scored_directions: dict[int, Direction] | None = None,
 ) -> int:
     """Count independent sources confirming the same signal (I. convergence detection).
 
     Two items converge if they:
     1. Come from different sources
     2. Impact at least one common ticker
-    3. Have the same directional implication
+    3. Have the same directional implication (not opposing directions)
 
     Returns count of additional confirming sources (0 = no convergence).
     """
@@ -636,7 +679,7 @@ def _count_convergence(
     item_source = item.source.lower()
     item_tickers = set(impacted_tickers)
 
-    for other in all_items:
+    for idx, other in enumerate(all_items):
         if other is item:
             continue
         if other.source.lower() == item_source:
@@ -644,6 +687,12 @@ def _count_convergence(
         # Check if related_tickers overlap with impacted_tickers
         other_tickers = set(other.related_tickers)
         if item_tickers & other_tickers:
+            # v4.0: Verify direction consistency — opposing directions = divergence, not convergence
+            if all_scored_directions and idx in all_scored_directions:
+                other_dir = all_scored_directions[idx]
+                if other_dir != Direction.NEUTRAL and direction != Direction.NEUTRAL:
+                    if other_dir != direction:
+                        continue  # Opposing direction = not convergence
             count += 1
 
     return count

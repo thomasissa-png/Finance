@@ -304,7 +304,7 @@ def test_build_performance_summary_with_data():
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         summary = build_performance_summary()
-    assert "HISTORIQUE DE PERFORMANCE" in summary
+    assert "DONNEES DE PERFORMANCE" in summary
     assert "Win rate" in summary
     assert "Derniers" in summary
 
@@ -469,4 +469,4 @@ def test_v34_performance_summary_anti_double_counting():
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         summary = build_performance_summary()
-    assert "N'ajuste PAS tes scores" in summary
+    assert "OBJECTIVEMENT" in summary  # v4.0 E3: restructured anti-double-counting instructions

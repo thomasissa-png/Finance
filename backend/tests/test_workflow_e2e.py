@@ -83,7 +83,8 @@ def _make_news(title="Test news", source="Reuters", source_weight=0.85,
 
 def _make_scored(news=None, surprise=70, freshness=100, clarity=80,
                  delay=70, awareness=15, direction=Direction.LONG,
-                 tickers=None, category="commodity", cat_mult=None):
+                 tickers=None, category="commodity", cat_mult=None,
+                 reliability=100, magnitude=50):
     if news is None:
         news = _make_news()
     if cat_mult is None:
@@ -95,6 +96,8 @@ def _make_scored(news=None, surprise=70, freshness=100, clarity=80,
         directional_clarity=clarity,
         transmission_delay=delay,
         market_awareness=awareness,
+        expected_magnitude=magnitude,
+        signal_reliability=reliability,
         direction=direction,
         impacted_tickers=tickers or ["CL=F"],
         reasoning="Test reasoning for backtest",
@@ -248,7 +251,7 @@ class TestTradeSelection:
         """NEUTRAL news must be rejected — no directional trade possible."""
         scored = [_make_scored(direction=Direction.NEUTRAL)]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.0, 69.0, 1.5)):
+                   return_value=(70.0, 2.0, 69.0, 1.5, 69.5)):
             result = select_trade(scored, ScanType.EUROPE)
         assert result.has_trade is False
 
@@ -258,7 +261,7 @@ class TestTradeSelection:
         scored = [_make_scored(surprise=10, delay=10, awareness=90, category="earnings")]
         assert scored[0].total_score < MIN_SCORE_THRESHOLD
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.0, 69.0, 1.5)):
+                   return_value=(70.0, 2.0, 69.0, 1.5, 69.5)):
             result = select_trade(scored, ScanType.EUROPE)
         assert result.has_trade is False
 
@@ -267,7 +270,7 @@ class TestTradeSelection:
         # ^GSPC is USD index — not eligible in Europe scan
         scored = [_make_scored(tickers=["^GSPC"])]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(5000.0, 1.5, 4990.0, 1.2)):
+                   return_value=(5000.0, 1.5, 4990.0, 1.2, 4995.0)):
             result = select_trade(scored, ScanType.EUROPE)
         assert result.has_trade is False
 
@@ -275,7 +278,7 @@ class TestTradeSelection:
         """US scan should reject Euronext stocks."""
         scored = [_make_scored(tickers=["MC.PA"])]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(800.0, 1.5, 795.0, 1.0)):
+                   return_value=(800.0, 1.5, 795.0, 1.0, 796.0)):
             result = select_trade(scored, ScanType.US)
         assert result.has_trade is False
 
@@ -343,7 +346,7 @@ class TestTradeSelection:
             delay=75, awareness=10, tickers=["CL=F"], category="commodity",
         )]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.5, 1.3)), \
+                   return_value=(70.0, 2.5, 69.5, 1.3, 69.8)), \
              patch("backend.app.trade_selector.check_event_conflict",
                    return_value=None):
             result = select_trade(scored, ScanType.EUROPE)
@@ -367,7 +370,7 @@ class TestTradeSelection:
             _make_scored(tickers=["GC=F"], direction=Direction.NEUTRAL, surprise=60),
         ]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.5, 1.3)), \
+                   return_value=(70.0, 2.5, 69.5, 1.3, 69.8)), \
              patch("backend.app.trade_selector.check_event_conflict",
                    return_value=None):
             result = select_trade(scored, ScanType.EUROPE)
@@ -613,7 +616,7 @@ class TestLearningPipeline:
         raw = [t.model_dump(mode="json") for t in trades]
         with _with_temp_trades(raw):
             summary = build_performance_summary()
-        assert "HISTORIQUE DE PERFORMANCE" in summary
+        assert "DONNEES DE PERFORMANCE" in summary
         assert "Win rate" in summary
         assert "Derniers" in summary
         assert "CL=F" in summary
@@ -644,7 +647,7 @@ class TestLearningPipeline:
         scored = [_make_scored(tickers=["CL=F"], surprise=80, delay=75, awareness=10)]
         # With boost
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.5, 1.3)), \
+                   return_value=(70.0, 2.5, 69.5, 1.3, 69.8)), \
              patch("backend.app.trade_selector.check_event_conflict",
                    return_value=None):
             result_boosted = select_trade(
@@ -725,7 +728,7 @@ class TestFullPipelineIntegration:
 
             # Verify performance summary is generated
             summary = build_performance_summary()
-            assert "HISTORIQUE DE PERFORMANCE" in summary
+            assert "DONNEES DE PERFORMANCE" in summary
             assert "Win rate" in summary
 
     def test_delay_accuracy_tracking(self):
@@ -801,7 +804,7 @@ class TestErrorResilience:
         """If yfinance returns None price, should skip to next candidate."""
         scored = [_make_scored(tickers=["CL=F"])]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(None, 1.5, None, None)), \
+                   return_value=(None, 1.5, None, None, None)), \
              patch("backend.app.trade_selector.check_event_conflict",
                    return_value=None):
             result = select_trade(scored, ScanType.EUROPE)
@@ -872,7 +875,7 @@ class TestMultiTradeSelection:
         ]
         # prev_close very close to price to avoid pre-move rejection
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+                   return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=0), \
              patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
             result = select_trades(scored, ScanType.EUROPE)
@@ -897,7 +900,7 @@ class TestMultiTradeSelection:
             ),
         ]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+                   return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=0), \
              patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
             result = select_trades(scored, ScanType.EUROPE)
@@ -920,7 +923,7 @@ class TestMultiTradeSelection:
         ]
         # Simulate 6 trades already taken today (MAX_TRADES_PER_DAY=6)
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.0, 1.5)), \
+                   return_value=(70.0, 2.5, 69.0, 1.5, 69.5)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=6), \
              patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
             result = select_trades(scored, ScanType.EUROPE)
@@ -945,7 +948,7 @@ class TestMultiTradeSelection:
         ]
         # 5 trades already → only 1 slot remaining
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+                   return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=5), \
              patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
             result = select_trades(scored, ScanType.EUROPE)
@@ -957,16 +960,18 @@ class TestMultiTradeSelection:
         scored = [
             _make_scored(
                 news=_make_news(title="Oil news"),
-                surprise=80, delay=75, awareness=10, tickers=["BZ=F"], category="commodity",
+                surprise=90, delay=85, awareness=5, tickers=["BZ=F"], category="commodity",
+                magnitude=80,
             ),
             _make_scored(
                 news=_make_news(title="Gold signal"),
-                surprise=75, delay=70, awareness=12, tickers=["GC=F"], category="commodity",
+                surprise=90, delay=85, awareness=5, tickers=["GC=F"], category="commodity",
+                magnitude=80,
             ),
         ]
         # CL=F already selected in another scan → BZ=F should be blocked (energy group)
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+                   return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=1), \
              patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
             result = select_trades(scored, ScanType.EUROPE, existing_trade_ticker=["CL=F"])
@@ -980,11 +985,12 @@ class TestMultiTradeSelection:
         scored = [
             _make_scored(
                 news=_make_news(title="Oil supply disruption"),
-                surprise=80, delay=75, awareness=10, tickers=["CL=F"], category="commodity",
+                surprise=90, delay=85, awareness=5, tickers=["CL=F"], category="commodity",
+                magnitude=80,
             ),
         ]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.5, 69.95, 1.5)), \
+                   return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=0), \
              patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
             result = select_trade(scored, ScanType.EUROPE)
@@ -997,7 +1003,7 @@ class TestMultiTradeSelection:
         """When no trade is found, recommendations should be an empty list."""
         scored = [_make_scored(direction=Direction.NEUTRAL)]
         with patch("backend.app.trade_selector._get_price_and_range",
-                   return_value=(70.0, 2.0, 69.0, 1.5)):
+                   return_value=(70.0, 2.0, 69.0, 1.5, 69.5)):
             result = select_trades(scored, ScanType.EUROPE)
         assert result.has_trade is False
         assert result.recommendations == []

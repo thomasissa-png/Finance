@@ -248,10 +248,52 @@ def test_get_recently_traded_tickers_empty_on_error(mock_load):
     assert result == set()
 
 
+# ── v4.0 tests: new calibration and filtering features ────────
+
+
+def test_calibrate_trade_convex_score_factor():
+    """v4.0 C4: High scores should get disproportionately bigger targets (convex)."""
+    _, _, t_low, _, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 20)
+    _, _, t_med, _, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 50)
+    _, _, t_high, _, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 90)
+    # The ratio high/low should be >2x (convex response)
+    assert t_high / t_low > 2.0
+    # And the gap between medium and high should be larger than low and medium
+    assert (t_high - t_med) > (t_med - t_low)
+
+
+def test_calibrate_trade_short_asymmetric_stop():
+    """v4.0 C2: SHORT trades should have wider stops than LONG."""
+    _, _, _, stop_long, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 70)
+    _, _, _, stop_short, _ = _calibrate_trade(Direction.SHORT, 100.0, 2.0, 70)
+    # SHORT stop should be 20% wider
+    assert abs(stop_short / stop_long - 1.2) < 0.01
+
+
+def test_calibrate_trade_magnitude_scales_target():
+    """v4.0 B1: Higher expected_magnitude should produce bigger targets."""
+    _, _, t_low_mag, _, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 70,
+                                              expected_magnitude=10)
+    _, _, t_high_mag, _, _ = _calibrate_trade(Direction.LONG, 100.0, 2.0, 70,
+                                               expected_magnitude=90)
+    assert t_high_mag > t_low_mag
+
+
+def test_calibrate_trade_spread_stop_floor():
+    """v4.0 C3: Stop floor should be at least 2x estimated spread for wide-spread assets."""
+    from backend.app.config import ESTIMATED_SPREADS
+    # OJ=F has spread 0.20% → stop floor should be at least 0.40%
+    _, _, _, stop_pct, _ = _calibrate_trade(Direction.LONG, 100.0, 0.5, 30,
+                                             ticker="OJ=F")
+    assert stop_pct >= 0.40  # 2x estimated spread
+
+
+@patch("backend.app.trade_selector._get_recently_traded_tickers_by_category")
 @patch("backend.app.trade_selector._get_recently_traded_tickers")
-def test_select_trade_rejects_recently_traded_ticker(mock_recent):
+def test_select_trade_rejects_recently_traded_ticker(mock_recent, mock_recent_cat):
     """A ticker traded recently should be rejected by select_trade."""
     mock_recent.return_value = {"MC.PA"}
+    mock_recent_cat.return_value = {"MC.PA"}
     scored = [_make_scored("MC.PA", surprise=90, freshness=90, clarity=90,
                            news_category="commodity")]
     # Need high transmission_delay and low market_awareness for edge score
@@ -259,5 +301,6 @@ def test_select_trade_rejects_recently_traded_ticker(mock_recent):
     scored[0].market_awareness = 10
     result = select_trade(scored, ScanType.EUROPE)
     assert not result.has_trade
-    # Check rejection log mentions the dedup reason
-    assert any("Deja trade" in r.get("reason", "") for r in result.rejection_log)
+    # With D1 fallback, rejection message is "Tous les tickers bloques" when all fallbacks fail
+    assert any("bloques" in r.get("reason", "") or "Deja trade" in r.get("reason", "")
+               for r in result.rejection_log)

@@ -9,6 +9,8 @@ from .config import (
     ASSET_BY_TICKER,
     BASE_POSITION_SIZE_PCT,
     CORRELATION_GROUPS,
+    DEFAULT_SPREAD,
+    ESTIMATED_SPREADS,
     KELLY_FRACTION,
     MAX_POSITION_SIZE_PCT,
     MAX_TRADES_PER_DAY,
@@ -142,19 +144,20 @@ BINARY_EVENT_KEYWORDS = [
 ]
 
 
-def _get_price_and_range(ticker: str, days: int = 20) -> tuple[float | None, float, float | None, float | None]:
-    """Fetch current price, true ATR (#11), previous close, and volume info.
+def _get_price_and_range(ticker: str, days: int = 20) -> tuple[float | None, float, float | None, float | None, float | None]:
+    """Fetch current price, true ATR (#11), previous close, volume info, and today's open.
 
-    Returns (current_price, true_atr_pct, prev_close, avg_volume_ratio).
+    Returns (current_price, true_atr_pct, prev_close, avg_volume_ratio, today_open).
     avg_volume_ratio = today's volume / 20d avg volume (None if unavailable).
+    today_open = today's opening price for intraday pre-move detection (v4.0 B5).
     """
     try:
         data = fetch_history(ticker, period_days=days + 5, interval="1day")
         if data is None or data.empty:
-            return None, 1.5, None, None
+            return None, 1.5, None, None, None
         current_price = float(data["Close"].iloc[-1])
         if len(data) < 5:
-            return current_price, 1.5, None, None
+            return current_price, 1.5, None, None, None
 
         # (#11) True ATR (Wilder): max(H-L, |H-prev_close|, |L-prev_close|)
         highs = data["High"].values
@@ -167,13 +170,17 @@ def _get_price_and_range(ticker: str, days: int = 20) -> tuple[float | None, flo
             lpc = abs(lows[i] - closes[i - 1])
             true_ranges.append(max(hl, hpc, lpc))
 
-        # Use last `days` true ranges
-        recent_tr = true_ranges[-days:] if len(true_ranges) >= days else true_ranges
+        # v4.0 C1: Use 5-day ATR (recent volatility) instead of 20-day for more reactive calibration
+        recent_atr_days = min(5, len(true_ranges))
+        recent_tr = true_ranges[-recent_atr_days:] if true_ranges else []
         avg_true_range = sum(recent_tr) / len(recent_tr) if recent_tr else 0
         true_atr_pct = (avg_true_range / current_price * 100) if current_price > 0 else 1.5
 
         # Previous close for "news déjà pricée" detection (#4)
         prev_close = float(closes[-2]) if len(closes) >= 2 else None
+
+        # v4.0 B5: Today's open for intraday pre-move detection
+        today_open = float(data["Open"].iloc[-1]) if "Open" in data.columns else None
 
         # (#10) Volume ratio — None if no volume data (don't block the trade)
         volume_ratio = None
@@ -183,10 +190,10 @@ def _get_price_and_range(ticker: str, days: int = 20) -> tuple[float | None, flo
             if avg_vol > 0 and volumes[-1] > 0:
                 volume_ratio = float(volumes[-1]) / avg_vol
 
-        return current_price, round(true_atr_pct, 4), prev_close, volume_ratio
+        return current_price, round(true_atr_pct, 4), prev_close, volume_ratio, today_open
     except Exception as exc:
         logger.warning("Price/range fetch failed for %s: %s", ticker, exc)
-        return None, 1.5, None, None
+        return None, 1.5, None, None, None
 
 
 def _detect_pre_move(current_price: float, prev_close: float | None, target_move_expected: float) -> float | None:
@@ -209,11 +216,25 @@ def _check_binary_event(news_title: str, reasoning: str) -> str | None:
     return None
 
 
+# v4.0 D3: Cache dynamic correlation results (TTL 1h) to avoid redundant yfinance calls
+_corr_cache: dict[str, tuple[float | None, float]] = {}  # key -> (correlation, timestamp)
+_CORR_CACHE_TTL = 3600  # 1 hour
+
+
 def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20) -> float | None:
     """Compute 20-day rolling correlation between two tickers (G. dynamic correlation).
 
+    v4.0 D3: Results are cached for 1h to avoid redundant API calls.
     Returns correlation coefficient (-1 to 1), or None if data unavailable.
     """
+    import time as _time
+    cache_key = f"{min(ticker1, ticker2)}:{max(ticker1, ticker2)}"
+    cached = _corr_cache.get(cache_key)
+    if cached is not None:
+        corr_val, cached_at = cached
+        if _time.time() - cached_at < _CORR_CACHE_TTL:
+            return corr_val
+
     try:
         data1 = fetch_history(ticker1, period_days=lookback + 5, interval="1day")
         data2 = fetch_history(ticker2, period_days=lookback + 5, interval="1day")
@@ -228,7 +249,9 @@ def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20)
         if len(common) < 10:
             return None
         corr = returns1.loc[common].corr(returns2.loc[common])
-        return round(corr, 3) if corr == corr else None  # NaN check
+        result = round(corr, 3) if corr == corr else None  # NaN check
+        _corr_cache[cache_key] = (result, _time.time())
+        return result
     except Exception:
         return None
 
@@ -283,37 +306,56 @@ def _calibrate_trade(
     avg_range: float,
     score: float,
     news_category: str = "other",
+    ticker: str = "",
+    expected_magnitude: int = 50,
 ) -> tuple[float, float, float, float, float]:
     """Calculate target, stop, percentages and risk/reward.
 
     Target is score-weighted: higher score → bigger target as fraction of ATR.
     Stop is a fixed fraction of ATR, independent of target.
     News category multipliers (#7) adjust target/stop based on event type.
+    v4.0: expected_magnitude from Claude scales the target (B1).
+    v4.0: C4 convex score factor — exponential instead of linear.
+    v4.0: C3 stop floor adapts to estimated spread.
 
     Returns (target_price, stop_price, target_pct, stop_pct, risk_reward).
     """
-    # Target: score-weighted fraction of ATR, scaled by volatility regime
-    # Low-vol assets (forex, large indices): wider factor to overcome slippage
-    # High-vol assets (NG, small-cap): tighter to stay realistic for day trading
+    # v4.0 C4: Convex score factor — exponential response gives bigger edge to high scores
+    # Old: linear 0.25 + (score/100) * 0.45 → ratio high/low = 1.8x
+    # New: exponential → ratio high/low = ~3x (rewards conviction, punishes mediocrity)
+    normalized_score = score / 100
     if avg_range < 1.0:
-        score_factor = 0.35 + (score / 100) * 0.55
+        score_factor = 0.30 + 0.60 * (normalized_score ** 1.5)
         stop_fraction = 0.5
     elif avg_range > 5.0:
-        score_factor = 0.15 + (score / 100) * 0.30
+        score_factor = 0.12 + 0.33 * (normalized_score ** 1.5)
         stop_fraction = 0.3
     else:
-        score_factor = 0.25 + (score / 100) * 0.45
+        score_factor = 0.20 + 0.50 * (normalized_score ** 1.5)
         stop_fraction = 0.4
+
+    # v4.0 B1: Scale target by expected_magnitude from Claude
+    # Magnitude 50 = neutral (1.0x), magnitude 100 = 1.3x, magnitude 0 = 0.7x
+    magnitude_factor = 0.7 + 0.6 * (expected_magnitude / 100)
+    score_factor *= magnitude_factor
+
     target_move_pct = max(TARGET_PERCENT, avg_range * score_factor)
 
     # Stop: fraction of ATR adapted to volatility, independent of target
-    # Floor at TARGET_PERCENT * 0.7 = 0.35% — adapte levier (0.35% x 10x = 3.5% perte max)
-    stop_move_pct = max(TARGET_PERCENT * 0.7, avg_range * stop_fraction)
+    # v4.0 C3: Stop floor = max(old floor, 2x estimated spread) — prevents getting stopped by bid-ask noise
+    spread = ESTIMATED_SPREADS.get(ticker, DEFAULT_SPREAD)
+    stop_floor = max(TARGET_PERCENT * 0.7, spread * 2.0)
+    stop_move_pct = max(stop_floor, avg_range * stop_fraction)
 
     # (#7) Apply news category multipliers
     cat_mults = NEWS_CATEGORY_MULTIPLIERS.get(news_category, {"target_mult": 1.0, "stop_mult": 1.0})
     target_move_pct *= cat_mults["target_mult"]
     stop_move_pct *= cat_mults["stop_mult"]
+
+    # v4.0 C2: Asymmetric SHORT stop — commodities/metals can spike 10%+ in 1h,
+    # so SHORT stops need to be wider to absorb adverse spikes
+    if direction == Direction.SHORT:
+        stop_move_pct *= 1.2  # 20% wider stop for shorts
 
     if direction == Direction.LONG:
         target_price = entry_price * (1 + target_move_pct / 100)
@@ -394,6 +436,8 @@ def _build_scored_news_log(scored_news: list[ScoredNews]) -> list[dict]:
             "directional_clarity": sn.directional_clarity,
             "transmission_delay": sn.transmission_delay,
             "market_awareness": sn.market_awareness,
+            "expected_magnitude": sn.expected_magnitude,
+            "signal_reliability": sn.signal_reliability,
             "news_category": sn.news_category,
             "category_score_mult": sn.category_score_mult,
             "impacted_tickers": sn.impacted_tickers,
@@ -510,16 +554,23 @@ def select_trades(
             learning_state=learning_state_for_log,
         )
 
-    # ── Daily cap check ──────────────────────────────────────────
+    # ── Daily cap check — v4.0 D4: adaptive to VIX regime ──────
+    # Stress regime = fewer trades (higher risk per trade), calm = more trades
+    effective_daily_cap = MAX_TRADES_PER_DAY  # default 6
+    if current_regime == "stress":
+        effective_daily_cap = max(2, MAX_TRADES_PER_DAY // 3)  # 2 trades max
+    elif current_regime == "elevated":
+        effective_daily_cap = max(3, MAX_TRADES_PER_DAY * 2 // 3)  # 4 trades max
     today_count = _count_today_trades()
-    daily_slots_remaining = max(0, MAX_TRADES_PER_DAY - today_count)
+    daily_slots_remaining = max(0, effective_daily_cap - today_count)
     if daily_slots_remaining == 0:
-        logger.info("Daily cap reached (%d trades today) — no more trades", today_count)
+        logger.info("Daily cap reached (%d trades today, cap=%d for regime=%s) — no more trades",
+                     today_count, effective_daily_cap, current_regime)
         return ScanResult(
             scan_type=scan_type,
             timestamp=now,
             has_trade=False,
-            reason_no_trade=f"Cap journalier atteint ({MAX_TRADES_PER_DAY} trades aujourd'hui)",
+            reason_no_trade=f"Cap journalier atteint ({effective_daily_cap} trades, regime={current_regime})",
             news_analyzed=len(scored_news),
             market_context=market_context,
             all_scored_news=all_scored_log,
@@ -547,14 +598,10 @@ def select_trades(
             })
             continue
 
-        # Find the best matching ticker from our universe AND eligible for this session
-        best_ticker = None
-        for t in sn.impacted_tickers:
-            if t in ASSET_BY_TICKER and t in eligible_tickers:
-                best_ticker = t
-                break
+        # v4.0 D1: Find ALL eligible tickers (not just first) — allows fallback if primary blocked
+        eligible_for_news = [t for t in sn.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers]
 
-        if not best_ticker:
+        if not eligible_for_news:
             rejection_log.append({
                 "title": sn.news.title, "ticker": sn.impacted_tickers[:3],
                 "reason": f"Aucun ticker eligible pour session {scan_type.value}",
@@ -563,7 +610,7 @@ def select_trades(
             continue
 
         # v3.4: Contextual learning multiplier = base(ticker*cat) * session * newscat * regime
-        base_mult = ticker_adj.get(best_ticker, 1.0)
+        base_mult = ticker_adj.get(eligible_for_news[0], 1.0)
         nc_mult = newscat_adj.get(sn.news_category, 1.0)  # v3.4 #4: direct from current news
         multiplier = base_mult * current_session_mult * nc_mult * current_regime_mult
         multiplier = max(0.5, min(1.5, multiplier))  # Clamp
@@ -578,7 +625,7 @@ def select_trades(
             logger.info("Convergence boost for '%s': %d sources → %.2fx",
                         sn.news.title[:60], sn.convergence_count, convergence_boost)
 
-        candidates.append((sn, adjusted_score))
+        candidates.append((sn, adjusted_score, eligible_for_news))
 
     candidates.sort(key=lambda x: x[1], reverse=True)
 
@@ -601,11 +648,9 @@ def select_trades(
     # Pre-fetch prices for all candidate tickers in parallel to avoid sequential yfinance calls
     from concurrent.futures import ThreadPoolExecutor
     candidate_tickers = set()
-    for sn, _ in candidates:
-        for t in sn.impacted_tickers:
-            if t in ASSET_BY_TICKER and t in eligible_tickers:
-                candidate_tickers.add(t)
-                break
+    for sn, _, elig_tickers in candidates:
+        for t in elig_tickers:
+            candidate_tickers.add(t)
 
     price_cache: dict[str, tuple] = {}
     # max_workers capped at 3: Replit kills process on too many concurrent threads.
@@ -617,7 +662,7 @@ def select_trades(
                 price_cache[ticker_key] = future.result(timeout=15)
             except Exception as exc:
                 logger.debug("Price pre-fetch failed for %s: %s", ticker_key, exc)
-                price_cache[ticker_key] = (None, 1.5, None, None)
+                price_cache[ticker_key] = (None, 1.5, None, None, None)
 
     # Cross-day dedup: load tickers traded in the last N days
     recently_traded = _get_recently_traded_tickers()
@@ -643,7 +688,7 @@ def select_trades(
     vix_val = market_context.get("vix") if market_context else None
     regime_val = market_context.get("regime") if market_context else None
 
-    for rank, (best_news, best_score) in enumerate(candidates):
+    for rank, (best_news, best_score, elig_tickers) in enumerate(candidates):
         # Recompute convergence boost for this candidate (needed for TradeRecommendation)
         _cand_convergence_boost = 1.0
         if hasattr(best_news, 'convergence_count') and best_news.convergence_count >= 2:
@@ -653,53 +698,73 @@ def select_trades(
             decision_parts.append(f"Cap journalier atteint apres {len(selected_trades)} trades ce scan")
             break
 
-        ticker = next(t for t in best_news.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers)
-        asset = ASSET_BY_TICKER[ticker]
+        # v4.0 D1: Try all eligible tickers in order — if first is blocked, try fallback
         raw_score = best_news.total_score
+        all_existing = cross_scan_tickers + scan_selected_tickers
+        cat_recently_traded = _get_recently_traded_tickers_by_category(best_news.news_category)
+        effective_cooldown = CATEGORY_COOLDOWN_DAYS.get(best_news.news_category, RECENT_TRADE_COOLDOWN_DAYS)
+
+        ticker = None
+        asset = None
+        price = None
+        avg_range = 1.5
+        prev_close = None
+        volume_ratio = None
+        today_open = None
+        base_mult = 1.0
+        multiplier = 1.0
+
+        for candidate_ticker in elig_tickers:
+            # (#22) Correlation check
+            if _check_correlation(candidate_ticker, all_existing):
+                logger.debug("D1 fallback: %s correlated, trying next", candidate_ticker)
+                continue
+            # Cross-day dedup
+            if candidate_ticker in cat_recently_traded and not _check_reentry_eligible(candidate_ticker, best_news.news_category):
+                logger.debug("D1 fallback: %s recently traded, trying next", candidate_ticker)
+                continue
+            # Price check
+            _p, _ar, _pc, _vr, _to = price_cache.get(candidate_ticker, (None, 1.5, None, None, None))
+            if _p is None:
+                logger.debug("D1 fallback: %s no price, trying next", candidate_ticker)
+                continue
+            # Found valid ticker
+            ticker = candidate_ticker
+            asset = ASSET_BY_TICKER[ticker]
+            price, avg_range, prev_close, volume_ratio, today_open = _p, _ar, _pc, _vr, _to
+            break
+
+        if ticker is None:
+            rejection_log.append({
+                "title": best_news.news.title, "ticker": elig_tickers,
+                "reason": f"Tous les tickers bloques (correlation/cooldown/prix)",
+                "score": raw_score, "adjusted_score": best_score,
+            })
+            continue
 
         # v3.4: Recompute full contextual multiplier for this candidate
-        base_mult = ticker_adj.get(ticker, 1.0)
         nc_mult = newscat_adj.get(best_news.news_category, 1.0)
+        base_mult = ticker_adj.get(ticker, 1.0)
         multiplier = base_mult * current_session_mult * nc_mult * current_regime_mult
         multiplier = max(0.5, min(1.5, multiplier))
 
-        # (#22) Correlation check — cross-scan + intra-scan
-        all_existing = cross_scan_tickers + scan_selected_tickers
-        if _check_correlation(ticker, all_existing):
-            reason = f"Correle avec trade existant {all_existing}"
-            logger.info("Skipping %s: correlated with existing trades %s", ticker, all_existing)
-            rejection_log.append({
-                "title": best_news.news.title, "ticker": [ticker],
-                "reason": reason, "score": raw_score, "adjusted_score": best_score,
-            })
-            continue
-
-        # Cross-day dedup: skip tickers already traded recently
-        # P1-4: Use category-adaptive cooldown (weather/supply_chain = 1 day)
-        # P2-6: Allow re-entry if trade was stopped and signal persists
-        cat_recently_traded = _get_recently_traded_tickers_by_category(best_news.news_category)
-        effective_cooldown = CATEGORY_COOLDOWN_DAYS.get(best_news.news_category, RECENT_TRADE_COOLDOWN_DAYS)
-        if ticker in cat_recently_traded and not _check_reentry_eligible(ticker, best_news.news_category):
-            reason = f"Deja trade dans les {effective_cooldown} derniers jours (categorie: {best_news.news_category})"
-            logger.info("Skipping %s: %s", ticker, reason)
-            rejection_log.append({
-                "title": best_news.news.title, "ticker": [ticker],
-                "reason": reason, "score": raw_score, "adjusted_score": best_score,
-            })
-            continue
-
-        price, avg_range, prev_close, volume_ratio = price_cache.get(ticker, (None, 1.5, None, None))
-        if price is None:
-            rejection_log.append({
-                "title": best_news.news.title, "ticker": [ticker],
-                "reason": "Prix indisponible (yfinance)", "score": raw_score,
-            })
-            continue
+        # v4.0 B4: Spread filter — reject if spread eats >40% of target
+        spread_pct = ESTIMATED_SPREADS.get(ticker, DEFAULT_SPREAD)
+        if avg_range > 0 and spread_pct > 0:
+            estimated_target = avg_range * (0.25 + (best_news.total_score / 100) * 0.45)
+            if spread_pct / estimated_target > 0.4:
+                reason = f"Spread {spread_pct:.2f}% trop large vs target estime {estimated_target:.2f}% ({ticker})"
+                logger.info("Skipping %s: %s", ticker, reason)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": [ticker],
+                    "reason": reason, "score": raw_score,
+                })
+                continue
 
         # (#4) News déjà pricée detection — direction-aware, category-adaptive
         # v3.7: Instead of rejecting partially-priced moves, REDUCE the target.
-        # "Si une tendance est déjà commencée, 1% de gain est une super victoire" (levier 5-10x).
-        # Only reject if >95% of expected move is already priced (truly exhausted).
+        # v4.0 B5: Use today_open (intraday reference) instead of prev_close when available.
+        # A scan at 17h comparing to yesterday's close misses the intraday move since 9h.
         if avg_range < 1.0:
             _pre_factor = 0.35 + (best_news.total_score / 100) * 0.55
         elif avg_range > 5.0:
@@ -707,7 +772,9 @@ def select_trades(
         else:
             _pre_factor = 0.25 + (best_news.total_score / 100) * 0.45
         target_move_expected = avg_range * _pre_factor
-        pre_move_pct = _detect_pre_move(price, prev_close, target_move_expected)
+        # v4.0 B5: Prefer today_open for intraday pre-move — captures moves since market open
+        pre_move_ref = today_open if today_open is not None else prev_close
+        pre_move_pct = _detect_pre_move(price, pre_move_ref, target_move_expected)
         pre_move_ratio = PRE_MOVE_THRESHOLDS.get(asset.category, 0.8)
         pre_move_reduction = 1.0  # Factor to reduce target if trend already started
         if pre_move_pct is not None:
@@ -765,6 +832,8 @@ def select_trades(
         target_price, stop_price, target_pct, stop_pct, rr = _calibrate_trade(
             best_news.direction, price, avg_range, best_news.total_score,
             news_category=best_news.news_category,
+            ticker=ticker,
+            expected_magnitude=best_news.expected_magnitude,
         )
 
         # v3.7: Apply pre-move reduction to target (trend already started → smaller target)
@@ -788,7 +857,9 @@ def select_trades(
             })
             continue
 
-        confidence = min(100, int(best_score))
+        # v4.0 B3: Confidence decoupled from score — based on reliability * clarity
+        # A high-score speculative rumor has low confidence, a confirmed USDA report has high confidence
+        confidence = min(100, int(best_news.signal_reliability * best_news.directional_clarity / 100))
 
         # v3.6: Position sizing (with IV filter K — reduce size if vol elevated)
         # P2-7: pass market_context for VIX regime sizing, P3-7: pass day_of_week for Friday
@@ -865,6 +936,9 @@ def select_trades(
                 * (1 - best_news.market_awareness / 100), 4
             ),
             chain_reactions=[cr.model_dump() for cr in best_news.chain_reactions] if best_news.chain_reactions else None,
+            # v4.0: Magnitude and reliability from Claude
+            expected_magnitude=best_news.expected_magnitude,
+            signal_reliability=best_news.signal_reliability,
             # P0-#4: Raw score decomposition
             raw_claude_score=round(raw_score, 2),
             learning_multiplier=round(multiplier, 3),
