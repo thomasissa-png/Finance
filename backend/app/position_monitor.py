@@ -1,7 +1,7 @@
 """Position monitor: trailing stop + time stop for intraday trade management.
 
 Runs every 15 minutes during trading hours. For each PENDING trade:
-1. Trailing stop: move SL to breakeven at +50% TP, to +50% move at +75% TP
+1. Trailing stop: move SL to breakeven at +35% TP, lock 50% of move at +60% TP
 2. Time stop: close flat if move < 25% of TP target after 3h, close everything after 5h
 3. Fetch live prices via Twelve Data (primary) / yfinance (fallback)
 
