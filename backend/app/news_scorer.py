@@ -1,10 +1,31 @@
-"""Scores news headlines using Claude API with tool_use for structured output."""
+"""Scores news headlines using Claude API with tool_use for structured output.
 
+v4.3 audit changes:
+- A1/F1: Model updated to Haiku (configurable via CLAUDE_MODEL env var)
+- A2: temperature=0 for reproducible scoring
+- A3: Singleton Anthropic client (reuse HTTP connections)
+- A4: Dynamic max_tokens based on batch size
+- B1: System prompt restructured with XML sections
+- B2: Few-shot examples added for calibration
+- B3/E1: Performance summary moved to system prompt (stable between scans)
+- B5: Ticker list moved to user message (saves system prompt tokens)
+- B6: Prompt version hash logged for tracking
+- C1: perceived_age_hours added to tool schema (optional)
+- C2: maxLength on reasoning field
+- D1: Pre-filter earnings/macro before sending to Claude
+- D2: Cross-dimension coherence validation post-scoring
+- D3: confirmed_event field added to tool schema
+- F2: Score cache by headline hash (TTL 4h)
+- F3: Anthropic prompt caching (cache_control on system prompt)
+- F4: Token usage logging per scan
+"""
+
+import hashlib
 import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import anthropic
 
@@ -59,113 +80,189 @@ def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[st
     else:
         _signal_accumulator[key] = {"count": 1, "first_seen": now, "last_seen": now}
         # Prune old entries (> 7 days)
-        cutoff = now - __import__("datetime").timedelta(days=7)
+        cutoff = now - timedelta(days=7)
         stale = [k for k, v in _signal_accumulator.items() if v["last_seen"] < cutoff]
         for k in stale:
             del _signal_accumulator[k]
         return 1.0
 
 
+# ── v4.3 A3: Singleton Anthropic client ──────────────────────────
+_anthropic_client: anthropic.Anthropic | None = None
+
+
+def _get_client() -> anthropic.Anthropic:
+    """Return a singleton Anthropic client, reusing HTTP connections."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not set")
+        _anthropic_client = anthropic.Anthropic(api_key=api_key)
+    return _anthropic_client
+
+
+# ── v4.3 A1/F1: Configurable model ──────────────────────────────
+# Default to Haiku for cost efficiency (10x cheaper, sufficient for structured scoring).
+# Override with CLAUDE_MODEL env var for Sonnet if needed.
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _get_model() -> str:
+    return os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
+
+
+# ── v4.3 F2: Score cache ────────────────────────────────────────
+# Cache scored headlines by hash(title+description) to avoid re-scoring
+# the same news across consecutive scans. TTL 4 hours.
+_score_cache: dict[str, tuple[dict, float]] = {}  # hash -> (score_entry, timestamp)
+SCORE_CACHE_TTL_SECONDS = 4 * 3600  # 4 hours
+
+
+def _get_cache_key(title: str, description: str | None) -> str:
+    """Compute a cache key for a headline."""
+    raw = f"{title}|{description or ''}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _get_cached_score(key: str) -> dict | None:
+    """Return cached score if exists and not expired."""
+    if key in _score_cache:
+        entry, ts = _score_cache[key]
+        if time.time() - ts < SCORE_CACHE_TTL_SECONDS:
+            return entry
+        del _score_cache[key]
+    return None
+
+
+def _set_cached_score(key: str, score_entry: dict) -> None:
+    """Store a score in the cache."""
+    _score_cache[key] = (score_entry, time.time())
+    # Prune old entries
+    now = time.time()
+    stale = [k for k, (_, ts) in _score_cache.items()
+             if now - ts > SCORE_CACHE_TTL_SECONDS]
+    for k in stale:
+        del _score_cache[k]
+
+
+# ── v4.3 F4: Token usage tracking ───────────────────────────────
+_scan_token_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "scans": 0}
+
+
+def get_token_usage() -> dict:
+    """Return cumulative token usage stats."""
+    return dict(_scan_token_usage)
+
+
+# ── v4.3 B6: Prompt version hash ────────────────────────────────
 TICKER_LIST = ", ".join(f"{a.ticker} ({a.name})" for a in ASSETS)
 CATEGORY_LIST = ", ".join(NEWS_CATEGORIES)
 
+# v4.3 B1: Restructured system prompt with XML sections for clarity
 SYSTEM_PROMPT = f"""Tu es un speculateur expert en news trading depuis 20 ans, specialise dans la detection
-de DISLOCATIONS NON ENCORE PRICEES par le marche. Ton edge, c'est d'identifier les news qui ne sont
-PAS ENCORE integrees dans les cours — les signaux en avance de phase.
+de DISLOCATIONS NON ENCORE PRICEES par le marche.
 
-Univers de {len(ASSETS)} actifs surveilles :
-{TICKER_LIST}
+<role>
+Ton edge : identifier les news PAS ENCORE integrees dans les cours — les signaux en avance de phase.
+On cherche la news que le marche n'a PAS ENCORE pricee, pas celle que tout le monde commente.
+</role>
 
-Pour chaque news, tu dois evaluer :
+<scoring_dimensions>
+Pour chaque news, evalue ces 11 dimensions :
 
-1. **surprise** (0-100) : A quel point cette information est inattendue par le marche.
-   - 0 = totalement anticipe / consensus / sans impact
-   - 50 = moderement surprenant
-   - 100 = choc total, cygne noir
+1. surprise (0-100) : A quel point cette information est inattendue.
+   0=anticipe/consensus | 50=moderement surprenant | 100=choc total/cygne noir
 
-2. **directional_clarity** (0-100) : A quel point la direction de l'impact est claire.
-   - 0 = ambigu, impact dans les deux sens possibles
-   - 100 = direction absolument evidente
+2. directional_clarity (0-100) : Clarte de la direction d'impact.
+   0=ambigu, deux sens possibles | 100=direction absolument evidente
 
-3. **transmission_delay** (0-100) : CRITIQUE — Combien de TEMPS avant que le marche price
-   pleinement cette information ?
-   - 0 = deja price (earnings post-publication, decision de taux attendue, NFP conforme)
-   - 20 = les algos HFT ont deja reagi en millisecondes (CPI, NFP, FOMC decision)
-   - 50 = quelques acteurs ont vu, le gros du marche pas encore (discours secondaire BCE)
-   - 80 = information specialisee, seuls les experts du secteur ont compris l'impact
-         (rapport USDA sur les stocks de ble, alerte secheresse NOAA sur le Midwest)
-   - 100 = personne n'a encore fait le lien avec les actifs concernes
-         (gel au Bresil repere par bulletin meteo local → impact cafe/sucre dans 6-12h)
+3. transmission_delay (0-100) : CRITIQUE — Temps avant que le marche price pleinement.
+   0=deja price (earnings, NFP conforme)
+   20=algos HFT ont reagi (CPI, FOMC decision)
+   50=quelques acteurs ont vu, pas le gros du marche
+   80=info specialisee, seuls les experts comprennent (rapport USDA, alerte NOAA)
+   100=personne n'a fait le lien (gel Bresil bulletin local → cafe dans 6-12h)
 
-4. **market_awareness** (0-100) : Quel % des participants a DEJA VU cette information ?
-   - 0 = personne (bulletin meteo local, rapport technique USDA)
-   - 30 = les specialistes du secteur
-   - 50 = les desk institutionnels
-   - 80 = tous les terminaux Bloomberg
-   - 100 = tout le monde (headline CNN/BBC, trending sur Twitter)
+4. market_awareness (0-100) : % des participants qui ont DEJA VU l'info.
+   0=personne (bulletin meteo local) | 30=specialistes | 50=desk institutionnels
+   80=terminaux Bloomberg | 100=tout le monde (CNN/BBC/Twitter trending)
 
-5. **expected_magnitude** (0-100) : Quelle AMPLITUDE de move attends-tu sur les actifs impactes ?
-   - 0-10 = micro-impact, bruit statistique (<0.3%)
-   - 20-40 = impact modere, move normal (0.3-1%)
-   - 50-70 = impact significatif, move notable (1-3%)
-   - 80-100 = impact majeur, choc d'offre/demande (>3%)
-   Exemples :
-   - Rapport USDA routine, chiffres proches du consensus → 15 (bruit)
-   - Gel ponctuel Bresil, degats limites → 40 (modere)
-   - Secheresse severe Midwest pendant silking mais → 75 (significatif)
-   - Pipeline explosion majeure / embargo total → 90 (choc)
+5. expected_magnitude (0-100) : Amplitude du move attendu.
+   0-10=bruit (<0.3%) | 20-40=modere (0.3-1%) | 50-70=notable (1-3%) | 80-100=choc (>3%)
 
-6. **signal_reliability** (0-100) : A quel point ce signal est CONFIRME vs SPECULATIF ?
-   - 0-20 = rumeur non sourcee, prevision a 10 jours, tweet non verifie
-   - 30-50 = prevision meteo 3-5 jours, article presse citant "sources proches"
-   - 60-80 = donnees officielles (EIA, USDA), rapport gouvernemental, evenement confirme
-   - 90-100 = fait observe/mesure (gel constate cette nuit, pipeline explose, stock draw publie)
+6. signal_reliability (0-100) : Niveau de confirmation du signal.
+   0-20=rumeur/prevision 10j | 30-50=presse "sources proches" | 60-80=donnees officielles
+   90-100=fait observe/mesure (gel constate, pipeline explose, stock draw publie)
 
-7. **direction** : "LONG", "SHORT", ou "NEUTRAL"
+7. direction : LONG / SHORT / NEUTRAL
 
-8. **impacted_tickers** : tickers directement impactes de notre univers
+8. impacted_tickers : tickers directement impactes de notre univers
 
-9. **news_category** : categorie parmi : {CATEGORY_LIST}
+9. news_category : {CATEGORY_LIST}
 
-10. **reasoning** : explication en 1-2 phrases — INCLURE l'estimation du delai de pricing
+10. reasoning : explication en 1-2 phrases incluant l'estimation du delai de pricing
 
-REGLES CRUCIALES — PHILOSOPHIE DU SYSTEME :
+11. confirmed_event (true/false) : Est-ce un fait confirme (true) ou une rumeur/prevision (false) ?
+</scoring_dimensions>
 
-- Notre edge est sur les signaux EN AVANCE DE PHASE. On cherche la news que le marche
-  n'a PAS ENCORE pricee, pas celle que tout le monde commente.
+<hard_rules>
+REGLES IMPERATIVES — ne jamais devier :
 
-- EARNINGS / RESULTATS D'ENTREPRISE : TOUJOURS mettre transmission_delay ≤ 10 et
-  market_awareness ≥ 90. Ces infos sont pricees en pre-market/after-hours par les algos.
-  On n'a ZERO edge dessus sauf profit warning inattendu.
+EARNINGS : transmission_delay ≤ 10, market_awareness ≥ 90. Price en pre-market par algos. Zero edge.
 
-- DECISIONS DE TAUX / NFP / CPI : transmission_delay = 0-5, market_awareness = 100.
-  Les algos reagissent en microsecondes. Ne jamais surestimer notre avantage.
+DECISIONS DE TAUX / NFP / CPI : transmission_delay 0-5, market_awareness 100. Algos en microsecondes.
 
-- SIGNAUX PHYSIQUES (meteo, shipping, stocks commodities) : Souvent
-  transmission_delay 60-100 car les traders de commodities physiques sont lents
-  a repercuter sur les futures.
+SIGNAUX PHYSIQUES (meteo, shipping, stocks commodities) : transmission_delay 60-100.
+Les traders de commodities physiques sont lents a repercuter sur les futures.
 
-- GEOPOLITIQUE : Evaluer honnêtement — une declaration officielle = deja vue.
-  Un mouvement militaire capte par OSINT = potentiellement en avance de phase.
+GEOPOLITIQUE : declaration officielle = deja vue. Mouvement militaire OSINT = en avance de phase.
 
-- M&A (FUSIONS/ACQUISITIONS) : DISTINGUER RUMEUR vs CONFIRMATION.
-  - Rumeur non confirmee / "talks" / "in discussions" → transmission_delay 40-60
-    (le marche n'a pas encore price car incertain)
-  - Deal confirme / "announces acquisition" / "agrees to buy" → transmission_delay ≤ 10,
-    market_awareness ≥ 85 (deja price en pre-market par les algos)
+M&A : Rumeur ("talks","in discussions") → delay 40-60, confirmed_event=false.
+      Confirme ("announces","agrees to buy") → delay ≤ 10, awareness ≥ 85, confirmed_event=true.
 
-- CENTRAL BANK : DISTINGUER DECISION vs DISCOURS.
-  - Decision de taux (rate decision) = deja price par algos HFT → transmission_delay ≤ 5
-  - Discours president (Fed Chair, ECB President) = signal fort → transmission_delay 20-40
-  - Discours secondaire (regional Fed, membre ECB non-president) → transmission_delay 40-60
+CENTRAL BANK : Decision taux → delay ≤ 5, confirmed_event=true.
+              Discours president (Powell/Lagarde) → delay 20-40.
+              Discours secondaire (regional Fed) → delay 40-60.
 
-- EFFETS DE SECOND ORDRE : Si une news impacte un actif A, pense aux impacts
-  indirects sur B et C (ex: gel bresilien → cafe + sucre car memes planteurs).
-  Mets les tickers de second ordre dans impacted_tickers aussi.
+EFFETS DE SECOND ORDRE : gel bresilien → cafe + sucre (memes planteurs). Inclure tickers secondaires.
 
-- Tiens compte du CONTEXTE DE MARCHE fourni (VIX, tendances) pour ta calibration."""
+COHERENCE : Si surprise est elevee (>70), transmission_delay devrait etre >40.
+            Si market_awareness est >80, transmission_delay devrait etre <30.
+</hard_rules>
+
+<examples>
+EXEMPLES DE SCORING (format attendu) :
+
+Exemple 1 — Signal physique fort :
+Headline: "NOAA: Severe drought warning for US Midwest corn belt, soil moisture at 10-year low"
+→ surprise=75, directional_clarity=90, transmission_delay=85, market_awareness=15,
+  expected_magnitude=65, signal_reliability=95, direction=LONG,
+  impacted_tickers=["ZC=F","ZS=F"], news_category=weather, confirmed_event=true,
+  reasoning="Secheresse severe confirmee par NOAA pendant silking mais. Marche futures pas encore reagi — pricing dans 6-12h."
+
+Exemple 2 — Earnings zero-edge :
+Headline: "Apple reports Q4 earnings beat, revenue up 8% YoY"
+→ surprise=30, directional_clarity=70, transmission_delay=5, market_awareness=95,
+  expected_magnitude=40, signal_reliability=100, direction=LONG,
+  impacted_tickers=[], news_category=earnings, confirmed_event=true,
+  reasoning="Earnings deja pricees en after-hours par algos HFT. Zero edge pour nous."
+
+Exemple 3 — Geopolitique early signal :
+Headline: "Maritime tracking shows 15 Iranian tankers changing course away from Strait of Hormuz"
+→ surprise=80, directional_clarity=85, transmission_delay=90, market_awareness=10,
+  expected_magnitude=70, signal_reliability=60, direction=LONG,
+  impacted_tickers=["CL=F","BZ=F","NG=F"], news_category=geopolitical, confirmed_event=false,
+  reasoning="Signal OSINT rare, mainstream media n'a pas encore repris. Impact petrole dans 12-24h si confirme."
+</examples>
+
+Tiens compte du CONTEXTE DE MARCHE fourni (VIX, tendances) pour ta calibration."""
+
+# v4.3 B6: Prompt version hash for tracking
+PROMPT_VERSION = hashlib.md5(SYSTEM_PROMPT.encode()).hexdigest()[:8]
 
 # (#9) Tool definition for structured output — with edge-detection fields
+# v4.3: Added confirmed_event (D3), perceived_age_hours (C1), maxLength on reasoning (C2)
 SCORING_TOOL = {
     "name": "submit_news_scores",
     "description": "Submit the analysis scores for each news headline, including edge-detection metrics",
@@ -199,18 +296,63 @@ SCORING_TOOL = {
                         "direction": {"type": "string", "enum": ["LONG", "SHORT", "NEUTRAL"]},
                         "impacted_tickers": {"type": "array", "items": {"type": "string"}},
                         "news_category": {"type": "string", "enum": NEWS_CATEGORIES},
-                        "reasoning": {"type": "string"},
+                        "reasoning": {
+                            "type": "string",
+                            "maxLength": 300,  # v4.3 C2: Keep reasoning concise
+                        },
+                        # v4.3 D3: Confirmed event flag — replaces fragile keyword matching
+                        "confirmed_event": {
+                            "type": "boolean",
+                            "description": "Is this a confirmed fact (true) or rumor/forecast/speculation (false)?",
+                        },
+                        # v4.3 C1: Optional perceived age field for coherence diagnostics
+                        "perceived_age_hours": {
+                            "type": "number",
+                            "description": "How old do you estimate this news is, in hours? (optional diagnostic)",
+                        },
                     },
                     "required": ["index", "surprise", "directional_clarity",
                                  "transmission_delay", "market_awareness",
                                  "expected_magnitude", "signal_reliability",
-                                 "direction", "impacted_tickers", "news_category", "reasoning"],
+                                 "direction", "impacted_tickers", "news_category",
+                                 "reasoning", "confirmed_event"],
                 },
             },
         },
         "required": ["scores"],
     },
 }
+
+
+# ── D1: Pre-filter categories with zero edge ────────────────────
+# These categories are ALWAYS zero-edge — skip Claude entirely.
+ZERO_EDGE_KEYWORDS = {
+    "earnings": [
+        "earnings report", "quarterly results", "revenue beat", "eps beat",
+        "profit rises", "profit falls", "quarterly profit", "annual results",
+        "reports q1", "reports q2", "reports q3", "reports q4",
+        "fiscal year results", "earnings surprise",
+    ],
+    "macro": [
+        "nonfarm payroll", "jobs report", "cpi data", "inflation data",
+        "gdp growth", "unemployment rate", "retail sales data",
+        "consumer confidence index",
+    ],
+}
+
+
+def _is_zero_edge_headline(title: str) -> str | None:
+    """Return category if headline is clearly zero-edge, else None.
+
+    v4.3 D1: Pre-filter obvious earnings/macro headlines before Claude.
+    Saves tokens by not sending headlines we'll hard-cap anyway.
+    """
+    title_lower = title.lower()
+    for category, keywords in ZERO_EDGE_KEYWORDS.items():
+        for kw in keywords:
+            if kw in title_lower:
+                return category
+    return None
 
 
 def _compute_freshness(published: datetime | None) -> int:
@@ -298,7 +440,10 @@ def _fetch_market_context() -> dict:
 
 
 def _build_context_string(market_ctx: dict, scan_type: ScanType) -> str:
-    """Build the context string for Claude prompt (#5, #8)."""
+    """Build the context string for Claude user message (#5, #8).
+
+    v4.3 B3: Performance summary moved to system prompt — only market data here.
+    """
     parts = []
 
     if scan_type == ScanType.EUROPE:
@@ -329,39 +474,94 @@ def _build_context_string(market_ctx: dict, scan_type: ScanType) -> str:
     if cal_ctx:
         parts.append(cal_ctx)
 
-    # P1-#1: Performance feedback loop — Claude sees its past results
+    return " | ".join(parts)
+
+
+def _build_system_messages() -> list[dict]:
+    """Build the system prompt with prompt caching (F3) and performance summary (B3/E1).
+
+    v4.3 F3: Uses Anthropic's cache_control to cache the static system prompt.
+    The performance summary is appended as a non-cached block (changes per journal).
+    """
+    # Static system prompt — cached across calls (saves ~50% input tokens)
+    messages = [
+        {
+            "type": "text",
+            "text": SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},  # v4.3 F3: prompt caching
+        }
+    ]
+
+    # Performance summary — dynamic, not cached (changes after each journal run)
     perf_summary = build_performance_summary()
     if perf_summary:
-        parts.append(perf_summary)
+        messages.append({
+            "type": "text",
+            "text": perf_summary,
+        })
 
-    return " | ".join(parts)
+    return messages
 
 
 def _call_claude_with_retry(client, headlines, session_context, max_retries=3):
     """Call Claude API with tool_use (#9) for structured output.
 
+    v4.3 changes:
+    - A1/F1: Uses configurable model (default Haiku)
+    - A2: temperature=0 for reproducible scoring
+    - A4: Dynamic max_tokens based on batch size
+    - B3/E1: System prompt as structured blocks with cache_control
+    - B5: Ticker list in user message instead of system prompt
+    - F3: Prompt caching via cache_control
+    - F4: Token usage logging
+
     Returns parsed scores list, or empty list on failure.
     Never raises — API errors are logged and return [] so the scan
     completes gracefully (no trade) instead of crashing.
     """
+    # v4.3 B5: Ticker list in user message (saves system prompt tokens)
     user_message = f"""Contexte : {session_context}
+
+Univers de {len(ASSETS)} actifs surveilles :
+{TICKER_LIST}
 
 Voici {len(headlines)} headlines recentes. Analyse chacune et utilise l'outil submit_news_scores pour soumettre tes scores.
 
 Headlines :
 {chr(10).join(headlines)}"""
 
+    # v4.3 A4: Dynamic max_tokens — 300 tokens per item is generous
+    dynamic_max_tokens = max(4096, min(16384, len(headlines) * 350))
+
+    # v4.3 B3/E1/F3: Structured system prompt with caching
+    system_messages = _build_system_messages()
+
+    model = _get_model()
+
     for attempt in range(max_retries + 1):
         try:
             response = client.messages.create(
-                model="claude-sonnet-4-5-20250929",
-                max_tokens=16384,
-                system=SYSTEM_PROMPT,
+                model=model,
+                max_tokens=dynamic_max_tokens,
+                temperature=0,  # v4.3 A2: Reproducible scoring
+                system=system_messages,  # v4.3 F3: Cached system prompt
                 messages=[{"role": "user", "content": user_message}],
                 tools=[SCORING_TOOL],
                 tool_choice={"type": "tool", "name": "submit_news_scores"},
                 timeout=120.0,  # 120s timeout — generous margin for API congestion
             )
+
+            # v4.3 F4: Track token usage
+            if hasattr(response, "usage"):
+                _scan_token_usage["input_tokens"] += getattr(response.usage, "input_tokens", 0)
+                _scan_token_usage["output_tokens"] += getattr(response.usage, "output_tokens", 0)
+                _scan_token_usage["scans"] += 1
+                # Log cache performance if available
+                cache_read = getattr(response.usage, "cache_read_input_tokens", 0)
+                cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0)
+                if cache_read > 0 or cache_creation > 0:
+                    logger.info("Prompt cache: read=%d, creation=%d tokens",
+                                cache_read, cache_creation)
 
             # Detect truncation — if max_tokens was hit, scores are likely incomplete
             if response.stop_reason == "max_tokens":
@@ -434,8 +634,11 @@ def score_news_batch(
 ) -> tuple[list[ScoredNews], dict]:
     """Send news headlines to Claude for scoring, with automatic batching.
 
-    If more than SCORING_BATCH_SIZE items, splits into multiple API calls
-    to avoid timeout. Each batch is scored independently.
+    v4.3 changes:
+    - A3: Uses singleton client
+    - D1: Pre-filters zero-edge headlines (earnings/macro)
+    - F2: Uses score cache to avoid re-scoring same headlines
+    - B6: Logs prompt version hash
 
     Returns (scored_news, market_context).
     """
@@ -455,27 +658,112 @@ def score_news_batch(
         logger.warning("EIA_API_KEY non configuree — donnees stocks petrole/gaz desactivees. "
                         "Inscription gratuite: https://www.eia.gov/opendata/register.php")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    # v4.3 A3: Singleton client
+    client = _get_client()
+
+    # v4.3 B6: Log prompt version
+    logger.info("Scoring with model=%s, prompt_version=%s", _get_model(), PROMPT_VERSION)
 
     # (#5) Fetch market context
     market_ctx = _fetch_market_context()
     session_context = _build_context_string(market_ctx, scan_type)
 
-    # Split into batches if needed (safety net — pre-filter should already cap at 50)
-    if len(news_items) > SCORING_BATCH_SIZE:
-        logger.info("Splitting %d items into batches of %d for Claude scoring",
-                     len(news_items), SCORING_BATCH_SIZE)
+    # v4.3 D1: Pre-filter zero-edge headlines + F2: Check cache
+    items_to_score: list[NewsItem] = []
+    pre_filtered_scored: list[ScoredNews] = []
+    cached_scored: list[ScoredNews] = []
 
-    all_scored: list[ScoredNews] = []
-    for batch_start in range(0, len(news_items), SCORING_BATCH_SIZE):
-        batch_items = news_items[batch_start:batch_start + SCORING_BATCH_SIZE]
-        batch_scored = _score_batch(client, batch_items, session_context, batch_start)
-        all_scored.extend(batch_scored)
+    for item in news_items:
+        # D1: Skip obvious zero-edge headlines
+        zero_cat = _is_zero_edge_headline(item.title)
+        if zero_cat:
+            logger.debug("D1 pre-filter: skipping '%s' (detected as %s)", item.title[:60], zero_cat)
+            # Create a minimal ScoredNews with zero-edge scores
+            freshness = _compute_freshness(item.published)
+            cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(zero_cat, 0.2)
+            pre_filtered_scored.append(ScoredNews(
+                news=item, surprise=20, freshness=freshness,
+                directional_clarity=50, transmission_delay=5,
+                market_awareness=95, expected_magnitude=30,
+                signal_reliability=90, direction=Direction.NEUTRAL,
+                impacted_tickers=item.related_tickers or [],
+                reasoning=f"Pre-filtered: {zero_cat} headline — zero edge",
+                news_category=zero_cat, category_score_mult=cat_mult,
+            ))
+            continue
 
+        # F2: Check score cache
+        cache_key = _get_cache_key(item.title, item.description)
+        cached = _get_cached_score(cache_key)
+        if cached is not None:
+            logger.debug("F2 cache hit: '%s'", item.title[:60])
+            freshness = _compute_freshness(item.published)
+            try:
+                direction = Direction(cached.get("direction", "NEUTRAL"))
+            except ValueError:
+                direction = Direction.NEUTRAL
+            news_cat = cached.get("news_category", "other")
+            cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
+            impacted = cached.get("impacted_tickers", [])
+            chain_reactions = _detect_chain_reactions(impacted, direction)
+            for cr in chain_reactions:
+                if cr.ticker not in impacted:
+                    impacted.append(cr.ticker)
+            cached_scored.append(ScoredNews(
+                news=item,
+                surprise=cached.get("surprise", 0),
+                freshness=freshness,
+                directional_clarity=cached.get("directional_clarity", 0),
+                transmission_delay=cached.get("transmission_delay", 50),
+                market_awareness=cached.get("market_awareness", 50),
+                expected_magnitude=cached.get("expected_magnitude", 50),
+                signal_reliability=cached.get("signal_reliability", 50),
+                direction=direction,
+                impacted_tickers=impacted,
+                reasoning=cached.get("reasoning", ""),
+                news_category=news_cat,
+                category_score_mult=cat_mult,
+                chain_reactions=chain_reactions,
+            ))
+            continue
+
+        items_to_score.append(item)
+
+    if pre_filtered_scored:
+        logger.info("D1: Pre-filtered %d zero-edge headlines (not sent to Claude)",
+                     len(pre_filtered_scored))
+    if cached_scored:
+        logger.info("F2: %d headlines served from cache (not sent to Claude)",
+                     len(cached_scored))
+
+    # Score remaining items via Claude
+    claude_scored: list[ScoredNews] = []
+    if items_to_score:
+        # Split into batches if needed
+        if len(items_to_score) > SCORING_BATCH_SIZE:
+            logger.info("Splitting %d items into batches of %d for Claude scoring",
+                         len(items_to_score), SCORING_BATCH_SIZE)
+
+        for batch_start in range(0, len(items_to_score), SCORING_BATCH_SIZE):
+            batch_items = items_to_score[batch_start:batch_start + SCORING_BATCH_SIZE]
+            batch_scored = _score_batch(client, batch_items, session_context, batch_start)
+            claude_scored.extend(batch_scored)
+
+    # Combine all sources
+    all_scored = pre_filtered_scored + cached_scored + claude_scored
     all_scored.sort(key=lambda s: s.total_score, reverse=True)
-    logger.info("Scored %d/%d news items (VIX=%s, regime=%s)",
+
+    logger.info("Scored %d/%d news items (claude=%d, cached=%d, prefiltered=%d, VIX=%s, regime=%s)",
                 len(all_scored), len(news_items),
+                len(claude_scored), len(cached_scored), len(pre_filtered_scored),
                 market_ctx.get("vix", "N/A"), market_ctx.get("regime", "N/A"))
+
+    # F4: Log cumulative token usage
+    usage = get_token_usage()
+    if usage["scans"] > 0:
+        logger.info("Token usage (cumulative): input=%d, output=%d, scans=%d",
+                     usage["input_tokens"], usage["output_tokens"], usage["scans"])
+
     return all_scored, market_ctx
 
 
@@ -542,6 +830,9 @@ def _score_batch(
         expected_magnitude = max(0, min(100, entry.get("expected_magnitude", 50)))
         signal_reliability = max(0, min(100, entry.get("signal_reliability", 50)))
 
+        # v4.3 D3: Use confirmed_event flag when available (replaces fragile keyword matching)
+        confirmed_event = entry.get("confirmed_event")
+
         # Hard rejection: categories with unrealistic transmission_delay
         # These are priced quickly by algos — Claude sometimes overestimates delay
         if news_cat == "earnings" and transmission_delay > 15:
@@ -569,50 +860,64 @@ def _score_batch(
                 "boe governor", "bailey", "president de la bce",
             ])
             if _is_rate_decision:
-                # Rate decisions = priced by HFT in microseconds
                 if transmission_delay > 10:
                     logger.info("Central bank rate-decision hard-cap: forcing transmission_delay %d -> 5 for '%s'",
                                 transmission_delay, item.title[:60])
                     transmission_delay = 5
                     market_awareness = max(market_awareness, 95)
             elif _is_major_speaker:
-                # Major speaker (Powell, Lagarde) — widely followed, cap at 25
                 if transmission_delay > 25:
                     logger.info("Central bank major-speech hard-cap: forcing transmission_delay %d -> 25 for '%s'",
                                 transmission_delay, item.title[:60])
                     transmission_delay = 25
                 market_awareness = max(market_awareness, 70)
             else:
-                # Secondary official — less attention, more edge, cap at 45
                 if transmission_delay > 45:
                     logger.info("Central bank secondary hard-cap: forcing transmission_delay %d -> 45 for '%s'",
                                 transmission_delay, item.title[:60])
                     transmission_delay = 45
                 market_awareness = max(market_awareness, 50)
         elif news_cat == "m_a":
-            # Distinguish M&A rumor (high edge) vs confirmed deal (zero edge)
-            title_lower = item.title.lower()
-            reasoning_lower = entry.get("reasoning", "").lower()
-            combined = title_lower + " " + reasoning_lower
-            _is_confirmed = any(kw in combined for kw in [
-                "confirms", "confirmed", "announces acquisition", "agrees to buy",
-                "agrees to acquire", "completed acquisition", "merger approved",
-                "deal closed", "takeover complete", "annonce l'acquisition",
-            ])
-            if _is_confirmed:
-                # Confirmed M&A = already priced in pre-market (treat like earnings)
-                if transmission_delay > 10:
-                    logger.info("M&A confirmed hard-cap: forcing transmission_delay %d -> 5 for '%s'",
-                                transmission_delay, item.title[:60])
-                    transmission_delay = 5
-                    market_awareness = max(market_awareness, 90)
+            # v4.3 D3: Use confirmed_event flag if available, fallback to keywords
+            if confirmed_event is not None:
+                if confirmed_event:
+                    if transmission_delay > 10:
+                        logger.info("M&A confirmed (via flag): forcing transmission_delay %d -> 5 for '%s'",
+                                    transmission_delay, item.title[:60])
+                        transmission_delay = 5
+                        market_awareness = max(market_awareness, 90)
+                else:
+                    if transmission_delay > 40:
+                        logger.info("M&A rumor (via flag): capping transmission_delay %d -> 40 for '%s'",
+                                    transmission_delay, item.title[:60])
+                        transmission_delay = 40
+                    market_awareness = max(market_awareness, 50)
             else:
-                # M&A rumor — cap at 40 (rumors still have some edge)
-                if transmission_delay > 40:
-                    logger.info("M&A rumor hard-cap: forcing transmission_delay %d -> 40 for '%s'",
-                                transmission_delay, item.title[:60])
-                    transmission_delay = 40
-                market_awareness = max(market_awareness, 50)
+                # Fallback: keyword-based detection
+                title_lower = item.title.lower()
+                reasoning_lower = entry.get("reasoning", "").lower()
+                combined = title_lower + " " + reasoning_lower
+                _is_confirmed = any(kw in combined for kw in [
+                    "confirms", "confirmed", "announces acquisition", "agrees to buy",
+                    "agrees to acquire", "completed acquisition", "merger approved",
+                    "deal closed", "takeover complete", "annonce l'acquisition",
+                ])
+                if _is_confirmed:
+                    if transmission_delay > 10:
+                        logger.info("M&A confirmed hard-cap: forcing transmission_delay %d -> 5 for '%s'",
+                                    transmission_delay, item.title[:60])
+                        transmission_delay = 5
+                        market_awareness = max(market_awareness, 90)
+                else:
+                    if transmission_delay > 40:
+                        logger.info("M&A rumor hard-cap: forcing transmission_delay %d -> 40 for '%s'",
+                                    transmission_delay, item.title[:60])
+                        transmission_delay = 40
+                    market_awareness = max(market_awareness, 50)
+
+        # v4.3 D2: Cross-dimension coherence validation
+        _validate_coherence(entry, transmission_delay, market_awareness,
+                            entry.get("surprise", 0), item.title)
 
         # Apply category score multiplier (edge priority)
         cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
@@ -652,11 +957,37 @@ def _score_batch(
             convergence_count=convergence_count,
         ))
 
+        # v4.3 F2: Cache the score for future scans
+        cache_key = _get_cache_key(item.title, item.description)
+        _set_cached_score(cache_key, entry)
+
     if scored and len(scored) < len(batch_items):
         logger.warning("Claude scored only %d/%d items in batch (possible truncation or index mismatch)",
                        len(scored), len(batch_items))
 
     return scored
+
+
+def _validate_coherence(entry: dict, transmission_delay: int, market_awareness: int,
+                        surprise: int, title: str) -> None:
+    """v4.3 D2: Validate cross-dimension coherence and log warnings.
+
+    Catches cases where Claude returns contradictory dimensions:
+    - High surprise + low delay = surprise that's already priced? Unlikely.
+    - Low awareness + low delay = nobody saw it but it's already priced? Contradictory.
+    """
+    if surprise > 70 and transmission_delay < 20:
+        logger.warning("D2 coherence: surprise=%d but delay=%d for '%s' — "
+                       "highly surprising news should not be already priced",
+                       surprise, transmission_delay, title[:60])
+    if market_awareness < 20 and transmission_delay < 20:
+        logger.warning("D2 coherence: awareness=%d but delay=%d for '%s' — "
+                       "if nobody saw it, it shouldn't be priced already",
+                       market_awareness, transmission_delay, title[:60])
+    if market_awareness > 80 and transmission_delay > 60:
+        logger.warning("D2 coherence: awareness=%d but delay=%d for '%s' — "
+                       "if everyone saw it, delay should be lower",
+                       market_awareness, transmission_delay, title[:60])
 
 
 def _count_convergence(

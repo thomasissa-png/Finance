@@ -1,4 +1,4 @@
-# OneShot News Trading System — v4.1 Journal Audit Pipeline
+# OneShot News Trading System — v4.3 Claude API Audit Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -164,6 +164,26 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - **7 dimensions** de learning au lieu de 4 : ticker*cat + session + newscat + regime + hour + direction + delay_bias
 - **Blending** : `final_mult = base * session * newscat * regime * hour * dir * delay_bias` (clamp [0.5, 1.5])
 
+#### 12. Audit Claude API v4.3 — 20 ameliorations (audit complet utilisation Claude)
+- **A1/F1** : Modele configurable — `claude-haiku-4-5-20251001` par defaut (3x moins cher que Sonnet), `CLAUDE_MODEL` env var pour override
+- **A2** : `temperature=0` pour scoring reproductible (deterministe)
+- **A3** : Singleton Anthropic client (`_get_client()`) — reutilise connexion HTTP, evite recreer a chaque scan
+- **A4** : Dynamic `max_tokens` base sur taille du batch (300 tokens/item, min 4096, max 16384)
+- **B1** : System prompt restructure en XML (`<role>`, `<scoring_dimensions>`, `<hard_rules>`, `<examples>`) — meilleur suivi des instructions
+- **B2** : 3 few-shot examples dans le prompt (weather/NOAA, earnings zero-edge, geopolitique OSINT) — calibration implicite
+- **B3/E1** : System prompt en blocks structures avec `cache_control` pour prompt caching Anthropic
+- **B5** : Ticker list deplace du system prompt vers le user message — economie tokens systeme caches
+- **B6** : `PROMPT_VERSION` hash MD5 du system prompt — log pour tracer les changements de prompt
+- **C1** : `perceived_age_hours` optionnel dans tool schema — diagnostic coherence age percu vs reel
+- **C2** : `maxLength: 300` sur reasoning — force la concision, evite gaspillage tokens
+- **D1** : Pre-filtrage zero-edge (`_is_zero_edge_headline()`) — skip Claude pour earnings/macro evidents, economise API calls
+- **D2** : Validation coherence cross-dimensions (`_validate_coherence()`) — detecte contradictions surprise vs delay vs awareness
+- **D3** : `confirmed_event` boolean dans tool schema — remplace keyword matching fragile pour M&A confirme vs rumeur
+- **F2** : Score caching par hash headline (`_score_cache`, TTL 4h) — evite re-scorer les memes news
+- **F3** : Prompt caching via `cache_control: {"type": "ephemeral"}` sur system blocks — reduit tokens input
+- **F4** : Token usage tracking (`get_token_usage()`) — monitoring couts cumules input/output/scans
+- **Note** : B4 (extended thinking) intentionnellement skippe — incompatible avec `tool_choice` force
+
 ### Etat actuel des fichiers cles
 - `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
@@ -171,7 +191,7 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - `backend/app/journal.py` : v4.1, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout
 - `backend/app/learning.py` : v4.2, 21 audit fixes, 7 learning dimensions, alerts-only summary, 2-bucket regimes
 - `backend/app/trade_selector.py` : v4.0, convex calibration, fallback ticker, spread filter, VIX daily cap, asymmetric SHORT
-- `backend/app/news_scorer.py` : v4.0, 11 dimensions scoring, convergence direction, dynamic asset count
+- `backend/app/news_scorer.py` : v4.3, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache, pre-filter, coherence validation, prompt caching, token tracking
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, is_market_holiday()
 - `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr)
 - `backend/app/scan_history.py` : PG support, pruning 30j
@@ -309,10 +329,16 @@ Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle 
 RSS feeds (5 sources) : BBC Business + World, CNBC World + Business, Investing.com. Poids reduits : BBC=0.85, CNBC=0.9, Investing.com=0.7
 **Note** : Reuters feeds.reuters.com DNS dead → remplace par BBC
 
-- **Claude API (Anthropic)**: scoring des news via Sonnet avec tool_use pour structured output + retry exponentiel (max 2 retries). Headlines incluent la description RSS quand disponible (contexte enrichi). WARNING logs si GNEWS_API_KEY ou EIA_API_KEY manquantes. Seul secret requis: `ANTHROPIC_API_KEY`.
+- **Claude API (Anthropic)** (v4.3): scoring des news via Haiku (configurable via `CLAUDE_MODEL` env var) avec tool_use pour structured output + retry exponentiel (max 3 retries). Singleton client HTTP. `temperature=0` pour reproductibilite. Headlines incluent la description RSS quand disponible. WARNING logs si GNEWS_API_KEY ou EIA_API_KEY manquantes. Seul secret requis: `ANTHROPIC_API_KEY`.
+  - **Pre-filtrage zero-edge** (v4.3 D1) : skip Claude pour earnings/macro evidents (`_is_zero_edge_headline()`)
   - **Pre-filtrage** : cap a 50 items max avant Claude (heuristique source_weight + freshness + description)
   - **Batching** : si > 50 items, decoupe en batchs de 50 pour eviter timeout API
   - **Timeout** : 90s par batch (50 items ~30s processing, marge pour queueing API)
+  - **Prompt caching** (v4.3 F3) : system prompt avec `cache_control: {"type": "ephemeral"}` — reduit tokens input
+  - **Score caching** (v4.3 F2) : cache par hash headline (TTL 4h) — evite re-scorer les memes news
+  - **Token tracking** (v4.3 F4) : `get_token_usage()` — monitoring couts cumules
+  - **Coherence** (v4.3 D2) : validation cross-dimensions surprise/delay/awareness
+  - **XML prompt** (v4.3 B1) : sections `<role>`, `<scoring_dimensions>`, `<hard_rules>`, `<examples>` avec 3 few-shot examples
 
 ## Calendrier Economique
 Module `economic_calendar.py` — bloque les trades avant les evenements macro majeurs :
@@ -744,6 +770,8 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - v4.2 tests ajoutés (12 tests) :
   - **test_learning.py** : stderr=0 effect size (A2), min effect size (A3), divisor fix (A4), hour_adj, direction_adj, delay_bias_adj, D1 lookback, regime merged buckets, trades param summary (D4), alerts-only format (E1)
   - **test_workflow_e2e.py** : updated "Win rate" → "WR=" assertions for v4.2 compact format
+- v4.3 tests ajoutés (15 tests) :
+  - **test_news_scorer.py** : prompt_version_hash, default_model_haiku, get_model_default, get_model_env_override, confirmed_event schema, perceived_age schema, reasoning_max_length, zero_edge_headline_detection, validate_coherence_warnings, validate_coherence_consistent, score_cache_operations, get_token_usage, xml_structure, few_shot_examples, cache_control
 - **test_weekend.py** : verification que scans, event checks et triggers sont bloques le week-end
 - **test_data_persistence.py** : PG fallback, JSON guard, corrupt file resilience, auto-migration
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data
