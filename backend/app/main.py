@@ -29,7 +29,6 @@ from .agents.registry import (
     run_learning_update,
     run_daily_journal as agents_run_journal,
     run_event_check as agents_run_event_check,
-    run_journal_recovery,
     run_position_monitor as agents_run_position_monitor,
     run_scan_pipeline,
     run_weekly_review as agents_run_weekly_review,

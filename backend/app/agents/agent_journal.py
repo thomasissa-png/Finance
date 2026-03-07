@@ -63,8 +63,13 @@ class AgentJournal(BaseAgent):
                 self._run_journal,
             )
 
-            entries = journal_result.get("entries", [])
-            diagnostic = journal_result.get("diagnostic", {})
+            # P1 fix: run_daily_journal() returns list[dict], not {"entries": [...]}
+            if isinstance(journal_result, list):
+                entries = journal_result
+                diagnostic = {}
+            else:
+                entries = journal_result.get("entries", [])
+                diagnostic = journal_result.get("diagnostic", {})
 
             result["entries"] = entries
             result["diagnostic"] = diagnostic
@@ -144,13 +149,14 @@ class AgentJournal(BaseAgent):
         try:
             self.log("Startup recovery: checking for old PENDING trades")
             result = self._run_journal()
-            entries = result.get("entries", [])
+            # P1 fix: run_daily_journal() returns list[dict]
+            entries = result if isinstance(result, list) else result.get("entries", [])
             if entries:
                 self.log_decision("Startup recovery complete", {
                     "recovered": len(entries),
                 })
             self._set_status(AgentStatus.IDLE, f"Recovered {len(entries)} trades")
-            return result
+            return {"entries": entries, "diagnostic": {}}
         except Exception as exc:
             self.log("Startup recovery failed", {"error": str(exc)}, level="ERROR")
             self._set_status(AgentStatus.ERROR, str(exc))

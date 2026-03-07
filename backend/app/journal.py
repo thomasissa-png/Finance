@@ -361,11 +361,12 @@ def _compute_slippage(
 
     first_open = first_bar[3]
     if trade.direction == Direction.LONG:
-        # LONG (buying): paid more than recommended = unfavorable
+        # LONG (buying): higher open = paid more = unfavorable (positive)
         slip = (first_open - trade.entry_price) / trade.entry_price * 100
     else:
-        # SHORT (selling): price moved up = sold at worse level = unfavorable
-        slip = (first_open - trade.entry_price) / trade.entry_price * 100
+        # SHORT (selling): lower open = sold cheaper = unfavorable (positive)
+        # P2 fix: inverted vs LONG — higher open is favorable for SHORT
+        slip = (trade.entry_price - first_open) / trade.entry_price * 100
     # Positive = unfavorable (price moved against), Negative = favorable (price moved in our favor)
     return round(slip, 4)
 
@@ -622,7 +623,13 @@ def _load_scan_decision_data() -> dict[str, dict]:
     scans_file = DATA_DIR / "last_scans.json"
     try:
         if scans_file.exists():
-            data = json.loads(scans_file.read_text())
+            # P4: Use shared lock for consistent reads (concurrent writes possible)
+            with open(scans_file, "r") as f:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                try:
+                    data = json.load(f)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
             if isinstance(data, dict):
                 return data
             logger.warning("Scan cache has unexpected type %s, ignoring", type(data).__name__)
