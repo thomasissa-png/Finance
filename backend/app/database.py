@@ -287,7 +287,23 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     mfe DOUBLE PRECISION,
     bar_coverage INTEGER,
     bar_interval VARCHAR(10),
-    realized_rr DOUBLE PRECISION
+    realized_rr DOUBLE PRECISION,
+    news_url TEXT DEFAULT '',
+    news_description TEXT DEFAULT '',
+    target_price DOUBLE PRECISION,
+    stop_price DOUBLE PRECISION,
+    target_pct DOUBLE PRECISION,
+    stop_pct DOUBLE PRECISION,
+    risk_reward DOUBLE PRECISION,
+    edge_score DOUBLE PRECISION,
+    surprise INTEGER,
+    directional_clarity INTEGER,
+    market_awareness INTEGER,
+    signal_reliability INTEGER,
+    expected_magnitude INTEGER,
+    volume_confirmed BOOLEAN,
+    volume_ratio DOUBLE PRECISION,
+    position_size_pct DOUBLE PRECISION
 )
 """
 
@@ -473,6 +489,23 @@ def init_db() -> None:
                 ("bar_coverage", "INTEGER"),
                 ("bar_interval", "VARCHAR(10)"),
                 ("realized_rr", "DOUBLE PRECISION"),
+                # v5.1: Full news & trade context
+                ("news_url", "TEXT DEFAULT ''"),
+                ("news_description", "TEXT DEFAULT ''"),
+                ("target_price", "DOUBLE PRECISION"),
+                ("stop_price", "DOUBLE PRECISION"),
+                ("target_pct", "DOUBLE PRECISION"),
+                ("stop_pct", "DOUBLE PRECISION"),
+                ("risk_reward", "DOUBLE PRECISION"),
+                ("edge_score", "DOUBLE PRECISION"),
+                ("surprise", "INTEGER"),
+                ("directional_clarity", "INTEGER"),
+                ("market_awareness", "INTEGER"),
+                ("signal_reliability", "INTEGER"),
+                ("expected_magnitude", "INTEGER"),
+                ("volume_confirmed", "BOOLEAN"),
+                ("volume_ratio", "DOUBLE PRECISION"),
+                ("position_size_pct", "DOUBLE PRECISION"),
             ]:
                 cur.execute(f"""
                     DO $$ BEGIN
@@ -663,6 +696,12 @@ _JOURNAL_COLUMNS = [
     "actual_pricing_time_hours", "delay_accuracy",
     # v5.0 M7: v4.1 journal enrichment fields
     "slippage", "mae", "mfe", "bar_coverage", "bar_interval", "realized_rr",
+    # v5.1: Full news & trade context
+    "news_url", "news_description", "target_price", "stop_price",
+    "target_pct", "stop_pct", "risk_reward", "edge_score",
+    "surprise", "directional_clarity", "market_awareness",
+    "signal_reliability", "expected_magnitude",
+    "volume_confirmed", "volume_ratio", "position_size_pct",
 ]
 
 _JOURNAL_JSONB_COLS = {"all_scored_news", "rejection_log", "learning_state"}

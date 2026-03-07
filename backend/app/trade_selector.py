@@ -962,6 +962,8 @@ def select_trades(
             category=asset.category,
             direction=best_news.direction,
             news_headline=best_news.news.title,
+            news_url=best_news.news.url or "",
+            news_description=best_news.news.description or "",
             news_category=best_news.news_category,
             catalyst=best_news.reasoning,
             entry_price=round(price, 4),
@@ -977,6 +979,9 @@ def select_trades(
             gap_buffer_applied=gap_buffer_applied,
             binary_event_warning=binary_warning,
             volume_confirmed=volume_confirmed,
+            # v5.1: All Claude scoring dimensions for complete journal view
+            surprise=best_news.surprise,
+            directional_clarity=best_news.directional_clarity,
             transmission_delay=best_news.transmission_delay,
             market_awareness=best_news.market_awareness,
             edge_score=round(

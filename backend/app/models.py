@@ -135,6 +135,8 @@ class TradeRecommendation(BaseModel):
     category: str
     direction: Direction
     news_headline: str = ""  # Original news title that triggered the trade
+    news_url: str = ""  # v5.1: Link to original article
+    news_description: str = ""  # v5.1: RSS summary/description
     news_category: str = "other"  # Type of news: earnings, macro, geopolitical, etc.
     catalyst: str
     entry_price: float
@@ -158,7 +160,9 @@ class TradeRecommendation(BaseModel):
     binary_event_warning: str | None = None
     # (#10) Volume confirmation
     volume_confirmed: bool | None = None  # None = no data, True/False = confirmed
-    # Edge-detection metrics
+    # Edge-detection metrics — Claude scoring dimensions
+    surprise: int | None = None            # v5.1: Claude's surprise score (0-100)
+    directional_clarity: int | None = None # v5.1: Claude's directional clarity (0-100)
     transmission_delay: int | None = None  # 0=already priced, 100=nobody saw it
     market_awareness: int | None = None    # 0=nobody, 100=everyone
     edge_score: float | None = None        # edge_factor used in scoring
@@ -290,6 +294,24 @@ class JournalEntry(BaseModel):
     bar_coverage: int | None = None              # Number of post-entry bars available
     bar_interval: str | None = None              # Bar interval used (15min, 1h, 1day)
     realized_rr: float | None = None             # Actual risk/reward ratio achieved
+
+    # ── v5.1: Full news & trade context for complete journal view
+    news_url: str = ""                            # Link to original article
+    news_description: str = ""                    # RSS summary/description
+    target_price: float | None = None             # TP level
+    stop_price: float | None = None               # SL level
+    target_pct: float | None = None               # TP as % from entry
+    stop_pct: float | None = None                 # SL as % from entry
+    risk_reward: float | None = None              # R/R ratio at entry
+    edge_score: float | None = None               # edge_factor used in scoring
+    surprise: int | None = None                   # Claude's surprise dimension
+    directional_clarity: int | None = None        # Claude's directional clarity
+    market_awareness: int | None = None           # Claude's market awareness
+    signal_reliability: int | None = None         # Claude's signal reliability
+    expected_magnitude: int | None = None         # Claude's expected move amplitude
+    volume_confirmed: bool | None = None          # Volume > 1.5x average
+    volume_ratio: float | None = None             # Today's volume / 20d avg
+    position_size_pct: float | None = None        # % of capital allocated
 
     # v5.0 O11: Validate news_category
     @field_validator("news_category")

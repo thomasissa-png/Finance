@@ -282,19 +282,80 @@ export default function Journal() {
                   {/* Expanded detail */}
                   {isExpanded && (
                     <div className="journal-detail">
-                      {/* News */}
+                      {/* News — full context */}
                       {e.news_title && (
                         <div className="journal-detail-news">
-                          <div className="journal-detail-news-title">{e.news_title}</div>
+                          <div className="journal-detail-news-title">
+                            {e.news_url ? (
+                              <a href={e.news_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--cyan)", textDecoration: "none" }}>
+                                {e.news_title}
+                              </a>
+                            ) : e.news_title}
+                          </div>
                           {e.news_source && <div className="journal-detail-news-source">{e.news_source}</div>}
+                          {e.news_description && (
+                            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.4 }}>
+                              {e.news_description.length > 300 ? e.news_description.slice(0, 300) + "..." : e.news_description}
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      {/* Metrics grid */}
+                      {/* Claude Scoring Dimensions */}
+                      {(e.surprise != null || e.directional_clarity != null || e.signal_reliability != null) && (
+                        <div className="journal-detail-grid" style={{ marginBottom: 8 }}>
+                          {e.surprise != null && (
+                            <div className="journal-detail-item">
+                              <div className="journal-detail-label">Surprise</div>
+                              <div className="journal-detail-value" style={{ color: scoreColor(e.surprise) }}>{e.surprise}/100</div>
+                            </div>
+                          )}
+                          {e.directional_clarity != null && (
+                            <div className="journal-detail-item">
+                              <div className="journal-detail-label">Clarté</div>
+                              <div className="journal-detail-value">{e.directional_clarity}/100</div>
+                            </div>
+                          )}
+                          {e.predicted_transmission_delay != null && (
+                            <div className="journal-detail-item">
+                              <div className="journal-detail-label">Délai</div>
+                              <div className="journal-detail-value">{e.predicted_transmission_delay}/100</div>
+                            </div>
+                          )}
+                          {e.market_awareness != null && (
+                            <div className="journal-detail-item">
+                              <div className="journal-detail-label">Awareness</div>
+                              <div className="journal-detail-value">{e.market_awareness}/100</div>
+                            </div>
+                          )}
+                          {e.signal_reliability != null && (
+                            <div className="journal-detail-item">
+                              <div className="journal-detail-label">Fiabilité</div>
+                              <div className="journal-detail-value">{e.signal_reliability}/100</div>
+                            </div>
+                          )}
+                          {e.expected_magnitude != null && (
+                            <div className="journal-detail-item">
+                              <div className="journal-detail-label">Magnitude</div>
+                              <div className="journal-detail-value">{e.expected_magnitude}/100</div>
+                            </div>
+                          )}
+                          {e.edge_score != null && (
+                            <div className="journal-detail-item">
+                              <div className="journal-detail-label">Edge</div>
+                              <div className="journal-detail-value" style={{ color: e.edge_score > 0.3 ? "var(--green)" : "var(--yellow)" }}>
+                                {Number(e.edge_score).toFixed(3)}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Trade Setup — entry/exit/target/stop */}
                       <div className="journal-detail-grid">
                         <div className="journal-detail-item">
                           <div className="journal-detail-label">Actif</div>
-                          <div className="journal-detail-value">{e.asset_name || "--"}</div>
+                          <div className="journal-detail-value">{e.asset_name || "--"} <span style={{ color: "var(--text-muted)", fontSize: 10 }}>({e.asset_category || "--"})</span></div>
                         </div>
                         <div className="journal-detail-item">
                           <div className="journal-detail-label">Entrée</div>
@@ -308,6 +369,30 @@ export default function Journal() {
                             {e.exit_price ?? "--"} <span style={{ color: "var(--text-muted)", fontSize: 10 }}>({formatTime(e.exit_time)})</span>
                           </div>
                         </div>
+                        {e.target_price != null && (
+                          <div className="journal-detail-item">
+                            <div className="journal-detail-label">Target (TP)</div>
+                            <div className="journal-detail-value" style={{ color: "var(--green)" }}>
+                              {Number(e.target_price).toFixed(4)} {e.target_pct != null && <span style={{ fontSize: 10 }}>({Number(e.target_pct).toFixed(2)}%)</span>}
+                            </div>
+                          </div>
+                        )}
+                        {e.stop_price != null && (
+                          <div className="journal-detail-item">
+                            <div className="journal-detail-label">Stop (SL)</div>
+                            <div className="journal-detail-value" style={{ color: "var(--red)" }}>
+                              {Number(e.stop_price).toFixed(4)} {e.stop_pct != null && <span style={{ fontSize: 10 }}>({Number(e.stop_pct).toFixed(2)}%)</span>}
+                            </div>
+                          </div>
+                        )}
+                        {e.risk_reward != null && (
+                          <div className="journal-detail-item">
+                            <div className="journal-detail-label">R/R</div>
+                            <div className="journal-detail-value" style={{ color: e.risk_reward >= 1.5 ? "var(--green)" : "var(--yellow)" }}>
+                              {Number(e.risk_reward).toFixed(2)}
+                            </div>
+                          </div>
+                        )}
                         <div className="journal-detail-item">
                           <div className="journal-detail-label">High</div>
                           <div className="journal-detail-value" style={{ color: "var(--green)" }}>
@@ -320,10 +405,20 @@ export default function Journal() {
                             {e.day_low ?? "--"}
                           </div>
                         </div>
-                        <div className="journal-detail-item">
-                          <div className="journal-detail-label">Catégorie actif</div>
-                          <div className="journal-detail-value">{e.asset_category || "--"}</div>
-                        </div>
+                        {e.position_size_pct != null && (
+                          <div className="journal-detail-item">
+                            <div className="journal-detail-label">Position</div>
+                            <div className="journal-detail-value">{Number(e.position_size_pct).toFixed(1)}%</div>
+                          </div>
+                        )}
+                        {e.volume_confirmed != null && (
+                          <div className="journal-detail-item">
+                            <div className="journal-detail-label">Volume</div>
+                            <div className="journal-detail-value" style={{ color: e.volume_confirmed ? "var(--green)" : "var(--text-muted)" }}>
+                              {e.volume_confirmed ? "Confirmé" : "Non confirmé"}{e.volume_ratio != null && ` (${Number(e.volume_ratio).toFixed(1)}x)`}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Reasoning */}
