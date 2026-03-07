@@ -204,6 +204,7 @@ def append_scan_result(scan_result: dict) -> None:
             decision_summary=scan_result.get("decision_summary"),
             learning_state=scan_result.get("learning_state"),
             market_context=scan_result.get("market_context"),
+            source_health=scan_result.get("source_health"),
         )
 
         if is_pg_enabled():

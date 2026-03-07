@@ -1013,6 +1013,50 @@ def health():
     return status
 
 
+# ── Source Health Monitoring ──────────────────────────────────────
+
+@app.get("/api/source-health")
+def source_health(days: int = 7):
+    """Get source health reports (daily + weekly).
+
+    v5.2: Returns recent daily reports and weekly reviews.
+    Query param: days (default 7) — how many days of history.
+    """
+    try:
+        from .source_monitor import get_tracker, pg_load_source_health
+        tracker = get_tracker()
+
+        # Get current daily report (in-memory)
+        current = tracker.get_daily_report()
+
+        # Get historical from PG if available
+        historical = pg_load_source_health(days=days)
+
+        return {
+            "current_day": current,
+            "historical": historical,
+        }
+    except Exception as exc:
+        logger.error("Source health endpoint error: %s", exc)
+        return {"current_day": {}, "historical": [], "error": str(exc)}
+
+
+@app.get("/api/source-health/weekly")
+def source_health_weekly():
+    """Get the latest weekly source health review.
+
+    v5.2: Analyzes last 7 days of source health + suggests new sources.
+    """
+    try:
+        from .source_monitor import get_tracker
+        tracker = get_tracker()
+        review = tracker.get_weekly_review()
+        return review
+    except Exception as exc:
+        logger.error("Weekly source health endpoint error: %s", exc)
+        return {"error": str(exc)}
+
+
 # ── Serve frontend build (production only) ────────────────────────
 # In production (Replit Autoscale), there's no Vite dev server.
 # The backend serves the built React app from frontend/dist/.

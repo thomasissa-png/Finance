@@ -1050,6 +1050,31 @@ def run_daily_journal() -> list[dict]:
     # v5.1: Archive daily OHLCV for traded tickers (backtest data)
     _archive_daily_prices(pending)
 
+    # v5.2: Save daily source health report
+    try:
+        from .source_monitor import get_tracker, create_weekly_review_journal_entry
+        tracker = get_tracker()
+        daily_report = tracker.save_daily_report()
+        if daily_report.get("total_calls_failed", 0) > 0:
+            failed_sources = [
+                name for name, data in daily_report.get("sources", {}).items()
+                if data.get("status") in ("DEAD", "DEGRADED")
+            ]
+            if failed_sources:
+                logger.warning("Source health: %d sources had issues today: %s",
+                               len(failed_sources), ", ".join(failed_sources))
+
+        # Weekly review every Monday
+        today_dt = datetime.now(PARIS_TZ)
+        if today_dt.weekday() == 0:  # Monday
+            review_entry = create_weekly_review_journal_entry()
+            if review_entry:
+                logger.info("Weekly source health review created (severity: %s, dead: %d, degraded: %d)",
+                            review_entry.get("severity"), review_entry.get("dead_count", 0),
+                            review_entry.get("degraded_count", 0))
+    except Exception as exc:
+        logger.warning("Source health reporting failed: %s", exc)
+
     # E1: Structured metrics log
     elapsed = time.monotonic() - journal_start
     logger.info(

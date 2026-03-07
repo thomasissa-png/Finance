@@ -257,6 +257,8 @@ class ScanHistoryEntry(BaseModel):
     decision_summary: str | None = None
     learning_state: dict | None = None
     market_context: dict | None = None
+    # v5.2: Source health snapshot for this scan
+    source_health: dict | None = None
 
 
 class JournalEntry(BaseModel):

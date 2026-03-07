@@ -223,6 +223,15 @@ def run_scan(scan_type: ScanType, max_retries: int = 1, existing_trade_ticker: l
 
             result_dict = result.model_dump(mode="json")
 
+            # v5.2: Attach source health snapshot to scan result
+            try:
+                from .source_monitor import get_tracker
+                source_health = get_tracker().get_scan_health_snapshot()
+                if source_health:
+                    result_dict["source_health"] = source_health
+            except Exception:
+                pass
+
             # Persist full scan result to history (all scored news + rejections)
             append_scan_result(result_dict)
 

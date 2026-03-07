@@ -481,6 +481,22 @@ def init_db() -> None:
                 ON price_archive(ticker, date)
             """)
 
+            # v5.2: Source health monitoring table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS source_health (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL,
+                    report JSONB NOT NULL,
+                    report_type VARCHAR(10) DEFAULT 'daily',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(date, report_type)
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_source_health_date
+                ON source_health(date)
+            """)
+
             # v5.0 M7: Add v4.1 journal columns if missing (safe for existing DBs)
             for col_name, col_type in [
                 ("slippage", "DOUBLE PRECISION"),

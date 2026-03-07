@@ -2744,8 +2744,17 @@ def collect_structured_data() -> list[NewsItem]:
     Each source is best-effort — failures don't block the scan.
     Sources are fetched concurrently to minimize total collection time.
     17 sources (was 11): +WOAH, +NDVI, +Freight, +LME, +Chokepoint, +DarkPool
+
+    v5.2: Each source call is tracked by source_monitor for health reporting.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Import tracker lazily to avoid circular imports
+    try:
+        from .source_monitor import get_tracker
+        tracker = get_tracker()
+    except Exception:
+        tracker = None
 
     all_items: list[NewsItem] = []
     sources = [
@@ -2772,17 +2781,33 @@ def collect_structured_data() -> list[NewsItem]:
     # max_workers=5: balanced concurrency for 17 sources.
     # 17 sources / 5 workers = ~4 waves.
     executor = ThreadPoolExecutor(max_workers=5)
-    futures = {executor.submit(fn): name for name, fn in sources}
+    # Track start time per future for latency measurement
+    _start_times: dict = {}
+    for name, fn in sources:
+        f = executor.submit(fn)
+        _start_times[f] = (name, time.monotonic())
+    futures = _start_times
     try:
         for future in as_completed(futures, timeout=120):
-            source_name = futures[future]
+            source_name, start_t = futures[future]
+            latency_ms = (time.monotonic() - start_t) * 1000
             try:
                 items = future.result(timeout=45)
                 all_items.extend(items)
+                if tracker:
+                    tracker.record_success(source_name, "phase0", len(items), latency_ms)
             except Exception as exc:
                 logger.warning("Structured data source '%s' failed: %s", source_name, exc)
+                if tracker:
+                    tracker.record_failure(source_name, "phase0", exc, latency_ms)
     except TimeoutError:
         logger.warning("Structured data collection timed out, some sources skipped")
+        # Record timeout for sources that didn't complete
+        if tracker:
+            completed_sources = {futures[f][0] for f in futures if f.done()}
+            for name, _ in sources:
+                if name not in completed_sources:
+                    tracker.record_failure(name, "phase0", "Timeout (120s global)")
     finally:
         # wait=True: ensure threads are joined before returning to caller,
         # preventing zombie threads from overlapping with the next collection phase.

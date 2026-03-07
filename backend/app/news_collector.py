@@ -367,18 +367,36 @@ def collect_all_news() -> list[NewsItem]:
     before starting the next source. This guarantees at most 3 active threads
     at any point, preventing Replit from killing the process.
     """
-    def _safe_collect(fn, name):
+    import time as _time
+
+    # v5.2: Source health tracking
+    try:
+        from .source_monitor import get_tracker
+        tracker = get_tracker()
+    except Exception:
+        tracker = None
+
+    def _safe_collect(fn, name, phase):
+        t0 = _time.monotonic()
         try:
-            return fn()
+            result = fn()
+            latency = (_time.monotonic() - t0) * 1000
+            if tracker:
+                tracker.record_success(name, phase, len(result), latency)
+            return result
         except Exception as exc:
+            latency = (_time.monotonic() - t0) * 1000
             logger.warning("News source '%s' failed: %s", name, exc)
+            if tracker:
+                tracker.record_failure(name, phase, exc, latency)
             return []
 
     # Sequential: each source completes (including thread cleanup) before next starts
-    structured_news = _safe_collect(collect_structured_data, "structured")
-    early_news = _safe_collect(collect_early_signal_news, "early-signal")
-    yf_news = _safe_collect(collect_yfinance_news, "yfinance")
-    rss_news = _safe_collect(collect_rss_news, "rss")
+    # Phase 0 sources are individually tracked in data_apis.collect_structured_data()
+    structured_news = _safe_collect(collect_structured_data, "structured_data", "phase0")
+    early_news = _safe_collect(collect_early_signal_news, "early_signal", "phase1")
+    yf_news = _safe_collect(collect_yfinance_news, "yfinance", "phase2")
+    rss_news = _safe_collect(collect_rss_news, "rss_mainstream", "phase3")
 
     # Log per-source results for diagnostics (helps debug "0 news" issues)
     logger.info("News sources: structured=%d, early-signal=%d, yfinance=%d, rss=%d",
