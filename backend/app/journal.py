@@ -479,30 +479,94 @@ def _determine_result(
     return TradeResult.EXPIRED, expired_close, pnl
 
 
-def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: float | None) -> str:
-    """Generate a short post-trade review line."""
+def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: float | None,
+                   slippage: float | None = None, mae: float | None = None,
+                   mfe: float | None = None, actual_pricing_hours: float | None = None) -> str:
+    """Generate a learning-oriented post-trade review.
+
+    Fix 6: Now includes actionable learning insights beyond just the outcome.
+    Analyzes why the trade worked/failed based on execution metrics.
+    """
     parts = []
 
+    # --- Outcome ---
     if result == TradeResult.TP_HIT:
-        parts.append(f"Objectif atteint. Gain de {pnl_pct:+.2f}%. La these etait correcte.")
+        parts.append(f"TP atteint ({pnl_pct:+.2f}%).")
     elif result == TradeResult.SL_HIT:
-        parts.append(f"Stop touche. Perte de {pnl_pct:+.2f}%. Le marche n'a pas suivi la news.")
+        parts.append(f"SL touche ({pnl_pct:+.2f}%).")
     elif pnl_pct is not None and pnl_pct > 0:
-        parts.append(f"Expire en gain ({pnl_pct:+.2f}%). Mouvement insuffisant pour le TP.")
+        parts.append(f"Expire en gain ({pnl_pct:+.2f}%).")
     elif pnl_pct is not None and pnl_pct < 0:
-        parts.append(f"Expire en perte ({pnl_pct:+.2f}%). Mouvement contraire mais SL non touche.")
+        parts.append(f"Expire en perte ({pnl_pct:+.2f}%).")
     else:
-        parts.append("Expire sans mouvement significatif.")
+        parts.append("Expire flat.")
 
-    # (#24) Add binary event warning if present
-    if trade.binary_event_warning:
-        parts.append(f" [{trade.binary_event_warning}]")
+    # --- Learning insights ---
+    insights = []
 
-    # Add volume info
-    if trade.volume_confirmed is True:
-        parts.append(" Volume confirme.")
-    elif trade.volume_confirmed is False:
-        parts.append(" Volume faible.")
+    # Transmission delay analysis
+    if actual_pricing_hours is not None and trade.predicted_transmission_delay is not None:
+        predicted_hours = trade.predicted_transmission_delay / 100.0 * 6.0  # baseline 6h
+        if actual_pricing_hours < predicted_hours * 0.5:
+            insights.append("Le marche a price plus vite que prevu — signal deja partiellement connu.")
+        elif actual_pricing_hours > predicted_hours * 1.5 and result == TradeResult.TP_HIT:
+            insights.append("Pricing plus lent que prevu — edge reel detecte avant le consensus.")
+
+    # Slippage analysis
+    if slippage is not None:
+        if abs(slippage) > 0.5:
+            insights.append(f"Slippage eleve ({slippage:+.2f}%) — execution degradee, verifier liquidite.")
+        elif abs(slippage) < 0.05:
+            insights.append("Execution propre, slippage negligeable.")
+
+    # MAE/MFE analysis (stop tightness)
+    if mae is not None and mfe is not None and result == TradeResult.SL_HIT:
+        if mfe > abs(pnl_pct or 0) * 0.5:
+            insights.append(f"Le trade etait en gain (MFE {mfe:+.2f}%) avant le SL — stop trop serre ou timing de sortie a revoir.")
+        else:
+            insights.append("Direction incorrecte des le depart — signal a recalibrer.")
+    elif mae is not None and result == TradeResult.TP_HIT:
+        if mae > abs(pnl_pct or 0) * 0.8:
+            insights.append(f"Drawdown important (MAE {mae:.2f}%) avant TP — trade volatile, risque de SL.")
+
+    # Category-specific insight
+    news_cat = getattr(trade, "news_category", "other")
+    if result == TradeResult.SL_HIT and news_cat in ("earnings", "macro"):
+        insights.append("Categorie zero-edge (earnings/macro) — le learning penalisera ce type de signal.")
+    elif result == TradeResult.TP_HIT and news_cat in ("weather", "supply_chain", "commodity"):
+        insights.append(f"Categorie a fort edge ({news_cat}) confirmee — le learning boostera ce type.")
+
+    # Volume confirmation
+    if trade.volume_confirmed is True and result == TradeResult.TP_HIT:
+        insights.append("Volume confirme = signal fiable.")
+    elif trade.volume_confirmed is False and result == TradeResult.SL_HIT:
+        insights.append("Volume faible — prudence sur les signaux sans confirmation volume.")
+
+    # Learning multiplier feedback
+    mult = getattr(trade, "learning_multiplier", None)
+    if mult is not None:
+        if mult < 0.8 and result == TradeResult.TP_HIT:
+            insights.append(f"Learning penalisait ce trade ({mult:.2f}x) mais il a gagne — possible sous-estimation.")
+        elif mult > 1.2 and result == TradeResult.SL_HIT:
+            insights.append(f"Learning boostait ce trade ({mult:.2f}x) mais il a perdu — possible sur-estimation.")
+
+    # EXPIRED specific
+    if result == TradeResult.EXPIRED:
+        if pnl_pct is not None and abs(pnl_pct) < 0.1:
+            insights.append("Aucun mouvement — le signal n'a pas eu d'impact mesurable.")
+        elif pnl_pct is not None and pnl_pct > 0:
+            insights.append("Mouvement dans le bon sens mais TP trop ambitieux — reduire le target.")
+        elif pnl_pct is not None and pnl_pct < -0.5:
+            insights.append("Mouvement contraire sans toucher le SL — direction a recalibrer.")
+
+    if insights:
+        parts.append(" " + " ".join(insights))
+    else:
+        # Fallback: at least say something about what happened
+        if result == TradeResult.TP_HIT:
+            parts.append(" These correcte, signal bien calibre.")
+        elif result == TradeResult.SL_HIT:
+            parts.append(" Le marche n'a pas suivi — direction ou timing incorrect.")
 
     return "".join(parts)
 
@@ -819,7 +883,11 @@ def run_daily_journal() -> list[dict]:
         else:
             exit_time_value = datetime.now(timezone.utc)
 
-        review = _build_review(trade, result, pnl_pct)
+        review = _build_review(
+            trade, result, pnl_pct,
+            slippage=slippage, mae=mae, mfe=mfe,
+            actual_pricing_hours=actual_pricing_hours,
+        )
 
         entry = JournalEntry(
             date=trade_date,

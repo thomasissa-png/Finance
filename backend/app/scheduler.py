@@ -237,6 +237,7 @@ def run_scan(scan_type: ScanType, max_retries: int = 1, existing_trade_ticker: l
                 logger.error("All %d attempts failed for %s scan", max_retries + 1, scan_type.value)
                 return {
                     "scan_type": scan_type.value,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "has_trade": False,
                     "reason_no_trade": f"Scan échoué après {max_retries + 1} tentatives: {exc}",
                     "news_analyzed": 0,
@@ -244,6 +245,7 @@ def run_scan(scan_type: ScanType, max_retries: int = 1, existing_trade_ticker: l
 
     return {
         "scan_type": scan_type.value,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "has_trade": False,
         "reason_no_trade": "Échec inattendu",
         "news_analyzed": 0,

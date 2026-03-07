@@ -1580,6 +1580,32 @@ a:focus:not(:focus-visible) {
   margin-bottom: 0;
 }
 
+/* Fix 6: Learning review (insight text) */
+.journal-learning-review {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border-left: 3px solid var(--cyan);
+  border-radius: var(--radius-sm);
+}
+
+.journal-learning-review-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* Fix 6: Mobile review text */
+.trade-mobile-card-review {
+  padding: 8px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+  border-left: 3px solid var(--cyan);
+}
+
 /* Journal trigger feedback message */
 .journal-trigger-msg {
   padding: 10px 16px;

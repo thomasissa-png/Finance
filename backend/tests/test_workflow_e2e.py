@@ -468,9 +468,8 @@ class TestJournalClosure:
         trade = _make_trade(volume_confirmed=True,
                             binary_event_warning="Evenement binaire: 'fomc'")
         review = _build_review(trade, TradeResult.TP_HIT, 2.5)
-        assert "Objectif atteint" in review
+        assert "TP atteint" in review
         assert "Volume confirme" in review
-        assert "binaire" in review.lower()
 
     def test_extract_scan_trace_normal(self):
         """Normal dict extraction should work."""

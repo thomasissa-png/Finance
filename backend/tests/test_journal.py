@@ -126,14 +126,14 @@ def test_determine_result_no_data():
 def test_review_tp():
     trade = _make_trade()
     review = _build_review(trade, TradeResult.TP_HIT, 1.5)
-    assert "Objectif atteint" in review
+    assert "TP atteint" in review
     assert "+1.50%" in review
 
 
 def test_review_sl():
     trade = _make_trade()
     review = _build_review(trade, TradeResult.SL_HIT, -0.8)
-    assert "Stop touche" in review
+    assert "SL touche" in review
     assert "-0.80%" in review
 
 
@@ -152,19 +152,19 @@ def test_review_expired_negative():
 def test_review_expired_none():
     trade = _make_trade()
     review = _build_review(trade, TradeResult.EXPIRED, None)
-    assert "sans mouvement" in review
+    assert "Expire flat" in review
 
 
-def test_review_with_binary_event():
-    """Binary event warning should appear in review (#24)."""
-    trade = _make_trade(binary_event_warning="Evenement binaire detecte: 'fed' — risque de volatilite extreme")
-    review = _build_review(trade, TradeResult.TP_HIT, 1.5)
-    assert "Objectif atteint" in review
-    assert "binaire" in review.lower()
+def test_review_with_learning_insights():
+    """Fix 6: Review should include learning insights based on execution metrics."""
+    trade = _make_trade(volume_confirmed=False)
+    review = _build_review(trade, TradeResult.SL_HIT, -1.2, slippage=0.8, mae=0.5, mfe=0.3)
+    assert "SL touche" in review
+    assert "Slippage eleve" in review or "Volume faible" in review
 
 
 def test_review_with_volume_confirmed():
-    """Volume confirmed should appear in review."""
+    """Volume confirmed should appear in review for TP trades."""
     trade = _make_trade(volume_confirmed=True)
     review = _build_review(trade, TradeResult.TP_HIT, 1.5)
     assert "Volume confirme" in review

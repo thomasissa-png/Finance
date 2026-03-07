@@ -528,6 +528,7 @@ def _run_triggered_scan(scan_type: str, st: ScanType, existing_ticker: list[str]
         with _scans_lock:
             _last_scans[scan_type] = {
                 "scan_type": scan_type,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "has_trade": False,
                 "reason_no_trade": f"Scan échoué : {exc}",
                 "news_analyzed": 0,

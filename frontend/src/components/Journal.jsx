@@ -336,9 +336,22 @@ export default function Journal() {
                         </div>
                       )}
 
-                      {/* Review */}
+                      {/* Review — learning insight */}
                       {e.review && (
-                        <div className="journal-detail-review">{e.review}</div>
+                        <div className="journal-learning-review">
+                          <div className="journal-detail-label">Learning</div>
+                          <div className="journal-learning-review-text">{e.review}</div>
+                        </div>
+                      )}
+
+                      {/* Decision summary — why this trade was selected */}
+                      {e.decision_summary && (
+                        <div className="journal-detail-item" style={{ marginBottom: 8 }}>
+                          <div className="journal-detail-label">Décision</div>
+                          <div className="journal-detail-value" style={{ fontSize: 11, lineHeight: 1.4, color: "var(--text-muted)" }}>
+                            {e.decision_summary}
+                          </div>
+                        </div>
                       )}
 
                       {/* Fix 3: Learning & execution metrics */}
@@ -549,6 +562,12 @@ export default function Journal() {
                           </span>
                         </div>
                       )}
+                    </div>
+                  )}
+                  {/* Fix 6: Learning review on mobile */}
+                  {e.review && (
+                    <div className="trade-mobile-card-review">
+                      {e.review}
                     </div>
                   )}
                 </div>
