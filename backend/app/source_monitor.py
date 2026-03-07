@@ -17,6 +17,7 @@ Source priority (for edge relevance):
 - LOW: Phase 3 mainstream RSS (BBC, CNBC)
 """
 
+import fcntl
 import json
 import logging
 import threading
@@ -142,7 +143,12 @@ class SourceHealthTracker:
         """Load historical daily summaries from disk."""
         if SOURCE_HEALTH_FILE.exists():
             try:
-                data = json.loads(SOURCE_HEALTH_FILE.read_text())
+                with open(SOURCE_HEALTH_FILE, "r") as f:
+                    fcntl.flock(f, fcntl.LOCK_SH)
+                    try:
+                        data = json.load(f)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
                 self._daily_summaries = data.get("daily_summaries", [])
                 # Prune summaries older than 30 days
                 cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
@@ -156,8 +162,12 @@ class SourceHealthTracker:
         """Persist daily summaries to disk."""
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            data = {"daily_summaries": self._daily_summaries}
-            SOURCE_HEALTH_FILE.write_text(json.dumps(data, indent=2, default=str))
+            with open(SOURCE_HEALTH_FILE, "w") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    json.dump({"daily_summaries": self._daily_summaries}, f, indent=2, default=str)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
         except Exception as exc:
             logger.warning("Failed to save source health history: %s", exc)
 
@@ -659,6 +669,9 @@ def _get_source_discovery_suggestions() -> list[str]:
             )
 
     return suggestions
+
+
+_tracker: SourceHealthTracker | None = None
 _tracker_lock = threading.Lock()
 
 

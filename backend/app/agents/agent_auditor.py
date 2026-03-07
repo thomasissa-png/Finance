@@ -369,9 +369,9 @@ class AgentAuditor(BaseAgent):
 
         # 4. Event detection
         try:
-            from ..event_scanner import EVENT_KEYWORDS
-            total_keywords = sum(len(v) for v in EVENT_KEYWORDS.values())
-            categories = list(EVENT_KEYWORDS.keys())
+            from ..event_scanner import HIGH_IMPACT_KEYWORDS
+            total_keywords = sum(len(v) for v in HIGH_IMPACT_KEYWORDS.values())
+            categories = list(HIGH_IMPACT_KEYWORDS.keys())
             findings.append({
                 "area": "event_detection",
                 "status": "OK" if total_keywords > 50 else "WARN",
@@ -456,6 +456,83 @@ class AgentAuditor(BaseAgent):
         except Exception:
             scores["data_quality"] = 5
 
+        # 8. Logging quality — structured logs coverage
+        try:
+            agent_logs = self._get_agent_logs("news", limit=100)
+            if agent_logs:
+                levels = {}
+                for log in agent_logs:
+                    lvl = log.get("level", "INFO")
+                    levels[lvl] = levels.get(lvl, 0) + 1
+                has_decisions = levels.get("DECISION", 0) > 0
+                has_warns = levels.get("WARN", 0) > 0
+                has_info = levels.get("INFO", 0) > 0
+                # Good logging = mix of levels with DECISION logs for key actions
+                log_quality = 10 if has_decisions and has_info else 7 if has_info else 4
+                findings.append({
+                    "area": "logging_quality",
+                    "status": "OK" if has_decisions else "WARN",
+                    "detail": f"Logs: {levels}, DECISION logs present: {has_decisions}",
+                })
+                scores["logging_quality"] = log_quality
+                if not has_decisions:
+                    improvements.append({
+                        "priority": "MEDIUM",
+                        "agent": "news",
+                        "action": "Add DECISION-level logs for key collection choices (source selection, dedup decisions)",
+                        "rationale": "DECISION logs enable audit trail and performance tracking",
+                    })
+            else:
+                scores["logging_quality"] = 3
+                findings.append({
+                    "area": "logging_quality",
+                    "status": "WARN",
+                    "detail": "No agent logs found — agent may not have run yet or logging is broken",
+                })
+        except Exception:
+            scores["logging_quality"] = 5
+
+        # 9. Weekly review capability
+        try:
+            from ..source_monitor import get_tracker
+            tracker = get_tracker()
+            review = tracker.get_weekly_review()
+            days_with_data = review.get("days_with_data", 0)
+            dead = review.get("dead_sources", [])
+            degraded = review.get("degraded_sources", [])
+            stable = review.get("stable_sources", [])
+            recs = review.get("recommendations", [])
+
+            if days_with_data > 0:
+                total_sources = len(dead) + len(degraded) + len(stable)
+                health_pct = len(stable) / max(1, total_sources) * 100
+                findings.append({
+                    "area": "weekly_review",
+                    "status": "OK" if health_pct > 70 and not dead else "WARN" if not dead else "CRITICAL",
+                    "detail": (f"Weekly review: {days_with_data} days data, "
+                               f"{len(stable)} stable / {len(degraded)} degraded / {len(dead)} dead, "
+                               f"{len(recs)} recommendations"),
+                })
+                scores["weekly_review"] = min(10, health_pct / 10)
+                if dead:
+                    for src in dead:
+                        improvements.append({
+                            "priority": "HIGH",
+                            "agent": "news",
+                            "action": f"Fix dead source: {src.get('source')} ({src.get('description', '')})",
+                            "rationale": f"Dead since {src.get('days_seen', '?')} days — lost edge signals",
+                        })
+            else:
+                findings.append({
+                    "area": "weekly_review",
+                    "status": "WARN",
+                    "detail": "No weekly review data — source health tracker may not be collecting (check _tracker init)",
+                })
+                scores["weekly_review"] = 4
+        except Exception as exc:
+            scores["weekly_review"] = 3
+            findings.append({"area": "weekly_review", "status": "ERROR", "detail": str(exc)})
+
         # Log analysis for news agent
         self._analyze_agent_errors(findings, scores, improvements, "news")
 
@@ -463,6 +540,7 @@ class AgentAuditor(BaseAgent):
         tests.append("test_news_agent_collects_from_all_phase0_sources")
         tests.append("test_news_agent_dedup_filters_exact_duplicates")
         tests.append("test_news_agent_event_detection_keywords_comprehensive")
+        tests.append("test_source_health_tracker_singleton")
 
     def _audit_scoring(self, report: dict, focus: str | None):
         """Audit Agent Scoring — calibration, edge detection, API efficiency."""

@@ -1,6 +1,7 @@
 """Collects news from Yahoo Finance and RSS feeds."""
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -38,36 +39,6 @@ def _get_source_weight(source: str) -> float:
         if key.lower() in source.lower():
             return weight
     return DEFAULT_SOURCE_WEIGHT
-
-
-def _fetch_news_for_asset(asset) -> list[NewsItem]:
-    """Fetch news for a single asset — designed to run in a thread."""
-    items: list[NewsItem] = []
-    try:
-        ticker = yf.Ticker(asset.ticker)
-        news = ticker.news or []
-        for article in news:
-            title = article.get("title", "")
-            if not title:
-                continue
-
-            published = None
-            pub_ts = article.get("providerPublishTime")
-            if pub_ts:
-                published = datetime.fromtimestamp(pub_ts, tz=timezone.utc)
-
-            source = article.get("publisher", "Yahoo Finance")
-            items.append(NewsItem(
-                title=title,
-                source=source,
-                url=article.get("link", ""),
-                published=published,
-                related_tickers=[asset.ticker],
-                source_weight=_get_source_weight(source),
-            ))
-    except Exception as exc:
-        logger.warning("yfinance news error for %s: %s", asset.ticker, exc)
-    return items
 
 
 def collect_yfinance_news() -> list[NewsItem]:
@@ -172,7 +143,6 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
             desc = entry.get("summary", "") or entry.get("description", "")
             # Strip HTML tags and truncate
             if desc:
-                import re
                 desc = re.sub(r"<[^>]+>", " ", desc).strip()
                 desc = " ".join(desc.split())  # normalize whitespace
                 if len(desc) > 200:

@@ -1,7 +1,7 @@
-"""Event-driven scanner: monitors feeds every 30 min and triggers scans on high-impact keywords.
+"""Event-driven scanner: monitors feeds every 10 min and triggers scans on high-impact keywords.
 
 In addition to the 4 scheduled scans (07:50, 11:15, 14:50, 17:00), this module
-runs a lightweight check every 30 minutes. If it detects a high-potential signal
+runs a lightweight check every 10 minutes. If it detects a high-potential signal
 in early-signal feeds, it triggers a full scan immediately (respecting cooldown).
 """
 
