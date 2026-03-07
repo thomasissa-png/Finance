@@ -288,18 +288,20 @@ def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | No
 
     for existing in tickers_to_check:
         # Static correlation group check (fast)
-        in_static_group = False
+        ticker_in_any_group = False
+        existing_in_any_group = False
         for group_tickers in CORRELATION_GROUPS.values():
             if ticker in group_tickers and existing in group_tickers:
-                return True
-            # P3-6: Track if either is in the same static group (skip dynamic then)
-            if ticker in group_tickers or existing in group_tickers:
-                if ticker in group_tickers and existing in group_tickers:
-                    in_static_group = True
+                return True  # Same static group → correlated
+            if ticker in group_tickers:
+                ticker_in_any_group = True
+            if existing in group_tickers:
+                existing_in_any_group = True
 
-        # P3-6: Only run dynamic check if not already covered by static groups
-        # Dynamic correlation is slow (2 yfinance calls per pair) — avoid when unnecessary
-        if not in_static_group:
+        # P3-6: Only run dynamic check if BOTH tickers are not already covered by static groups.
+        # If both appear in static groups (even different ones), the groups already capture
+        # their correlation profile — no need for expensive yfinance rolling correlation.
+        if not (ticker_in_any_group and existing_in_any_group):
             dyn_corr = _compute_dynamic_correlation(ticker, existing)
             if dyn_corr is not None and abs(dyn_corr) > DYNAMIC_CORRELATION_THRESHOLD:
                 logger.info("Dynamic correlation block: %s vs %s = %.3f (threshold: %.1f)",

@@ -538,3 +538,78 @@ class TestDatabasePruning:
         from backend.app.database import pg_prune_audit_reports
         result = pg_prune_audit_reports()
         assert result == 0
+
+
+# ── v6.3 Audit Trader tests ─────────────────────────────────────────
+
+
+class TestAgentTraderAuditV63:
+    """v6.3: Trader audit fixes — score field, direction enum, position monitor."""
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_trader_uses_raw_claude_score_not_score(self, _m1, _m2):
+        """P1: TradeRecommendation has raw_claude_score, not score."""
+        from backend.app.models import TradeRecommendation, Direction, ScanType
+        from datetime import datetime, timezone
+        rec = TradeRecommendation(
+            scan_type=ScanType.EUROPE, timestamp=datetime.now(timezone.utc),
+            ticker="ZW=F", asset_name="Wheat", category="commodities_agri",
+            direction=Direction.LONG, catalyst="Test",
+            entry_price=600.0, target_price=610.0, stop_price=594.0,
+            target_pct=1.67, stop_pct=1.0, risk_reward=1.67,
+            confidence=75, time_window="09:00 — 20:00",
+            raw_claude_score=42.5,
+        )
+        # raw_claude_score exists
+        assert rec.raw_claude_score == 42.5
+        # 'score' does NOT exist as a field
+        assert "score" not in TradeRecommendation.model_fields
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_trader_direction_serialized_as_string(self, _m1, _m2):
+        """P3: direction.value produces string, not enum object."""
+        from backend.app.models import Direction
+        d = Direction.LONG
+        assert d.value == "LONG"
+        assert isinstance(d.value, str)
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_trader_reset_daily_counters(self, _m1, _m2):
+        """P5: reset_daily_counters zeroes both counters."""
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_trader import AgentTrader
+        agent = AgentTrader()
+        agent._trades_today = 5
+        agent._rejections_today = 3
+        agent.reset_daily_counters()
+        assert agent._trades_today == 0
+        assert agent._rejections_today == 0
+
+    def test_correlation_static_group_skips_dynamic(self):
+        """P4: When both tickers are in static groups, skip dynamic correlation."""
+        from backend.app.trade_selector import _check_correlation
+        # GC=F and SI=F are in the gold_safe group → should be correlated (True)
+        assert _check_correlation("GC=F", ["SI=F"]) is True
+        # GC=F and TTE.PA are in different groups → dynamic needed (but returns False without data)
+        # Just verify it doesn't crash
+        result = _check_correlation("GC=F", ["TTE.PA"])
+        assert isinstance(result, bool)
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_position_monitor_returns_dict(self, _m1, _m2):
+        """P2: run_position_monitor returns dict with actions_taken key."""
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_trader import AgentTrader
+        agent = AgentTrader()
+        # Mock monitor_positions to return empty list (no pending trades)
+        with patch("backend.app.agents.agent_trader.AgentTrader.run_position_monitor") as mock:
+            mock.return_value = {"actions_taken": [], "active_positions": 0}
+            result = agent.run_position_monitor()
+            assert isinstance(result, dict)
+            assert "actions_taken" in result

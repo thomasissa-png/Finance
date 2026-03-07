@@ -383,6 +383,14 @@ def _run_daily_journal() -> None:
             return
         try:
             agents_run_journal()
+            # Reset trader daily counters for next trading day
+            try:
+                from .agents.registry import get_agent
+                trader = get_agent("trader_1")
+                if trader:
+                    trader.reset_daily_counters()
+            except Exception:
+                pass
             # Invalidate learning cache and run full learning update
             invalidate_learning_cache()
             try:

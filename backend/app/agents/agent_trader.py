@@ -83,18 +83,18 @@ class AgentTrader(BaseAgent):
                     self._trades_today += 1
                     self._trades_total += 1
                     self._last_trade_ticker = rec.ticker
-                    self._last_trade_direction = rec.direction
+                    self._last_trade_direction = rec.direction.value if hasattr(rec.direction, 'value') else rec.direction
 
                     self.log_decision("TRADE SELECTED", {
                         "ticker": rec.ticker,
                         "asset": rec.asset_name,
-                        "direction": rec.direction,
+                        "direction": rec.direction.value if hasattr(rec.direction, 'value') else rec.direction,
                         "entry_price": rec.entry_price,
                         "target_pct": round(rec.target_pct, 3),
                         "stop_pct": round(rec.stop_pct, 3),
                         "risk_reward": round(rec.risk_reward, 2),
                         "confidence": rec.confidence,
-                        "score": round(rec.score, 1),
+                        "score": round(rec.raw_claude_score, 1) if rec.raw_claude_score else None,
                         "news_headline": rec.news_headline[:100] if rec.news_headline else None,
                         "news_category": rec.news_category,
                         "learning_multiplier": round(rec.learning_multiplier, 3) if rec.learning_multiplier else None,
@@ -108,8 +108,8 @@ class AgentTrader(BaseAgent):
                     "trades": [
                         {
                             "ticker": r.ticker,
-                            "direction": r.direction,
-                            "score": round(r.score, 1),
+                            "direction": r.direction.value if hasattr(r.direction, 'value') else r.direction,
+                            "score": round(r.raw_claude_score, 1) if r.raw_claude_score else None,
                         }
                         for r in result.recommendations
                     ],
@@ -150,18 +150,24 @@ class AgentTrader(BaseAgent):
         self._set_status(AgentStatus.WORKING, "Monitoring positions")
         try:
             from ..position_monitor import monitor_positions
-            result = monitor_positions()
-            active = result.get("active_positions", 0) if result else 0
-            self._pending_positions = active
+            actions = monitor_positions()  # Returns list[dict], not dict
+            # Count remaining PENDING trades for metrics
+            try:
+                from ..learning import load_trades
+                from ..models import TradeResult
+                pending = sum(1 for t in load_trades() if t.result == TradeResult.PENDING)
+            except Exception:
+                pending = 0
+            self._pending_positions = pending
 
-            if result and result.get("actions_taken"):
+            if actions:
                 self.log_decision("Position monitor actions", {
-                    "actions": result["actions_taken"],
-                    "active_positions": active,
+                    "actions": actions,
+                    "active_positions": pending,
                 })
 
-            self._set_status(AgentStatus.IDLE, f"{active} active positions")
-            return result or {}
+            self._set_status(AgentStatus.IDLE, f"{pending} active positions")
+            return {"actions_taken": actions, "active_positions": pending}
         except Exception as exc:
             self.log("Position monitor failed", {"error": str(exc)}, level="ERROR")
             self._set_status(AgentStatus.ERROR, str(exc))

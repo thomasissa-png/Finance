@@ -299,12 +299,19 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
   - **P3** : Defensive `getattr(t, "news_category", "other")` replaced with direct `t.news_category` in learning.py (4 occurrences) — field has default on model, getattr masked real errors
 - **Data contract verified** : all 6 learning dimensions have correct data flow Journal→TradeRecommendation→Learning
 
+#### 19. Audit Agent Trader v6.3 — 5 fixes
+- **P1 (CRITIQUE)** : `rec.score` → `AttributeError` : `TradeRecommendation` n'a pas de champ `score`, corrigé en `rec.raw_claude_score` (agent_trader.py:97,112)
+- **P2 (CRITIQUE)** : `monitor_positions()` retourne `list[dict]`, agent traitait comme `dict` — `.get("active_positions")` crashait. Réécrit pour compter les trades PENDING réels
+- **P3** : `rec.direction` (enum `Direction`) stocké sans `.value` → metrics/logs affichaient `Direction.LONG` au lieu de `LONG`
+- **P4** : Dead code dans `_check_correlation()` — `in_static_group` toujours False car la branche `and` est inatteignable après le `return True`. Réécrit avec tracking `ticker_in_any_group`/`existing_in_any_group` séparés, skip dynamic si les deux sont dans des groupes statiques
+- **P5** : `reset_daily_counters()` jamais appelé — wirée dans `_run_daily_journal()` post-journal 22h pour préparer le lendemain
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), run_learning_update(), helpers
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
-- `backend/app/agents/agent_trader.py` : décision trade, position monitor, multi-trader ready, daily counters
+- `backend/app/agents/agent_trader.py` : v6.3, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
 - `backend/app/agents/agent_journal.py` : clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_learning.py` : 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_auditor.py` : audit profondeur, 8 profils d'expertise (+ UX v6.1, + self-audit v6.2), note /10, persistance rapports, trend tracking, log analysis
@@ -314,7 +321,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/journal.py` : v6.3, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours computation
 - `backend/app/learning.py` : v6.3, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback
-- `backend/app/trade_selector.py` : v4.0+, convex calibration, fallback ticker, spread filter, VIX daily cap
+- `backend/app/trade_selector.py` : v6.3, convex calibration, fallback ticker, spread filter, VIX daily cap, fixed static group correlation check
 - `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
 - `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES
@@ -907,6 +914,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - **test_data_persistence.py** : scan_history_retention_365, scored_news_log_includes_description, price_archive_table_creation, price_archive_stats_without_pg, rescore_headline_formula, rescore_headline_zero_edge, replay_backtest_no_history, coherence_validation_returns_fixed_values, learning_filters_anomalous_pnl, review_insights_filter_pending_trades, price_archive_endpoint, backtest_replay_endpoint
 - v6.1 tests ajoutés (42 tests) :
   - **test_agents.py** : MessageBus (singleton, publish/consume, targeted, broadcast, subscribe, limit, filter, recent, maxlen), AgentLogger (log/duration/filter/limit/maxlen), BaseAgent (status, execute success/failure, log_decision, metrics, publish), Registry (get_all, get_by_name, unknown, status with UX, metrics, status fields), Auditor (profiles present, UX profile, checks, invalid target, metrics, UX audit runs), per-agent init+metrics (News, Scoring, Trader, Journal, Learning), Database pruning (messages, logs, reports no-PG)
-- v6.3 tests ajoutés (5 tests) :
-  - **test_learning.py** : PG trade columns include scoring fields, EXPIRED pricing_hours computation, news_category direct access, extract_structured_anomalies returns typed dicts, performance summary uses journal MAE
+- v6.3 tests ajoutés (10 tests) :
+  - **test_learning.py** (5) : PG trade columns include scoring fields, EXPIRED pricing_hours computation, news_category direct access, extract_structured_anomalies returns typed dicts, performance summary uses journal MAE
+  - **test_agents.py** (5) : raw_claude_score not score on TradeRecommendation, direction enum serialization, reset_daily_counters, static group correlation skip, position_monitor returns dict
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data
