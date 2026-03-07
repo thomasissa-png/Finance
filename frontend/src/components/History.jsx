@@ -352,6 +352,8 @@ export default function History({ isActive }) {
     setExporting(false);
   };
 
+  const pendingTrades = useMemo(() => trades.filter((t) => t.result === "PENDING"), [trades]);
+
   if (isLoading) {
     return (
       <div>
@@ -376,8 +378,6 @@ export default function History({ isActive }) {
       </div>
     );
   }
-
-  const pendingTrades = useMemo(() => trades.filter((t) => t.result === "PENDING"), [trades]);
 
   return (
     <div>
