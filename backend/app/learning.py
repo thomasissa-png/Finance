@@ -974,7 +974,7 @@ def build_performance_summary(max_recent: int = 15,
     # E1: News category performance — only show outliers (WR < 35% or > 70%)
     by_newscat: dict[str, dict] = {}
     for t in closed:
-        nc = getattr(t, "news_category", "other")
+        nc = t.news_category
         if nc not in by_newscat:
             by_newscat[nc] = {"wins": 0, "total": 0, "pnl": 0.0}
         by_newscat[nc]["total"] += 1
@@ -996,7 +996,7 @@ def build_performance_summary(max_recent: int = 15,
     # e.g. "weather+ZW=F: 0/3" tells Claude that wheat-drought trades keep failing
     newscat_ticker: dict[str, dict] = {}
     for t in closed:
-        nc = getattr(t, "news_category", "other")
+        nc = t.news_category
         combo = f"{nc}+{t.ticker}"
         if combo not in newscat_ticker:
             newscat_ticker[combo] = {"wins": 0, "total": 0}
@@ -1017,7 +1017,7 @@ def build_performance_summary(max_recent: int = 15,
     dir_by_cat: dict[str, dict] = {}
     for t in closed:
         if t.pnl_pct is not None and t.pnl_pct != 0:
-            nc = getattr(t, "news_category", "other")
+            nc = t.news_category
             if nc not in dir_by_cat:
                 dir_by_cat[nc] = {"correct": 0, "total": 0}
             dir_by_cat[nc]["total"] += 1
@@ -1132,7 +1132,7 @@ def build_performance_summary(max_recent: int = 15,
     if verified_recent:
         parts.append(f"Derniers {len(verified_recent)}:")
         for t in verified_recent:
-            nc = getattr(t, "news_category", "?")
+            nc = t.news_category
             parts.append(
                 f"  {t.ticker}({nc}) {t.direction.value}→{t.result.value} {t.pnl_pct:+.2f}%"
             )

@@ -242,7 +242,16 @@ CREATE TABLE IF NOT EXISTS trades (
     volume_ratio DOUBLE PRECISION,
     predicted_transmission_delay INTEGER,
     actual_pricing_time_hours DOUBLE PRECISION,
-    delay_accuracy DOUBLE PRECISION
+    delay_accuracy DOUBLE PRECISION,
+    surprise INTEGER,
+    directional_clarity INTEGER,
+    signal_reliability INTEGER,
+    expected_magnitude INTEGER,
+    position_size_pct DOUBLE PRECISION,
+    convergence_count INTEGER,
+    convergence_boost DOUBLE PRECISION,
+    news_url TEXT DEFAULT '',
+    news_description TEXT DEFAULT ''
 )
 """
 
@@ -552,6 +561,25 @@ def init_db() -> None:
                 ON audit_reports(target_agent, created_at)
             """)
 
+            # v6.3: Add missing trade columns for learning feedback (safe for existing DBs)
+            for col_name, col_type in [
+                ("surprise", "INTEGER"),
+                ("directional_clarity", "INTEGER"),
+                ("signal_reliability", "INTEGER"),
+                ("expected_magnitude", "INTEGER"),
+                ("position_size_pct", "DOUBLE PRECISION"),
+                ("convergence_count", "INTEGER"),
+                ("convergence_boost", "DOUBLE PRECISION"),
+                ("news_url", "TEXT DEFAULT ''"),
+                ("news_description", "TEXT DEFAULT ''"),
+            ]:
+                cur.execute(f"""
+                    DO $$ BEGIN
+                        ALTER TABLE trades ADD COLUMN {col_name} {col_type};
+                    EXCEPTION WHEN duplicate_column THEN NULL;
+                    END $$;
+                """)
+
             # v5.0 M7: Add v4.1 journal columns if missing (safe for existing DBs)
             for col_name, col_type in [
                 ("slippage", "DOUBLE PRECISION"),
@@ -632,6 +660,10 @@ _TRADE_COLUMNS = [
     "learning_multiplier", "vix_at_trade", "market_regime", "day_of_week",
     "volume_ratio", "predicted_transmission_delay", "actual_pricing_time_hours",
     "delay_accuracy",
+    # v6.3: Fields needed by Learning for signal_reliability/magnitude feedback
+    "surprise", "directional_clarity", "signal_reliability", "expected_magnitude",
+    "position_size_pct", "convergence_count", "convergence_boost",
+    "news_url", "news_description",
 ]
 
 _TRADE_JSONB_COLS = {"news_sources", "chain_reactions"}

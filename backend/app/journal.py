@@ -914,6 +914,15 @@ def run_daily_journal() -> list[dict]:
             remaining_hours = max(1.0, market_close_hour - entry_paris.hour - entry_paris.minute / 60)
             actual_pricing_hours = round(remaining_hours, 2)
 
+        # P2 audit: For EXPIRED trades, compute full trading window as actual_pricing_hours
+        # This tells Learning that the signal was NOT priced within the available window
+        # → delay was likely overestimated (market never moved enough for TP/SL)
+        if result == TradeResult.EXPIRED and actual_pricing_hours is None:
+            entry_paris = trade.timestamp.astimezone(PARIS_TZ)
+            market_close_hour = 20  # 20:00 CET
+            remaining_hours = max(1.0, market_close_hour - entry_paris.hour - entry_paris.minute / 60)
+            actual_pricing_hours = round(remaining_hours, 2)
+
         if trade.predicted_transmission_delay is not None and actual_pricing_hours is not None:
             from .learning import TRANSMISSION_DELAY_BASELINE_HOURS
             actual_delay_score = min(100, actual_pricing_hours / TRANSMISSION_DELAY_BASELINE_HOURS * 100)
