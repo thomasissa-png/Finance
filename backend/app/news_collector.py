@@ -15,6 +15,76 @@ from .models import NewsItem
 
 logger = logging.getLogger(__name__)
 
+# ── P1 Audit Scoring: keyword→ticker mapping for RSS feeds ──────────
+# RSS feeds (Phase 1 & 3) don't provide related_tickers. This mapping
+# infers tickers from headline keywords so that convergence detection
+# in news_scorer._count_convergence() works even before Claude scoring.
+# Only high-confidence mappings — Claude handles the rest.
+_RSS_KEYWORD_TICKERS: list[tuple[list[str], list[str]]] = [
+    # Energy
+    (["crude oil", "wti", "petroleum", "oil stocks", "oil inventory"], ["CL=F", "BZ=F"]),
+    (["brent"], ["BZ=F", "CL=F"]),
+    (["natural gas", "lng", "ttf", "gas storage", "gas stocks"], ["NG=F"]),
+    (["opec", "opec+", "oil output", "oil production cut"], ["CL=F", "BZ=F"]),
+    (["refinery", "refining"], ["CL=F"]),
+    # Metals
+    (["gold", "bullion", "xau"], ["GC=F"]),
+    (["silver", "xag"], ["SI=F"]),
+    (["copper"], ["HG=F"]),
+    (["platinum", "palladium", "pgm"], ["PL=F", "PA=F"]),
+    # Agriculture
+    (["corn", "maize", "mais", "milho"], ["ZC=F"]),
+    (["wheat", "ble"], ["ZW=F"]),
+    (["soybean", "soja", "soy"], ["ZS=F"]),
+    (["coffee", "cafe", "café", "arabica", "robusta"], ["KC=F"]),
+    (["sugar", "sucre", "sucrose"], ["SB=F"]),
+    (["cocoa", "cacao"], ["CC=F"]),
+    (["cotton", "coton"], ["CT=F"]),
+    (["orange juice", "citrus", "oj futures"], ["OJ=F"]),
+    # Livestock
+    (["cattle", "beef", "betail", "bétail", "live cattle"], ["LE=F"]),
+    (["hog", "pork", "swine", "porc"], ["HE=F"]),
+    (["avian flu", "bird flu", "avian influenza"], ["HE=F", "LE=F"]),
+    (["african swine fever", "asf outbreak"], ["HE=F"]),
+    # Forex / Macro
+    (["euro zone", "eurozone", "ecb", "lagarde"], ["EURUSD=X"]),
+    (["bank of japan", "boj", "yen"], ["USDJPY=X"]),
+    (["yuan", "renminbi", "pboc", "cnh"], ["USDCNH=X"]),
+    # Indices
+    (["s&p 500", "s&p500", "wall street"], ["^GSPC"]),
+    (["nasdaq"], ["^IXIC"]),
+    (["cac 40", "cac40", "euronext paris"], ["^FCHI"]),
+    (["dax ", "german stocks"], ["^GDAXI"]),
+    (["ftse", "london stock"], ["^FTSE"]),
+    (["nikkei"], ["^N225"]),
+    # Shipping / Supply chain
+    (["panama canal"], ["CL=F", "ZC=F", "ZS=F"]),
+    (["suez canal", "red sea"], ["CL=F", "BZ=F"]),
+    (["baltic dry", "freight rate", "shipping rate"], ["HG=F", "ZW=F", "ZC=F"]),
+    # Geopolitical
+    (["uranium", "nuclear"], ["URA"]),
+    # French stocks (from early-signal feeds like ECB, BoE)
+    (["lvmh"], ["MC.PA"]),
+    (["totalenergies", "total energies"], ["TTE.PA"]),
+    (["hermes", "hermès"], ["RMS.PA"]),
+]
+
+
+def _infer_tickers_from_title(title: str) -> list[str]:
+    """Infer related tickers from RSS headline keywords.
+
+    Returns a list of tickers that likely relate to this headline.
+    Only high-confidence keyword matches — Claude handles nuanced cases.
+    """
+    title_lower = title.lower()
+    tickers: list[str] = []
+    for keywords, ticker_list in _RSS_KEYWORD_TICKERS:
+        if any(kw in title_lower for kw in keywords):
+            for t in ticker_list:
+                if t not in tickers:
+                    tickers.append(t)
+    return tickers
+
 # Max news items to send to Claude per scan.
 # 50 items ~= 5,200 input tokens → ~30s processing → well within 90s timeout.
 # Phase 0/1 premium sources naturally rank higher and always make the cut.
@@ -148,11 +218,15 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
                 if len(desc) > 200:
                     desc = desc[:197] + "..."
 
+            # P1 Audit Scoring: infer tickers from headline keywords
+            inferred_tickers = _infer_tickers_from_title(title)
+
             items.append(NewsItem(
                 title=title,
                 source=feed_title,
                 url=entry.get("link", ""),
                 published=published,
+                related_tickers=inferred_tickers,
                 source_weight=_get_source_weight(feed_title),
                 description=desc,
             ))

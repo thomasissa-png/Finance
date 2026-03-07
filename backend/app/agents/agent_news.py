@@ -104,11 +104,12 @@ class AgentNews(BaseAgent):
             for item in news_items:
                 serialized.append({
                     "title": item.title,
-                    "description": getattr(item, "description", None),
+                    "description": item.description,
                     "source": item.source,
                     "source_weight": item.source_weight,
-                    "url": getattr(item, "url", None),
+                    "url": item.url,
                     "published": item.published.isoformat() if item.published else None,
+                    "related_tickers": item.related_tickers,
                 })
 
             self.publish("news_collected", {
