@@ -536,6 +536,22 @@ def init_db() -> None:
                 ON agent_logs(agent_name, timestamp)
             """)
 
+            # v6.0: Audit reports
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS audit_reports (
+                    id SERIAL PRIMARY KEY,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    target_agent VARCHAR(50) NOT NULL,
+                    score DOUBLE PRECISION,
+                    focus VARCHAR(50),
+                    report JSONB NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_audit_reports_agent
+                ON audit_reports(target_agent, created_at)
+            """)
+
             # v5.0 M7: Add v4.1 journal columns if missing (safe for existing DBs)
             for col_name, col_type in [
                 ("slippage", "DOUBLE PRECISION"),

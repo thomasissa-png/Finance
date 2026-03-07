@@ -1045,6 +1045,40 @@ def agent_messages(limit: int = 50):
     return bus.recent_messages(limit=limit)
 
 
+@app.post("/api/agents/auditor/audit/{target_agent}")
+def trigger_audit(target_agent: str, focus: str | None = None):
+    """Trigger an audit of a specific agent."""
+    auditor = get_agent("auditor")
+    if not auditor:
+        raise HTTPException(500, "Auditor agent not initialized")
+    try:
+        report = auditor.run(target_agent=target_agent, focus=focus)
+        return report
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+
+
+@app.get("/api/agents/auditor/reports")
+def get_audit_reports(target_agent: str | None = None, limit: int = 20):
+    """Get historical audit reports."""
+    auditor = get_agent("auditor")
+    if not auditor:
+        return []
+    return auditor.get_reports(target_agent=target_agent, limit=limit)
+
+
+@app.get("/api/agents/auditor/reports/latest/{target_agent}")
+def get_latest_audit(target_agent: str):
+    """Get the most recent audit report for an agent."""
+    auditor = get_agent("auditor")
+    if not auditor:
+        raise HTTPException(404, "No audit reports")
+    report = auditor.get_latest_report(target_agent)
+    if not report:
+        raise HTTPException(404, f"No audit report for agent '{target_agent}'")
+    return report
+
+
 # ── (#41) Enhanced health check ──────────────────────────────────
 
 

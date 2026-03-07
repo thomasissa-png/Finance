@@ -221,7 +221,7 @@ export default function App() {
           <div>
             <div className="app-title">ONESHOT NEWS TRADING</div>
             <div className="app-subtitle">
-              6 agents autonomes
+              7 agents autonomes
               {workingCount > 0 && (
                 <span className="header-agents-working">
                   {" "}&mdash; {workingCount} en cours

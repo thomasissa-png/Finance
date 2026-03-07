@@ -11,6 +11,7 @@ import logging
 import threading
 from typing import Any
 
+from .agent_auditor import AgentAuditor
 from .agent_news import AgentNews
 from .agent_scoring import AgentScoring
 from .agent_trader import AgentTrader
@@ -39,6 +40,7 @@ def _ensure_agents():
             "trader_1": AgentTrader(),
             "journal": AgentJournal(),
             "learning": AgentLearning(),
+            "auditor": AgentAuditor(),
         }
         logger.info("Agent registry initialized: %s", list(_agents.keys()))
 

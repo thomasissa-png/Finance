@@ -6,6 +6,7 @@ const AGENT_ICONS = {
   trader_1: "💹",
   journal: "📊",
   learning: "🧠",
+  auditor: "🔍",
   ux: "🎨",
 };
 
@@ -15,6 +16,7 @@ const AGENT_LABELS = {
   trader_1: "Trader",
   journal: "Journal",
   learning: "Learning",
+  auditor: "Audit",
   ux: "UX",
 };
 

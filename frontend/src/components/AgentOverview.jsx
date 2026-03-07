@@ -51,6 +51,16 @@ const AGENT_CONFIG = {
       { label: "Recalculs", value: m.total_recalculations || 0 },
     ],
   },
+  auditor: {
+    icon: "🔍",
+    label: "Agent Auditeur",
+    desc: "Audit en profondeur",
+    metricsDisplay: (m) => [
+      { label: "Audits", value: m.total_audits || 0 },
+      { label: "Dernier", value: m.last_audit_target || "—" },
+      { label: "Score", value: m.last_audit_score != null ? `${m.last_audit_score}/10` : "—" },
+    ],
+  },
   ux: {
     icon: "🎨",
     label: "Agent UX",

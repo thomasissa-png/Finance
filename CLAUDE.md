@@ -1,4 +1,4 @@
-# OneShot News Trading System — v5.2 Learning Integrity & Granular Commodities
+# OneShot News Trading System — v6.0 Multi-Agent Architecture
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -17,12 +17,44 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 **REGLE ABSOLUE — Commodities :**
 On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity ne marchent pas, le probleme est dans le scoring ou l'analyse — PAS dans la categorie elle-meme. Le learning ne doit JAMAIS penaliser les commodities en tant que classe. Les ajustements se font au niveau ticker+newscat (granulaire), jamais au niveau categorie d'actif pour les commodities.
 
-## Architecture
+## Architecture v6.0 — Multi-Agent
+
+### 7 Agents Autonomes (`backend/app/agents/`)
+
+| Agent | Fichier | Expertise | Rôle |
+|-------|---------|-----------|------|
+| **News** | `agent_news.py` | Data engineering, news sourcing | Collecte, dédup, santé sources, event detection |
+| **Scoring** | `agent_scoring.py` | 15+ ans edge detection, spéculation | Score Claude, formule edge, chain reactions |
+| **Trader 1** | `agent_trader.py` | 15+ ans news trading | Décision trade, position monitoring, risk mgmt |
+| **Journal** | `agent_journal.py` | Business analyse, spéculation | Clôture trades, P&L, MAE/MFE, analyse qualité |
+| **Learning** | `agent_learning.py` | 10+ ans ML, trading quantitatif | 6 dimensions learning, anomalie detection |
+| **Auditeur** | `agent_auditor.py` | Se met dans la peau de chaque agent | Audit profondeur, note /10, améliorations |
+| **UX** | (virtuel) | 15 ans UX, flat design | Frontend React |
+
+### Infrastructure agents
+- **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
+- **`registry.py`** : singletons, orchestration `News → Scoring → Trader`, helpers
+- **Message Bus** : `agent_messages` (PG) — communication inter-agents async
+- **Logs structurés** : `agent_logs` (PG) — niveaux INFO/WARN/ERROR/DECISION, visibles frontend
+- **Audit Reports** : `audit_reports` (PG) + `data/audit_reports.json` (fallback) — persistés entre sessions
+
+### Architecture multi-trader
+Le framework supporte N traders : `agent_trader_2.py`, `agent_trader_3.py`... chacun avec sa propre logique de sélection mais partageant le bus et les données de scoring/learning.
+
+### Agent Auditeur — utilisation
+L'auditeur s'appelle manuellement via l'API ou Claude Code :
+- `POST /api/agents/auditor/audit/{target_agent}` — lance un audit
+- `GET /api/agents/auditor/reports` — tous les rapports
+- `GET /api/agents/auditor/reports/latest/{target_agent}` — dernier rapport
+- Chaque audit produit : note /10, findings, améliorations priorisées, tests à ajouter, updates mémoire
+- Les rapports sont persistés et consultables quelle que soit la session
+
+### Stack technique
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite
 - **Persistence**: PostgreSQL (primary, via `DATABASE_URL`) avec fallback JSON flat files
-  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive
-  - Fallback: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` (file locking via `fcntl`)
+  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive/agent_messages/agent_logs/audit_reports
+  - Fallback: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` + `data/audit_reports.json` (file locking via `fcntl`)
   - Auto-migration JSON→PG au demarrage si PG est vide mais JSON a des donnees
   - `price_archive`: daily OHLCV par ticker pour backtesting historique (v5.1)
 - **Market Data**: Twelve Data (primary) + yfinance (fallback) — module `market_data.py`
@@ -206,19 +238,49 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 - **L7** : Fallback broad newscat toujours calcule — les tickers sans assez de donnees cross-dimension utilisent le signal pooled
 - **L8** : PRE_MOVE_THRESHOLDS et CATEGORIES mis a jour pour les nouvelles sous-categories commodity
 
+#### 15. Multi-Agent Architecture v6.0 — refactoring majeur
+- **7 agents autonomes** : News, Scoring, Trader, Journal, Learning, Auditeur, UX
+- **BaseAgent** : classe mère avec logging structuré (PG), message bus, status tracking, execute() wrapper
+- **MessageBus** : communication inter-agents via `agent_messages` (PG, fallback in-memory)
+- **AgentLogger** : logs structurés dans `agent_logs` (PG), niveaux INFO/WARN/ERROR/DECISION
+- **Registry** : singletons, orchestration `run_scan_pipeline()` (News → Scoring → Trader)
+- **Agent Auditeur** : audit profondeur de chaque agent, 5 profils d'expertise, note /10, persistance rapports
+  - Checks par agent : source coverage, score distribution, win rate, bar coverage, commodity protection...
+  - Rapports persistés dans `audit_reports` (PG) ou `data/audit_reports.json`
+  - API : `POST /api/agents/auditor/audit/{agent}`, `GET /api/agents/auditor/reports`
+- **Scheduler** délègue aux agents (plus d'appels directs aux modules)
+- **main.py** : nouveaux endpoints `/api/agents/*`, `/api/agents/auditor/*`
+- **Frontend** : sidebar 7 agents, overview cards, agent detail avec métriques + logs timeline
+- **Weekly source review** déplacée au dimanche 20h (avant le trading lundi)
+- **3 tables PG ajoutées** : `agent_messages`, `agent_logs`, `audit_reports`
+- Les agents wrappent les modules existants — zéro réécriture logique métier
+- Architecture multi-trader prête (agent_trader_2.py, agent_trader_3.py...)
+
 ### Etat actuel des fichiers cles
-- `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
+- `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
+- `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), helpers
+- `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
+- `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
+- `backend/app/agents/agent_trader.py` : décision trade, position monitor, multi-trader ready, daily counters
+- `backend/app/agents/agent_journal.py` : clôture trades, P&L, MAE/MFE, startup recovery
+- `backend/app/agents/agent_learning.py` : 6 dims ML, anomaly detection, cache learning, performance summary
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 5 profils d'expertise, note /10, persistance rapports
+- `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
+- `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
+- `backend/app/database.py` : v6.0, 8 tables PG (+ agent_messages, agent_logs, audit_reports), pool, CRUD
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
-- `backend/app/database.py` : PG persistence layer, 5 tables (trades/journal/scan_history/last_scans/price_archive), pool, CRUD
-- `backend/app/journal.py` : v4.1+, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, price archiving post-journal
-- `backend/app/learning.py` : v5.2, 6 learning dimensions (hour_adj removed), newscat+ticker cross-dimension, cat_adj disabled for commodities, alerts-only summary, data integrity filters
-- `backend/app/trade_selector.py` : v4.0+, convex calibration, fallback ticker, spread filter, VIX daily cap, backtest-enriched scored_news_log
-- `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache, coherence FIX (not just warn), prompt caching
-- `backend/app/backtest.py` : parameter sweep + news replay backtest (v5.1), re-scoring with current formula
-- `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, is_market_holiday()
+- `backend/app/journal.py` : v4.1+, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout
+- `backend/app/learning.py` : v5.2, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities
+- `backend/app/trade_selector.py` : v4.0+, convex calibration, fallback ticker, spread filter, VIX daily cap
+- `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
+- `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
+- `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES
 - `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr)
-- `backend/app/scan_history.py` : PG support, pruning 365j (backtest retention)
-- `backend/migrate_json_to_postgres.py` : script de migration one-shot
+- `backend/app/scan_history.py` : PG support, pruning 365j
+- `frontend/src/App.jsx` : v6.0, sidebar agents, agent overview cards, agent detail view, hash routing
+- `frontend/src/components/AgentSidebar.jsx` : sidebar 7 agents avec status dots
+- `frontend/src/components/AgentOverview.jsx` : 7 cards métriques live sur dashboard
+- `frontend/src/components/AgentDetail.jsx` : vue détail agent, métriques grid, filtre logs, timeline
 
 ## REGLE ABSOLUE — Protection des donnees de production
 
@@ -233,6 +295,8 @@ Fichiers proteges :
 - `data/journal.json` — journal quotidien avec analyse post-trade
 - `data/scan_history.json` — historique de tous les scans (audit trail)
 - `data/last_scans.json` — cache des derniers scans (volatile)
+- `data/audit_reports.json` — rapports d'audit de l'Agent Auditeur (persistés entre sessions)
+- `data/source_health.json` — données santé sources (Agent News)
 
 Regles :
 1. **Ne JAMAIS `git add data/`** ou `git add -A` sans verifier
