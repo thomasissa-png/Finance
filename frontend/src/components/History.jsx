@@ -91,7 +91,9 @@ function TradesMobileCards({ trades, page, setPage }) {
             <div className="trade-mobile-card-header">
               <div>
                 <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t.asset_name}</div>
-                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{t.ticker} — {scanLabel(t.scan_type)}</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {formatDateTime(t.timestamp)} — {t.ticker} — {scanLabel(t.scan_type)}
+                </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span className={`direction-badge sm ${t.direction === "LONG" ? "long" : "short"}`}>{t.direction}</span>

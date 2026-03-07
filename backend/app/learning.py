@@ -973,6 +973,27 @@ def build_performance_summary(max_recent: int = 15,
         parts.append("Outliers par newscat:")
         parts.extend(outlier_cats)
 
+    # v5.2: Per newscat+ticker breakdown — identify specific failing combos
+    # e.g. "weather+ZW=F: 0/3" tells Claude that wheat-drought trades keep failing
+    newscat_ticker: dict[str, dict] = {}
+    for t in closed:
+        nc = getattr(t, "news_category", "other")
+        combo = f"{nc}+{t.ticker}"
+        if combo not in newscat_ticker:
+            newscat_ticker[combo] = {"wins": 0, "total": 0}
+        newscat_ticker[combo]["total"] += 1
+        if t.result == TradeResult.TP_HIT:
+            newscat_ticker[combo]["wins"] += 1
+    bad_combos = []
+    for combo, stats in sorted(newscat_ticker.items(), key=lambda x: x[1]["total"], reverse=True):
+        if stats["total"] >= 3:
+            wr = stats["wins"] / stats["total"] * 100
+            if wr < 30:
+                bad_combos.append(f"  {combo}: {stats['wins']}/{stats['total']} TP")
+    if bad_combos:
+        parts.append("Combos newscat+ticker en echec:")
+        parts.extend(bad_combos[:5])  # Limit to top 5 worst
+
     # Direction accuracy — only if anomalous
     dir_by_cat: dict[str, dict] = {}
     for t in closed:
