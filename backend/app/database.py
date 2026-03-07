@@ -497,6 +497,45 @@ def init_db() -> None:
                 ON source_health(date)
             """)
 
+            # v6.0: Agent message bus
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS agent_messages (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMPTZ DEFAULT NOW(),
+                    from_agent VARCHAR(50) NOT NULL,
+                    to_agent VARCHAR(50),
+                    msg_type VARCHAR(50) NOT NULL,
+                    payload JSONB NOT NULL,
+                    consumed BOOLEAN DEFAULT FALSE
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_messages_consume
+                ON agent_messages(consumed, msg_type)
+                WHERE consumed = FALSE
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_messages_ts
+                ON agent_messages(timestamp)
+            """)
+
+            # v6.0: Agent structured logs
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS agent_logs (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMPTZ DEFAULT NOW(),
+                    agent_name VARCHAR(50) NOT NULL,
+                    level VARCHAR(10) DEFAULT 'INFO',
+                    action VARCHAR(200) NOT NULL,
+                    details JSONB,
+                    duration_ms INTEGER
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_logs_agent_ts
+                ON agent_logs(agent_name, timestamp)
+            """)
+
             # v5.0 M7: Add v4.1 journal columns if missing (safe for existing DBs)
             for col_name, col_type in [
                 ("slippage", "DOUBLE PRECISION"),

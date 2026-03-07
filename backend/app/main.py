@@ -22,6 +22,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .agents.registry import (
+    get_all_status as get_agents_status,
+    get_agent,
+    invalidate_learning_cache,
+    run_daily_journal as agents_run_journal,
+    run_event_check as agents_run_event_check,
+    run_journal_recovery,
+    run_position_monitor as agents_run_position_monitor,
+    run_scan_pipeline,
+    run_weekly_review as agents_run_weekly_review,
+)
 from .backtest import run_backtest, run_parameter_sweep
 from .config import SCAN_KEY_TO_TYPE, TRIGGER_COOLDOWN_SECONDS
 from .database import is_pg_enabled, init_db
@@ -343,12 +354,13 @@ def _run_event_check() -> None:
 
 
 def _run_position_monitor() -> None:
-    """Run position monitor in background thread."""
+    """Run position monitor via Agent Trader in background thread."""
     def _monitor_worker():
         try:
-            actions = monitor_positions()
-            if actions:
-                logger.info("Position monitor took %d action(s)", len(actions))
+            result = agents_run_position_monitor()
+            if result and result.get("actions_taken"):
+                logger.info("Position monitor took %d action(s)",
+                            len(result["actions_taken"]))
         except Exception as exc:
             logger.error("Position monitor failed: %s", exc)
 
@@ -363,16 +375,17 @@ def _run_post_eia_scan() -> None:
 
 
 def _run_daily_journal() -> None:
-    """Run daily journal in background thread (same reason as scans)."""
+    """Run daily journal via Agent Journal in background thread."""
     def _journal_worker():
         global _last_scans
         if not _journal_lock.acquire(blocking=False):
             logger.warning("Daily journal: journal lock held — skipping (journal already running)")
             return
         try:
-            run_daily_journal()
-            # Clear scan cache after journal — trades are closed, dashboard should
-            # show a clean slate the next morning instead of stale yesterday's trades.
+            agents_run_journal()
+            # Invalidate learning cache — Agent Learning will recompute on next request
+            invalidate_learning_cache()
+            # Clear scan cache after journal
             with _scans_lock:
                 _last_scans = {}
                 _save_scans_cache(_last_scans)
@@ -387,27 +400,10 @@ def _run_daily_journal() -> None:
 
 
 def _run_weekly_source_review() -> None:
-    """Run weekly source health review — Sunday 20:00 CET.
-
-    Analyzes the last 7 days of source health data, generates recommendations
-    (dead/degraded sources, new source suggestions), and saves the review.
-    Runs before Monday trading starts so issues are visible before first scan.
-    """
+    """Run weekly source health review via Agent News — Sunday 20:00 CET."""
     def _review_worker():
         try:
-            from .source_monitor import get_tracker, create_weekly_review_journal_entry
-            review_entry = create_weekly_review_journal_entry()
-            if review_entry:
-                logger.info(
-                    "Weekly source health review: severity=%s, dead=%d, degraded=%d, stable=%d",
-                    review_entry.get("severity"), review_entry.get("dead_count", 0),
-                    review_entry.get("degraded_count", 0), review_entry.get("stable_count", 0),
-                )
-                for rec in review_entry.get("recommendations", []):
-                    if rec:  # skip empty separator strings
-                        logger.info("  → %s", rec)
-            else:
-                logger.info("Weekly source review: no data available (first week?)")
+            agents_run_weekly_review()
         except Exception as exc:
             logger.error("Weekly source health review failed: %s", exc)
 
@@ -1000,6 +996,53 @@ def api_backtest_replay(days: int = 90, min_score: float | None = None):
     if min_score is not None:
         params["min_score"] = min_score
     return run_news_replay_backtest(days=days, override_params=params)
+
+
+# ── Agent API Endpoints (v6.0) ───────────────────────────────────
+
+
+@app.get("/api/agents")
+def list_agents():
+    """Get status + metrics for all 6 agents."""
+    return get_agents_status()
+
+
+@app.get("/api/agents/{agent_name}/logs")
+def agent_logs(agent_name: str, limit: int = 50, level: str | None = None):
+    """Get structured logs for a specific agent."""
+    agent = get_agent(agent_name)
+    if not agent:
+        # UX agent is virtual — no logs
+        if agent_name == "ux":
+            return []
+        raise HTTPException(404, f"Agent '{agent_name}' not found")
+    return agent.logger.get_logs(limit=limit, level=level)
+
+
+@app.get("/api/agents/{agent_name}/status")
+def agent_status(agent_name: str):
+    """Get detailed status for a specific agent."""
+    agent = get_agent(agent_name)
+    if not agent:
+        if agent_name == "ux":
+            return {
+                "name": "ux",
+                "description": "Frontend & expérience utilisateur",
+                "status": "idle",
+                "metrics": {},
+            }
+        raise HTTPException(404, f"Agent '{agent_name}' not found")
+    status = agent.status
+    status["metrics"] = agent.get_metrics()
+    return status
+
+
+@app.get("/api/agents/messages")
+def agent_messages(limit: int = 50):
+    """Get recent agent bus messages (debug)."""
+    from .agents.base import MessageBus
+    bus = MessageBus()
+    return bus.recent_messages(limit=limit)
 
 
 # ── (#41) Enhanced health check ──────────────────────────────────
