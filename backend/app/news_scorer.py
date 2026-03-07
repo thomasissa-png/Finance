@@ -231,10 +231,23 @@ CENTRAL BANK : Decision taux → delay ≤ 5, confirmed_event=true.
               Discours president (Powell/Lagarde) → delay 20-40.
               Discours secondaire (regional Fed) → delay 40-60.
 
-EFFETS DE SECOND ORDRE : gel bresilien → cafe + sucre (memes planteurs). Inclure tickers secondaires.
+EFFETS DE SECOND ORDRE : gel bresilien → cafe + sucre (memes planteurs). Max 2 tickers impactes.
 
 COHERENCE : Si surprise est elevee (>70), transmission_delay devrait etre >40.
             Si market_awareness est >80, transmission_delay devrait etre <30.
+
+SURPRISE vs MAGNITUDE — ce sont deux dimensions DIFFERENTES :
+- surprise = "personne ne s'y attendait" (0=consensus, 100=cygne noir)
+- expected_magnitude = "l'impact sur les prix sera grand" (0=bruit, 100=choc)
+Exemples : rapport EIA hebdomadaire avec draw RECORD = LOW surprise (40-50, EIA publie chaque mercredi) mais HIGH magnitude (70-80, draw historique). Rumeur gel Bresil non confirmee = HIGH surprise (80) mais MEDIUM magnitude (50, pas encore confirme).
+
+TIMING DE PRICING par categorie :
+- weather/supply_chain : pricing PROGRESSIF 6-24h (these se confirme graduellement) → delay 70-100
+- commodity (data officielle EIA/USDA) : pricing en 1-3h (algo + traders physiques) → delay 50-75
+- geopolitical : spike initial 15-30min puis reversion possible si non confirme → delay 40-70
+- sector : liens indirects prices en 2-6h → delay 50-80
+
+TICKERS : Ne liste que les 1-2 tickers les PLUS DIRECTEMENT impactes. Ne pas diluer le signal.
 </hard_rules>
 
 <examples>
@@ -258,8 +271,22 @@ Exemple 3 — Geopolitique early signal :
 Headline: "Maritime tracking shows 15 Iranian tankers changing course away from Strait of Hormuz"
 → surprise=80, directional_clarity=85, transmission_delay=90, market_awareness=10,
   expected_magnitude=70, signal_reliability=60, direction=LONG,
-  impacted_tickers=["CL=F","BZ=F","NG=F"], news_category=geopolitical, confirmed_event=false,
+  impacted_tickers=["CL=F","BZ=F"], news_category=geopolitical, confirmed_event=false,
   reasoning="Signal OSINT rare, mainstream media n'a pas encore repris. Impact petrole dans 12-24h si confirme."
+
+Exemple 4 — Signal mid-range tradeable (NE PAS rejeter) :
+Headline: "EIA: crude oil inventories draw -5.2M barrels vs consensus -3.0M"
+→ surprise=45, directional_clarity=85, transmission_delay=65, market_awareness=40,
+  expected_magnitude=55, signal_reliability=95, direction=LONG,
+  impacted_tickers=["CL=F"], news_category=commodity, confirmed_event=true,
+  reasoning="Draw surprise 2.2M au-dessus du consensus. EIA publie a 16:30 CET, traders physiques reagissent dans 1-3h. Edge sur le second ordre."
+
+Exemple 5 — Signal faible a rejeter :
+Headline: "CNBC: Analysts expect Fed to hold rates at next meeting"
+→ surprise=10, directional_clarity=30, transmission_delay=5, market_awareness=95,
+  expected_magnitude=15, signal_reliability=60, direction=NEUTRAL,
+  impacted_tickers=[], news_category=macro, confirmed_event=false,
+  reasoning="Anticipation consensus deja pricee dans les futures. Aucun edge."
 </examples>
 
 Tiens compte du CONTEXTE DE MARCHE fourni (VIX, tendances) pour ta calibration."""
@@ -300,7 +327,7 @@ SCORING_TOOL = {
                             "description": "How confirmed is this signal? 0=rumor/speculation, 50=press report, 100=confirmed fact/measurement",
                         },
                         "direction": {"type": "string", "enum": ["LONG", "SHORT", "NEUTRAL"]},
-                        "impacted_tickers": {"type": "array", "items": {"type": "string"}},
+                        "impacted_tickers": {"type": "array", "items": {"type": "string"}, "maxItems": 2, "description": "Les 1-2 tickers les PLUS DIRECTEMENT impactes"},
                         "news_category": {"type": "string", "enum": NEWS_CATEGORIES},
                         "reasoning": {
                             "type": "string",

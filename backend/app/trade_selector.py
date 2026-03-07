@@ -647,6 +647,14 @@ def select_trades(
 
         adjusted_score = sn.total_score * multiplier
 
+        # v5.2 A4: Freshness decay — soft penalty for news > 4h old
+        # -5% per hour after 4h, floor at 0.7 (weather/supply_chain pricing is slow)
+        if sn.news.published:
+            age_hours = (now - sn.news.published).total_seconds() / 3600
+            if age_hours > 4:
+                freshness_decay = max(0.7, 1.0 - (age_hours - 4) / 20)
+                adjusted_score *= freshness_decay
+
         # v3.6 (I): Multi-source convergence boost
         convergence_boost = 1.0
         if hasattr(sn, 'convergence_count') and sn.convergence_count >= 2:
@@ -887,8 +895,16 @@ def select_trades(
             logger.info("Pre-move adjusted target for %s: %.2f%% (reduction %.0f%%), R/R=%.2f",
                         ticker, target_pct, pre_move_reduction * 100, rr)
 
-        if rr < MIN_RISK_REWARD:
-            reason = f"R/R {rr:.2f} < seuil {MIN_RISK_REWARD}"
+        # v5.2 D2: Adaptive R/R minimum by category — demand higher R/R for low-edge categories
+        _min_rr = MIN_RISK_REWARD  # 1.2 base
+        if best_news.news_category in ("earnings", "macro", "regulatory", "central_bank_subtle", "other"):
+            _min_rr = 1.5  # Low-edge categories need higher R/R to be worth the risk
+        elif best_news.news_category in ("m_a", "sector"):
+            _min_rr = 1.3  # Moderate edge
+        # commodity, weather, supply_chain, geopolitical stay at 1.2
+
+        if rr < _min_rr:
+            reason = f"R/R {rr:.2f} < seuil adaptatif {_min_rr} ({best_news.news_category})"
             logger.info("Skipping %s: %s", ticker, reason)
             rejection_log.append({
                 "title": best_news.news.title, "ticker": [ticker],

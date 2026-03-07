@@ -30,8 +30,9 @@ def test_scored_news_edge_weighted_score():
     )
     # edge_factor = 0.8 * 0.9 = 0.72
     # reliability_factor = 0.4 + 0.6 * 1.0 = 1.0
-    # score = 80 * 1.0 * 0.72 * 1.0 * 1.0 * 1.0 = 57.6
-    assert scored.total_score == 57.6
+    # v5.2: surprise_boost = 80 * (1 + 10/100) = 88
+    # score = 88 * 1.0 * 0.72 * 1.0 * 1.0 * 1.0 = 63.36
+    assert scored.total_score == 63.36
 
 
 def test_scored_news_zero_edge_earnings():
@@ -50,8 +51,9 @@ def test_scored_news_zero_edge_earnings():
     )
     # edge_factor = max(0.05 * 0.05, 0.05) = 0.05
     # reliability_factor = 1.0
-    # score = 80 * 1.0 * 0.05 * 1.0 * 1.0 * 0.2 = 0.8
-    assert scored.total_score == 0.8
+    # v5.2: surprise_boost = 88, score = 88 * 1.0 * 0.05 * 1.0 * 1.0 * 0.2 = 0.88
+    # edge_floor = 0.05 * 1.0 * 1.0 * 0.2 * 15 = 0.15 → max(0.88, 0.15) = 0.88
+    assert scored.total_score == 0.88
 
 
 def test_scored_news_weather_commodity():
@@ -88,8 +90,9 @@ def test_scored_news_stale_cap():
         direction=Direction.LONG,
     )
     # edge_factor = 0.8 * 0.9 = 0.72, reliability_factor = 1.0
-    # score = 100 * 1.0 * 0.72 * 1.0 * 1.0 * 1.0 = 72.0
-    assert scored.total_score == 72.0
+    # v5.2: surprise_boost = 100 * (1 + 30/100) = 130
+    # score = 130 * 1.0 * 0.72 * 1.0 * 1.0 * 1.0 = 93.6
+    assert scored.total_score == 93.6
 
 
 def test_scored_news_source_weight_applied():
@@ -106,14 +109,20 @@ def test_scored_news_source_weight_applied():
     assert scored_high.total_score > scored_low.total_score
 
 
-def test_scored_news_total_score_zero():
+def test_scored_news_total_score_near_zero():
+    """Zero surprise + zero clarity + zero edge → score is very low."""
     news = NewsItem(title="Nothing", source="test")
     scored = ScoredNews(
         news=news,
         surprise=0,
         freshness=0,
         directional_clarity=0,
+        transmission_delay=5,    # Already priced
+        market_awareness=95,     # Everyone saw
+        signal_reliability=0,    # Pure rumor
     )
+    # surprise=0 < 20 → edge floor does not apply
+    # Raw score = 0 * 0 * 0.05 * 0.4 = 0
     assert scored.total_score == 0.0
 
 
@@ -264,3 +273,64 @@ def test_trade_recommendation_has_magnitude_reliability():
     )
     assert trade.expected_magnitude == 70
     assert trade.signal_reliability == 85
+
+
+# ── v5.2 Scoring Improvements ──────────────────────────────────
+
+def test_surprise_boost_above_70():
+    """v5.2 A2: Surprise > 70 gets convex bonus."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    base = ScoredNews(
+        news=news, surprise=70, freshness=100, directional_clarity=100,
+        transmission_delay=80, market_awareness=10, signal_reliability=100,
+        direction=Direction.LONG, category_score_mult=1.0,
+    )
+    boosted = ScoredNews(
+        news=news, surprise=80, freshness=100, directional_clarity=100,
+        transmission_delay=80, market_awareness=10, signal_reliability=100,
+        direction=Direction.LONG, category_score_mult=1.0,
+    )
+    # surprise=70 → no boost, raw ratio should be 80/70 = 1.143x
+    # With boost, surprise=80 → 80*1.1 = 88, ratio = 88/70 = 1.257x (convex)
+    ratio = boosted.total_score / base.total_score
+    assert ratio > 1.2  # More than linear 80/70 thanks to boost
+
+
+def test_surprise_boost_no_effect_below_70():
+    """v5.2 A2: Surprise <= 70 has no boost."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    scored = ScoredNews(
+        news=news, surprise=60, freshness=100, directional_clarity=100,
+        transmission_delay=80, market_awareness=10, signal_reliability=100,
+        direction=Direction.LONG, category_score_mult=1.0,
+    )
+    # edge = 0.72, rel = 1.0, score = 60 * 1.0 * 0.72 * 1.0 = 43.2
+    assert scored.total_score == 43.2
+
+
+def test_edge_floor_preserves_mid_range():
+    """v5.2 A1: Edge floor prevents high-edge signals from being crushed."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    scored = ScoredNews(
+        news=news, surprise=25, freshness=100, directional_clarity=30,
+        transmission_delay=90, market_awareness=5, signal_reliability=95,
+        direction=Direction.LONG, category_score_mult=1.5,
+    )
+    # Raw: 25 * 0.3 * 0.855 * 0.97 = 6.22 * 1.0 * 1.5 = 9.33
+    # Edge floor: 0.855 * 0.97 * 1.0 * 1.5 * 15 = 18.66
+    # Score = max(9.33, 18.66) = 18.66
+    assert scored.total_score > 15  # Edge floor kicks in
+
+
+def test_edge_floor_requires_min_surprise():
+    """v5.2 A1: Edge floor does NOT apply if surprise < 20."""
+    news = NewsItem(title="Test", source="Reuters", source_weight=1.0)
+    scored = ScoredNews(
+        news=news, surprise=10, freshness=100, directional_clarity=100,
+        transmission_delay=100, market_awareness=0, signal_reliability=100,
+        direction=Direction.LONG, category_score_mult=1.5,
+    )
+    # surprise=10 < 20 → no edge floor
+    # Raw: 10 * 1.0 * 1.0 * 1.0 * 1.0 * 1.5 = 15.0
+    # Edge floor would be 1.0*1.0*1.0*1.5*15 = 22.5 but does NOT apply
+    assert scored.total_score == 15.0

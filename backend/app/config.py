@@ -44,14 +44,14 @@ CATEGORY_SCORE_MULTIPLIERS: dict[str, float] = {
     "earnings":      0.2,   # Quasi zero-edge — deja price en pre-market
     "macro":         0.3,   # Algos HFT dominent — on n'a aucun avantage
     "geopolitical":  1.3,   # Fort edge si signal early — delai de pricing 1-6h
-    "regulatory":    0.9,   # Peut avoir de l'edge si signal early (ex 0.6)
-    "m_a":           0.7,   # Fort si rumeur, rarement en avance de phase (ex 0.5)
+    "regulatory":    0.7,   # v5.2: Baisse de 0.9 — reglementation rarement en avance (export bans = supply_chain)
+    "m_a":           0.5,   # v5.2: Baisse de 0.7 — desk M&A ont l'info avant les medias
     "sector":        1.2,   # Liens indirects = edge reel — le marche connecte lentement
     "commodity":     1.5,   # Edge max — signaux physiques (meteo, shipping, stocks)
     "weather":       1.6,   # Fort edge mais faux-positifs possibles sur previsions
     "supply_chain":  1.6,   # Disruptions logistiques — delai de pricing long
-    "central_bank_subtle": 0.8,  # Speeches/minutes secondaires — edge faible mais non nul (ex 0.6)
-    "other":         0.8,   # Defaut moins punitif (ex 0.6)
+    "central_bank_subtle": 0.8,  # Speeches/minutes secondaires — edge faible mais non nul
+    "other":         0.5,   # v5.2: Baisse de 0.8 — force Claude a mieux categoriser
 }
 
 # ── News category multipliers for calibration (#7) ────────────

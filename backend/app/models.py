@@ -83,24 +83,20 @@ class ScoredNews(BaseModel):
 
     @property
     def total_score(self) -> float:
-        """Edge-weighted score: surprise * clarity * edge_factor * reliability * source_weight * category_mult.
+        """Edge-weighted score with edge floor and surprise boost.
 
-        La formule privilegie les news NON ENCORE PRICEES :
-        - transmission_delay eleve = le marche n'a pas encore integre -> boost
-        - market_awareness faible = peu de monde a vu -> boost
-        - signal_reliability eleve = signal confirme -> boost (v4.0)
-        - category_score_mult penalise les earnings/macro, booste commodity/weather
+        v5.2 formula improvements:
+        - Edge floor: signals with high edge never get crushed below edge*reliability*15
+        - Surprise boost: >70 surprise gets convex bonus (+0-30%)
+        These prevent the purely multiplicative formula from killing valid mid-range signals.
 
+        Base: surprise * (clarity/100) * edge_factor * reliability_factor * source_weight * cat_mult
         edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.05)
         reliability_factor = 0.4 + 0.6 * (signal_reliability / 100)
-          → floor 0.4 pour ne pas ecraser les rumeurs interessantes,
-            mais un signal confirme vaut 1.5x plus qu'une rumeur pure
 
         NOTE: freshness n'est PAS dans la formule car Claude voit deja l'age
-        de la news ("[il y a X.Xh]") et ajuste surprise/transmission_delay
-        en consequence. L'inclure causerait une double penalisation.
-        expected_magnitude n'est PAS dans la formule — il est utilise dans la
-        calibration target/stop (trade_selector) et dans la confidence.
+        de la news et ajuste surprise/transmission_delay en consequence.
+        expected_magnitude n'est PAS dans la formule — utilise dans calibration R/R.
         """
         clarity_factor = self.directional_clarity / 100
 
@@ -117,11 +113,25 @@ class ScoredNews(BaseModel):
         # Floor 0.4: even a pure rumor (reliability=0) retains 40% of value
         reliability_factor = 0.4 + 0.6 * (self.signal_reliability / 100)
 
-        score = self.surprise * clarity_factor * edge_factor * reliability_factor
+        # v5.2 A2: Surprise boost — convex bonus for truly unexpected signals
+        # A surprise=80 gets +10%, surprise=100 gets +30%. Below 70: no effect.
+        surprise_val = self.surprise
+        if surprise_val > 70:
+            surprise_val = surprise_val * (1.0 + (surprise_val - 70) / 100)
+
+        score = surprise_val * clarity_factor * edge_factor * reliability_factor
         # Apply source reliability weight (#6)
         score *= self.news.source_weight
         # Apply category edge-priority multiplier
         score *= self.category_score_mult
+
+        # v5.2 A1: Edge floor — high-edge signals never fully crushed by low surprise
+        # Only applies if surprise >= 20 (truly zero-surprise = no signal worth preserving)
+        # A signal with edge=0.72, reliability=0.91 has floor = 0.72*0.91*15 = 9.8
+        if self.surprise >= 20:
+            edge_floor = edge_factor * reliability_factor * self.news.source_weight * self.category_score_mult * 15
+            score = max(score, edge_floor)
+
         return round(score, 2)
 
 
