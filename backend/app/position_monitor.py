@@ -167,18 +167,32 @@ def monitor_positions() -> list[dict]:
     actions: list[dict] = []
 
     # Fetch prices in parallel for all pending trades
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     price_cache: dict[str, float | None] = {}
     tickers = list(set(t.ticker for t in pending))
 
-    with ThreadPoolExecutor(max_workers=min(3, len(tickers))) as executor:
-        futures = {executor.submit(_get_current_price, t): t for t in tickers}
-        for future in futures:
+    executor = ThreadPoolExecutor(max_workers=min(3, len(tickers)))
+    futures = {executor.submit(_get_current_price, t): t for t in tickers}
+    try:
+        for future in as_completed(futures, timeout=45):
             ticker = futures[future]
             try:
                 price_cache[ticker] = future.result(timeout=15)
-            except Exception:
+            except TimeoutError:
+                logger.warning("Position monitor: price fetch TIMEOUT for %s", ticker)
                 price_cache[ticker] = None
+            except Exception as exc:
+                logger.warning("Position monitor: price fetch failed for %s: %s", ticker, exc)
+                price_cache[ticker] = None
+    except TimeoutError:
+        # Some futures didn't complete within global timeout — fill missing
+        for future in futures:
+            t = futures[future]
+            if t not in price_cache:
+                logger.warning("Position monitor: global timeout, skipping %s", t)
+                price_cache[t] = None
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     for trade in pending:
         current_price = price_cache.get(trade.ticker)

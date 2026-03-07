@@ -244,15 +244,17 @@ def collect_rss_news() -> list[NewsItem]:
     completed_count = 0
     try:
         for future in as_completed(futures, timeout=45):
+            url = futures[future]
             try:
                 result = future.result(timeout=20)
                 items.extend(result)
                 completed_count += 1
+            except TimeoutError:
+                logger.warning("RSS feed TIMEOUT (20s) for %s", url)
             except Exception as exc:
-                url = futures[future]
-                logger.warning("RSS feed timeout/error for %s: %s", url, exc)
+                logger.warning("RSS feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("RSS collection timed out after 45s (%d/%d feeds completed)",
+        logger.warning("RSS collection global TIMEOUT (45s), %d/%d feeds completed",
                        completed_count, len(RSS_FEEDS))
     finally:
         # wait=True: ensure all threads are joined before returning,
@@ -278,16 +280,18 @@ def collect_early_signal_news() -> list[NewsItem]:
     completed_count = 0
     try:
         for future in as_completed(futures, timeout=45):
+            url = futures[future]
             try:
                 result = future.result(timeout=20)
                 if result:
                     items.extend(result)
                 completed_count += 1
+            except TimeoutError:
+                logger.warning("Early-signal feed TIMEOUT (20s) for %s", url)
             except Exception as exc:
-                url = futures[future]
-                logger.warning("Early-signal feed unavailable %s: %s", url, exc)
+                logger.warning("Early-signal feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("Early-signal collection timed out after 45s (%d/%d feeds completed)",
+        logger.warning("Early-signal collection global TIMEOUT (45s), %d/%d feeds completed",
                        completed_count, len(EARLY_SIGNAL_FEEDS))
     finally:
         # wait=True: ensure all threads are joined before returning.

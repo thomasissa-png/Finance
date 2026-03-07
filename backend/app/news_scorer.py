@@ -581,7 +581,7 @@ Headlines :
                 messages=[{"role": "user", "content": user_message}],
                 tools=[SCORING_TOOL],
                 tool_choice={"type": "tool", "name": "submit_news_scores"},
-                timeout=120.0,  # 120s timeout — generous margin for API congestion
+                timeout=45.0,  # v6.5: Reduced from 120s — 45s is generous, 120s means network is dead
             )
 
             # Detect truncation — if max_tokens was hit, scores are likely incomplete

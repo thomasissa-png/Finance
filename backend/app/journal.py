@@ -792,7 +792,10 @@ def run_daily_journal() -> list[dict]:
                 executor.submit(_fetch_intraday_prices, ticker, trade_date): (ticker, trade_date)
                 for ticker, trade_date in price_tasks
             }
-            for future in as_completed(futures):
+            # v6.5: Global timeout on as_completed — prevents indefinite blocking
+            # Budget: 30s per future × 3 workers ≈ max 90s total for all price tasks
+            global_price_timeout = min(120, len(price_tasks) * 15)
+            for future in as_completed(futures, timeout=global_price_timeout):
                 key = futures[future]
                 try:
                     result = future.result(timeout=30)
@@ -801,8 +804,20 @@ def run_daily_journal() -> list[dict]:
                         price_fetch_successes += 1
                     else:
                         price_fetch_failures += 1
+                except TimeoutError:
+                    logger.warning("Journal price fetch TIMEOUT for %s", key[0])
+                    price_cache[key] = (None, None, None, None)
+                    price_fetch_failures += 1
                 except Exception as exc:
-                    logger.warning("Parallel price fetch failed for %s: %s", key[0], exc)
+                    logger.warning("Journal price fetch failed for %s: %s", key[0], exc)
+                    price_cache[key] = (None, None, None, None)
+                    price_fetch_failures += 1
+        except TimeoutError:
+            # Fill missing entries so trades can still be closed (with fallback pricing)
+            for future in futures:
+                key = futures[future]
+                if key not in price_cache:
+                    logger.warning("Journal price fetch: global timeout, skipping %s", key[0])
                     price_cache[key] = (None, None, None, None)
                     price_fetch_failures += 1
         finally:
@@ -816,14 +831,16 @@ def run_daily_journal() -> list[dict]:
             price_fetch_failures / total_fetches * 100, price_fetch_failures, total_fetches,
         )
 
+    timed_out = False
     for trade in pending:
         # G3: Check global timeout
         elapsed = time.monotonic() - journal_start
         if elapsed > JOURNAL_GLOBAL_TIMEOUT_SECONDS:
             logger.error(
-                "Journal global timeout reached (%.0fs > %ds) — %d trades remaining",
+                "Journal global timeout reached (%.0fs > %ds) — %d trades remaining, force-closing as EXPIRED",
                 elapsed, JOURNAL_GLOBAL_TIMEOUT_SECONDS, len(pending) - len(new_entries),
             )
+            timed_out = True
             break
 
         trade_date = trade.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
@@ -1016,6 +1033,20 @@ def run_daily_journal() -> list[dict]:
             trade.direction.value, trade.ticker, trade.asset_name,
             result.value, pnl_pct, mae, slippage, n_bars, bar_interval or "none",
         )
+
+    # v6.5: Force-close remaining PENDING trades if journal timed out
+    # Without this, trades stay PENDING until next-day startup recovery
+    if timed_out:
+        processed_keys = {(e.ticker, e.entry_time.isoformat()) for e in new_entries}
+        for trade in pending:
+            trade_key = (trade.ticker, trade.timestamp.isoformat())
+            if trade_key not in processed_keys and trade_key not in existing_keys:
+                logger.warning("Force-closing timed-out trade: %s %s as EXPIRED",
+                              trade.ticker, trade.timestamp.isoformat())
+                update_trade_result(
+                    trade.timestamp, trade.ticker,
+                    TradeResult.EXPIRED, trade.entry_price,
+                )
 
     # Append to journal
     if new_entries:

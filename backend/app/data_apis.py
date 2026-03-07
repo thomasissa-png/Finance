@@ -2778,9 +2778,9 @@ def collect_structured_data() -> list[NewsItem]:
         ("dark_pool", fetch_dark_pool_signals),
     ]
 
-    # max_workers=5: balanced concurrency for 17 sources.
-    # 17 sources / 5 workers = ~4 waves.
-    executor = ThreadPoolExecutor(max_workers=5)
+    # max_workers=3: Replit kills process on too many concurrent threads.
+    # 17 sources / 3 workers = ~6 waves, but safer on constrained environments.
+    executor = ThreadPoolExecutor(max_workers=3)
     # Track start time per future for latency measurement
     _start_times: dict = {}
     for name, fn in sources:
@@ -2796,6 +2796,10 @@ def collect_structured_data() -> list[NewsItem]:
                 all_items.extend(items)
                 if tracker:
                     tracker.record_success(source_name, "phase0", len(items), latency_ms)
+            except TimeoutError:
+                logger.warning("Structured data source '%s' TIMEOUT (45s)", source_name)
+                if tracker:
+                    tracker.record_failure(source_name, "phase0", "Timeout (45s per-source)", latency_ms)
             except Exception as exc:
                 logger.warning("Structured data source '%s' failed: %s", source_name, exc)
                 if tracker:

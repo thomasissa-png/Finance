@@ -193,18 +193,24 @@ def scan_feeds_for_triggers() -> list[dict]:
     # max_workers=3: Replit kills process on too many concurrent threads.
     executor = ThreadPoolExecutor(max_workers=3)
     futures = {executor.submit(_fetch_feed_triggers, url, seen_snapshot): url for url in EARLY_SIGNAL_FEEDS}
+    completed_count = 0
     try:
         for future in as_completed(futures, timeout=30):
+            url = futures[future]
             try:
-                results = future.result(timeout=5)
+                results = future.result(timeout=15)
+                completed_count += 1
                 for r in results:
                     if r["title"] not in _seen_headlines:
                         _seen_headlines[r["title"]] = None
                         triggers.append(r)
+            except TimeoutError:
+                logger.warning("Event scan: feed timeout (15s) for %s", url)
             except Exception as exc:
-                logger.debug("Event scan future error: %s", exc)
+                logger.warning("Event scan: feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("Event scan timed out, some feeds skipped")
+        logger.warning("Event scan: global timeout (30s), %d/%d feeds completed",
+                       completed_count, len(futures))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 

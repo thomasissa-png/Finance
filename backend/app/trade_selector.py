@@ -703,15 +703,22 @@ def select_trades(
 
     price_cache: dict[str, tuple] = {}
     # max_workers capped at 3: Replit kills process on too many concurrent threads.
-    with ThreadPoolExecutor(max_workers=min(3, len(candidate_tickers) or 1)) as executor:
+    # v6.5: Explicit shutdown(wait=False) to avoid blocking scheduler if a future hangs
+    executor = ThreadPoolExecutor(max_workers=min(3, len(candidate_tickers) or 1))
+    try:
         futures = {executor.submit(_get_price_and_range, t): t for t in candidate_tickers}
         for future in futures:
             ticker_key = futures[future]
             try:
                 price_cache[ticker_key] = future.result(timeout=15)
-            except Exception as exc:
-                logger.debug("Price pre-fetch failed for %s: %s", ticker_key, exc)
+            except TimeoutError:
+                logger.warning("Price pre-fetch TIMEOUT for %s (15s)", ticker_key)
                 price_cache[ticker_key] = (None, 1.5, None, None, None)
+            except Exception as exc:
+                logger.warning("Price pre-fetch failed for %s: %s", ticker_key, exc)
+                price_cache[ticker_key] = (None, 1.5, None, None, None)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     # Cross-day dedup: load tickers traded in the last N days
     recently_traded = _get_recently_traded_tickers()
