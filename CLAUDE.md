@@ -312,6 +312,12 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **J2/L2/L3** : `getattr(trade, "field", default)` inutiles sur 12 champs déclarés avec defaults Pydantic dans `journal.py` (4) et `learning.py` (8). Remplacés par accès directs (`trade.field`, `t.field`, `je.field`). Cohérent avec le fix v6.3 P3 pour `news_category`
 - **7 tests** : trailing stop order, persistence call, update_trade_stop exists + JSON fallback, pg_update_trade_stop exists, no getattr in journal, no getattr in learning
 
+#### 21. Audit Scoring (from Trader perspective) v6.5 — 3 fixes
+- **P1 (BUG)** : Formule high-vol incohérente — `_calibrate_trade()` utilisait `0.12 + 0.33 * (ns^1.5)` mais le filtre spread (line 808) et le calcul pre-move (line 833) utilisaient `0.10 + 0.35 * (ns^1.5)`. L'estimation du target par le filtre spread était différente du target réellement calibré. Fix : synchronisé les deux formulas sur `0.12 + 0.33` (les tiers low-vol et normal étaient déjà synchronisés)
+- **P2** : `hasattr(sn, 'convergence_count')` aux lignes 671 et 743 de `trade_selector.py` — `convergence_count` est un champ déclaré sur `ScoredNews` avec default=0, `hasattr` est inutile et masque des erreurs. Remplacé par accès direct
+- **P3** : `getattr(best_news, 'expected_magnitude', 50)` aux lignes 804 et 827 + `getattr(best_news, 'convergence_count', 0)` à la ligne 1040 — mêmes champs déclarés avec defaults sur `ScoredNews`. Remplacés par accès directs (cohérent avec le pattern v6.4)
+- **6 tests** : highvol_formula_synced, spread_filter_matches_calibrate, no_hasattr_on_scored_news, no_getattr_on_scored_news, scored_news_has_all_trader_fields, scoring_agent_returns_all_needed_keys
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), run_learning_update(), helpers
@@ -327,7 +333,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/journal.py` : v6.4, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours, direct field access (no getattr)
 - `backend/app/learning.py` : v6.4, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback, update_trade_stop for trailing persistence, direct field access (no getattr)
-- `backend/app/trade_selector.py` : v6.3, convex calibration, fallback ticker, spread filter, VIX daily cap, fixed static group correlation check
+- `backend/app/trade_selector.py` : v6.5, convex calibration, fallback ticker, spread filter (synced high-vol formula), VIX daily cap, fixed static group correlation check, direct field access on ScoredNews (no hasattr/getattr)
 - `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
 - `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES
