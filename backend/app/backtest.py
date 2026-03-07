@@ -1,10 +1,17 @@
-"""Backtesting engine (#31): replay historical scans to evaluate parameters."""
+"""Backtesting engine (#31): replay historical scans to evaluate parameters.
+
+v5.1: Added run_news_replay_backtest() for re-scoring historical headlines
+with current parameters and comparing against actual trade outcomes.
+"""
 
 import logging
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from .config import ASSET_BY_TICKER, MIN_RISK_REWARD, MIN_SCORE_THRESHOLD, assets_for_session
+from .config import (
+    ASSET_BY_TICKER, CATEGORY_SCORE_MULTIPLIERS, MIN_RISK_REWARD,
+    MIN_SCORE_THRESHOLD, assets_for_session,
+)
 from .journal import _determine_result
 from .market_data import fetch_history_range
 from .models import Direction, ScanType, TradeRecommendation, TradeResult
@@ -173,3 +180,233 @@ def run_parameter_sweep(trades: list[TradeRecommendation]) -> list[dict]:
 
     sweep_results.sort(key=lambda r: r["total_pnl"], reverse=True)
     return sweep_results
+
+
+def _rescore_headline(news_entry: dict) -> dict:
+    """v5.1: Re-score a historical headline using current formula parameters.
+
+    Takes a dict from all_scored_news and recomputes total_score using
+    the CURRENT formula (edge_factor, reliability_factor, category_mult).
+    This does NOT call Claude — it uses the stored Claude dimensions
+    (surprise, delay, awareness, etc.) and applies the current formula.
+
+    Returns dict with original + recalculated fields.
+    """
+    surprise = news_entry.get("surprise", 0)
+    clarity = news_entry.get("directional_clarity", 0)
+    delay = news_entry.get("transmission_delay", 50)
+    awareness = news_entry.get("market_awareness", 50)
+    reliability = news_entry.get("signal_reliability", 50)
+    magnitude = news_entry.get("expected_magnitude", 50)
+    source_weight = news_entry.get("source_weight", 0.75)
+    news_cat = news_entry.get("news_category", "other")
+
+    # Current formula
+    edge_factor = max(delay / 100 * (1 - awareness / 100), 0.05)
+    reliability_factor = 0.4 + 0.6 * (reliability / 100)
+    cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
+
+    recalc_score = round(
+        surprise * (clarity / 100) * edge_factor * reliability_factor * source_weight * cat_mult,
+        2,
+    )
+
+    return {
+        "title": news_entry.get("title", ""),
+        "source": news_entry.get("source", ""),
+        "news_category": news_cat,
+        "direction": news_entry.get("direction", "NEUTRAL"),
+        "impacted_tickers": news_entry.get("impacted_tickers", []),
+        "original_score": news_entry.get("total_score", 0),
+        "recalculated_score": recalc_score,
+        "score_diff": round(recalc_score - news_entry.get("total_score", 0), 2),
+        # Stored Claude dimensions (NOT re-evaluated — these are facts)
+        "surprise": surprise,
+        "directional_clarity": clarity,
+        "transmission_delay": delay,
+        "market_awareness": awareness,
+        "signal_reliability": reliability,
+        "expected_magnitude": magnitude,
+    }
+
+
+def run_news_replay_backtest(days: int = 90, override_params: dict | None = None) -> dict:
+    """v5.1: Replay historical scan_history news using current scoring parameters.
+
+    Does NOT call Claude API — re-uses stored Claude dimensions (surprise, delay,
+    awareness, etc.) and re-applies the CURRENT formula. This answers the question:
+    "If we had used today's parameters on historical news, what would have changed?"
+
+    Compares:
+    1. Original scores (at time of scan) vs recalculated scores (current formula)
+    2. Which trades would have been selected vs actually selected
+    3. PnL of actual trades vs hypothetical trades
+
+    Args:
+        days: How many days of history to replay (default 90).
+        override_params: Optional min_score override.
+
+    Returns comprehensive backtest report.
+    """
+    from .database import is_pg_enabled
+    from .scan_history import load_scan_history
+    from .learning import load_trades
+
+    min_score = (override_params or {}).get("min_score", MIN_SCORE_THRESHOLD)
+
+    # Load scan history
+    all_scans = load_scan_history()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    recent_scans = [s for s in all_scans
+                    if s.timestamp.replace(tzinfo=timezone.utc) > cutoff]
+
+    if not recent_scans:
+        return {"error": "No scan history available", "scans_available": len(all_scans)}
+
+    # Load actual trades for comparison
+    trades = load_trades()
+    closed = [t for t in trades if t.result != TradeResult.PENDING]
+    trade_by_key = {}
+    for t in closed:
+        key = (t.ticker, t.timestamp.strftime("%Y-%m-%d"))
+        trade_by_key[key] = t
+
+    # Replay each scan
+    total_scans = 0
+    scans_with_news = 0
+    total_news_rescored = 0
+    score_diffs = []
+    category_analysis: dict[str, dict] = {}
+    would_have_traded: list[dict] = []
+    missed_signals: list[dict] = []
+    false_positives: list[dict] = []
+
+    for scan in recent_scans:
+        total_scans += 1
+        if not scan.all_scored_news:
+            continue
+        scans_with_news += 1
+        scan_date = scan.timestamp.strftime("%Y-%m-%d")
+
+        # Re-score all headlines with current formula
+        rescored = []
+        for news in scan.all_scored_news:
+            # Validate: skip entries where Claude dimensions are missing/zero
+            # This prevents "invented" data from contaminating the backtest
+            if not news.get("title"):
+                continue
+            if news.get("surprise", 0) == 0 and news.get("directional_clarity", 0) == 0:
+                continue  # Skip placeholder/empty entries
+
+            rescored_entry = _rescore_headline(news)
+            rescored.append(rescored_entry)
+            total_news_rescored += 1
+
+            diff = rescored_entry["score_diff"]
+            score_diffs.append(diff)
+
+            # Category analysis
+            cat = rescored_entry["news_category"]
+            if cat not in category_analysis:
+                category_analysis[cat] = {
+                    "count": 0, "avg_original": 0.0, "avg_recalc": 0.0,
+                    "avg_diff": 0.0, "max_original": 0.0, "max_recalc": 0.0,
+                }
+            ca = category_analysis[cat]
+            ca["count"] += 1
+            ca["avg_original"] += rescored_entry["original_score"]
+            ca["avg_recalc"] += rescored_entry["recalculated_score"]
+            ca["avg_diff"] += diff
+            ca["max_original"] = max(ca["max_original"], rescored_entry["original_score"])
+            ca["max_recalc"] = max(ca["max_recalc"], rescored_entry["recalculated_score"])
+
+        # Find top signal with current formula
+        if rescored:
+            top_current = max(rescored, key=lambda x: x["recalculated_score"])
+            top_original = max(rescored, key=lambda x: x["original_score"])
+
+            # Would this scan have produced a trade with current params?
+            if top_current["recalculated_score"] >= min_score and top_current["direction"] != "NEUTRAL":
+                tickers = top_current.get("impacted_tickers", [])
+                if tickers:
+                    # Check if there was actually a trade for this ticker/date
+                    actual_trade = None
+                    for tk in tickers:
+                        actual_trade = trade_by_key.get((tk, scan_date))
+                        if actual_trade:
+                            break
+
+                    entry = {
+                        "date": scan_date,
+                        "scan_type": scan.scan_type.value,
+                        "title": top_current["title"][:100],
+                        "ticker": tickers[0] if tickers else "?",
+                        "direction": top_current["direction"],
+                        "recalculated_score": top_current["recalculated_score"],
+                        "original_score": top_current["original_score"],
+                        "news_category": top_current["news_category"],
+                    }
+
+                    if actual_trade:
+                        entry["actual_result"] = actual_trade.result.value
+                        entry["actual_pnl"] = actual_trade.pnl_pct
+                        would_have_traded.append(entry)
+                    else:
+                        missed_signals.append(entry)
+
+            # Was the original scan's top pick worse than current recalc?
+            if (scan.has_trade and top_original["original_score"] >= min_score
+                    and top_current["recalculated_score"] < min_score * 0.8):
+                # This trade would NOT have been taken with current formula
+                false_positives.append({
+                    "date": scan_date,
+                    "title": top_original["title"][:100],
+                    "original_score": top_original["original_score"],
+                    "recalculated_score": top_original.get("recalculated_score", 0),
+                    "news_category": top_original["news_category"],
+                })
+
+    # Finalize category analysis
+    for cat, ca in category_analysis.items():
+        n = ca["count"]
+        if n > 0:
+            ca["avg_original"] = round(ca["avg_original"] / n, 2)
+            ca["avg_recalc"] = round(ca["avg_recalc"] / n, 2)
+            ca["avg_diff"] = round(ca["avg_diff"] / n, 2)
+
+    # Score drift statistics
+    score_drift = {}
+    if score_diffs:
+        score_drift = {
+            "mean_diff": round(statistics.mean(score_diffs), 2),
+            "median_diff": round(statistics.median(score_diffs), 2),
+            "stdev_diff": round(statistics.stdev(score_diffs), 2) if len(score_diffs) >= 2 else 0,
+            "max_increase": round(max(score_diffs), 2),
+            "max_decrease": round(min(score_diffs), 2),
+        }
+
+    # PnL analysis of would-have-traded signals
+    pnl_of_confirmed = [t["actual_pnl"] for t in would_have_traded
+                        if t.get("actual_pnl") is not None]
+    confirmed_stats = {}
+    if pnl_of_confirmed:
+        confirmed_stats = {
+            "total_trades": len(pnl_of_confirmed),
+            "total_pnl": round(sum(pnl_of_confirmed), 2),
+            "avg_pnl": round(statistics.mean(pnl_of_confirmed), 2),
+            "win_rate": round(sum(1 for p in pnl_of_confirmed if p > 0) / len(pnl_of_confirmed) * 100, 1),
+        }
+
+    return {
+        "period_days": days,
+        "min_score_used": min_score,
+        "total_scans": total_scans,
+        "scans_with_news": scans_with_news,
+        "total_news_rescored": total_news_rescored,
+        "score_drift": score_drift,
+        "category_analysis": category_analysis,
+        "would_have_traded": would_have_traded[:20],  # Limit response size
+        "would_have_traded_pnl": confirmed_stats,
+        "missed_signals": missed_signals[:10],
+        "false_positives": false_positives[:10],
+    }

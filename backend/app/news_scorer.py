@@ -943,9 +943,11 @@ def _score_batch(
                         transmission_delay = 40
                     market_awareness = max(market_awareness, 50)
 
-        # v4.3 D2: Cross-dimension coherence validation
-        _validate_coherence(entry, transmission_delay, market_awareness,
-                            entry.get("surprise", 0), item.title)
+        # v4.3 D2 / v5.1: Cross-dimension coherence validation — now FIXES contradictions
+        transmission_delay, market_awareness = _validate_coherence(
+            entry, transmission_delay, market_awareness,
+            entry.get("surprise", 0), item.title,
+        )
 
         # Apply category score multiplier (edge priority)
         cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
@@ -1005,25 +1007,38 @@ def _score_batch(
 
 
 def _validate_coherence(entry: dict, transmission_delay: int, market_awareness: int,
-                        surprise: int, title: str) -> None:
-    """v4.3 D2: Validate cross-dimension coherence and log warnings.
+                        surprise: int, title: str) -> tuple[int, int]:
+    """v4.3 D2: Validate cross-dimension coherence and FIX contradictions.
+
+    v5.1: Now returns corrected (transmission_delay, market_awareness) instead of
+    just logging warnings. Prevents Claude's contradictory dimensions from producing
+    garbage scores that would corrupt the learning system.
 
     Catches cases where Claude returns contradictory dimensions:
     - High surprise + low delay = surprise that's already priced? Unlikely.
     - Low awareness + low delay = nobody saw it but it's already priced? Contradictory.
+    - High awareness + high delay = everyone saw it but it's not priced? Contradictory.
     """
+    fixed_delay = transmission_delay
+    fixed_awareness = market_awareness
+
     if surprise > 70 and transmission_delay < 20:
-        logger.warning("D2 coherence: surprise=%d but delay=%d for '%s' — "
-                       "highly surprising news should not be already priced",
+        logger.warning("D2 coherence FIX: surprise=%d but delay=%d for '%s' — "
+                       "raising delay to 40 (surprising news can't be priced)",
                        surprise, transmission_delay, title[:60])
+        fixed_delay = max(fixed_delay, 40)
     if market_awareness < 20 and transmission_delay < 20:
-        logger.warning("D2 coherence: awareness=%d but delay=%d for '%s' — "
-                       "if nobody saw it, it shouldn't be priced already",
+        logger.warning("D2 coherence FIX: awareness=%d but delay=%d for '%s' — "
+                       "raising delay to 50 (unknown info can't be priced)",
                        market_awareness, transmission_delay, title[:60])
+        fixed_delay = max(fixed_delay, 50)
     if market_awareness > 80 and transmission_delay > 60:
-        logger.warning("D2 coherence: awareness=%d but delay=%d for '%s' — "
-                       "if everyone saw it, delay should be lower",
+        logger.warning("D2 coherence FIX: awareness=%d but delay=%d for '%s' — "
+                       "capping delay to 30 (widely known info is priced)",
                        market_awareness, transmission_delay, title[:60])
+        fixed_delay = min(fixed_delay, 30)
+
+    return fixed_delay, fixed_awareness
 
 
 def _count_convergence(

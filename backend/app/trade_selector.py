@@ -423,10 +423,14 @@ def _compute_position_size(
 
 
 def _build_scored_news_log(scored_news: list[ScoredNews]) -> list[dict]:
-    """Build a serializable log of all scored news for journal tracing."""
+    """Build a serializable log of all scored news for journal tracing.
+
+    v5.1: Now stores description, url, published, source_weight for backtest replay.
+    These fields enable re-scoring historical headlines with updated parameters.
+    """
     log = []
     for sn in scored_news:
-        log.append({
+        entry = {
             "title": sn.news.title,
             "source": sn.news.source,
             "direction": sn.direction.value,
@@ -442,7 +446,13 @@ def _build_scored_news_log(scored_news: list[ScoredNews]) -> list[dict]:
             "category_score_mult": sn.category_score_mult,
             "impacted_tickers": sn.impacted_tickers,
             "reasoning": sn.reasoning,
-        })
+            # v5.1: Backtest-critical fields — enable historical replay
+            "description": sn.news.description or "",
+            "url": sn.news.url or "",
+            "published": sn.news.published.isoformat() if sn.news.published else None,
+            "source_weight": sn.news.source_weight,
+        }
+        log.append(entry)
     return log
 
 

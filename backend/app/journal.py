@@ -683,6 +683,52 @@ def prune_old_journal_entries(max_age_days: int = 365) -> int:
     return pruned
 
 
+def _archive_daily_prices(trades: list[TradeRecommendation]) -> None:
+    """v5.1: Archive daily OHLCV data for traded tickers into price_archive table.
+
+    Called after journal to build historical price database for backtesting.
+    Archives the last 5 trading days for each ticker to fill any gaps.
+    Only runs when PG is enabled.
+    """
+    if not is_pg_enabled():
+        return
+    if not trades:
+        return
+
+    try:
+        from .database import pg_save_price_archive
+        from .market_data import fetch_history
+
+        # Get unique tickers from trades
+        tickers = list({t.ticker for t in trades})
+
+        rows = []
+        for ticker in tickers:
+            try:
+                df = fetch_history(ticker, period_days=7, interval="1day")
+                if df is None or df.empty:
+                    continue
+                for dt, row in df.iterrows():
+                    rows.append({
+                        "ticker": ticker,
+                        "date": dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10],
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": float(row.get("Volume", 0)),
+                        "source": "twelve_data",
+                    })
+            except Exception as exc:
+                logger.debug("Price archive: failed to fetch %s: %s", ticker, exc)
+
+        if rows:
+            inserted = pg_save_price_archive(rows)
+            logger.info("v5.1: Archived %d price rows for %d tickers", inserted, len(tickers))
+    except Exception as exc:
+        logger.warning("v5.1: Price archiving failed (non-critical): %s", exc)
+
+
 def run_daily_journal() -> list[dict]:
     """Main job: close all pending trades, generate journal entries for today.
 
@@ -983,6 +1029,9 @@ def run_daily_journal() -> list[dict]:
             pg_run_maintenance()
         except Exception as exc:
             logger.warning("M4: Post-journal maintenance failed: %s", exc)
+
+    # v5.1: Archive daily OHLCV for traded tickers (backtest data)
+    _archive_daily_prices(pending)
 
     # E1: Structured metrics log
     elapsed = time.monotonic() - journal_start

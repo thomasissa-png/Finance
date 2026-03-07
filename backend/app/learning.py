@@ -491,6 +491,23 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         trades = load_trades()
     closed = [t for t in trades if t.result != TradeResult.PENDING]
 
+    # v5.1: Data integrity — filter out trades with missing or anomalous PnL
+    # Prevents corrupt/incomplete data from skewing learning adjustments
+    valid_closed = []
+    for t in closed:
+        if t.pnl_pct is None:
+            continue
+        # Filter extreme outliers that are likely data errors (>50% PnL on a day trade)
+        if abs(t.pnl_pct) > 50:
+            logger.warning("v5.1: Filtering anomalous trade %s with PnL=%.2f%% (likely data error)",
+                          t.ticker, t.pnl_pct)
+            continue
+        valid_closed.append(t)
+    if len(valid_closed) < len(closed):
+        logger.info("v5.1: Filtered %d invalid/anomalous trades from learning (%d → %d)",
+                    len(closed) - len(valid_closed), len(closed), len(valid_closed))
+    closed = valid_closed
+
     # C3: Initial generous lookback filter (180 days), then compute half_life from filtered set
     initial_cutoff = datetime.now(timezone.utc) - timedelta(days=180)
     recent_closed = []
@@ -772,6 +789,13 @@ def _extract_recent_review_insights(closed_trades: list[TradeRecommendation],
         if not review:
             continue
 
+        # v5.1: Data integrity — only include reviews from trades with real outcomes
+        # Prevents feeding unvalidated/incomplete data back to Claude
+        if t.result == TradeResult.PENDING:
+            continue
+        if t.pnl_pct is None:
+            continue
+
         # Only include reviews with actionable content
         has_insight = any(marker.lower() in review.lower() for marker in actionable_markers)
         if not has_insight:
@@ -1044,10 +1068,12 @@ def build_performance_summary(max_recent: int = 15,
                          "execution degradee ou spreads sous-estimes")
 
     # Recent trades (compact — last 10)
+    # v5.1: Only include trades with verified PnL (prevent NULL data in Claude prompt)
     recent = sorted(closed, key=lambda t: t.timestamp, reverse=True)[:min(max_recent, 10)]
-    if recent:
-        parts.append(f"Derniers {len(recent)}:")
-        for t in recent:
+    verified_recent = [t for t in recent if t.pnl_pct is not None and t.result != TradeResult.PENDING]
+    if verified_recent:
+        parts.append(f"Derniers {len(verified_recent)}:")
+        for t in verified_recent:
             nc = getattr(t, "news_category", "?")
             parts.append(
                 f"  {t.ticker}({nc}) {t.direction.value}→{t.result.value} {t.pnl_pct:+.2f}%"
@@ -1062,12 +1088,17 @@ def build_performance_summary(max_recent: int = 15,
 
     parts.append("--- FIN DONNEES ---")
 
-    # Instructions section (always shown)
+    # Instructions section (always shown) — v5.1: More specific actionable guidance
     parts.extend([
         "--- INSTRUCTIONS SCORING ---",
-        "Le learning applique AUTOMATIQUEMENT des multiplicateurs. Score OBJECTIVEMENT "
-        "chaque news selon surprise, delay, awareness, magnitude, reliability. "
-        "NE COMPENSE PAS l'historique.",
+        "Le learning applique AUTOMATIQUEMENT des multiplicateurs sur les scores. "
+        "Score OBJECTIVEMENT chaque news selon surprise, delay, awareness, magnitude, reliability.",
+        "UTILISE les lecons ci-dessus pour CALIBRER tes estimations :",
+        "- Si un ticker a un streak negatif → sois plus conservateur sur transmission_delay",
+        "- Si EXPIRED rate est eleve → reduis expected_magnitude (les moves sont plus petits que prevu)",
+        "- Si direction est faible → augmente le seuil de directional_clarity",
+        "- Si une categorie a un WR bas → augmente market_awareness pour cette categorie",
+        "NE COMPENSE PAS l'historique dans le score — les multiplicateurs s'en chargent.",
         "--- FIN INSTRUCTIONS ---",
     ])
 

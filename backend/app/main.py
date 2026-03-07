@@ -897,6 +897,79 @@ def run_db_backup():
     return pg_backup_to_json()
 
 
+# ── v5.1: Price archive & news replay backtest ──────────────────
+
+
+@app.get("/api/price-archive/stats")
+def get_price_archive_stats():
+    """v5.1: Get price archive statistics."""
+    if not is_pg_enabled():
+        return {"status": "pg_not_enabled"}
+    from .database import pg_price_archive_stats
+    return pg_price_archive_stats()
+
+
+@app.post("/api/price-archive/fill")
+def fill_price_archive(days: int = 30):
+    """v5.1: Backfill price archive for all tickers.
+
+    Fetches daily OHLCV for the last `days` trading days for all 41 tickers.
+    Safe to call repeatedly — uses ON CONFLICT DO NOTHING for dedup.
+    """
+    if not is_pg_enabled():
+        raise HTTPException(400, "PostgreSQL not configured")
+    if days > 365:
+        raise HTTPException(400, "Maximum 365 days")
+
+    from .config import ASSETS
+    from .database import pg_save_price_archive
+    from .market_data import fetch_history
+
+    rows = []
+    errors = []
+    for asset in ASSETS:
+        try:
+            df = fetch_history(asset.ticker, period_days=days + 5, interval="1day")
+            if df is None or df.empty:
+                errors.append(asset.ticker)
+                continue
+            for dt, row in df.iterrows():
+                rows.append({
+                    "ticker": asset.ticker,
+                    "date": dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)[:10],
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": float(row["Close"]),
+                    "volume": float(row.get("Volume", 0)),
+                    "source": "twelve_data",
+                })
+        except Exception as exc:
+            errors.append(f"{asset.ticker}: {exc}")
+
+    inserted = pg_save_price_archive(rows) if rows else 0
+    return {
+        "total_rows_fetched": len(rows),
+        "inserted": inserted,
+        "tickers": len(ASSETS),
+        "errors": errors[:10],  # Limit error list
+    }
+
+
+@app.get("/api/backtest/replay")
+def api_backtest_replay(days: int = 90, min_score: float | None = None):
+    """v5.1: Replay historical news backtest.
+
+    Re-scores historical scan_history headlines using current scoring formula
+    and compares against actual outcomes.
+    """
+    from .backtest import run_news_replay_backtest
+    params = {}
+    if min_score is not None:
+        params["min_score"] = min_score
+    return run_news_replay_backtest(days=days, override_params=params)
+
+
 # ── (#41) Enhanced health check ──────────────────────────────────
 
 

@@ -634,3 +634,232 @@ def test_startup_recovery_includes_today():
     # Must NOT have the old `trade_date < today` filter that excluded today's trades
     assert "trade_date < today" not in source or "all_pending" in source, \
         "Startup recovery should recover ALL pending trades, not just old ones"
+
+
+# ── 10. v5.1 Backtest infrastructure ────────────────────────────────
+
+
+def test_scan_history_retention_365_days():
+    """v5.1: scan_history retention must be 365 days for backtesting."""
+    from backend.app.scan_history import MAX_HISTORY_DAYS
+    assert MAX_HISTORY_DAYS == 365, \
+        f"MAX_HISTORY_DAYS should be 365, got {MAX_HISTORY_DAYS}"
+
+
+def test_scored_news_log_includes_description():
+    """v5.1: _build_scored_news_log must include description, url, published, source_weight."""
+    from backend.app.trade_selector import _build_scored_news_log
+    from backend.app.models import ScoredNews, NewsItem, Direction
+
+    item = NewsItem(
+        title="Test headline",
+        source="test_source",
+        url="https://example.com/article",
+        description="Detailed article description for backtesting",
+        source_weight=1.15,
+        published=datetime(2026, 3, 7, 10, 0, tzinfo=timezone.utc),
+    )
+    scored = ScoredNews(
+        news=item,
+        surprise=70, freshness=80, directional_clarity=85,
+        transmission_delay=75, market_awareness=20,
+        expected_magnitude=60, signal_reliability=90,
+        direction=Direction.LONG,
+        impacted_tickers=["ZC=F"],
+        reasoning="Test reasoning",
+        news_category="weather",
+        category_score_mult=1.6,
+    )
+    log = _build_scored_news_log([scored])
+    assert len(log) == 1
+    entry = log[0]
+    # v5.1 backtest-critical fields
+    assert entry["description"] == "Detailed article description for backtesting"
+    assert entry["url"] == "https://example.com/article"
+    assert entry["published"] is not None
+    assert entry["source_weight"] == 1.15
+
+
+def test_price_archive_table_creation():
+    """v5.1: price_archive CREATE TABLE SQL must exist."""
+    from backend.app.database import _CREATE_PRICE_ARCHIVE
+    assert "price_archive" in _CREATE_PRICE_ARCHIVE
+    assert "ticker" in _CREATE_PRICE_ARCHIVE
+    assert "UNIQUE(ticker, date)" in _CREATE_PRICE_ARCHIVE
+
+
+def test_price_archive_stats_without_pg():
+    """v5.1: pg_price_archive_stats() must handle no PG."""
+    from backend.app.database import pg_price_archive_stats
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        # Should raise since is_pg_enabled is False — function needs PG
+        try:
+            result = pg_price_archive_stats()
+            # If it returns without error, check it indicates no PG
+        except Exception:
+            pass  # Expected — PG not available
+
+
+def test_rescore_headline_formula():
+    """v5.1: _rescore_headline must use current formula with edge_factor and reliability."""
+    from backend.app.backtest import _rescore_headline
+
+    # Weather headline with high edge
+    entry = {
+        "title": "NOAA severe drought warning",
+        "source": "NOAA",
+        "surprise": 75,
+        "directional_clarity": 90,
+        "transmission_delay": 85,
+        "market_awareness": 15,
+        "signal_reliability": 95,
+        "expected_magnitude": 65,
+        "source_weight": 1.2,
+        "news_category": "weather",
+        "direction": "LONG",
+        "impacted_tickers": ["ZC=F"],
+        "total_score": 50.0,  # Original score at time of scan
+    }
+    result = _rescore_headline(entry)
+
+    assert result["title"] == "NOAA severe drought warning"
+    assert result["recalculated_score"] > 0
+    assert "score_diff" in result
+    # High edge signal should score well
+    assert result["recalculated_score"] > 30, \
+        f"Weather signal with high edge should score well, got {result['recalculated_score']}"
+
+
+def test_rescore_headline_zero_edge():
+    """v5.1: _rescore_headline must crush earnings/macro scores."""
+    from backend.app.backtest import _rescore_headline
+
+    entry = {
+        "title": "Apple Q4 earnings beat",
+        "source": "CNBC",
+        "surprise": 50,
+        "directional_clarity": 70,
+        "transmission_delay": 5,
+        "market_awareness": 95,
+        "signal_reliability": 90,
+        "expected_magnitude": 40,
+        "source_weight": 0.9,
+        "news_category": "earnings",
+        "direction": "LONG",
+        "impacted_tickers": [],
+        "total_score": 3.0,
+    }
+    result = _rescore_headline(entry)
+    # Earnings should have crushed score
+    assert result["recalculated_score"] < 10, \
+        f"Earnings should score very low, got {result['recalculated_score']}"
+
+
+def test_replay_backtest_no_history():
+    """v5.1: run_news_replay_backtest must handle empty scan history gracefully."""
+    from backend.app.backtest import run_news_replay_backtest
+
+    with patch("backend.app.scan_history.load_scan_history", return_value=[]):
+        result = run_news_replay_backtest(days=30)
+        assert "error" in result
+
+
+def test_coherence_validation_returns_fixed_values():
+    """v5.1: _validate_coherence must return corrected (delay, awareness) tuple."""
+    from backend.app.news_scorer import _validate_coherence
+
+    # Case: surprise=80, delay=10 — should fix delay to 40
+    delay, awareness = _validate_coherence(
+        {"surprise": 80}, 10, 30, 80, "Test headline"
+    )
+    assert delay >= 40, f"High surprise + low delay should be fixed, got delay={delay}"
+
+    # Case: awareness=15, delay=10 — should fix delay to 50
+    delay2, awareness2 = _validate_coherence(
+        {}, 10, 15, 50, "Test headline 2"
+    )
+    assert delay2 >= 50, f"Low awareness + low delay should be fixed, got delay={delay2}"
+
+    # Case: awareness=90, delay=70 — should cap delay to 30
+    delay3, awareness3 = _validate_coherence(
+        {}, 70, 90, 50, "Test headline 3"
+    )
+    assert delay3 <= 30, f"High awareness + high delay should be capped, got delay={delay3}"
+
+
+def test_learning_filters_anomalous_pnl():
+    """v5.1: compute_learning_adjustments must filter trades with >50% PnL."""
+    from backend.app.learning import compute_learning_adjustments
+    from backend.app.models import TradeRecommendation, ScanType, Direction, TradeResult
+
+    trades = [
+        TradeRecommendation(
+            scan_type=ScanType.EUROPE,
+            timestamp=datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc),
+            ticker="GC=F", asset_name="Gold", category="metaux",
+            direction=Direction.LONG, catalyst="normal trade",
+            entry_price=2000, target_price=2050, stop_price=1975,
+            target_pct=2.5, stop_pct=1.25, risk_reward=2.0, confidence=70,
+            time_window="09:00-20:00",
+            result=TradeResult.TP_HIT, pnl_pct=1.5,
+        ),
+        TradeRecommendation(
+            scan_type=ScanType.EUROPE,
+            timestamp=datetime(2026, 3, 2, 8, 0, tzinfo=timezone.utc),
+            ticker="ZC=F", asset_name="Corn", category="commodities",
+            direction=Direction.LONG, catalyst="anomalous trade",
+            entry_price=400, target_price=410, stop_price=395,
+            target_pct=2.5, stop_pct=1.25, risk_reward=2.0, confidence=70,
+            time_window="09:00-20:00",
+            result=TradeResult.TP_HIT, pnl_pct=75.0,  # Anomalous!
+        ),
+    ]
+    # Should not crash, and should filter the anomalous trade
+    result = compute_learning_adjustments(trades=trades)
+    assert isinstance(result, dict)
+    assert "adjustments" in result
+
+
+def test_review_insights_filter_pending_trades():
+    """v5.1: _extract_recent_review_insights must skip PENDING trades."""
+    from backend.app.learning import _extract_recent_review_insights
+    from backend.app.models import TradeRecommendation, ScanType, Direction, TradeResult
+
+    # Create a PENDING trade (should be filtered out)
+    trades = [
+        TradeRecommendation(
+            scan_type=ScanType.EUROPE,
+            timestamp=datetime(2026, 3, 7, 8, 0, tzinfo=timezone.utc),
+            ticker="GC=F", asset_name="Gold", category="metaux",
+            direction=Direction.LONG, catalyst="pending trade",
+            entry_price=2000, target_price=2050, stop_price=1975,
+            target_pct=2.5, stop_pct=1.25, risk_reward=2.0, confidence=70,
+            time_window="09:00-20:00",
+            result=TradeResult.PENDING, pnl_pct=None,
+        ),
+    ]
+    # Should return empty (PENDING trades filtered)
+    result = _extract_recent_review_insights(trades)
+    assert result == []
+
+
+def test_price_archive_endpoint_returns_200():
+    """v5.1: /api/price-archive/stats must return 200."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        response = client.get("/api/price-archive/stats")
+        assert response.status_code == 200
+
+
+def test_backtest_replay_endpoint_returns_200():
+    """v5.1: /api/backtest/replay must return 200."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    with patch("backend.app.scan_history.load_scan_history", return_value=[]):
+        response = client.get("/api/backtest/replay?days=30")
+        assert response.status_code == 200

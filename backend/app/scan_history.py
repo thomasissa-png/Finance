@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 SCAN_HISTORY_FILE = DATA_DIR / "scan_history.json"
 
-# Keep 30 days of scan history (~120 scans at 4/day)
-MAX_HISTORY_DAYS = 30
+# Keep 365 days of scan history for backtesting (~1460 scans at 4/day)
+# v5.1: Extended from 30 to 365 days to enable historical news replay backtest
+MAX_HISTORY_DAYS = 365
 
 # ── In-memory cache for cross-scan dedup ─────────────────────────
 # Populated from scan_history.json on first access, then updated after each scan.

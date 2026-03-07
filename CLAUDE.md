@@ -1,4 +1,4 @@
-# OneShot News Trading System — v4.3 Claude API Audit Pipeline
+# OneShot News Trading System — v5.1 Backtest & Learning Integrity Pipeline
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -18,9 +18,10 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite
 - **Persistence**: PostgreSQL (primary, via `DATABASE_URL`) avec fallback JSON flat files
-  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans
+  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive
   - Fallback: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` (file locking via `fcntl`)
   - Auto-migration JSON→PG au demarrage si PG est vide mais JSON a des donnees
+  - `price_archive`: daily OHLCV par ticker pour backtesting historique (v5.1)
 - **Market Data**: Twelve Data (primary) + yfinance (fallback) — module `market_data.py`
 
 ## Branche active : `claude/json-to-postgres-migration-ToNVq`
@@ -184,17 +185,29 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - **F4** : Token usage tracking (`get_token_usage()`) — monitoring couts cumules input/output/scans
 - **Note** : B4 (extended thinking) intentionnellement skippe — incompatible avec `tool_choice` force
 
+#### 13. Backtest & Learning Integrity v5.1 — 8 ameliorations
+- **B1** : Scan history retention etendue de 30 → 365 jours pour backtesting historique
+- **B2** : `all_scored_news` stocke maintenant description, url, published, source_weight (replay fidele)
+- **B3** : Table `price_archive` (PG) — daily OHLCV par ticker, archivage automatique apres journal
+- **B4** : `run_news_replay_backtest()` — re-score les headlines historiques avec la formule actuelle (sans appeler Claude)
+- **B5** : `_rescore_headline()` — recalcule le score avec edge_factor/reliability_factor actuels
+- **L1** : Data integrity — filtre trades anomalous (PnL > 50%) dans learning, filtre PENDING dans insights
+- **L2** : Coherence validation corrigee : `_validate_coherence()` retourne (delay, awareness) corriges au lieu de juste logger
+- **L3** : Instructions scoring enrichies — guidance specifique pour Claude basee sur les metriques (EXPIRED rate, streaks, direction)
+- **Endpoints** : `/api/backtest/replay`, `/api/price-archive/stats`, `/api/price-archive/fill`
+
 ### Etat actuel des fichiers cles
 - `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
-- `backend/app/database.py` : PG persistence layer, 4 tables, pool, CRUD
-- `backend/app/journal.py` : v4.1, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout
-- `backend/app/learning.py` : v4.2, 21 audit fixes, 7 learning dimensions, alerts-only summary, 2-bucket regimes
-- `backend/app/trade_selector.py` : v4.0, convex calibration, fallback ticker, spread filter, VIX daily cap, asymmetric SHORT
-- `backend/app/news_scorer.py` : v4.3, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache, pre-filter, coherence validation, prompt caching, token tracking
+- `backend/app/database.py` : PG persistence layer, 5 tables (trades/journal/scan_history/last_scans/price_archive), pool, CRUD
+- `backend/app/journal.py` : v4.1+, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, price archiving post-journal
+- `backend/app/learning.py` : v4.2+, 7 learning dimensions, alerts-only summary, data integrity filters, actionable Claude instructions
+- `backend/app/trade_selector.py` : v4.0+, convex calibration, fallback ticker, spread filter, VIX daily cap, backtest-enriched scored_news_log
+- `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache, coherence FIX (not just warn), prompt caching
+- `backend/app/backtest.py` : parameter sweep + news replay backtest (v5.1), re-scoring with current formula
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, is_market_holiday()
 - `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr)
-- `backend/app/scan_history.py` : PG support, pruning 30j
+- `backend/app/scan_history.py` : PG support, pruning 365j (backtest retention)
 - `backend/migrate_json_to_postgres.py` : script de migration one-shot
 
 ## REGLE ABSOLUE — Protection des donnees de production
@@ -774,4 +787,6 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - **test_news_scorer.py** : prompt_version_hash, default_model_haiku, get_model_default, get_model_env_override, confirmed_event schema, perceived_age schema, reasoning_max_length, zero_edge_headline_detection, validate_coherence_warnings, validate_coherence_consistent, score_cache_operations, get_token_usage, xml_structure, few_shot_examples, cache_control
 - **test_weekend.py** : verification que scans, event checks et triggers sont bloques le week-end
 - **test_data_persistence.py** : PG fallback, JSON guard, corrupt file resilience, auto-migration
+- v5.1 tests ajoutés (12 tests) :
+  - **test_data_persistence.py** : scan_history_retention_365, scored_news_log_includes_description, price_archive_table_creation, price_archive_stats_without_pg, rescore_headline_formula, rescore_headline_zero_edge, replay_backtest_no_history, coherence_validation_returns_fixed_values, learning_filters_anomalous_pnl, review_insights_filter_pending_trades, price_archive_endpoint, backtest_replay_endpoint
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data

@@ -317,10 +317,102 @@ CREATE TABLE IF NOT EXISTS last_scans (
 """
 
 
+# ── v5.1: Price Archive for backtesting ─────────────────────────────
+
+_CREATE_PRICE_ARCHIVE = """
+CREATE TABLE IF NOT EXISTS price_archive (
+    id SERIAL PRIMARY KEY,
+    ticker VARCHAR(30) NOT NULL,
+    date DATE NOT NULL,
+    open DOUBLE PRECISION NOT NULL,
+    high DOUBLE PRECISION NOT NULL,
+    low DOUBLE PRECISION NOT NULL,
+    close DOUBLE PRECISION NOT NULL,
+    volume DOUBLE PRECISION DEFAULT 0,
+    source VARCHAR(20) DEFAULT 'twelve_data',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(ticker, date)
+)
+"""
+
+
+def pg_save_price_archive(rows: list[dict]) -> int:
+    """v5.1: Bulk insert daily OHLCV data for backtesting.
+
+    rows: list of dicts with keys: ticker, date, open, high, low, close, volume, source.
+    Returns number of rows inserted (ignores duplicates).
+    """
+    if not rows:
+        return 0
+
+    def _save():
+        inserted = 0
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for row in rows:
+                    cur.execute("""
+                        INSERT INTO price_archive (ticker, date, open, high, low, close, volume, source)
+                        VALUES (%(ticker)s, %(date)s, %(open)s, %(high)s, %(low)s, %(close)s, %(volume)s, %(source)s)
+                        ON CONFLICT (ticker, date) DO NOTHING
+                    """, row)
+                    inserted += cur.rowcount
+        if inserted > 0:
+            logger.info("Price archive: inserted %d/%d rows", inserted, len(rows))
+        return inserted
+    return _pg_retry(_save)
+
+
+def pg_load_price_archive(ticker: str, start_date: str | None = None,
+                          end_date: str | None = None) -> list[dict]:
+    """v5.1: Load archived OHLCV data for a ticker (for backtesting).
+
+    Returns list of dicts with date, open, high, low, close, volume.
+    """
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                conditions = ["ticker = %s"]
+                params: list = [ticker]
+                if start_date:
+                    conditions.append("date >= %s")
+                    params.append(start_date)
+                if end_date:
+                    conditions.append("date <= %s")
+                    params.append(end_date)
+                where = " AND ".join(conditions)
+                cur.execute(
+                    f"SELECT date, open, high, low, close, volume FROM price_archive WHERE {where} ORDER BY date ASC",
+                    params,
+                )
+                return [dict(row) for row in cur.fetchall()]
+    return _pg_retry(_load)
+
+
+def pg_price_archive_stats() -> dict:
+    """v5.1: Get price archive statistics for monitoring."""
+    def _stats():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT COUNT(*) as total_rows FROM price_archive")
+                total = cur.fetchone()["total_rows"]
+                cur.execute("SELECT COUNT(DISTINCT ticker) as tickers FROM price_archive")
+                tickers = cur.fetchone()["tickers"]
+                cur.execute("SELECT MIN(date) as oldest, MAX(date) as newest FROM price_archive")
+                date_range = cur.fetchone()
+                return {
+                    "total_rows": total,
+                    "tickers": tickers,
+                    "oldest": str(date_range["oldest"]) if date_range["oldest"] else None,
+                    "newest": str(date_range["newest"]) if date_range["newest"] else None,
+                }
+    return _pg_retry(_stats)
+
+
 def init_db() -> None:
     """Create tables and indexes if they don't exist. Called on app startup.
 
     M3: Added index on journal_entries(result) for faster pending queries.
+    v5.1: Added price_archive table for OHLCV backtesting data.
     """
     if not is_pg_enabled():
         logger.info("PostgreSQL not configured - using JSON file persistence")
@@ -365,6 +457,13 @@ def init_db() -> None:
             """)
 
             cur.execute(_CREATE_LAST_SCANS)
+
+            # v5.1: Price archive for backtesting
+            cur.execute(_CREATE_PRICE_ARCHIVE)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_price_archive_ticker_date
+                ON price_archive(ticker, date)
+            """)
 
             # v5.0 M7: Add v4.1 journal columns if missing (safe for existing DBs)
             for col_name, col_type in [
@@ -685,7 +784,10 @@ def pg_load_scan_history() -> list[dict]:
 
 
 def pg_save_scan_history_entry(entry_dict: dict) -> None:
-    """Insert a single scan history entry and prune old ones (>30 days)."""
+    """Insert a single scan history entry and prune old ones (>365 days).
+
+    v5.1: Extended retention from 30 to 365 days for backtesting capability.
+    """
     def _save():
         row = {}
         for col in _SCAN_HISTORY_COLUMNS:
@@ -701,16 +803,16 @@ def pg_save_scan_history_entry(entry_dict: dict) -> None:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, row)
-                # Prune entries older than 30 days
-                cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                # Prune entries older than 365 days (backtest retention)
+                cutoff = datetime.now(timezone.utc) - timedelta(days=365)
                 cur.execute("DELETE FROM scan_history WHERE timestamp < %s", (cutoff,))
                 if cur.rowcount > 0:
-                    logger.info("Pruned %d old scan history entries", cur.rowcount)
+                    logger.info("Pruned %d old scan history entries (>365 days)", cur.rowcount)
     _pg_retry(_save)
 
 
-def pg_prune_scan_history(max_age_days: int = 30) -> int:
-    """H1: Explicit scan history pruning (belt and suspenders with inline pruning)."""
+def pg_prune_scan_history(max_age_days: int = 365) -> int:
+    """H1: Explicit scan history pruning. v5.1: default 365 days for backtest retention."""
     def _prune():
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         with get_conn() as conn:
