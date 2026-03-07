@@ -187,8 +187,12 @@ def _get_price_and_range(ticker: str, days: int = 20) -> tuple[float | None, flo
         if "Volume" in data.columns:
             volumes = data["Volume"].values
             avg_vol = float(volumes[-days:].mean()) if len(volumes) >= days else float(volumes.mean())
-            if avg_vol > 0 and volumes[-1] > 0:
-                volume_ratio = float(volumes[-1]) / avg_vol
+            today_vol = float(volumes[-1])
+            # v5.1: Minimum volume floor — ignore if avg < 100 (forex/indices return 0)
+            if avg_vol >= 100 and today_vol > 0:
+                volume_ratio = today_vol / avg_vol
+            elif avg_vol < 100 and today_vol >= 0:
+                logger.debug("Volume data sparse/unavailable for %s (avg=%.0f) — skipping volume confirmation", ticker, avg_vol)
 
         return current_price, round(true_atr_pct, 4), prev_close, volume_ratio, today_open
     except Exception as exc:
@@ -911,13 +915,21 @@ def select_trades(
         binary_warning = _check_binary_event(best_news.news.title, best_news.reasoning)
 
         # (#10) Volume confirmation (non-blocking)
+        # v5.1: Threshold raised to 1.5x (industry standard for meaningful confirmation)
         volume_confirmed = None
         if volume_ratio is not None:
-            volume_confirmed = volume_ratio > 1.2
+            volume_confirmed = volume_ratio > 1.5
             if volume_confirmed:
                 logger.info("Volume confirmed for %s: %.1fx average", ticker, volume_ratio)
+                # v5.1: Boost position size slightly when volume confirms (max +15%)
+                vol_boost = min(1.15, 1.0 + (volume_ratio - 1.5) * 0.1)
+                position_size *= vol_boost
+                position_size = round(min(MAX_POSITION_SIZE_PCT, position_size), 2)
             else:
                 logger.info("Volume below average for %s: %.1fx (trade still valid)", ticker, volume_ratio)
+                # v5.1: Reduce position size when volume doesn't confirm (-10%)
+                position_size *= 0.9
+                position_size = round(max(MIN_POSITION_SIZE_PCT, position_size), 2)
 
         # (#12) Entry price latency warning
         if prev_close is not None:
