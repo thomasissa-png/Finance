@@ -341,6 +341,117 @@ export default function Journal() {
                         <div className="journal-detail-review">{e.review}</div>
                       )}
 
+                      {/* Fix 3: Learning & execution metrics */}
+                      {(e.raw_claude_score != null || e.learning_multiplier != null || e.slippage != null) && (
+                        <div className="journal-learning-section">
+                          <div className="journal-detail-label" style={{ marginBottom: 6 }}>Learning & Exécution</div>
+                          <div className="journal-detail-grid">
+                            {e.raw_claude_score != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Score brut</div>
+                                <div className="journal-detail-value" style={{ color: scoreColor(e.raw_claude_score) }}>
+                                  {Number(e.raw_claude_score).toFixed(1)}
+                                </div>
+                              </div>
+                            )}
+                            {e.learning_multiplier != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Multiplicateur</div>
+                                <div className="journal-detail-value" style={{
+                                  color: e.learning_multiplier >= 1.0 ? "var(--green)" : "var(--red)"
+                                }}>
+                                  {Number(e.learning_multiplier).toFixed(2)}x
+                                </div>
+                              </div>
+                            )}
+                            {e.score != null && e.raw_claude_score != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Score ajusté</div>
+                                <div className="journal-detail-value" style={{ color: scoreColor(e.score) }}>
+                                  {Number(e.score).toFixed(1)}
+                                </div>
+                              </div>
+                            )}
+                            {e.slippage != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Slippage</div>
+                                <div className="journal-detail-value" style={{
+                                  color: Math.abs(e.slippage) > 0.3 ? "var(--red)" : "var(--text-secondary)"
+                                }}>
+                                  {Number(e.slippage).toFixed(2)}%
+                                </div>
+                              </div>
+                            )}
+                            {e.mae != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">MAE</div>
+                                <div className="journal-detail-value" style={{ color: "var(--red)" }}>
+                                  {Number(e.mae).toFixed(2)}%
+                                </div>
+                              </div>
+                            )}
+                            {e.mfe != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">MFE</div>
+                                <div className="journal-detail-value" style={{ color: "var(--green)" }}>
+                                  {Number(e.mfe).toFixed(2)}%
+                                </div>
+                              </div>
+                            )}
+                            {e.realized_rr != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">R/R réalisé</div>
+                                <div className="journal-detail-value" style={{
+                                  color: e.realized_rr >= 1.0 ? "var(--green)" : "var(--red)"
+                                }}>
+                                  {Number(e.realized_rr).toFixed(2)}
+                                </div>
+                              </div>
+                            )}
+                            {e.bar_coverage != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Couverture</div>
+                                <div className="journal-detail-value">
+                                  {e.bar_coverage} bars {e.bar_interval ? `(${e.bar_interval})` : ""}
+                                </div>
+                              </div>
+                            )}
+                            {e.predicted_transmission_delay != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Délai prédit</div>
+                                <div className="journal-detail-value">{e.predicted_transmission_delay}/100</div>
+                              </div>
+                            )}
+                            {e.actual_pricing_time_hours != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Pricing réel</div>
+                                <div className="journal-detail-value">{Number(e.actual_pricing_time_hours).toFixed(1)}h</div>
+                              </div>
+                            )}
+                            {e.delay_accuracy != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">Précision délai</div>
+                                <div className="journal-detail-value" style={{
+                                  color: Math.abs(e.delay_accuracy) < 15 ? "var(--green)" : "var(--yellow)"
+                                }}>
+                                  {e.delay_accuracy > 0 ? "+" : ""}{Number(e.delay_accuracy).toFixed(0)}pts
+                                </div>
+                              </div>
+                            )}
+                            {e.vix_at_trade != null && (
+                              <div className="journal-detail-item">
+                                <div className="journal-detail-label">VIX</div>
+                                <div className="journal-detail-value" style={{
+                                  color: e.vix_at_trade >= 30 ? "var(--red)" : e.vix_at_trade >= 20 ? "var(--yellow)" : "var(--text-secondary)"
+                                }}>
+                                  {Number(e.vix_at_trade).toFixed(1)} {e.market_regime ? `(${e.market_regime})` : ""}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Binary event warning */}
                       {e.binary_event_warning && (
                         <div className="trade-warning" style={{ marginTop: 8 }}>
@@ -391,6 +502,55 @@ export default function Journal() {
                       <div style={{ color: pnlColor(e.pnl_pct), fontWeight: 600 }}>{formatPnl(e.pnl_pct)}</div>
                     </div>
                   </div>
+                  {/* Fix 3: Learning metrics on mobile */}
+                  {(e.raw_claude_score != null || e.learning_multiplier != null) && (
+                    <div className="trade-mobile-card-learning">
+                      {e.raw_claude_score != null && (
+                        <div className="mobile-learning-item">
+                          <span className="trade-mobile-label">Score</span>
+                          <span style={{ color: scoreColor(e.raw_claude_score), fontWeight: 600 }}>
+                            {Number(e.raw_claude_score).toFixed(1)}
+                          </span>
+                        </div>
+                      )}
+                      {e.learning_multiplier != null && (
+                        <div className="mobile-learning-item">
+                          <span className="trade-mobile-label">Mult.</span>
+                          <span style={{ color: e.learning_multiplier >= 1.0 ? "var(--green)" : "var(--red)", fontWeight: 600 }}>
+                            {Number(e.learning_multiplier).toFixed(2)}x
+                          </span>
+                        </div>
+                      )}
+                      {e.mae != null && (
+                        <div className="mobile-learning-item">
+                          <span className="trade-mobile-label">MAE</span>
+                          <span style={{ color: "var(--red)" }}>{Number(e.mae).toFixed(2)}%</span>
+                        </div>
+                      )}
+                      {e.mfe != null && (
+                        <div className="mobile-learning-item">
+                          <span className="trade-mobile-label">MFE</span>
+                          <span style={{ color: "var(--green)" }}>{Number(e.mfe).toFixed(2)}%</span>
+                        </div>
+                      )}
+                      {e.slippage != null && (
+                        <div className="mobile-learning-item">
+                          <span className="trade-mobile-label">Slip.</span>
+                          <span style={{ color: Math.abs(e.slippage) > 0.3 ? "var(--red)" : "var(--text-secondary)" }}>
+                            {Number(e.slippage).toFixed(2)}%
+                          </span>
+                        </div>
+                      )}
+                      {e.realized_rr != null && (
+                        <div className="mobile-learning-item">
+                          <span className="trade-mobile-label">R/R</span>
+                          <span style={{ color: e.realized_rr >= 1.0 ? "var(--green)" : "var(--red)" }}>
+                            {Number(e.realized_rr).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

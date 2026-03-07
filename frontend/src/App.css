@@ -28,19 +28,6 @@
   --transition: 0.15s ease;
 }
 
-/* (O7) Light theme */
-.light {
-  --bg-primary: #f8fafc;
-  --bg-card: #ffffff;
-  --bg-card-hover: #f1f5f9;
-  --bg-surface: #e2e8f0;
-  --border: #cbd5e1;
-  --border-accent: #0284c7;
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-}
-
 * {
   margin: 0;
   padding: 0;
@@ -174,25 +161,6 @@ a:focus:not(:focus-visible) {
 }
 
 /* (O7) Theme toggle */
-.theme-toggle {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  transition: all var(--transition);
-}
-
-.theme-toggle:hover {
-  border-color: var(--cyan);
-  color: var(--cyan);
-}
 
 .status-dot {
   width: 8px;
@@ -1582,6 +1550,34 @@ a:focus:not(:focus-visible) {
 
 .journal-mobile-list {
   display: none;
+}
+
+/* Fix 3: Learning section in journal expanded view */
+.journal-learning-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Fix 3: Mobile learning metrics row */
+.trade-mobile-card-learning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+.mobile-learning-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.mobile-learning-item .trade-mobile-label {
+  margin-bottom: 0;
 }
 
 /* Journal trigger feedback message */

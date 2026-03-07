@@ -66,26 +66,66 @@ _journal_lock = threading.Lock()
 
 
 def _load_scans_cache() -> dict[str, dict]:
-    """Load last scan results (#34). Uses PostgreSQL when available."""
+    """Load last scan results (#34). Uses PostgreSQL when available.
+
+    Fix 1: Validates that cached scans are from today (Paris time).
+    Stale cache from a previous day is discarded to avoid showing yesterday's data.
+    """
+    raw = {}
     if is_pg_enabled():
         try:
             from .database import pg_load_last_scans
-            return pg_load_last_scans()
+            raw = pg_load_last_scans()
         except Exception as exc:
             logger.warning("Failed to load scans cache from PostgreSQL: %s", exc)
             return {}
-    try:
-        if SCANS_CACHE_FILE.exists():
-            # C2: Shared lock for consistent reads
-            with open(SCANS_CACHE_FILE, "r") as f:
-                fcntl.flock(f, fcntl.LOCK_SH)
-                try:
-                    return json.load(f)
-                finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-    except (json.JSONDecodeError, Exception) as exc:
-        logger.warning("Failed to load scans cache: %s", exc)
-    return {}
+    else:
+        try:
+            if SCANS_CACHE_FILE.exists():
+                # C2: Shared lock for consistent reads
+                with open(SCANS_CACHE_FILE, "r") as f:
+                    fcntl.flock(f, fcntl.LOCK_SH)
+                    try:
+                        raw = json.load(f)
+                    finally:
+                        fcntl.flock(f, fcntl.LOCK_UN)
+        except (json.JSONDecodeError, Exception) as exc:
+            logger.warning("Failed to load scans cache: %s", exc)
+            return {}
+
+    # Fix 1: Discard stale cache from a previous trading day
+    if raw:
+        today_paris = datetime.now(PARIS_TZ).strftime("%Y-%m-%d")
+        raw = _filter_todays_scans(raw, today_paris)
+    return raw
+
+
+def _filter_todays_scans(scans: dict, today: str) -> dict:
+    """Fix 1: Keep only scans from today (Paris time). Discard yesterday's stale data.
+
+    Checks the 'timestamp' field in each scan result. If no timestamp is found,
+    the scan is kept (backward compat). If the timestamp is from a previous day,
+    the scan is discarded and a log message is emitted.
+    """
+    filtered = {}
+    for key, scan_data in scans.items():
+        if not isinstance(scan_data, dict):
+            continue
+        ts = scan_data.get("timestamp")
+        if ts:
+            try:
+                # Parse timestamp and convert to Paris date
+                scan_dt = datetime.fromisoformat(str(ts))
+                scan_date = scan_dt.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
+                if scan_date < today:
+                    logger.info("Fix 1: Discarding stale scan '%s' from %s (today=%s)", key, scan_date, today)
+                    continue
+            except (ValueError, TypeError):
+                pass  # Keep scans with unparseable timestamps
+        filtered[key] = scan_data
+    if len(filtered) < len(scans):
+        logger.info("Fix 1: Discarded %d stale scan(s) from cache", len(scans) - len(filtered))
+    return filtered
 
 
 def _save_scans_cache(scans: dict[str, dict]) -> None:
@@ -118,32 +158,37 @@ PARIS_TZ = ZoneInfo("Europe/Paris")
 
 
 def _recover_pending_trades_on_startup() -> None:
-    """Close old PENDING trades that were missed by the 22:00 journal.
+    """Close ALL PENDING trades on startup — not just old ones.
 
-    On Replit, the app can be killed overnight and restarted the next morning.
-    If the 22:00 journal was missed, trades from previous days stay PENDING forever.
-    This function detects and closes them on startup, in a background thread.
+    Fix 2: Previously only recovered trades from *previous* days (trade_date < today),
+    which missed trades from today if the app crashed and restarted during trading hours.
+    Now recovers ALL PENDING trades regardless of date, since the journal will correctly
+    handle them (fetch real prices, compute TP/SL/EXPIRED).
+
+    On Replit, the app can be killed at any time. If the 22:00 journal was missed,
+    or the app crashed mid-day, trades stay PENDING forever without this recovery.
     """
     def _worker():
         try:
-            now_paris = datetime.now(PARIS_TZ)
-            today = now_paris.strftime("%Y-%m-%d")
             trades = load_trades()
-            old_pending = []
-            for t in trades:
-                if t.result != TradeResult.PENDING:
-                    continue
-                trade_date = t.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d")
-                if trade_date < today:
-                    old_pending.append(t)
+            all_pending = [t for t in trades if t.result == TradeResult.PENDING]
 
-            if not old_pending:
-                logger.info("Startup recovery: no old PENDING trades found")
+            if not all_pending:
+                logger.info("Startup recovery: no PENDING trades found")
                 return
 
+            # Log details about what we're recovering
+            now_paris = datetime.now(PARIS_TZ)
+            today = now_paris.strftime("%Y-%m-%d")
+            old_count = sum(
+                1 for t in all_pending
+                if t.timestamp.astimezone(PARIS_TZ).strftime("%Y-%m-%d") < today
+            )
+            today_count = len(all_pending) - old_count
+
             logger.info(
-                "Startup recovery: found %d old PENDING trade(s) — running journal to close them",
-                len(old_pending),
+                "Startup recovery: found %d PENDING trade(s) (%d from previous days, %d from today) — running journal",
+                len(all_pending), old_count, today_count,
             )
             if not _journal_lock.acquire(blocking=False):
                 logger.warning("Startup recovery: journal lock held — skipping (journal already running)")
@@ -153,6 +198,12 @@ def _recover_pending_trades_on_startup() -> None:
                 logger.info(
                     "Startup recovery: journal created %d entries", len(new_entries),
                 )
+                # Clear stale scan cache after recovery
+                with _scans_lock:
+                    global _last_scans
+                    _last_scans = {}
+                    _save_scans_cache(_last_scans)
+                logger.info("Startup recovery: scan cache cleared")
             finally:
                 _journal_lock.release()
         except Exception as exc:
@@ -438,9 +489,19 @@ def root():
 
 @app.get("/api/scan/latest")
 def get_latest_scans():
-    """Get the most recent scan results (europe + us)."""
+    """Get the most recent scan results (europe + us).
+
+    Fix 1: Filters out stale scans from previous days at read time,
+    so the dashboard never shows yesterday's data even if the cache wasn't cleared.
+    """
+    global _last_scans
+    today_paris = datetime.now(PARIS_TZ).strftime("%Y-%m-%d")
     with _scans_lock:
-        return dict(_last_scans)
+        filtered = _filter_todays_scans(_last_scans, today_paris)
+        if len(filtered) < len(_last_scans):
+            # Auto-clean the cache in memory too
+            _last_scans = filtered
+        return dict(filtered)
 
 
 @app.get("/api/scan/latest/{scan_type}")

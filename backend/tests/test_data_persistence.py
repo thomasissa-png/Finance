@@ -597,3 +597,40 @@ def test_pg_prune_journal_exists():
     """C1: pg_prune_journal() must exist in database module."""
     from backend.app.database import pg_prune_journal
     assert callable(pg_prune_journal)
+
+
+def test_filter_todays_scans_discards_old():
+    """Fix 1: _filter_todays_scans() must discard scans from previous days."""
+    from backend.app.main import _filter_todays_scans
+    scans = {
+        "europe": {"timestamp": "2026-03-05T08:00:00+01:00", "has_trade": True},
+        "us": {"timestamp": "2026-03-06T15:00:00+01:00", "has_trade": False},
+    }
+    result = _filter_todays_scans(scans, "2026-03-06")
+    assert "europe" not in result, "March 5 scan should be discarded"
+    assert "us" in result, "March 6 scan should be kept"
+
+
+def test_filter_todays_scans_keeps_no_timestamp():
+    """Fix 1: Scans without timestamp are kept for backward compat."""
+    from backend.app.main import _filter_todays_scans
+    scans = {"europe": {"has_trade": True}}
+    result = _filter_todays_scans(scans, "2026-03-06")
+    assert "europe" in result
+
+
+def test_journal_timeout_increased():
+    """Fix 2: Journal global timeout must be >= 600s."""
+    from backend.app.journal import JOURNAL_GLOBAL_TIMEOUT_SECONDS
+    assert JOURNAL_GLOBAL_TIMEOUT_SECONDS >= 600, \
+        f"Journal timeout too low: {JOURNAL_GLOBAL_TIMEOUT_SECONDS}s (should be >= 600s)"
+
+
+def test_startup_recovery_includes_today():
+    """Fix 2: Startup recovery must include today's PENDING trades (not just old ones)."""
+    import inspect
+    from backend.app.main import _recover_pending_trades_on_startup
+    source = inspect.getsource(_recover_pending_trades_on_startup)
+    # Must NOT have the old `trade_date < today` filter that excluded today's trades
+    assert "trade_date < today" not in source or "all_pending" in source, \
+        "Startup recovery should recover ALL pending trades, not just old ones"

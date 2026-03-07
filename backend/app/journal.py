@@ -49,8 +49,10 @@ JOURNAL_FILE = DATA_DIR / "journal.json"
 
 PARIS_TZ = ZoneInfo("Europe/Paris")
 
-# G3: Global timeout for journal run (5 minutes max)
-JOURNAL_GLOBAL_TIMEOUT_SECONDS = 300
+# G3: Global timeout for journal run (10 minutes max)
+# Fix 2: Raised from 300s to 600s — 300s was too short when many trades
+# need price fetches, causing remaining trades to stay PENDING permanently.
+JOURNAL_GLOBAL_TIMEOUT_SECONDS = 600
 
 # F4: Price anomaly threshold — flag if exit/entry ratio exceeds this
 PRICE_ANOMALY_THRESHOLD = 0.20  # 20% change = likely split or data error
