@@ -218,7 +218,7 @@ export default function Journal({ isActive }) {
         </button>
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
-          <button className="refresh-btn" onClick={fetchEntries} title="Rafraîchir">&#8635;</button>
+          <button className="refresh-btn" onClick={fetchEntries} title="Rafraîchir">{"\u21BB"}</button>
         </span>
       </div>
 

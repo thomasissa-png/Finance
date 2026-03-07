@@ -408,7 +408,7 @@ export default function History({ isActive }) {
               {exporting ? <><span className="spinner spinner-inline" />Export...</> : "Export CSV"}
             </button>
           )}
-          <button className="refresh-btn" onClick={fetchData} title="Rafraîchir">&#8635;</button>
+          <button className="refresh-btn" onClick={fetchData} title="Rafraîchir">{"\u21BB"}</button>
         </span>
       </div>
 

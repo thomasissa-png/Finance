@@ -261,7 +261,7 @@ export default function Dashboard({ isActive }) {
       {/* (O1) Last update + manual refresh */}
       <div className="last-update-bar">
         {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
-        <button className="refresh-btn" onClick={fetchScans} title="Rafraîchir">&#8635;</button>
+        <button className="refresh-btn" onClick={fetchScans} title="Rafraîchir">{"\u21BB"}</button>
       </div>
 
       {/* Toast container — (O5) dismissable */}
