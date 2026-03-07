@@ -761,6 +761,7 @@ def score_news_batch(
                 news_category=news_cat,
                 category_score_mult=cat_mult,
                 chain_reactions=chain_reactions,
+                convergence_count=cached.get("_convergence_count", 0),
             ))
             continue
 
@@ -1021,6 +1022,7 @@ def _score_batch(
         post_hardcap_entry["transmission_delay"] = transmission_delay
         post_hardcap_entry["market_awareness"] = market_awareness
         post_hardcap_entry["_accumulation_boost"] = accum_boost
+        post_hardcap_entry["_convergence_count"] = convergence_count
         if confirmed_event is not None:
             post_hardcap_entry["confirmed_event"] = confirmed_event
         cache_key = _get_cache_key(item.title, item.description)

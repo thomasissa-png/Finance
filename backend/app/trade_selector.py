@@ -659,13 +659,10 @@ def select_trades(
 
         adjusted_score = sn.total_score * multiplier
 
-        # v5.2 A4: Freshness decay — soft penalty for news > 4h old
-        # -5% per hour after 4h, floor at 0.7 (weather/supply_chain pricing is slow)
-        if sn.news.published:
-            age_hours = (now - sn.news.published).total_seconds() / 3600
-            if age_hours > 4:
-                freshness_decay = max(0.7, 1.0 - (age_hours - 4) / 20)
-                adjusted_score *= freshness_decay
+        # NOTE: Freshness is NOT penalized here — Claude already sees the age
+        # ("[il y a Xh]") and adjusts transmission_delay accordingly.
+        # Adding a decay here would double-penalize physical signals (weather 8h,
+        # supply_chain 6h) that have high transmission_delay by design.
 
         # v3.6 (I): Multi-source convergence boost
         convergence_boost = 1.0
@@ -800,10 +797,15 @@ def select_trades(
         # v4.0 B4: Spread filter — reject if spread eats >40% of target
         spread_pct = ESTIMATED_SPREADS.get(ticker, DEFAULT_SPREAD)
         if avg_range > 0 and spread_pct > 0:
-            # v4.3 M3: Convex formula matching calibration (mid-tier as conservative estimate)
+            # v5.2: Use volatility-tier-adapted formula (same as pre-move and calibration)
             _ns = best_news.total_score / 100
-            _sf = 0.20 + 0.50 * (_ns ** 1.5)
             _mf = 0.7 + 0.6 * (getattr(best_news, 'expected_magnitude', 50) / 100)
+            if avg_range < 1.0:
+                _sf = 0.30 + 0.60 * (_ns ** 1.5)  # Low-vol tier
+            elif avg_range > 5.0:
+                _sf = 0.10 + 0.35 * (_ns ** 1.5)  # High-vol tier
+            else:
+                _sf = 0.20 + 0.50 * (_ns ** 1.5)  # Normal tier
             estimated_target = avg_range * _sf * _mf
             if spread_pct / estimated_target > 0.4:
                 reason = f"Spread {spread_pct:.2f}% trop large vs target estime {estimated_target:.2f}% ({ticker})"
