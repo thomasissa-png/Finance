@@ -442,3 +442,158 @@ def test_health_check_shows_json_persistence_without_pg():
         assert response.status_code == 200
         data = response.json()
         assert data["persistence"] == "json_files"
+
+
+# ── 9. v4.4 DB audit improvements ───────────────────────────────────
+
+
+def test_compute_pnl_long():
+    """L3: compute_pnl() must calculate LONG PnL correctly."""
+    from backend.app.database import compute_pnl
+    pnl = compute_pnl("LONG", 100.0, 105.0)
+    assert pnl == 5.0
+
+
+def test_compute_pnl_short():
+    """L3: compute_pnl() must calculate SHORT PnL correctly."""
+    from backend.app.database import compute_pnl
+    pnl = compute_pnl("SHORT", 100.0, 95.0)
+    assert pnl == 5.0
+
+
+def test_compute_pnl_zero_entry():
+    """L3: compute_pnl() must return None on zero entry price."""
+    from backend.app.database import compute_pnl
+    assert compute_pnl("LONG", 0, 105.0) is None
+    assert compute_pnl("SHORT", 0, 95.0) is None
+
+
+def test_migration_guard_prevents_repeat():
+    """M6: Auto-migration must only attempt once per table."""
+    from backend.app.database import mark_migration_attempted, was_migration_attempted, _migration_attempted
+    # Clear state
+    _migration_attempted.clear()
+    assert not was_migration_attempted("test_table")
+    mark_migration_attempted("test_table")
+    assert was_migration_attempted("test_table")
+    # Clean up
+    _migration_attempted.clear()
+
+
+def test_pg_table_stats_without_pg():
+    """M7: pg_table_stats() must return pg_not_enabled when PG is off."""
+    from backend.app.database import pg_table_stats
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        result = pg_table_stats()
+        assert result["status"] == "pg_not_enabled"
+
+
+def test_pg_run_maintenance_without_pg():
+    """M4: pg_run_maintenance() must skip when PG is off."""
+    from backend.app.database import pg_run_maintenance
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        result = pg_run_maintenance()
+        assert result["status"] == "skipped"
+
+
+def test_pg_backup_without_pg():
+    """L5: pg_backup_to_json() must skip when PG is off."""
+    from backend.app.database import pg_backup_to_json
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        result = pg_backup_to_json()
+        assert result["status"] == "pg_not_enabled"
+
+
+def test_trades_cache_invalidation():
+    """H2: Trades cache must be invalidated after save_trade()."""
+    from backend.app.learning import (
+        load_trades, save_trade, _invalidate_trades_cache,
+        _trades_cache, _trades_cache_lock,
+    )
+    from backend.app.models import TradeRecommendation, ScanType, Direction
+
+    _invalidate_trades_cache()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir) / "trades.json"
+        tmp_path.write_text("[]")
+        with patch("backend.app.learning.TRADES_FILE", tmp_path), \
+             patch("backend.app.learning.DATA_DIR", Path(tmpdir)), \
+             patch("backend.app.database.is_pg_enabled", return_value=False):
+            # First load should populate cache
+            result1 = load_trades()
+            assert result1 == []
+
+            # Save a trade — should invalidate cache
+            trade = TradeRecommendation(
+                scan_type=ScanType.EUROPE,
+                timestamp=datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc),
+                ticker="GC=F", asset_name="Gold", category="metaux",
+                direction=Direction.LONG, catalyst="test cache",
+                entry_price=2000, target_price=2050, stop_price=1975,
+                target_pct=2.5, stop_pct=1.25, risk_reward=2.0, confidence=70,
+                time_window="09:00-20:00",
+            )
+            save_trade(trade)
+
+            # Next load should see the new trade (not stale cache)
+            result2 = load_trades()
+            assert len(result2) == 1
+            assert result2[0].ticker == "GC=F"
+    _invalidate_trades_cache()
+
+
+def test_db_stats_endpoint_returns_200():
+    """L4: /api/db/stats must return 200."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        response = client.get("/api/db/stats")
+        assert response.status_code == 200
+
+
+def test_db_maintenance_endpoint_returns_200():
+    """M4: /api/db/maintenance must return 200."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        response = client.post("/api/db/maintenance")
+        assert response.status_code == 200
+
+
+def test_db_backup_endpoint_returns_200():
+    """L5: /api/db/backup must return 200."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+
+    client = TestClient(app)
+    with patch("backend.app.database.is_pg_enabled", return_value=False):
+        response = client.post("/api/db/backup")
+        assert response.status_code == 200
+
+
+def test_scans_cache_file_locking():
+    """C2: _save_scans_cache() must use file locking."""
+    import inspect
+    from backend.app.main import _save_scans_cache
+    source = inspect.getsource(_save_scans_cache)
+    assert "fcntl.flock" in source or "LOCK_EX" in source, \
+        "_save_scans_cache() must use file locking (C2)"
+
+
+def test_journal_load_uses_shared_lock():
+    """C3: load_journal() must use LOCK_SH for JSON reads."""
+    import inspect
+    from backend.app.journal import load_journal
+    source = inspect.getsource(load_journal)
+    assert "LOCK_SH" in source, \
+        "load_journal() must use LOCK_SH for consistent reads (C3)"
+
+
+def test_pg_prune_journal_exists():
+    """C1: pg_prune_journal() must exist in database module."""
+    from backend.app.database import pg_prune_journal
+    assert callable(pg_prune_journal)

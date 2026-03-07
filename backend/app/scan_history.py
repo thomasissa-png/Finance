@@ -86,19 +86,22 @@ def load_scan_history() -> list[ScanHistoryEntry]:
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
         entries = _parse_scan_entries(raw, "JSON")
-        # Auto-migrate JSON → PG if PG is enabled but was empty
+        # M6: Auto-migrate JSON → PG if PG is enabled but was empty (only once)
         if entries and is_pg_enabled():
-            logger.info(
-                "Auto-migrating %d scan history entries from JSON to PostgreSQL",
-                len(entries),
-            )
-            try:
-                from .database import pg_save_scan_history_entry
-                for e in entries:
-                    pg_save_scan_history_entry(e.model_dump(mode="json"))
-                logger.info("Auto-migration of scan history complete")
-            except Exception as exc:
-                logger.error("Auto-migration of scan history failed: %s", exc)
+            from .database import was_migration_attempted, mark_migration_attempted
+            if not was_migration_attempted("scan_history"):
+                mark_migration_attempted("scan_history")
+                logger.info(
+                    "Auto-migrating %d scan history entries from JSON to PostgreSQL",
+                    len(entries),
+                )
+                try:
+                    from .database import pg_save_scan_history_entry
+                    for e in entries:
+                        pg_save_scan_history_entry(e.model_dump(mode="json"))
+                    logger.info("Auto-migration of scan history complete")
+                except Exception as exc:
+                    logger.error("Auto-migration of scan history failed: %s", exc)
         return entries
     except (json.JSONDecodeError, Exception) as exc:
         logger.error("Failed to load scan history: %s", exc)

@@ -39,6 +39,8 @@ import json
 import logging
 import math
 import statistics
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,6 +51,13 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 TRADES_FILE = DATA_DIR / "trades.json"
+
+# H2: In-memory cache for load_trades() — avoids repeated PG/JSON reads
+_trades_cache: list[TradeRecommendation] | None = None
+_trades_cache_time: float = 0.0
+_trades_cache_source: str = ""  # "pg" or path string — invalidate if source changes
+_trades_cache_lock = threading.Lock()
+_TRADES_CACHE_TTL = 60.0  # seconds
 
 # (#30) Adaptive decay: gradual transition from 45 to 30 days
 DECAY_HALF_LIFE_DAYS_LOW = 45.0   # When few trades
@@ -106,12 +115,48 @@ def _parse_trades(raw: list, source: str) -> list[TradeRecommendation]:
     return trades
 
 
+def _invalidate_trades_cache() -> None:
+    """H2: Invalidate the in-memory trades cache (called after writes)."""
+    global _trades_cache, _trades_cache_time, _trades_cache_source
+    with _trades_cache_lock:
+        _trades_cache = None
+        _trades_cache_time = 0.0
+        _trades_cache_source = ""
+
+
 def load_trades() -> list[TradeRecommendation]:
     """Load all historical trades.
 
+    H2: Returns cached result if within TTL (60s), avoiding repeated PG/JSON reads.
+    Cache auto-invalidates if the data source changes (PG vs JSON file path).
+    M6: Guards against repeated auto-migration attempts.
     Resilient: skips individual entries that fail to parse.
     Falls back to JSON if PG returns empty (un-migrated data).
     """
+    # H2: Determine current source for cache validity check
+    current_source = "pg" if is_pg_enabled() else str(TRADES_FILE)
+
+    # H2: Check cache first
+    global _trades_cache, _trades_cache_time, _trades_cache_source
+    with _trades_cache_lock:
+        if (_trades_cache is not None
+                and _trades_cache_source == current_source
+                and (time.monotonic() - _trades_cache_time) < _TRADES_CACHE_TTL):
+            return list(_trades_cache)  # Return copy to prevent mutation
+
+    trades = _load_trades_uncached()
+
+    # H2: Update cache
+    with _trades_cache_lock:
+        _trades_cache = list(trades)
+        _trades_cache_time = time.monotonic()
+        _trades_cache_source = current_source
+
+    return trades
+
+
+def _load_trades_uncached() -> list[TradeRecommendation]:
+    """Internal: load trades without cache (for cache population)."""
     if is_pg_enabled():
         try:
             from .database import pg_load_trades
@@ -128,16 +173,19 @@ def load_trades() -> list[TradeRecommendation]:
     try:
         raw = _read_json_locked(TRADES_FILE)
         trades = _parse_trades(raw, "JSON")
-        # Auto-migrate JSON → PG if PG is enabled but was empty
+        # M6: Auto-migrate JSON → PG if PG is enabled but was empty (only once)
         if trades and is_pg_enabled():
-            logger.info("Auto-migrating %d trades from JSON to PostgreSQL", len(trades))
-            try:
-                from .database import pg_save_trade
-                for t in trades:
-                    pg_save_trade(t.model_dump(mode="json"))
-                logger.info("Auto-migration of trades complete")
-            except Exception as exc:
-                logger.error("Auto-migration of trades failed: %s", exc)
+            from .database import was_migration_attempted, mark_migration_attempted
+            if not was_migration_attempted("trades"):
+                mark_migration_attempted("trades")
+                logger.info("Auto-migrating %d trades from JSON to PostgreSQL", len(trades))
+                try:
+                    from .database import pg_save_trade
+                    for t in trades:
+                        pg_save_trade(t.model_dump(mode="json"))
+                    logger.info("Auto-migration of trades complete")
+                except Exception as exc:
+                    logger.error("Auto-migration of trades failed: %s", exc)
         return trades
     except Exception as exc:
         logger.error("Failed to load trades: %s", exc)
@@ -150,10 +198,12 @@ def save_trade(trade: TradeRecommendation) -> None:
         from .database import pg_save_trade
         pg_save_trade(trade.model_dump(mode="json"))
         logger.info("Saved trade: %s %s %s", trade.direction, trade.ticker, trade.catalyst[:50])
+        _invalidate_trades_cache()  # H2
         return
-    trades = load_trades()
+    trades = _load_trades_uncached()  # bypass cache to get fresh data for append
     trades.append(trade)
     _write_trades(trades)
+    _invalidate_trades_cache()  # H2
     logger.info("Saved trade: %s %s %s", trade.direction, trade.ticker, trade.catalyst[:50])
 
 
@@ -167,6 +217,8 @@ def update_trade_result(
 ) -> None:
     """Update a pending trade with its outcome.
 
+    L3: Uses shared compute_pnl() for consistent PnL calculation.
+    H2: Invalidates trades cache after update.
     Also signals that the learning cache should be invalidated,
     so the next scan picks up the updated performance data.
     """
@@ -179,22 +231,23 @@ def update_trade_result(
         )
         if updated:
             logger.info("Updated trade %s %s: %s (PnL: %s%%)", ticker, timestamp, result, pnl)
+            _invalidate_trades_cache()  # H2
             _signal_learning_cache_invalidation()
         else:
             logger.warning("Trade not found for update: %s %s", ticker, timestamp)
         return
 
-    trades = load_trades()
+    trades = _load_trades_uncached()  # bypass cache for fresh data
     for trade in trades:
         if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
             trade.result = result
             trade.exit_price = exit_price
             trade.closed_at = datetime.now(timezone.utc)
 
-            if trade.direction.value == "LONG":
-                trade.pnl_pct = round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
-            else:
-                trade.pnl_pct = round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)
+            # L3: Use shared PnL calculation
+            from .database import compute_pnl
+            pnl = compute_pnl(trade.direction.value, trade.entry_price, exit_price)
+            trade.pnl_pct = pnl if pnl is not None else 0.0
 
             # P1-#6: Store transmission delay accuracy on the trade
             if actual_pricing_time_hours is not None:
@@ -203,8 +256,8 @@ def update_trade_result(
                 trade.delay_accuracy = delay_accuracy
 
             _write_trades(trades)
+            _invalidate_trades_cache()  # H2
             logger.info("Updated trade %s %s: %s (PnL: %s%%)", ticker, timestamp, result, trade.pnl_pct)
-            # Signal cache invalidation — imported lazily to avoid circular imports
             _signal_learning_cache_invalidation()
             return
 

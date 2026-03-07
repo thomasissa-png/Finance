@@ -99,7 +99,13 @@ def load_journal() -> list[JournalEntry]:
     # JSON fallback (or primary path when PG is disabled)
     _ensure_journal_file()
     try:
-        raw = json.loads(JOURNAL_FILE.read_text())
+        # C3: Shared lock for consistent reads (matches _save_journal's LOCK_EX)
+        with open(JOURNAL_FILE, "r") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            try:
+                raw = json.load(f)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
         for i, e in enumerate(raw):
             try:
                 entries.append(JournalEntry(**e))
@@ -108,20 +114,23 @@ def load_journal() -> list[JournalEntry]:
                     "Skipping invalid journal entry #%d from JSON (ticker=%s): %s",
                     i, e.get("ticker", "?") if isinstance(e, dict) else "?", exc,
                 )
-        # Auto-migrate JSON → PG if PG is enabled but was empty
+        # M6: Auto-migrate JSON → PG if PG is enabled but was empty (only once)
         # ON CONFLICT DO NOTHING protects against concurrent migrations
         if entries and is_pg_enabled():
-            logger.info(
-                "Auto-migrating %d journal entries from JSON to PostgreSQL", len(entries),
-            )
-            try:
-                from .database import pg_save_journal_entries
-                pg_save_journal_entries(
-                    [e.model_dump(mode="json") for e in entries]
+            from .database import was_migration_attempted, mark_migration_attempted
+            if not was_migration_attempted("journal"):
+                mark_migration_attempted("journal")
+                logger.info(
+                    "Auto-migrating %d journal entries from JSON to PostgreSQL", len(entries),
                 )
-                logger.info("Auto-migration of journal entries complete (duplicates ignored via ON CONFLICT)")
-            except Exception as exc:
-                logger.error("Auto-migration of journal entries failed: %s", exc)
+                try:
+                    from .database import pg_save_journal_entries
+                    pg_save_journal_entries(
+                        [e.model_dump(mode="json") for e in entries]
+                    )
+                    logger.info("Auto-migration of journal entries complete (duplicates ignored via ON CONFLICT)")
+                except Exception as exc:
+                    logger.error("Auto-migration of journal entries failed: %s", exc)
     except (json.JSONDecodeError, Exception) as exc:
         logger.error("Failed to load journal from JSON: %s", exc)
 
@@ -896,6 +905,14 @@ def run_daily_journal() -> list[dict]:
 
     # (#26) Invalidate learning cache after journal
     invalidate_learning_cache()
+
+    # M4: Run VACUUM ANALYZE after journal (daily maintenance)
+    if is_pg_enabled():
+        try:
+            from .database import pg_run_maintenance
+            pg_run_maintenance()
+        except Exception as exc:
+            logger.warning("M4: Post-journal maintenance failed: %s", exc)
 
     # E1: Structured metrics log
     elapsed = time.monotonic() - journal_start

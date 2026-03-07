@@ -1,6 +1,7 @@
 """FastAPI application — backend API for the news trading tool."""
 
 import csv
+import fcntl
 import io
 import json
 import logging
@@ -75,7 +76,13 @@ def _load_scans_cache() -> dict[str, dict]:
             return {}
     try:
         if SCANS_CACHE_FILE.exists():
-            return json.loads(SCANS_CACHE_FILE.read_text())
+            # C2: Shared lock for consistent reads
+            with open(SCANS_CACHE_FILE, "r") as f:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                try:
+                    return json.load(f)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
     except (json.JSONDecodeError, Exception) as exc:
         logger.warning("Failed to load scans cache: %s", exc)
     return {}
@@ -93,7 +100,14 @@ def _save_scans_cache(scans: dict[str, dict]) -> None:
             return
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        SCANS_CACHE_FILE.write_text(json.dumps(scans, indent=2, default=str))
+        # C2: File locking to prevent corruption from concurrent writes
+        data = json.dumps(scans, indent=2, default=str)
+        with open(SCANS_CACHE_FILE, "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.write(data)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
     except Exception as exc:
         logger.warning("Failed to save scans cache: %s", exc)
 
@@ -795,6 +809,30 @@ def api_backtest_sweep():
     """Run parameter sweep to find optimal settings (#31)."""
     trades = load_trades()
     return run_parameter_sweep(trades)
+
+
+# ── (L4) Database monitoring & maintenance endpoints ─────────────
+
+
+@app.get("/api/db/stats")
+def get_db_stats():
+    """L4: Get database table statistics (row counts, sizes, oldest/newest)."""
+    from .database import pg_table_stats
+    return pg_table_stats()
+
+
+@app.post("/api/db/maintenance")
+def run_db_maintenance():
+    """M4: Run VACUUM ANALYZE on all PG tables."""
+    from .database import pg_run_maintenance
+    return pg_run_maintenance()
+
+
+@app.post("/api/db/backup")
+def run_db_backup():
+    """L5: Dump all PG tables to JSON backup files."""
+    from .database import pg_backup_to_json
+    return pg_backup_to_json()
 
 
 # ── (#41) Enhanced health check ──────────────────────────────────

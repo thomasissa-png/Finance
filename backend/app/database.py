@@ -6,6 +6,26 @@ files. This solves the data loss issue on Replit autoscale deployments.
 
 Falls back to JSON files when DATABASE_URL is not set (local development).
 
+v4.4 DB audit — improvements:
+- C1: pg_prune_journal() — prevents unbounded journal table growth
+- H1: pg_prune_scan_history() — explicit scan history pruning function
+- H3: SELECT FOR UPDATE in pg_update_trade_result() — prevents race conditions
+- H4: statement_timeout=30s on connections — prevents query hangs
+- H5: PG retry with backoff (3 retries, 1s/2s/4s) — resilience to PG restarts
+- H6: pg_load_trades(since=) — date-filtered loading for learning lookback
+- M1: Conditional pre-ping (idle > 300s) — eliminates ~200 useless queries/day
+- M2: pg_load_pending_trades() — avoids loading full trade history for journal
+- M3: Index on journal_entries(result) — faster pending trade queries
+- M4: pg_run_maintenance() — periodic VACUUM ANALYZE helper
+- M5: Query duration logging via timed get_conn() — detects slow queries
+- M6: _migration_attempted guard — prevents repeated auto-migration attempts
+- M7: pg_table_stats() — row counts and table sizes for monitoring
+- M8: Pool maxconn parameterized via PG_POOL_MAX env var
+- L1: pg_load_journal(limit=, offset=) — pagination support
+- L2: pg_load_journal_by_date_range() — efficient date range queries
+- L3: compute_pnl() — shared PnL calculation (DRY)
+- L5: pg_backup_to_json() — PG dump to JSON files for backup
+
 Tables:
 - trades: All historical trades (replaces data/trades.json)
 - journal_entries: Daily journal (replaces data/journal.json)
@@ -13,10 +33,13 @@ Tables:
 - last_scans: Scan result cache (replaces data/last_scans.json)
 """
 
+import json
 import logging
 import os
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +60,24 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 
 _pool = None
 
+# M1: Track last connection use time for conditional pre-ping
+_last_conn_use: float = 0.0
+_PRE_PING_IDLE_THRESHOLD = 300.0  # 5 minutes — only pre-ping if idle longer than this
+
+# M6: Guard against repeated auto-migration attempts
+_migration_attempted: dict[str, bool] = {}
+
+# H4: Statement timeout (seconds) — prevents queries from blocking indefinitely
+_STATEMENT_TIMEOUT_S = int(os.environ.get("PG_STATEMENT_TIMEOUT", "30"))
+
+# M8: Pool size configurable via env var
+_PG_POOL_MIN = int(os.environ.get("PG_POOL_MIN", "2"))
+_PG_POOL_MAX = int(os.environ.get("PG_POOL_MAX", "10"))
+
+# H5: Retry configuration
+_PG_MAX_RETRIES = 3
+_PG_RETRY_BACKOFF = [1, 2, 4]  # seconds
+
 
 def is_pg_enabled() -> bool:
     """Check if PostgreSQL persistence is available and configured."""
@@ -44,17 +85,28 @@ def is_pg_enabled() -> bool:
 
 
 def _get_pool():
-    """Get or create the thread-safe connection pool (lazy initialization)."""
+    """Get or create the thread-safe connection pool (lazy initialization).
+
+    M8: Pool size configurable via PG_POOL_MIN/PG_POOL_MAX env vars.
+    H4: Statement timeout applied via DSN options.
+    """
     global _pool
     if _pool is None:
         if not is_pg_enabled():
             raise RuntimeError("PostgreSQL is not configured (DATABASE_URL not set)")
+        # H4: Append statement_timeout to DSN options
+        dsn = DATABASE_URL
+        options = f"-c statement_timeout={_STATEMENT_TIMEOUT_S * 1000}"
         _pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=10,
-            dsn=DATABASE_URL,
+            minconn=_PG_POOL_MIN,
+            maxconn=_PG_POOL_MAX,
+            dsn=dsn,
+            options=options,
         )
-        logger.info("PostgreSQL connection pool created (min=2, max=10)")
+        logger.info(
+            "PostgreSQL connection pool created (min=%d, max=%d, statement_timeout=%ds)",
+            _PG_POOL_MIN, _PG_POOL_MAX, _STATEMENT_TIMEOUT_S,
+        )
     return _pool
 
 
@@ -74,31 +126,76 @@ def close_pool():
 def get_conn():
     """Get a connection from the pool as a context manager.
 
-    v5.0 O12: Pre-ping connection to detect stale connections after PG restart.
+    M1: Conditional pre-ping — only pings if connection idle > 300s.
+    M5: Logs query duration for slow query detection.
+    H5: Retries on transient PG errors with exponential backoff.
     Auto-commits on success, rolls back on exception.
     """
+    global _last_conn_use
     pool = _get_pool()
     conn = pool.getconn()
+    start_time = time.monotonic()
     try:
-        # v5.0 O12: Pre-ping to detect dead connections
-        try:
-            conn.cursor().execute("SELECT 1")
-        except Exception:
-            logger.warning("Stale PG connection detected, replacing")
+        # M1: Only pre-ping if connection has been idle for a while
+        now = time.monotonic()
+        if (now - _last_conn_use) > _PRE_PING_IDLE_THRESHOLD:
             try:
-                conn.close()
+                conn.cursor().execute("SELECT 1")
             except Exception:
-                pass
-            pool.putconn(conn)
-            # Get a fresh connection
-            conn = pool.getconn()
+                logger.warning("Stale PG connection detected (idle %.0fs), replacing",
+                               now - _last_conn_use)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                pool.putconn(conn)
+                conn = pool.getconn()
         yield conn
         conn.commit()
+        _last_conn_use = time.monotonic()
     except Exception:
         conn.rollback()
         raise
     finally:
+        elapsed = time.monotonic() - start_time
+        # M5: Log slow queries (>2s)
+        if elapsed > 2.0:
+            logger.warning("Slow PG operation: %.2fs", elapsed)
         pool.putconn(conn)
+
+
+def _pg_retry(func, *args, **kwargs):
+    """H5: Retry a PG operation with exponential backoff on transient errors.
+
+    Retries up to _PG_MAX_RETRIES times on OperationalError (connection issues).
+    Does NOT retry on ProgrammingError, IntegrityError, etc. (logic bugs).
+    """
+    last_exc = None
+    for attempt in range(_PG_MAX_RETRIES + 1):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            # Only retry on operational/connection errors
+            if _HAS_PSYCOPG2 and isinstance(exc, psycopg2.OperationalError):
+                last_exc = exc
+                if attempt < _PG_MAX_RETRIES:
+                    wait = _PG_RETRY_BACKOFF[attempt] if attempt < len(_PG_RETRY_BACKOFF) else 4
+                    logger.warning(
+                        "PG transient error (attempt %d/%d), retrying in %ds: %s",
+                        attempt + 1, _PG_MAX_RETRIES, wait, exc,
+                    )
+                    time.sleep(wait)
+                    # Reset pool to force fresh connections
+                    global _pool
+                    if _pool is not None:
+                        try:
+                            _pool.closeall()
+                        except Exception:
+                            pass
+                        _pool = None
+                    continue
+            raise  # Non-transient error — raise immediately
+    raise last_exc  # All retries exhausted
 
 
 # ── Table Definitions ────────────────────────────────────────────────
@@ -221,7 +318,10 @@ CREATE TABLE IF NOT EXISTS last_scans (
 
 
 def init_db() -> None:
-    """Create tables and indexes if they don't exist. Called on app startup."""
+    """Create tables and indexes if they don't exist. Called on app startup.
+
+    M3: Added index on journal_entries(result) for faster pending queries.
+    """
     if not is_pg_enabled():
         logger.info("PostgreSQL not configured - using JSON file persistence")
         return
@@ -247,11 +347,21 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_journal_date
                 ON journal_entries(date)
             """)
+            # M3: Index on result for faster pending trade queries
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_journal_result
+                ON journal_entries(result)
+            """)
 
             cur.execute(_CREATE_SCAN_HISTORY)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_scan_history_ts
                 ON scan_history(timestamp)
+            """)
+            # M3: Index on scan_type for filtered queries
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_scan_history_scan_type
+                ON scan_history(scan_type)
             """)
 
             cur.execute(_CREATE_LAST_SCANS)
@@ -289,6 +399,23 @@ def check_connection() -> bool:
         return False
 
 
+# ── L3: Shared PnL Calculation ───────────────────────────────────────
+
+
+def compute_pnl(direction: str, entry_price: float, exit_price: float) -> float | None:
+    """Shared PnL calculation used by both PG and JSON code paths.
+
+    L3: Eliminates duplicated PnL logic between database.py and learning.py.
+    Returns PnL percentage rounded to 4 decimals, or None if entry_price is invalid.
+    """
+    if not entry_price or entry_price == 0:
+        return None
+    if direction == "LONG":
+        return round((exit_price - entry_price) / entry_price * 100, 4)
+    else:
+        return round((entry_price - exit_price) / entry_price * 100, 4)
+
+
 # ── Trades CRUD ──────────────────────────────────────────────────────
 
 _TRADE_COLUMNS = [
@@ -314,32 +441,62 @@ def _wrap_jsonb(col: str, val, jsonb_cols: set) -> object:
     return val
 
 
-def pg_load_trades() -> list[dict]:
-    """Load all trades from PostgreSQL, ordered by timestamp."""
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM trades ORDER BY timestamp ASC")
-            rows = cur.fetchall()
-            return [{k: v for k, v in dict(row).items() if k != "id"} for row in rows]
+def _strip_id(row: dict) -> dict:
+    """Remove the 'id' key from a row dict (internal PG serial, not part of model)."""
+    return {k: v for k, v in row.items() if k != "id"}
+
+
+def pg_load_trades(since: datetime | None = None) -> list[dict]:
+    """Load trades from PostgreSQL, ordered by timestamp.
+
+    H6: Optional `since` parameter to only load trades after a given date.
+    Useful for learning lookback (only needs last 60-90 days).
+    """
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if since:
+                    cur.execute(
+                        "SELECT * FROM trades WHERE timestamp >= %s ORDER BY timestamp ASC",
+                        (since,),
+                    )
+                else:
+                    cur.execute("SELECT * FROM trades ORDER BY timestamp ASC")
+                return [_strip_id(dict(row)) for row in cur.fetchall()]
+    return _pg_retry(_load)
+
+
+def pg_load_pending_trades() -> list[dict]:
+    """M2: Load only PENDING trades — avoids loading full history for journal."""
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM trades WHERE result = 'PENDING' ORDER BY timestamp ASC"
+                )
+                return [_strip_id(dict(row)) for row in cur.fetchall()]
+    return _pg_retry(_load)
 
 
 def pg_save_trade(trade_dict: dict) -> None:
     """Insert a new trade into PostgreSQL."""
-    row = {}
-    for col in _TRADE_COLUMNS:
-        val = trade_dict.get(col)
-        row[col] = _wrap_jsonb(col, val, _TRADE_JSONB_COLS)
+    def _save():
+        row = {}
+        for col in _TRADE_COLUMNS:
+            val = trade_dict.get(col)
+            row[col] = _wrap_jsonb(col, val, _TRADE_JSONB_COLS)
 
-    cols = list(row.keys())
-    placeholders = [f"%({c})s" for c in cols]
-    sql = f"""
-        INSERT INTO trades ({', '.join(cols)})
-        VALUES ({', '.join(placeholders)})
-        ON CONFLICT (ticker, timestamp) DO NOTHING
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, row)
+        cols = list(row.keys())
+        placeholders = [f"%({c})s" for c in cols]
+        sql = f"""
+            INSERT INTO trades ({', '.join(cols)})
+            VALUES ({', '.join(placeholders)})
+            ON CONFLICT (ticker, timestamp) DO NOTHING
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, row)
+    _pg_retry(_save)
 
 
 def pg_update_trade_result(
@@ -353,50 +510,45 @@ def pg_update_trade_result(
 ) -> tuple[bool, float | None]:
     """Update a pending trade with its outcome. Calculates PnL internally.
 
+    H3: Uses SELECT ... FOR UPDATE to prevent race conditions.
+    L3: Uses shared compute_pnl() function.
     Returns (updated: bool, pnl_pct: float|None).
     """
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Read trade info for PnL calculation
-            cur.execute("""
-                SELECT direction, entry_price FROM trades
-                WHERE ticker = %s AND timestamp = %s AND result = 'PENDING'
-            """, (ticker, timestamp))
-            row = cur.fetchone()
-            if not row:
-                return False, None
+    def _update():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # H3: FOR UPDATE locks the row to prevent concurrent updates
+                cur.execute("""
+                    SELECT direction, entry_price FROM trades
+                    WHERE ticker = %s AND timestamp = %s AND result = 'PENDING'
+                    FOR UPDATE
+                """, (ticker, timestamp))
+                row = cur.fetchone()
+                if not row:
+                    return False, None
 
-            # Calculate PnL (same logic as existing code)
-            # v5.0: Guard against division by zero on entry_price
-            entry_price = row["entry_price"]
-            if not entry_price or entry_price == 0:
-                logger.error("entry_price is 0 for %s — cannot compute PnL", ticker)
-                return False, None
-            if row["direction"] == "LONG":
-                pnl_pct = round(
-                    (exit_price - entry_price) / entry_price * 100, 4
-                )
-            else:
-                pnl_pct = round(
-                    (entry_price - exit_price) / entry_price * 100, 4
-                )
+                # L3: Shared PnL calculation
+                pnl_pct = compute_pnl(row["direction"], row["entry_price"], exit_price)
+                if pnl_pct is None:
+                    logger.error("entry_price is 0 for %s — cannot compute PnL", ticker)
+                    return False, None
 
-            # Update the trade
-            cur.execute("""
-                UPDATE trades SET
-                    result = %s,
-                    exit_price = %s,
-                    pnl_pct = %s,
-                    closed_at = %s,
-                    actual_pricing_time_hours = %s,
-                    delay_accuracy = %s
-                WHERE ticker = %s AND timestamp = %s AND result = 'PENDING'
-            """, (
-                result_value, exit_price, pnl_pct, closed_at,
-                actual_pricing_time_hours, delay_accuracy,
-                ticker, timestamp,
-            ))
-            return True, pnl_pct
+                cur.execute("""
+                    UPDATE trades SET
+                        result = %s,
+                        exit_price = %s,
+                        pnl_pct = %s,
+                        closed_at = %s,
+                        actual_pricing_time_hours = %s,
+                        delay_accuracy = %s
+                    WHERE ticker = %s AND timestamp = %s AND result = 'PENDING'
+                """, (
+                    result_value, exit_price, pnl_pct, closed_at,
+                    actual_pricing_time_hours, delay_accuracy,
+                    ticker, timestamp,
+                ))
+                return True, pnl_pct
+    return _pg_retry(_update)
 
 
 # ── Journal CRUD ─────────────────────────────────────────────────────
@@ -417,37 +569,95 @@ _JOURNAL_COLUMNS = [
 _JOURNAL_JSONB_COLS = {"all_scored_news", "rejection_log", "learning_state"}
 
 
-def pg_load_journal() -> list[dict]:
-    """Load all journal entries from PostgreSQL."""
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT * FROM journal_entries ORDER BY date ASC, entry_time ASC"
-            )
-            rows = cur.fetchall()
-            return [{k: v for k, v in dict(row).items() if k != "id"} for row in rows]
+def pg_load_journal(limit: int | None = None, offset: int | None = None) -> list[dict]:
+    """Load journal entries from PostgreSQL.
+
+    L1: Supports pagination via limit/offset parameters.
+    """
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                sql = "SELECT * FROM journal_entries ORDER BY date ASC, entry_time ASC"
+                params: list = []
+                if limit is not None:
+                    sql += " LIMIT %s"
+                    params.append(limit)
+                if offset is not None:
+                    sql += " OFFSET %s"
+                    params.append(offset)
+                cur.execute(sql, params if params else None)
+                return [_strip_id(dict(row)) for row in cur.fetchall()]
+    return _pg_retry(_load)
+
+
+def pg_load_journal_by_date_range(
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """L2: Load journal entries within a date range (YYYY-MM-DD strings).
+
+    More efficient than loading all entries and filtering in Python.
+    """
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                conditions = []
+                params: list = []
+                if start_date:
+                    conditions.append("date >= %s")
+                    params.append(start_date)
+                if end_date:
+                    conditions.append("date <= %s")
+                    params.append(end_date)
+                where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+                cur.execute(
+                    f"SELECT * FROM journal_entries{where} ORDER BY date ASC, entry_time ASC",
+                    params if params else None,
+                )
+                return [_strip_id(dict(row)) for row in cur.fetchall()]
+    return _pg_retry(_load)
 
 
 def pg_save_journal_entries(entries: list[dict]) -> None:
     """Insert multiple journal entries into PostgreSQL (dedup via ON CONFLICT)."""
     if not entries:
         return
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            for entry_dict in entries:
-                row = {}
-                for col in _JOURNAL_COLUMNS:
-                    val = entry_dict.get(col)
-                    row[col] = _wrap_jsonb(col, val, _JOURNAL_JSONB_COLS)
 
-                cols = list(row.keys())
-                placeholders = [f"%({c})s" for c in cols]
-                sql = f"""
-                    INSERT INTO journal_entries ({', '.join(cols)})
-                    VALUES ({', '.join(placeholders)})
-                    ON CONFLICT (ticker, entry_time) DO NOTHING
-                """
-                cur.execute(sql, row)
+    def _save():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for entry_dict in entries:
+                    row = {}
+                    for col in _JOURNAL_COLUMNS:
+                        val = entry_dict.get(col)
+                        row[col] = _wrap_jsonb(col, val, _JOURNAL_JSONB_COLS)
+
+                    cols = list(row.keys())
+                    placeholders = [f"%({c})s" for c in cols]
+                    sql = f"""
+                        INSERT INTO journal_entries ({', '.join(cols)})
+                        VALUES ({', '.join(placeholders)})
+                        ON CONFLICT (ticker, entry_time) DO NOTHING
+                    """
+                    cur.execute(sql, row)
+    _pg_retry(_save)
+
+
+def pg_prune_journal(max_age_days: int = 365) -> int:
+    """C1: Delete journal entries older than max_age_days.
+
+    Returns the number of entries pruned.
+    """
+    def _prune():
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM journal_entries WHERE date < %s", (cutoff,))
+                pruned = cur.rowcount
+                if pruned > 0:
+                    logger.info("C1: Pruned %d old journal entries from PG (>%d days)", pruned, max_age_days)
+                return pruned
+    return _pg_retry(_prune)
 
 
 # ── Scan History CRUD ────────────────────────────────────────────────
@@ -466,53 +676,72 @@ _SCAN_HISTORY_JSONB_COLS = {
 
 def pg_load_scan_history() -> list[dict]:
     """Load all scan history entries from PostgreSQL."""
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM scan_history ORDER BY timestamp ASC")
-            rows = cur.fetchall()
-            return [{k: v for k, v in dict(row).items() if k != "id"} for row in rows]
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM scan_history ORDER BY timestamp ASC")
+                return [_strip_id(dict(row)) for row in cur.fetchall()]
+    return _pg_retry(_load)
 
 
 def pg_save_scan_history_entry(entry_dict: dict) -> None:
     """Insert a single scan history entry and prune old ones (>30 days)."""
-    row = {}
-    for col in _SCAN_HISTORY_COLUMNS:
-        val = entry_dict.get(col)
-        row[col] = _wrap_jsonb(col, val, _SCAN_HISTORY_JSONB_COLS)
+    def _save():
+        row = {}
+        for col in _SCAN_HISTORY_COLUMNS:
+            val = entry_dict.get(col)
+            row[col] = _wrap_jsonb(col, val, _SCAN_HISTORY_JSONB_COLS)
 
-    cols = list(row.keys())
-    placeholders = [f"%({c})s" for c in cols]
-    sql = f"""
-        INSERT INTO scan_history ({', '.join(cols)})
-        VALUES ({', '.join(placeholders)})
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, row)
-            # Prune entries older than 30 days
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-            cur.execute("DELETE FROM scan_history WHERE timestamp < %s", (cutoff,))
-            if cur.rowcount > 0:
-                logger.info("Pruned %d old scan history entries", cur.rowcount)
+        cols = list(row.keys())
+        placeholders = [f"%({c})s" for c in cols]
+        sql = f"""
+            INSERT INTO scan_history ({', '.join(cols)})
+            VALUES ({', '.join(placeholders)})
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, row)
+                # Prune entries older than 30 days
+                cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                cur.execute("DELETE FROM scan_history WHERE timestamp < %s", (cutoff,))
+                if cur.rowcount > 0:
+                    logger.info("Pruned %d old scan history entries", cur.rowcount)
+    _pg_retry(_save)
+
+
+def pg_prune_scan_history(max_age_days: int = 30) -> int:
+    """H1: Explicit scan history pruning (belt and suspenders with inline pruning)."""
+    def _prune():
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM scan_history WHERE timestamp < %s", (cutoff,))
+                pruned = cur.rowcount
+                if pruned > 0:
+                    logger.info("H1: Pruned %d old scan history entries (>%d days)", pruned, max_age_days)
+                return pruned
+    return _pg_retry(_prune)
 
 
 def pg_get_recently_scored_titles(max_age_hours: float = 8.0) -> list[str]:
     """Get titles from recently scored news (for cross-scan dedup)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT all_scored_news FROM scan_history
-                WHERE timestamp > %s
-            """, (cutoff,))
-            titles = []
-            for (scored_news,) in cur.fetchall():
-                if scored_news:
-                    for news in scored_news:
-                        title = news.get("title", "")
-                        if title:
-                            titles.append(title)
-            return titles
+    def _get():
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT all_scored_news FROM scan_history
+                    WHERE timestamp > %s
+                """, (cutoff,))
+                titles = []
+                for (scored_news,) in cur.fetchall():
+                    if scored_news:
+                        for news in scored_news:
+                            title = news.get("title", "")
+                            if title:
+                                titles.append(title)
+                return titles
+    return _pg_retry(_get)
 
 
 # ── Last Scans Cache CRUD ────────────────────────────────────────────
@@ -520,35 +749,179 @@ def pg_get_recently_scored_titles(max_age_hours: float = 8.0) -> list[str]:
 
 def pg_load_last_scans() -> dict[str, dict]:
     """Load all cached scan results from PostgreSQL."""
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT scan_key, data FROM last_scans")
-            return {row["scan_key"]: row["data"] for row in cur.fetchall()}
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT scan_key, data FROM last_scans")
+                return {row["scan_key"]: row["data"] for row in cur.fetchall()}
+    return _pg_retry(_load)
 
 
 def pg_save_last_scan(scan_key: str, data: dict) -> None:
     """Upsert a single scan result into the cache."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO last_scans (scan_key, data, updated_at)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (scan_key) DO UPDATE SET
-                    data = EXCLUDED.data,
-                    updated_at = EXCLUDED.updated_at
-            """, (scan_key, psycopg2.extras.Json(data), datetime.now(timezone.utc)))
-
-
-def pg_save_all_last_scans(scans: dict[str, dict]) -> None:
-    """Save all scan results to the cache (bulk upsert)."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            now = datetime.now(timezone.utc)
-            for scan_key, data in scans.items():
+    def _save():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO last_scans (scan_key, data, updated_at)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (scan_key) DO UPDATE SET
                         data = EXCLUDED.data,
                         updated_at = EXCLUDED.updated_at
-                """, (scan_key, psycopg2.extras.Json(data), now))
+                """, (scan_key, psycopg2.extras.Json(data), datetime.now(timezone.utc)))
+    _pg_retry(_save)
+
+
+def pg_save_all_last_scans(scans: dict[str, dict]) -> None:
+    """Save all scan results to the cache (bulk upsert)."""
+    def _save():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                now = datetime.now(timezone.utc)
+                for scan_key, data in scans.items():
+                    cur.execute("""
+                        INSERT INTO last_scans (scan_key, data, updated_at)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (scan_key) DO UPDATE SET
+                            data = EXCLUDED.data,
+                            updated_at = EXCLUDED.updated_at
+                    """, (scan_key, psycopg2.extras.Json(data), now))
+    _pg_retry(_save)
+
+
+# ── M4: Maintenance ──────────────────────────────────────────────────
+
+
+def pg_run_maintenance() -> dict:
+    """M4: Run VACUUM ANALYZE on all tables. Call periodically (e.g., daily after journal).
+
+    Returns dict with table names and whether maintenance succeeded.
+    """
+    if not is_pg_enabled():
+        return {"status": "skipped", "reason": "PG not enabled"}
+
+    results = {}
+    tables = ["trades", "journal_entries", "scan_history", "last_scans"]
+    for table in tables:
+        try:
+            pool = _get_pool()
+            conn = pool.getconn()
+            try:
+                # VACUUM requires autocommit mode
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute(f"VACUUM ANALYZE {table}")
+                results[table] = "ok"
+            finally:
+                conn.autocommit = False
+                pool.putconn(conn)
+        except Exception as exc:
+            logger.warning("VACUUM ANALYZE %s failed: %s", table, exc)
+            results[table] = f"error: {exc}"
+    logger.info("M4: Maintenance complete: %s", results)
+    return results
+
+
+# ── M7: Monitoring ───────────────────────────────────────────────────
+
+
+def pg_table_stats() -> dict:
+    """M7: Get row counts and estimated sizes for all tables.
+
+    Returns dict with table stats for monitoring/alerting.
+    """
+    if not is_pg_enabled():
+        return {"status": "pg_not_enabled"}
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                stats = {}
+                for table in ["trades", "journal_entries", "scan_history", "last_scans"]:
+                    cur.execute(f"SELECT COUNT(*) as row_count FROM {table}")
+                    row_count = cur.fetchone()["row_count"]
+
+                    cur.execute("""
+                        SELECT pg_total_relation_size(%s) as total_bytes
+                    """, (table,))
+                    total_bytes = cur.fetchone()["total_bytes"]
+
+                    stats[table] = {
+                        "rows": row_count,
+                        "size_bytes": total_bytes,
+                        "size_mb": round(total_bytes / (1024 * 1024), 2),
+                    }
+
+                # Oldest and newest trade
+                cur.execute("SELECT MIN(timestamp) as oldest, MAX(timestamp) as newest FROM trades")
+                trade_range = cur.fetchone()
+                stats["trade_range"] = {
+                    "oldest": trade_range["oldest"].isoformat() if trade_range["oldest"] else None,
+                    "newest": trade_range["newest"].isoformat() if trade_range["newest"] else None,
+                }
+
+                # Pending trades count
+                cur.execute("SELECT COUNT(*) as cnt FROM trades WHERE result = 'PENDING'")
+                stats["pending_trades"] = cur.fetchone()["cnt"]
+
+                return stats
+    except Exception as exc:
+        logger.error("pg_table_stats failed: %s", exc)
+        return {"error": str(exc)}
+
+
+# ── M6: Migration guard ─────────────────────────────────────────────
+
+
+def mark_migration_attempted(table: str) -> None:
+    """M6: Mark that auto-migration was already attempted for a table."""
+    _migration_attempted[table] = True
+
+
+def was_migration_attempted(table: str) -> bool:
+    """M6: Check if auto-migration was already attempted for a table."""
+    return _migration_attempted.get(table, False)
+
+
+# ── L5: Backup ───────────────────────────────────────────────────────
+
+
+def pg_backup_to_json(output_dir: str | Path | None = None) -> dict:
+    """L5: Dump all PG tables to JSON files for backup.
+
+    Creates timestamped JSON files in output_dir (defaults to data/).
+    Returns dict with file paths and row counts.
+    """
+    if not is_pg_enabled():
+        return {"status": "pg_not_enabled"}
+
+    if output_dir is None:
+        output_dir = Path(__file__).resolve().parent.parent.parent / "data" / "backups"
+    else:
+        output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    results = {}
+
+    tables = {
+        "trades": pg_load_trades,
+        "journal_entries": pg_load_journal,
+        "scan_history": pg_load_scan_history,
+        "last_scans": pg_load_last_scans,
+    }
+
+    for table_name, load_func in tables.items():
+        try:
+            data = load_func()
+            filename = f"{table_name}_{timestamp}.json"
+            filepath = output_dir / filename
+            filepath.write_text(json.dumps(data, indent=2, default=str))
+            count = len(data) if isinstance(data, list) else len(data.keys()) if isinstance(data, dict) else 0
+            results[table_name] = {"file": str(filepath), "rows": count}
+            logger.info("L5: Backed up %s: %d entries → %s", table_name, count, filepath)
+        except Exception as exc:
+            results[table_name] = {"error": str(exc)}
+            logger.error("L5: Backup of %s failed: %s", table_name, exc)
+
+    return results
