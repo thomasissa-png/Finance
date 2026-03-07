@@ -637,7 +637,15 @@ def select_trades(
         # v4.2 A5: Average multipliers across ALL eligible tickers (not just first)
         ticker_mults = [ticker_adj.get(t, 1.0) for t in eligible_for_news]
         base_mult = sum(ticker_mults) / len(ticker_mults)
-        nc_mult = newscat_adj.get(sn.news_category, 1.0)
+        # v5.2: Cross-dimension newscat+ticker lookup, fallback to broad category
+        nc_mult = 1.0
+        for _t in eligible_for_news:
+            combo_key = f"{sn.news_category}+{_t}"
+            if combo_key in newscat_adj:
+                nc_mult = newscat_adj[combo_key]
+                break
+        if nc_mult == 1.0:
+            nc_mult = newscat_adj.get(sn.news_category, 1.0)
         dir_mult = direction_adj.get(sn.direction.value, 1.0)  # v4.2 B5
         # v4.2: Full contextual multiplier with all dimensions
         multiplier = (base_mult * current_session_mult * nc_mult

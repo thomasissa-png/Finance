@@ -472,7 +472,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     Returns dict with:
     - "adjustments": dict[ticker, multiplier] (default 1.0, range 0.5-1.5)
     - "session_adj": dict[scan_type, multiplier] — applied by caller based on current scan
-    - "newscat_adj": dict[news_category, multiplier] — applied by caller based on current news
+    - "newscat_adj": dict[newscat+ticker or newscat, multiplier] — v5.2 cross-dimension
     - "regime_adj": dict[regime, multiplier] — applied by caller based on current VIX regime
     - "direction_adj": dict[direction, multiplier] — v4.2 B5: LONG vs SHORT accuracy
     - "delay_bias_adj": float — v4.2 B1: adjustment from delay prediction accuracy
@@ -599,20 +599,35 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         if adj is not None:
             session_adj[scan_type] = adj
 
-    # ── (#29) Per-news_category adjustments (v3.4 #4: returned separately) ──
+    # ── v5.2: Per newscat+ticker cross-dimension (replaces broad newscat_adj) ──
+    # Fixes: weather+ZW=F failures no longer penalize weather+CC=F trades.
+    # Key format: "weather+ZW=F", looked up by caller with news_category+ticker.
+    # Falls back to broad newscat if no cross-dimension data exists for the combo.
+    newscat_ticker_weighted: dict[str, list[tuple[float, float]]] = {}
     newscat_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None and hasattr(t, "news_category"):
             w = _compute_decay_weight(t.timestamp, half_life)
+            combo_key = f"{t.news_category}+{t.ticker}"
+            newscat_ticker_weighted.setdefault(combo_key, []).append((t.pnl_pct, w))
             newscat_weighted.setdefault(t.news_category, []).append((t.pnl_pct, w))
 
     newscat_adj: dict[str, float] = {}
-    for ncat, entries in newscat_weighted.items():
+    # Cross-dimension combos (granular)
+    for combo, entries in newscat_ticker_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.7, 1.3), min_significant=5,
+                                  bounds=(0.7, 1.3), min_significant=4,
                                   t_threshold=1.5)
         if adj is not None:
-            newscat_adj[ncat] = adj
+            newscat_adj[combo] = adj
+    # Broad category fallback (only if no cross-dimension entries exist for that category)
+    for ncat, entries in newscat_weighted.items():
+        if ncat not in newscat_adj and not any(k.startswith(f"{ncat}+") for k in newscat_adj):
+            adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
+                                      bounds=(0.7, 1.3), min_significant=5,
+                                      t_threshold=1.5)
+            if adj is not None:
+                newscat_adj[ncat] = adj
 
     # ── v3.4 #1 + v4.2 C1: Per-regime adjustments ──
     # C1: Merge to 2 buckets (calm+normal, elevated+stress) and raise min to 15

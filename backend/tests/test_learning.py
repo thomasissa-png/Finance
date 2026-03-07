@@ -409,7 +409,7 @@ def test_v34_per_ticker_stricter_significance():
 
 
 def test_v34_newscat_adj_returned_separately():
-    """v3.4 #4: News category adjustments returned as separate dict."""
+    """v5.2: News category adjustments use cross-dimension newscat+ticker keys."""
     trades = []
     for i in range(10):
         pnl = 1.0 if i < 7 else -0.5
@@ -423,8 +423,11 @@ def test_v34_newscat_adj_returned_separately():
         result = compute_learning_adjustments()
     newscat = result.get("newscat_adj", {})
     if newscat:
-        assert "weather" in newscat
-        assert 0.7 <= newscat["weather"] <= 1.3
+        # v5.2: cross-dimension key "weather+MC.PA" instead of broad "weather"
+        matching_keys = [k for k in newscat if k.startswith("weather")]
+        assert len(matching_keys) > 0
+        for k in matching_keys:
+            assert 0.7 <= newscat[k] <= 1.3
 
 
 def test_v34_decomposition_logged():
