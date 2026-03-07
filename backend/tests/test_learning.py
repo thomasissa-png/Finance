@@ -116,7 +116,6 @@ def test_learning_adjustments_not_enough_data():
     assert adj["session_adj"] == {}
     assert adj["newscat_adj"] == {}
     assert adj["regime_adj"] == {}
-    assert adj["hour_adj"] == {}
     assert adj["direction_adj"] == {}
     assert adj["delay_bias_adj"] == 1.0
 
@@ -340,13 +339,13 @@ def test_v34_structured_return_format():
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         result = compute_learning_adjustments()
-    # Must have all expected keys (v4.2: +hour_adj, direction_adj, delay_bias_adj)
+    # Must have all expected keys (v4.2: +direction_adj, delay_bias_adj; M8: hour_adj removed)
     assert "adjustments" in result
     assert "session_adj" in result
     assert "newscat_adj" in result
     assert "regime_adj" in result
     assert "decomposition" in result
-    assert "hour_adj" in result
+    assert "hour_adj" not in result
     assert "direction_adj" in result
     assert "delay_bias_adj" in result
 
@@ -519,16 +518,15 @@ def test_v42_compute_adjustment_divisor_fixed():
     assert result >= 1.12  # Would have been ~1.06 with old divisor=2.0
 
 
-def test_v42_hour_adj_in_result():
-    """v4.2 B4: compute_learning_adjustments should include hour_adj."""
+def test_v42_hour_adj_removed():
+    """M8: hour_adj removed from compute_learning_adjustments (worst data-to-noise ratio)."""
     trades = []
     for i in range(10):
         pnl = 1.5 if i < 8 else -0.5
         result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
         trades.append(_make_trade(result=result, pnl_pct=pnl))
     result = compute_learning_adjustments(trades=trades)
-    assert "hour_adj" in result
-    assert isinstance(result["hour_adj"], dict)
+    assert "hour_adj" not in result
 
 
 def test_v42_direction_adj_in_result():

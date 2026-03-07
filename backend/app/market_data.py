@@ -42,6 +42,25 @@ CACHE_TTL_MEDIUM = 600   # 10 min — daily history (25d)
 CACHE_TTL_LONG = 1800    # 30 min — intraday bars (journal uses once/day)
 
 
+_CACHE_PURGE_INTERVAL = 300  # 5 minutes
+_last_purge: float = 0.0
+
+
+def _maybe_purge_cache() -> None:
+    """v5.0 N2: Periodically purge expired cache entries to prevent memory leak."""
+    global _last_purge
+    now = time.monotonic()
+    if now - _last_purge < _CACHE_PURGE_INTERVAL:
+        return
+    _last_purge = now
+    with _cache_lock:
+        stale = [k for k, (expiry, _) in _cache.items() if time.monotonic() > expiry]
+        for k in stale:
+            del _cache[k]
+        if stale:
+            logger.debug("Cache purge: removed %d expired entries, %d remaining", len(stale), len(_cache))
+
+
 def td_available() -> bool:
     """Check if Twelve Data API key is configured and non-empty."""
     return bool(TWELVE_DATA_API_KEY)
@@ -63,6 +82,8 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "USDCHF=X": ("USD/CHF", {}),
     "EURJPY=X": ("EUR/JPY", {}),
     "AUDUSD=X": ("AUD/USD", {}),
+    # v5.0 N7: Added v3.5 tickers
+    "USDCNH=X": ("USD/CNH", {}),   # Yuan offshore
     # Paris stocks (Euronext) — use mic_code=XPAR
     "TTE.PA": ("TTE", {"mic_code": "XPAR"}),
     "MC.PA": ("MC", {"mic_code": "XPAR"}),
@@ -100,6 +121,8 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "USO": ("USO", {}), "GLD": ("GLD", {}),
     "SLV": ("SLV", {}), "CORN": ("CORN", {}),
     "WEAT": ("WEAT", {}),
+    # v5.0 N7: Uranium ETF (v3.5)
+    "URA": ("URA", {}),
 }
 
 # Tickers known to not work on Twelve Data — skip to yfinance directly.
@@ -186,10 +209,11 @@ def _cache_get_or_miss(key: str) -> Any:
 
 # ── Twelve Data API ───────────────────────────────────────────────
 
-def _td_request(endpoint: str, params: dict) -> dict | None:
+def _td_request(endpoint: str, params: dict, yf_ticker: str | None = None) -> dict | None:
     """Make a rate-limited request to Twelve Data API.
 
     Returns parsed JSON or None on failure (rate limit, network, API error).
+    v5.0 N8: Pass yf_ticker to auto-blacklist on 'not found' errors.
     """
     if not td_available():
         return None
@@ -213,9 +237,11 @@ def _td_request(endpoint: str, params: dict) -> dict | None:
         data = resp.json()
         if data.get("status") == "error":
             msg = data.get("message", "")
-            # Blacklist unknown symbols to avoid repeated failures
+            # v5.0 N8: Blacklist unknown symbols to avoid repeated failures
             if "not found" in msg.lower() or "not available" in msg.lower():
-                logger.info("TD symbol not found: %s", msg[:120])
+                if yf_ticker:
+                    _blacklist_ticker(yf_ticker)
+                logger.info("TD symbol not found (blacklisted=%s): %s", yf_ticker or "?", msg[:120])
                 return None
             logger.debug("TD %s API error: %s", endpoint, msg[:200])
             return None
@@ -325,6 +351,7 @@ def fetch_history(
         period_days: Number of data points to fetch
         interval: TD interval format — "1day", "1h", "4h", etc.
     """
+    _maybe_purge_cache()
     cache_key = f"hist:{ticker}:{period_days}:{interval}"
     cached = _cache_get_or_miss(cache_key)
     if cached is not _CACHE_MISS:
@@ -343,7 +370,7 @@ def fetch_history(
             "outputsize": period_days,
             **extra_params,
         }
-        data = _td_request("time_series", params)
+        data = _td_request("time_series", params, yf_ticker=ticker)
         if data and "values" in data:
             tz = data.get("meta", {}).get("exchange_timezone")
             df = _td_values_to_dataframe(data["values"], tz)
@@ -398,7 +425,7 @@ def fetch_history_range(
             "end_date": end_str,
             **extra_params,
         }
-        data = _td_request("time_series", params)
+        data = _td_request("time_series", params, yf_ticker=ticker)
         if data and "values" in data:
             tz = data.get("meta", {}).get("exchange_timezone")
             df = _td_values_to_dataframe(data["values"], tz)
@@ -541,7 +568,7 @@ def fetch_quote(ticker: str) -> dict | None:
     if mapping and td_available():
         td_sym, extra_params = mapping
         params = {"symbol": td_sym, **extra_params}
-        data = _td_request("quote", params)
+        data = _td_request("quote", params, yf_ticker=ticker)
         if data and "close" in data:
             try:
                 price = float(data.get("close", 0))

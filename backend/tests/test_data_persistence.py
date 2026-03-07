@@ -352,7 +352,10 @@ def test_root_health_check_returns_200():
     client = TestClient(app)
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    # In dev (no frontend build): returns JSON {"status": "ok"}.
+    # In prod (build exists): returns HTML (SPA index.html) — still 200.
+    if response.headers.get("content-type", "").startswith("application/json"):
+        assert response.json()["status"] == "ok"
 
 
 def test_api_health_check_returns_200():

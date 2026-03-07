@@ -14,15 +14,51 @@ logger = logging.getLogger(__name__)
 
 PARIS_TZ = ZoneInfo("Europe/Paris")
 ET_TZ = ZoneInfo("America/New_York")
+JST_TZ = ZoneInfo("Asia/Tokyo")
+AEST_TZ = ZoneInfo("Australia/Sydney")
+CST_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _to_paris_time(event_date: date, hour: int, minute: int, source_tz: ZoneInfo) -> time:
+    """Convert a time in source_tz on event_date to Paris time.
+
+    Handles DST transitions correctly: e.g. 14:00 ET is 20:00 CET in winter
+    but 20:00 CEST in summer (same clock hour, but the UTC offset differs).
+    More importantly, 08:30 ET = 14:30 CET (winter) vs 14:30 CEST (summer),
+    which are both "14:30 Paris wall clock". However, when US and EU DST
+    transitions don't align (2-3 weeks/year), the Paris wall clock shifts by 1h.
+    """
+    source_dt = datetime(
+        event_date.year, event_date.month, event_date.day,
+        hour, minute, tzinfo=source_tz,
+    )
+    paris_dt = source_dt.astimezone(PARIS_TZ)
+    return paris_dt.time()
+
+
+# ── Event priority for context sorting (lower = higher priority) ────
+EVENT_PRIORITY: dict[str, int] = {
+    "FOMC Rate Decision": 1,
+    "BOJ Rate Decision": 2,
+    "ECB Rate Decision": 2,
+    "BOE Rate Decision": 2,
+    "RBA Rate Decision": 2,
+    "PBOC LPR Fixing": 2,
+    "US Non-Farm Payrolls (NFP)": 3,
+    "US CPI Release": 3,
+    "USDA WASDE Report": 4,
+    "USDA Quarterly Grain Stocks": 4,
+    "EIA Weekly Petroleum Status": 5,
+}
 
 
 @dataclass(frozen=True)
 class EconomicEvent:
     name: str
     date: date
-    time_cet: time  # Time in CET/CEST
+    time_cet: time  # Time in CET/CEST (Paris wall clock)
     impact: str  # "high", "medium"
-    currency: str  # "USD", "EUR", "GBP", "JPY", "ALL"
+    currency: str  # "USD", "EUR", "GBP", "JPY", "CNY", "AUD", "ALL"
     blocks_trade: bool = True  # If True, no trade within the window
     hours_before: float = 2.0  # Danger window: hours BEFORE event
     hours_after: float = 1.0   # Danger window: hours AFTER event
@@ -88,6 +124,51 @@ BOE_DATES_2027 = [
 ]
 BOE_DATES = set(BOE_DATES_2025 + BOE_DATES_2026 + BOE_DATES_2027)
 
+# ── BOJ meeting dates 2025-2026 (published by Bank of Japan) ──────
+# Announcement ~12:00 JST — converted to Paris dynamically (DST-safe)
+BOJ_DATES_2025 = [
+    date(2025, 1, 24), date(2025, 3, 14), date(2025, 5, 1),
+    date(2025, 6, 13), date(2025, 7, 31), date(2025, 9, 19),
+    date(2025, 10, 31), date(2025, 12, 19),
+]
+BOJ_DATES_2026 = [
+    date(2026, 1, 23), date(2026, 3, 13), date(2026, 4, 30),
+    date(2026, 6, 12), date(2026, 7, 17), date(2026, 9, 18),
+    date(2026, 10, 30), date(2026, 12, 18),
+]
+BOJ_DATES = set(BOJ_DATES_2025 + BOJ_DATES_2026)
+
+# ── RBA meeting dates 2025-2026 (published by Reserve Bank of Australia) ──
+# Announcement ~14:30 AEDT/AEST — converted to Paris dynamically (DST-safe)
+RBA_DATES_2025 = [
+    date(2025, 2, 18), date(2025, 4, 1), date(2025, 5, 20),
+    date(2025, 7, 8), date(2025, 8, 12), date(2025, 9, 30),
+    date(2025, 11, 4), date(2025, 12, 9),
+]
+RBA_DATES_2026 = [
+    date(2026, 2, 3), date(2026, 3, 17), date(2026, 5, 5),
+    date(2026, 6, 16), date(2026, 8, 4), date(2026, 9, 15),
+    date(2026, 11, 3), date(2026, 12, 8),
+]
+RBA_DATES = set(RBA_DATES_2025 + RBA_DATES_2026)
+
+
+def _generate_pboc_lpr_dates(year: int) -> list[date]:
+    """PBOC LPR fixing is the 20th of each month (or next business day if weekend).
+
+    Time: 09:15 CST (Asia/Shanghai) — converted to Paris dynamically.
+    """
+    dates = []
+    for month in range(1, 13):
+        d = date(year, month, 20)
+        # If weekend, move to next Monday
+        if d.weekday() == 5:  # Saturday
+            d += timedelta(days=2)
+        elif d.weekday() == 6:  # Sunday
+            d += timedelta(days=1)
+        dates.append(d)
+    return dates
+
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
     """Find the nth occurrence of a weekday in a given month.
@@ -103,7 +184,7 @@ def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
 
 
 def _generate_nfp_dates(year: int) -> list[date]:
-    """NFP is released the first Friday of each month at 08:30 ET (14:30 CET)."""
+    """NFP is released the first Friday of each month at 08:30 ET."""
     dates = []
     for month in range(1, 13):
         dates.append(_nth_weekday(year, month, 4, 1))  # First Friday
@@ -173,7 +254,7 @@ USDA_QUARTERLY_DATES = set(
 
 
 def _generate_eia_weekly_dates(year: int) -> list[date]:
-    """EIA Weekly Petroleum Status Report is released every Wednesday at 16:30 CET."""
+    """EIA Weekly Petroleum Status Report is released every Wednesday at 10:30 ET."""
     dates = []
     d = date(year, 1, 1)
     while d.year == year:
@@ -196,12 +277,13 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
     window_end = target_date + timedelta(days=window_days)
 
     # FOMC — rate decisions: widest window (2h before, 2h after)
+    # 14:00 ET — converted to Paris dynamically (DST-safe, C5)
     for d in FOMC_DATES:
         if window_start <= d <= window_end:
             events.append(EconomicEvent(
                 name="FOMC Rate Decision",
                 date=d,
-                time_cet=time(20, 0),  # 14:00 ET = 20:00 CET (approx)
+                time_cet=_to_paris_time(d, 14, 0, ET_TZ),
                 impact="high",
                 currency="USD",
                 blocks_trade=True,
@@ -237,14 +319,61 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 hours_after=1.5,
             ))
 
-    # NFP — data release: fast repricing, tighter window
+    # BOJ — rate decisions at 12:00 JST
+    # Converted to Paris dynamically (DST-safe, C7)
+    for d in BOJ_DATES:
+        if window_start <= d <= window_end:
+            events.append(EconomicEvent(
+                name="BOJ Rate Decision",
+                date=d,
+                time_cet=_to_paris_time(d, 12, 0, JST_TZ),
+                impact="high",
+                currency="JPY",
+                blocks_trade=True,
+                hours_before=2.0,
+                hours_after=1.0,
+            ))
+
+    # RBA — rate decisions at 14:30 AEDT/AEST
+    # Converted to Paris dynamically (DST-safe, C7)
+    for d in RBA_DATES:
+        if window_start <= d <= window_end:
+            events.append(EconomicEvent(
+                name="RBA Rate Decision",
+                date=d,
+                time_cet=_to_paris_time(d, 14, 30, AEST_TZ),
+                impact="high",
+                currency="AUD",
+                blocks_trade=True,
+                hours_before=2.0,
+                hours_after=1.0,
+            ))
+
+    # PBOC LPR — monthly fixing at 09:15 CST (20th of each month)
+    # Converted to Paris dynamically (DST-safe, C7)
+    for year in (target_date.year - 1, target_date.year, target_date.year + 1):
+        for d in _generate_pboc_lpr_dates(year):
+            if window_start <= d <= window_end:
+                events.append(EconomicEvent(
+                    name="PBOC LPR Fixing",
+                    date=d,
+                    time_cet=_to_paris_time(d, 9, 15, CST_TZ),
+                    impact="high",
+                    currency="CNY",
+                    blocks_trade=True,
+                    hours_before=2.0,
+                    hours_after=1.0,
+                ))
+
+    # NFP — data release at 08:30 ET: fast repricing, tighter window
+    # Converted to Paris dynamically (DST-safe, C5)
     for year in (target_date.year - 1, target_date.year, target_date.year + 1):
         for d in _generate_nfp_dates(year):
             if window_start <= d <= window_end:
                 events.append(EconomicEvent(
                     name="US Non-Farm Payrolls (NFP)",
                     date=d,
-                    time_cet=time(14, 30),
+                    time_cet=_to_paris_time(d, 8, 30, ET_TZ),
                     impact="high",
                     currency="USD",
                     blocks_trade=True,
@@ -252,13 +381,14 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                     hours_after=1.0,
                 ))
 
-    # CPI — hardcoded BLS dates, data release: fast repricing
+    # CPI — hardcoded BLS dates at 08:30 ET: fast repricing
+    # Converted to Paris dynamically (DST-safe, C5)
     for d in CPI_DATES:
         if window_start <= d <= window_end:
             events.append(EconomicEvent(
                 name="US CPI Release",
                 date=d,
-                time_cet=time(14, 30),
+                time_cet=_to_paris_time(d, 8, 30, ET_TZ),
                 impact="high",
                 currency="USD",
                 blocks_trade=True,
@@ -266,13 +396,14 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 hours_after=1.0,
             ))
 
-    # WASDE — monthly USDA report, blocks commodity trades
+    # WASDE — monthly USDA report at 12:00 ET, blocks commodity trades
+    # Converted to Paris dynamically (DST-safe, C5)
     for d in WASDE_DATES:
         if window_start <= d <= window_end:
             events.append(EconomicEvent(
                 name="USDA WASDE Report",
                 date=d,
-                time_cet=time(18, 0),  # 12:00 ET = 18:00 CET
+                time_cet=_to_paris_time(d, 12, 0, ET_TZ),
                 impact="high",
                 currency="USD",
                 blocks_trade=True,
@@ -280,13 +411,14 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 hours_after=1.0,
             ))
 
-    # USDA Quarterly (Grain Stocks / Prospective Plantings)
+    # USDA Quarterly (Grain Stocks / Prospective Plantings) at 12:00 ET
+    # Converted to Paris dynamically (DST-safe, C5)
     for d in USDA_QUARTERLY_DATES:
         if window_start <= d <= window_end:
             events.append(EconomicEvent(
                 name="USDA Quarterly Grain Stocks",
                 date=d,
-                time_cet=time(18, 0),
+                time_cet=_to_paris_time(d, 12, 0, ET_TZ),
                 impact="high",
                 currency="USD",
                 blocks_trade=True,
@@ -294,14 +426,15 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
                 hours_after=1.5,
             ))
 
-    # EIA Weekly Petroleum — Wednesdays at 16:30 CET (medium impact, doesn't block)
+    # EIA Weekly Petroleum — Wednesdays at 10:30 ET (medium impact, doesn't block)
+    # Converted to Paris dynamically (DST-safe, C5)
     for year in (target_date.year - 1, target_date.year, target_date.year + 1):
         for d in _generate_eia_weekly_dates(year):
             if window_start <= d <= window_end:
                 events.append(EconomicEvent(
                     name="EIA Weekly Petroleum Status",
                     date=d,
-                    time_cet=time(16, 30),
+                    time_cet=_to_paris_time(d, 10, 30, ET_TZ),
                     impact="medium",
                     currency="USD",
                     blocks_trade=False,  # Doesn't block — our post-EIA scan captures this
@@ -364,6 +497,10 @@ def get_events_context(target_date: date | None = None) -> str:
     events = get_upcoming_events(target_date, window_days=3)
     if not events:
         return ""
+
+    # N1: Sort by impact priority before truncating to top 5
+    # Lower priority number = higher impact (FOMC=1 > ECB/BOJ=2 > NFP=3 > WASDE=4 > EIA=5)
+    events.sort(key=lambda e: (EVENT_PRIORITY.get(e.name, 5), e.date, e.time_cet))
 
     parts = []
     for e in events[:5]:

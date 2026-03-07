@@ -296,12 +296,16 @@ def _find_hit_time(
 
 def _compute_mae_mfe(
     trade: TradeRecommendation, post_entry_bars: list | None,
+    exit_bar_ts=None,
 ) -> tuple[float | None, float | None]:
     """F1: Compute Max Adverse Excursion and Max Favorable Excursion.
 
     MAE = worst unrealized loss during the trade (before outcome)
     MFE = best unrealized gain during the trade (before outcome)
     Both expressed as % of entry price.
+
+    M6: If exit_bar_ts is provided (timestamp of the bar where TP/SL was hit),
+    stop iterating after that bar — bars after the exit are irrelevant.
     """
     if not post_entry_bars or trade.entry_price == 0:
         return None, None
@@ -310,7 +314,7 @@ def _compute_mae_mfe(
     mfe = 0.0  # Best unrealized gain
 
     for bar in post_entry_bars:
-        bar_high, bar_low = bar[1], bar[2]
+        bar_ts, bar_high, bar_low = bar[0], bar[1], bar[2]
         if trade.direction == Direction.LONG:
             # Worst case: bar_low below entry
             adverse = (bar_low - trade.entry_price) / trade.entry_price * 100
@@ -322,6 +326,10 @@ def _compute_mae_mfe(
 
         mae = min(mae, adverse)
         mfe = max(mfe, favorable)
+
+        # M6: Stop after the exit bar — post-exit price action is irrelevant
+        if exit_bar_ts is not None and bar_ts >= exit_bar_ts:
+            break
 
     return round(mae, 4), round(mfe, 4)
 
@@ -342,12 +350,13 @@ def _compute_slippage(
 
     first_open = first_bar[3]
     if trade.direction == Direction.LONG:
-        # Slippage = how much more we paid vs scan price
+        # LONG (buying): paid more than recommended = unfavorable
         slip = (first_open - trade.entry_price) / trade.entry_price * 100
     else:
-        # SHORT: slippage = how much less we sold for
-        slip = (trade.entry_price - first_open) / trade.entry_price * 100
-    return round(-slip, 4)  # Negative = favorable slippage
+        # SHORT (selling): price moved up = sold at worse level = unfavorable
+        slip = (first_open - trade.entry_price) / trade.entry_price * 100
+    # Positive = unfavorable (price moved against), Negative = favorable (price moved in our favor)
+    return round(slip, 4)
 
 
 def _check_price_anomaly(
@@ -648,7 +657,9 @@ def run_daily_journal() -> list[dict]:
     if price_tasks:
         # max_workers capped at 3: Replit kills process on too many concurrent threads.
         # G3: Per-future timeout of 30s
-        with ThreadPoolExecutor(max_workers=min(3, len(price_tasks))) as executor:
+        # O7: Explicit shutdown(wait=False, cancel_futures=True) to avoid blocking
+        executor = ThreadPoolExecutor(max_workers=min(3, len(price_tasks)))
+        try:
             futures = {
                 executor.submit(_fetch_intraday_prices, ticker, trade_date): (ticker, trade_date)
                 for ticker, trade_date in price_tasks
@@ -666,6 +677,8 @@ def run_daily_journal() -> list[dict]:
                     logger.warning("Parallel price fetch failed for %s: %s", key[0], exc)
                     price_cache[key] = (None, None, None, None)
                     price_fetch_failures += 1
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     # E2: Alert if price fetch failure rate is high
     total_fetches = price_fetch_successes + price_fetch_failures
@@ -730,6 +743,13 @@ def run_daily_journal() -> list[dict]:
             trade, day_high, day_low, close, post_bars,
         )
 
+        # M6: Find hit time BEFORE MAE/MFE so we can stop at the exit bar
+        exit_bar_ts = None
+        if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and post_bars:
+            exit_bar_ts_raw = _find_hit_time(trade, result, post_bars)
+            if exit_bar_ts_raw is not None:
+                exit_bar_ts = exit_bar_ts_raw
+
         # F4: Price anomaly detection
         _check_price_anomaly(trade, exit_price)
 
@@ -737,7 +757,8 @@ def run_daily_journal() -> list[dict]:
         slippage = _compute_slippage(trade, post_bars)
 
         # F1: Max Adverse Excursion and Max Favorable Excursion
-        mae, mfe = _compute_mae_mfe(trade, post_bars)
+        # M6: Pass exit_bar_ts to stop iteration at the hit bar
+        mae, mfe = _compute_mae_mfe(trade, post_bars, exit_bar_ts=exit_bar_ts)
 
         # Compute realized R/R (F3 — actual risk vs reward)
         realized_rr = None
@@ -747,18 +768,16 @@ def run_daily_journal() -> list[dict]:
         # P1-#6: Compute actual pricing time and delay accuracy
         actual_pricing_hours = None
         delay_accuracy = None
-        hit_time = None
-        if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and post_bars:
-            # Use intraday bars to find when TP/SL was actually hit
-            hit_time = _find_hit_time(trade, result, post_bars)
-            if hit_time is not None:
-                raw_hours = (hit_time - trade.timestamp).total_seconds() / 3600
-                # B2: Add midpoint correction — bar timestamp is start of bar
-                if bar_interval == "15min":
-                    raw_hours += 0.125  # +7.5min midpoint
-                elif bar_interval == "1h":
-                    raw_hours += 0.5    # +30min midpoint
-                actual_pricing_hours = round(max(0, raw_hours), 2)
+        # M6: Reuse exit_bar_ts from earlier (already computed for MAE/MFE)
+        hit_time = exit_bar_ts
+        if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and hit_time is not None:
+            raw_hours = (hit_time - trade.timestamp).total_seconds() / 3600
+            # B2: Add midpoint correction — bar timestamp is start of bar
+            if bar_interval == "15min":
+                raw_hours += 0.125  # +7.5min midpoint
+            elif bar_interval == "1h":
+                raw_hours += 0.5    # +30min midpoint
+            actual_pricing_hours = round(max(0, raw_hours), 2)
 
         if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and actual_pricing_hours is None:
             # B3: Smart fallback — estimate remaining trading window from entry time

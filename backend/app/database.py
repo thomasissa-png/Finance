@@ -74,11 +74,24 @@ def close_pool():
 def get_conn():
     """Get a connection from the pool as a context manager.
 
+    v5.0 O12: Pre-ping connection to detect stale connections after PG restart.
     Auto-commits on success, rolls back on exception.
     """
     pool = _get_pool()
     conn = pool.getconn()
     try:
+        # v5.0 O12: Pre-ping to detect dead connections
+        try:
+            conn.cursor().execute("SELECT 1")
+        except Exception:
+            logger.warning("Stale PG connection detected, replacing")
+            try:
+                conn.close()
+            except Exception:
+                pass
+            pool.putconn(conn)
+            # Get a fresh connection
+            conn = pool.getconn()
         yield conn
         conn.commit()
     except Exception:
@@ -171,7 +184,13 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     market_regime VARCHAR(20),
     predicted_transmission_delay INTEGER,
     actual_pricing_time_hours DOUBLE PRECISION,
-    delay_accuracy DOUBLE PRECISION
+    delay_accuracy DOUBLE PRECISION,
+    slippage DOUBLE PRECISION,
+    mae DOUBLE PRECISION,
+    mfe DOUBLE PRECISION,
+    bar_coverage INTEGER,
+    bar_interval VARCHAR(10),
+    realized_rr DOUBLE PRECISION
 )
 """
 
@@ -236,6 +255,22 @@ def init_db() -> None:
             """)
 
             cur.execute(_CREATE_LAST_SCANS)
+
+            # v5.0 M7: Add v4.1 journal columns if missing (safe for existing DBs)
+            for col_name, col_type in [
+                ("slippage", "DOUBLE PRECISION"),
+                ("mae", "DOUBLE PRECISION"),
+                ("mfe", "DOUBLE PRECISION"),
+                ("bar_coverage", "INTEGER"),
+                ("bar_interval", "VARCHAR(10)"),
+                ("realized_rr", "DOUBLE PRECISION"),
+            ]:
+                cur.execute(f"""
+                    DO $$ BEGIN
+                        ALTER TABLE journal_entries ADD COLUMN {col_name} {col_type};
+                    EXCEPTION WHEN duplicate_column THEN NULL;
+                    END $$;
+                """)
 
     logger.info("PostgreSQL tables initialized successfully")
 
@@ -332,13 +367,18 @@ def pg_update_trade_result(
                 return False, None
 
             # Calculate PnL (same logic as existing code)
+            # v5.0: Guard against division by zero on entry_price
+            entry_price = row["entry_price"]
+            if not entry_price or entry_price == 0:
+                logger.error("entry_price is 0 for %s — cannot compute PnL", ticker)
+                return False, None
             if row["direction"] == "LONG":
                 pnl_pct = round(
-                    (exit_price - row["entry_price"]) / row["entry_price"] * 100, 4
+                    (exit_price - entry_price) / entry_price * 100, 4
                 )
             else:
                 pnl_pct = round(
-                    (row["entry_price"] - exit_price) / row["entry_price"] * 100, 4
+                    (entry_price - exit_price) / entry_price * 100, 4
                 )
 
             # Update the trade
@@ -370,6 +410,8 @@ _JOURNAL_COLUMNS = [
     "all_scored_news", "rejection_log", "decision_summary", "learning_state",
     "vix_at_trade", "market_regime", "predicted_transmission_delay",
     "actual_pricing_time_hours", "delay_accuracy",
+    # v5.0 M7: v4.1 journal enrichment fields
+    "slippage", "mae", "mfe", "bar_coverage", "bar_interval", "realized_rr",
 ]
 
 _JOURNAL_JSONB_COLS = {"all_scored_news", "rejection_log", "learning_state"}

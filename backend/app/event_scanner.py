@@ -6,7 +6,9 @@ in early-signal feeds, it triggers a full scan immediately (respecting cooldown)
 """
 
 import logging
+import re
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -119,9 +121,13 @@ for category, keywords in HIGH_IMPACT_KEYWORDS.items():
 _last_event_trigger: float = 0.0
 _last_category_trigger: dict[str, float] = {}
 
-# Track seen headlines to avoid re-triggering on the same news
-_seen_headlines: set[str] = set()
+# Track seen headlines to avoid re-triggering on the same news (OrderedDict preserves insertion order)
+_seen_headlines: OrderedDict = OrderedDict()
 _MAX_SEEN = 500  # Prevent unbounded growth
+
+# Per-keyword cooldown for HIGH_PRIORITY keywords (min 10 min between same keyword triggers)
+_last_keyword_trigger: dict[str, float] = {}
+_KEYWORD_COOLDOWN = 600  # 10 minutes in seconds
 
 
 def _check_headline_for_triggers(title: str) -> list[tuple[str, str]]:
@@ -132,7 +138,7 @@ def _check_headline_for_triggers(title: str) -> list[tuple[str, str]]:
     title_lower = title.lower()
     matches = []
     for keyword, category in ALL_KEYWORDS:
-        if keyword in title_lower:
+        if re.search(r'\b' + re.escape(keyword) + r'\b', title_lower):
             matches.append((keyword, category))
     return matches
 
@@ -177,9 +183,9 @@ def scan_feeds_for_triggers() -> list[dict]:
 
     triggers: list[dict] = []
 
-    # Prune seen headlines if too many
-    if len(_seen_headlines) > _MAX_SEEN:
-        _seen_headlines = set(list(_seen_headlines)[-_MAX_SEEN // 2:])
+    # Prune seen headlines if too many (remove oldest entries)
+    while len(_seen_headlines) > _MAX_SEEN:
+        _seen_headlines.popitem(last=False)
 
     # Snapshot seen headlines for thread-safe read (writes happen after)
     seen_snapshot = set(_seen_headlines)
@@ -193,14 +199,14 @@ def scan_feeds_for_triggers() -> list[dict]:
                 results = future.result(timeout=5)
                 for r in results:
                     if r["title"] not in _seen_headlines:
-                        _seen_headlines.add(r["title"])
+                        _seen_headlines[r["title"]] = None
                         triggers.append(r)
             except Exception as exc:
                 logger.debug("Event scan future error: %s", exc)
     except TimeoutError:
         logger.warning("Event scan timed out, some feeds skipped")
     finally:
-        executor.shutdown(wait=True, cancel_futures=True)
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return triggers
 
@@ -218,7 +224,7 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
 
     Returns (should_trigger, trigger_events).
     """
-    global _last_event_trigger, _last_category_trigger
+    global _last_event_trigger, _last_category_trigger, _last_keyword_trigger
 
     now = datetime.now(PARIS_TZ)
 
@@ -248,10 +254,19 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
         trigger_keywords = [kw.lower() for kw in t.get("keywords", [])]
 
         # High-priority keywords bypass category cooldown (only respect 30s global minimum)
-        is_high_priority = any(kw in HIGH_PRIORITY_KEYWORDS for kw in trigger_keywords)
+        # But enforce per-keyword cooldown of 10 min to avoid repeated triggers on same keyword
+        high_priority_keywords = [kw for kw in trigger_keywords if kw in HIGH_PRIORITY_KEYWORDS]
+        is_high_priority = False
+        if high_priority_keywords:
+            # Check per-keyword cooldown: at least one HIGH_PRIORITY keyword must not be on cooldown
+            for kw in high_priority_keywords:
+                last_kw_time = _last_keyword_trigger.get(kw, 0.0)
+                if current_time - last_kw_time >= _KEYWORD_COOLDOWN:
+                    is_high_priority = True
+                    break
 
         # Check category cooldown
-        should_include = is_high_priority  # High priority always passes
+        should_include = is_high_priority  # High priority passes if keyword not on cooldown
         if not should_include:
             for cat in trigger_categories:
                 cat_cooldown = CATEGORY_COOLDOWNS.get(cat, TRIGGER_COOLDOWN_SECONDS)
@@ -279,6 +294,11 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
     for t in filtered_triggers:
         for cat in t.get("categories", []):
             _last_category_trigger[cat] = current_time
+        # Track per-keyword cooldown for HIGH_PRIORITY keywords
+        for kw in t.get("keywords", []):
+            kw_lower = kw.lower()
+            if kw_lower in HIGH_PRIORITY_KEYWORDS:
+                _last_keyword_trigger[kw_lower] = current_time
 
     return True, filtered_triggers
 

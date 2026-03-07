@@ -54,6 +54,14 @@ _scans_lock = threading.Lock()
 
 # (#35) Rate limiting for triggers
 _last_trigger_times: dict[str, float] = {}
+_trigger_lock = threading.Lock()
+
+# M2: Prevent overlapping scans for the same scan_key
+_running_scans: set = set()
+_running_scans_lock = threading.Lock()
+
+# O2: Mutex between recovery thread and journal scheduler
+_journal_lock = threading.Lock()
 
 
 def _load_scans_cache() -> dict[str, dict]:
@@ -123,10 +131,16 @@ def _recover_pending_trades_on_startup() -> None:
                 "Startup recovery: found %d old PENDING trade(s) — running journal to close them",
                 len(old_pending),
             )
-            new_entries = run_daily_journal()
-            logger.info(
-                "Startup recovery: journal created %d entries", len(new_entries),
-            )
+            if not _journal_lock.acquire(blocking=False):
+                logger.warning("Startup recovery: journal lock held — skipping (journal already running)")
+                return
+            try:
+                new_entries = run_daily_journal()
+                logger.info(
+                    "Startup recovery: journal created %d entries", len(new_entries),
+                )
+            finally:
+                _journal_lock.release()
         except Exception as exc:
             logger.error("Startup recovery failed: %s", exc)
 
@@ -196,6 +210,11 @@ def _run_scheduled_scan(scan_key: str) -> None:
     thread stays free, health checks keep responding, Replit stays happy.
     """
     def _scan_worker():
+        with _running_scans_lock:
+            if scan_key in _running_scans:
+                logger.warning("Scheduled scan '%s' already running — skipping", scan_key)
+                return
+            _running_scans.add(scan_key)
         try:
             scan_type_str = SCAN_KEY_TO_TYPE.get(scan_key, scan_key)
             scan_type = ScanType(scan_type_str)
@@ -206,6 +225,9 @@ def _run_scheduled_scan(scan_key: str) -> None:
                 _save_scans_cache(_last_scans)
         except Exception as exc:
             logger.error("Scheduled scan '%s' failed: %s", scan_key, exc)
+        finally:
+            with _running_scans_lock:
+                _running_scans.discard(scan_key)
 
     thread = threading.Thread(target=_scan_worker, daemon=True, name=f"scan-{scan_key}")
     thread.start()
@@ -231,6 +253,12 @@ def _run_us_session_scan() -> None:
 def _run_event_check() -> None:
     """Run event-driven scan check in background thread."""
     def _event_worker():
+        event_key = "__event_check__"
+        with _running_scans_lock:
+            if event_key in _running_scans:
+                logger.warning("Event check already running — skipping")
+                return
+            _running_scans.add(event_key)
         try:
             result = run_event_check()
             if result and result.get("has_trade"):
@@ -241,6 +269,9 @@ def _run_event_check() -> None:
                 logger.info("Event-driven scan produced trade(s) for %s", scan_key)
         except Exception as exc:
             logger.error("Event check failed: %s", exc)
+        finally:
+            with _running_scans_lock:
+                _running_scans.discard(event_key)
 
     thread = threading.Thread(target=_event_worker, daemon=True, name="event-check")
     thread.start()
@@ -270,6 +301,9 @@ def _run_daily_journal() -> None:
     """Run daily journal in background thread (same reason as scans)."""
     def _journal_worker():
         global _last_scans
+        if not _journal_lock.acquire(blocking=False):
+            logger.warning("Daily journal: journal lock held — skipping (journal already running)")
+            return
         try:
             run_daily_journal()
             # Clear scan cache after journal — trades are closed, dashboard should
@@ -280,6 +314,8 @@ def _run_daily_journal() -> None:
             logger.info("Scan cache cleared after daily journal")
         except Exception as exc:
             logger.error("Daily journal failed: %s", exc)
+        finally:
+            _journal_lock.release()
 
     thread = threading.Thread(target=_journal_worker, daemon=True, name="daily-journal")
     thread.start()
@@ -441,15 +477,15 @@ def trigger_scan(scan_type: str):
 
     # (#35) Rate limiting
     now = time.time()
-    last_trigger = _last_trigger_times.get(scan_type, 0)
-    if now - last_trigger < TRIGGER_COOLDOWN_SECONDS:
-        remaining = int(TRIGGER_COOLDOWN_SECONDS - (now - last_trigger))
-        raise HTTPException(
-            status_code=429,
-            detail=f"Cooldown actif. Reessayez dans {remaining}s.",
-        )
-
-    _last_trigger_times[scan_type] = now
+    with _trigger_lock:
+        last_trigger = _last_trigger_times.get(scan_type, 0)
+        if now - last_trigger < TRIGGER_COOLDOWN_SECONDS:
+            remaining = int(TRIGGER_COOLDOWN_SECONDS - (now - last_trigger))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Cooldown actif. Reessayez dans {remaining}s.",
+            )
+        _last_trigger_times[scan_type] = now
 
     # Map scan key to ScanType (supports europe, mid_session, us, us_session)
     if scan_type not in SCAN_KEY_TO_TYPE:
@@ -575,10 +611,10 @@ def get_journal_by_date(date: str):
 def trigger_journal():
     """Manually trigger the daily journal (for testing).
 
-    Returns diagnostic info so the user knows what happened.
+    O3: Runs in a background thread to avoid HTTP timeout.
+    Returns immediately with diagnostic info about pending trades.
+    Poll GET /api/journal for results.
     """
-    global _last_scans
-
     # Pre-check: how many trades exist and how many are PENDING
     from .models import TradeResult
     all_trades = load_trades()
@@ -588,36 +624,38 @@ def trigger_journal():
         len(all_trades), len(pending),
     )
 
-    result = run_daily_journal()
+    def _journal_trigger_worker():
+        global _last_scans
+        if not _journal_lock.acquire(blocking=False):
+            logger.warning("Journal trigger: journal lock held — skipping (journal already running)")
+            return
+        try:
+            result = run_daily_journal()
+            logger.info("Journal trigger: completed with %d entries", len(result) if result else 0)
+            # Clear scan cache — trades are closed, dashboard should reset
+            with _scans_lock:
+                _last_scans = {}
+                _save_scans_cache(_last_scans)
+            logger.info("Scan cache cleared after manual journal trigger")
+        except Exception as exc:
+            logger.error("Journal trigger failed: %s", exc)
+        finally:
+            _journal_lock.release()
 
-    # Clear scan cache — trades are closed, dashboard should reset
-    with _scans_lock:
-        _last_scans = {}
-        _save_scans_cache(_last_scans)
-    logger.info("Scan cache cleared after manual journal trigger")
+    thread = threading.Thread(target=_journal_trigger_worker, daemon=True, name="journal-trigger")
+    thread.start()
 
-    # Always return consistent format: { entries: [...], diagnostic: {...} }
-    if not result:
-        return {
-            "entries": [],
-            "diagnostic": {
-                "total_trades": len(all_trades),
-                "pending_trades": len(pending),
-                "pending_tickers": [t.ticker for t in pending],
-                "message": (
-                    "Aucun trade PENDING a cloturer."
-                    if not pending
-                    else f"{len(pending)} trades PENDING trouves mais aucune entree journal creee."
-                ),
-            },
-        }
     return {
-        "entries": result,
+        "status": "journal_started",
         "diagnostic": {
             "total_trades": len(all_trades),
             "pending_trades": len(pending),
             "pending_tickers": [t.ticker for t in pending],
-            "message": f"{len(result)} entree(s) journal creee(s).",
+            "message": (
+                f"Journal lance en arriere-plan pour {len(pending)} trade(s) PENDING. Consultez GET /api/journal pour les resultats."
+                if pending
+                else "Aucun trade PENDING detecte, journal lance en arriere-plan."
+            ),
         },
     }
 
@@ -792,31 +830,11 @@ def health():
     except Exception:
         status["market_data"] = {"primary": "yfinance"}
 
-    # Data storage checks
-    if is_pg_enabled():
-        from .database import check_connection
-        status["dependencies"]["database"] = "ok" if check_connection() else "error"
-        status["persistence"] = "postgresql"
-    else:
-        trades_file = DATA_DIR / "trades.json"
-        journal_file = DATA_DIR / "journal.json"
-        status["dependencies"]["trades_file"] = "ok" if trades_file.exists() else "missing"
-        status["dependencies"]["journal_file"] = "ok" if journal_file.exists() else "missing"
-        status["persistence"] = "json_files"
-
-    # Data counts for diagnostic (lightweight — just load and count)
-    try:
-        status["data_counts"] = {
-            "trades": len(load_trades()),
-            "journal_entries": len(load_journal()),
-        }
-    except Exception:
-        status["data_counts"] = "error"
+    # Data storage — report mode without I/O
+    status["persistence"] = "postgresql" if is_pg_enabled() else "json_files"
 
     # Degraded only if the critical API key is missing
     if status["dependencies"].get("anthropic_key") == "missing":
-        status["status"] = "degraded"
-    if status["dependencies"].get("database") == "error":
         status["status"] = "degraded"
 
     return status

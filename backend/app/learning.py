@@ -20,7 +20,7 @@ v4.2 audit changes:
 - B1: delay_bias_adj — learning adjustment from transmission_delay accuracy
 - B2: magnitude_accuracy tracking in performance summary
 - B3: Slippage vs estimated spread feedback
-- B4: hour_adj — per-hour-of-day learning adjustment
+- B4: hour_adj — REMOVED (M8: worst data-to-noise ratio)
 - B5: direction_adj — direction accuracy as learning adjustment
 - C1: Regime min trades raised to 15, or merged into 2 buckets
 - C2: Confidence-scaled bounds in adjustments
@@ -313,7 +313,9 @@ def compute_performance() -> PerformanceStats:
 
 def _is_significant(pnl_values: list[float], min_samples: int = 4,
                     t_threshold: float = 1.0,
-                    min_effect_size: float = 0.1) -> bool:
+                    min_effect_size: float = 0.1,
+                    weighted_mean: float | None = None,
+                    weighted_stderr: float | None = None) -> bool:
     """P0-#12: Check if we have enough data for a statistically meaningful adjustment.
 
     Requires:
@@ -323,24 +325,35 @@ def _is_significant(pnl_values: list[float], min_samples: int = 4,
     3. v4.2 A3: Minimum effect size — |mean| must be at least min_effect_size
        to avoid adjusting on negligible signals
 
-    v3.4: t_threshold is configurable per dimension.
-    Per-ticker uses 1.5 (stricter — small samples, high noise).
-    Per-category/session/newscat uses 1.0 (larger pool, less noise).
+    v3.4/M8: t_threshold is configurable per dimension.
+    Per-ticker uses 2.0 (stricter — small samples, high noise).
+    Per-category/session/newscat/regime uses 1.5 (larger pool, less noise).
 
     v4.2 A2: When stderr=0 (all identical values), check minimum effect size
     instead of blindly returning True. All-zero PnL values are not a signal.
+
+    C2: If weighted_mean and weighted_stderr are provided, use those for the
+    significance test instead of computing unweighted statistics from pnl_values.
+    This ensures the significance test matches the decay-weighted values actually
+    used for the adjustment computation.
     """
     if len(pnl_values) < min_samples:
         return False
     if len(pnl_values) < 2:
         return False
     try:
-        mean = statistics.mean(pnl_values)
+        # C2: Use pre-computed decay-weighted mean/stderr if provided
+        if weighted_mean is not None and weighted_stderr is not None:
+            mean = weighted_mean
+            stderr = weighted_stderr
+        else:
+            mean = statistics.mean(pnl_values)
+            stdev = statistics.stdev(pnl_values)
+            stderr = stdev / math.sqrt(len(pnl_values))
+
         # A3: Minimum effect size — ignore negligible average PnL
         if abs(mean) < min_effect_size:
             return False
-        stdev = statistics.stdev(pnl_values)
-        stderr = stdev / math.sqrt(len(pnl_values))
         if stderr == 0:
             # A2: All identical non-zero values — check effect size instead of blind True
             return abs(mean) >= min_effect_size
@@ -369,16 +382,23 @@ def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float =
         logger.warning("_compute_adjustment: zero total weight (possible data issue)")
         return None
 
-    # P0-#12: Significance check on raw PnL values
+    # v3.4 #6: PnL-signed signal — decay-weighted average PnL
+    avg_pnl = sum(p * w for p, w in entries) / total_w
+
+    # C2: Compute decay-weighted stderr for significance test on weighted values
+    # Weighted variance: sum(w_i * (x_i - avg)^2) / total_w
+    weighted_var = sum(w * (p - avg_pnl) ** 2 for p, w in entries) / total_w
+    weighted_stderr = math.sqrt(weighted_var / len(entries)) if weighted_var > 0 else 0.0
+
+    # P0-#12: Significance check on decay-weighted values (C2: uses weighted mean/stderr)
     pnl_values = [p for p, _ in entries]
     if not _is_significant(pnl_values, min_samples=min_significant,
-                           t_threshold=t_threshold):
+                           t_threshold=t_threshold,
+                           weighted_mean=avg_pnl,
+                           weighted_stderr=weighted_stderr):
         logger.debug("_compute_adjustment: not significant (n=%d, t_thresh=%.1f)",
                       len(pnl_values), t_threshold)
         return None
-
-    # v3.4 #6: PnL-signed signal — decay-weighted average PnL
-    avg_pnl = sum(p * w for p, w in entries) / total_w
     # v4.2 A4: Normalize by 1.0 (1% PnL = full-strength signal)
     # Previously divided by 2.0 which halved the sensitivity — a 1% avg PnL
     # only produced a 0.125 adjustment instead of 0.25
@@ -393,7 +413,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
 
     Uses temporal decay: recent trades weigh more than old ones.
     Also computes per-category, per-session (#28), per-news_category (#29),
-    per-regime (#1 v3.4), per-hour (B4 v4.2), delay_bias (B1 v4.2),
+    per-regime (#1 v3.4), delay_bias (B1 v4.2),
     and direction (B5 v4.2) adjustments.
 
     Returns dict with:
@@ -401,7 +421,6 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     - "session_adj": dict[scan_type, multiplier] — applied by caller based on current scan
     - "newscat_adj": dict[news_category, multiplier] — applied by caller based on current news
     - "regime_adj": dict[regime, multiplier] — applied by caller based on current VIX regime
-    - "hour_adj": dict[hour_label, multiplier] — v4.2 B4: applied by hour of entry
     - "direction_adj": dict[direction, multiplier] — v4.2 B5: LONG vs SHORT accuracy
     - "delay_bias_adj": float — v4.2 B1: adjustment from delay prediction accuracy
     - "decomposition": dict[ticker, {ticker_mult, cat_mult}] — for diagnostics (#8)
@@ -409,39 +428,53 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     v4.2 changes:
     - D1: Lookback reduced to 2x half_life (was 180 days fixed)
     - B1: delay_bias_adj from transmission_delay accuracy data
-    - B4: hour_adj per hour-of-day
     - B5: direction_adj LONG/SHORT accuracy
     - C1: Regime min trades raised to 15, merged to 2 buckets (calm+normal, elevated+stress)
-    - C2: Confidence-scaled bounds (high-confidence → tighter bounds)
+    - C2: Significance test on decay-weighted values (weighted mean/stderr)
+    - C3: Half-life computed after lookback filter
+    - M8: hour_adj removed (worst data-to-noise ratio), t-stat thresholds raised
     """
     if trades is None:
         trades = load_trades()
     closed = [t for t in trades if t.result != TradeResult.PENDING]
 
-    # (#30) Adaptive decay
-    half_life = _get_decay_half_life(len(closed))
-
-    # D1: Lookback = 2x half_life (was 180 days fixed) — tighter focus on recent data
-    lookback_days = int(half_life * 2)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    # C3: Initial generous lookback filter (180 days), then compute half_life from filtered set
+    initial_cutoff = datetime.now(timezone.utc) - timedelta(days=180)
     recent_closed = []
     for t in closed:
         ts = t.timestamp
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        if ts > cutoff:
+        if ts > initial_cutoff:
             recent_closed.append(t)
     if len(recent_closed) < len(closed):
-        logger.info("D1: Filtered %d → %d trades (last %d days = 2x half_life)",
-                     len(closed), len(recent_closed), lookback_days)
+        logger.info("C3: Initial filter %d → %d trades (last 180 days)",
+                     len(closed), len(recent_closed))
     closed = recent_closed
+
+    # (#30) Adaptive decay — computed AFTER lookback filter (C3)
+    half_life = _get_decay_half_life(len(closed))
+
+    # D1: Tighten lookback to 2x half_life (computed from filtered set)
+    lookback_days = int(half_life * 2)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    tighter_closed = []
+    for t in closed:
+        ts = t.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts > cutoff:
+            tighter_closed.append(t)
+    if len(tighter_closed) < len(closed):
+        logger.info("D1: Filtered %d → %d trades (last %d days = 2x half_life)",
+                     len(closed), len(tighter_closed), lookback_days)
+    closed = tighter_closed
 
     empty_result = {
         "adjustments": {},
         "session_adj": {},
         "newscat_adj": {},
         "regime_adj": {},
-        "hour_adj": {},
         "direction_adj": {},
         "delay_bias_adj": 1.0,
         "decomposition": {},
@@ -451,7 +484,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         logger.info("Not enough closed trades for learning: %d < 5", len(closed))
         return empty_result
 
-    # ── Per-ticker adjustments (v3.4 #3: stricter — t>1.5, min 8) ────
+    # ── Per-ticker adjustments (M8: stricter — t>2.0, min 8) ────
     ticker_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
@@ -462,7 +495,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     for ticker, entries in ticker_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.5, pnl_cap=0.25,
                                   bounds=(0.5, 1.5), min_significant=8,
-                                  t_threshold=1.5)
+                                  t_threshold=2.0)
         if adj is not None:
             ticker_adj[ticker] = adj
 
@@ -476,7 +509,8 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     cat_adj: dict[str, float] = {}
     for cat, entries in cat_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.7, 1.3), min_significant=5)
+                                  bounds=(0.7, 1.3), min_significant=5,
+                                  t_threshold=1.5)
         if adj is not None:
             cat_adj[cat] = adj
 
@@ -490,7 +524,8 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     session_adj: dict[str, float] = {}
     for scan_type, entries in session_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.2, pnl_cap=0.1,
-                                  bounds=(0.8, 1.2), min_significant=5)
+                                  bounds=(0.8, 1.2), min_significant=5,
+                                  t_threshold=1.5)
         if adj is not None:
             session_adj[scan_type] = adj
 
@@ -504,7 +539,8 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     newscat_adj: dict[str, float] = {}
     for ncat, entries in newscat_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.7, 1.3), min_significant=5)
+                                  bounds=(0.7, 1.3), min_significant=5,
+                                  t_threshold=1.5)
         if adj is not None:
             newscat_adj[ncat] = adj
 
@@ -525,30 +561,12 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     regime_adj: dict[str, float] = {}
     for regime, entries in regime_weighted.items():
         # C1: min 15 trades for regime (was 5 — too few leads to overfitting)
+        # M8: t_threshold raised to 1.5
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.7, 1.3), min_significant=15)
+                                  bounds=(0.7, 1.3), min_significant=15,
+                                  t_threshold=1.5)
         if adj is not None:
             regime_adj[regime] = adj
-
-    # ── v4.2 B4: Per-hour adjustments ──
-    hour_adj_weighted: dict[str, list[tuple[float, float]]] = {}
-    for t in closed:
-        if t.pnl_pct is not None:
-            try:
-                from zoneinfo import ZoneInfo
-                ts_paris = t.timestamp.astimezone(ZoneInfo("Europe/Paris"))
-                hour_label = f"{ts_paris.hour:02d}h"
-            except Exception:
-                hour_label = "unknown"
-            w = _compute_decay_weight(t.timestamp, half_life)
-            hour_adj_weighted.setdefault(hour_label, []).append((t.pnl_pct, w))
-
-    hour_adj: dict[str, float] = {}
-    for h, entries in hour_adj_weighted.items():
-        adj = _compute_adjustment(entries, sensitivity=0.2, pnl_cap=0.1,
-                                  bounds=(0.85, 1.15), min_significant=8)
-        if adj is not None:
-            hour_adj[h] = adj
 
     # ── v4.2 B5: Direction accuracy adjustment ──
     dir_weighted: dict[str, list[tuple[float, float]]] = {}
@@ -588,7 +606,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
                 logger.info("B1: delay_bias_adj=%.3f (avg_error=%.1f)", delay_bias_adj, avg_error)
 
     # ── Multiplicative blend: ticker * category only ──────────────
-    # v3.4 #2/#4: session, newscat, regime, hour, direction returned separately
+    # v3.4 #2/#4: session, newscat, regime, direction returned separately
     from .config import ASSET_BY_TICKER
     adjustments: dict[str, float] = {}
     decomposition: dict[str, dict] = {}
@@ -612,9 +630,9 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
 
     # Log per-dimension decomposition
     logger.info("Learning v4.2: %d tickers, %d categories, %d sessions, %d news_cats, "
-                "%d regimes, %d hours, %d directions, delay_bias=%.3f, half_life=%.0fd",
+                "%d regimes, %d directions, delay_bias=%.3f, half_life=%.0fd",
                 len(adjustments), len(cat_adj), len(session_adj),
-                len(newscat_adj), len(regime_adj), len(hour_adj),
+                len(newscat_adj), len(regime_adj),
                 len(direction_adj), delay_bias_adj, half_life)
     if decomposition:
         for ticker, dec in sorted(decomposition.items()):
@@ -628,8 +646,6 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         logger.info("  NewsCategory adj: %s", newscat_adj)
     if regime_adj:
         logger.info("  Regime adj: %s", regime_adj)
-    if hour_adj:
-        logger.info("  Hour adj: %s", hour_adj)
     if direction_adj:
         logger.info("  Direction adj: %s", direction_adj)
 
@@ -638,7 +654,6 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         "session_adj": session_adj,
         "newscat_adj": newscat_adj,
         "regime_adj": regime_adj,
-        "hour_adj": hour_adj,
         "direction_adj": direction_adj,
         "delay_bias_adj": delay_bias_adj,
         "decomposition": decomposition,

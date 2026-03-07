@@ -1056,9 +1056,9 @@ class TestJournalAuditV41:
         bars = [(datetime.now(timezone.utc), 102.0, 99.0, 100.5, 101.0)]
         slip = _compute_slippage(trade, bars)
         # first_open=100.5, entry=100 → price moved against us: (100.5-100)/100 = 0.5%
-        # Returned as negative of (first_open - entry)/entry for LONG
+        # M9: Positive = unfavorable (price moved against), Negative = favorable
         assert slip is not None
-        assert abs(slip - (-0.5)) < 0.01
+        assert abs(slip - 0.5) < 0.01
 
     def test_compute_slippage_no_bars(self):
         """B5: No bars returns None."""

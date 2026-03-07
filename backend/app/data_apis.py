@@ -115,6 +115,24 @@ def fetch_eia_data() -> list[NewsItem]:
             elif "Refinery" in description:
                 tickers = ["CL=F", "BZ=F"]
 
+            # Extract period date from response for accurate published timestamp
+            period_str = ""
+            if isinstance(series_data[0], list):
+                period_str = str(series_data[0][0]) if series_data[0][0] else ""
+            else:
+                period_str = series_data[0].get("period", "")
+            try:
+                # EIA periods can be "YYYYMMDD", "YYYY-MM-DD", or "YYYYMM"
+                clean = period_str.replace("-", "").strip()
+                if len(clean) == 8:
+                    published_dt = datetime.strptime(clean, "%Y%m%d").replace(tzinfo=timezone.utc)
+                elif len(clean) == 6:
+                    published_dt = datetime.strptime(clean, "%Y%m").replace(tzinfo=timezone.utc)
+                else:
+                    published_dt = datetime.now(timezone.utc)
+            except (ValueError, TypeError):
+                published_dt = datetime.now(timezone.utc)
+
             # Build a precise headline with numbers
             direction = "hausse" if change > 0 else "baisse"
             title = (
@@ -126,7 +144,7 @@ def fetch_eia_data() -> list[NewsItem]:
                 title=title,
                 source="EIA",
                 url=f"https://www.eia.gov/petroleum/supply/weekly/",
-                published=datetime.now(timezone.utc),
+                published=published_dt,
                 related_tickers=tickers,
                 source_weight=SOURCE_WEIGHTS.get("EIA", 1.15),
             ))
@@ -999,6 +1017,12 @@ def fetch_usda_crop_data() -> list[NewsItem]:
                     except (ValueError, TypeError):
                         pass
 
+            # Parse week_ending for accurate published timestamp
+            try:
+                usda_published_dt = datetime.strptime(week.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                usda_published_dt = datetime.now(timezone.utc)
+
             title = (
                 f"[USDA DATA] {q['label']} — {stat}: {value}%{wow_str} "
                 f"(semaine du {week})"
@@ -1007,7 +1031,7 @@ def fetch_usda_crop_data() -> list[NewsItem]:
                 title=title,
                 source="USDA",
                 url="https://quickstats.nass.usda.gov/",
-                published=datetime.now(timezone.utc),
+                published=usda_published_dt,
                 related_tickers=q["tickers"],
                 source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
             ))
@@ -1166,6 +1190,12 @@ def fetch_cot_data() -> list[NewsItem]:
         latest_date = sorted_dates[0]
         previous_date = sorted_dates[1] if len(sorted_dates) > 1 else None
 
+        # Parse report date for accurate published timestamp
+        try:
+            cot_published_dt = datetime.strptime(latest_date.strip(), "%y%m%d").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            cot_published_dt = datetime.now(timezone.utc)
+
         # Parse both weeks
         latest_data = _parse_cot_by_date(lines, col_map, latest_date)
         previous_data = _parse_cot_by_date(lines, col_map, previous_date) if previous_date else {}
@@ -1199,7 +1229,7 @@ def fetch_cot_data() -> list[NewsItem]:
                         title=title,
                         source="CFTC",
                         url="https://www.cftc.gov/dea/futures/deacmelf.htm",
-                        published=datetime.now(timezone.utc),
+                        published=cot_published_dt,
                         related_tickers=[info["ticker"]],
                         source_weight=1.1,  # Higher weight for change signals
                     ))
@@ -1216,7 +1246,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     title=title,
                     source="CFTC",
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
-                    published=datetime.now(timezone.utc),
+                    published=cot_published_dt,
                     related_tickers=[info["ticker"]],
                     source_weight=1.05,
                 ))
@@ -1234,7 +1264,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     title=title,
                     source="CFTC",
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
-                    published=datetime.now(timezone.utc),
+                    published=cot_published_dt,
                     related_tickers=[info["ticker"]],
                     source_weight=1.05,
                 ))
@@ -1250,7 +1280,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     title=title,
                     source="CFTC",
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
-                    published=datetime.now(timezone.utc),
+                    published=cot_published_dt,
                     related_tickers=[info["ticker"]],
                     source_weight=1.05,
                 ))
@@ -1268,7 +1298,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     title=title,
                     source="CFTC",
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
-                    published=datetime.now(timezone.utc),
+                    published=cot_published_dt,
                     related_tickers=[info["ticker"]],
                     source_weight=1.1,
                 ))
@@ -1284,7 +1314,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     title=title,
                     source="CFTC",
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
-                    published=datetime.now(timezone.utc),
+                    published=cot_published_dt,
                     related_tickers=[info["ticker"]],
                     source_weight=1.1,
                 ))
@@ -1614,13 +1644,25 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
             # Use region-specific tickers if available, otherwise fall back to category default
             final_tickers = region_tickers if region_tickers else matched_tickers
 
+            # Parse event date from geometry for accurate published timestamp
+            eonet_published_dt = datetime.now(timezone.utc)
+            if geometry:
+                event_date_str = geometry[-1].get("date", "")
+                if event_date_str:
+                    try:
+                        # EONET dates are ISO 8601: "2025-08-12T00:00:00Z"
+                        clean = event_date_str.replace("Z", "+00:00")
+                        eonet_published_dt = datetime.fromisoformat(clean)
+                    except (ValueError, TypeError):
+                        pass
+
             title = f"[NASA EONET] {label}: {title_raw}{location_str}"
 
             items.append(NewsItem(
                 title=title,
                 source="NASA EONET",
                 url=event.get("link", "https://eonet.gsfc.nasa.gov/"),
-                published=datetime.now(timezone.utc),
+                published=eonet_published_dt,
                 related_tickers=list(set(final_tickers)),
                 source_weight=1.1,
             ))
@@ -1714,6 +1756,12 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                     if injection is not None:
                         injection_str = f", {'injection' if injection >= 0 else 'soutirage'}: {abs(injection):.2f} TWh/j"
 
+                    # Parse gasDayStart for accurate published timestamp
+                    try:
+                        agsi_published_dt = datetime.strptime(gas_date.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError):
+                        agsi_published_dt = datetime.now(timezone.utc)
+
                     title = (
                         f"[GIE AGSI] Stockage gaz EU: {full_pct:.1f}% plein"
                         f"{' — niveau ' + alert if alert else ''}"
@@ -1723,7 +1771,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                         title=title,
                         source="GIE AGSI",
                         url="https://agsi.gie.eu/",
-                        published=datetime.now(timezone.utc),
+                        published=agsi_published_dt,
                         related_tickers=["NG=F"],
                         source_weight=1.1,
                     ))
@@ -1749,6 +1797,12 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
 
             # Only alert on country level if it's significantly diverging from normal
             if full_pct < thresholds["critical_low"]:
+                # Parse gasDayStart for accurate published timestamp
+                try:
+                    country_published_dt = datetime.strptime(gas_date.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    country_published_dt = datetime.now(timezone.utc)
+
                 title = (
                     f"[GIE AGSI] ALERTE {country_name}: stockage gaz {full_pct:.1f}% — "
                     f"CRITIQUE BAS (seuil saison {season}: {thresholds['critical_low']}%) — "
@@ -1758,7 +1812,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                     title=title,
                     source="GIE AGSI",
                     url="https://agsi.gie.eu/",
-                    published=datetime.now(timezone.utc),
+                    published=country_published_dt,
                     related_tickers=["NG=F"],
                     source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),  # Country-level stress
                 ))
@@ -1896,6 +1950,18 @@ def fetch_usda_wasde() -> list[NewsItem]:
                     except (ValueError, TypeError):
                         pass
 
+            # Parse load_time or week_ending for accurate published timestamp
+            wasde_date_str = latest.get("load_time", latest.get("week_ending", ""))
+            try:
+                if wasde_date_str:
+                    # load_time format: "2025-08-12 00:00:00" or "YYYY-MM-DD"
+                    clean_date = wasde_date_str.strip().split(" ")[0]
+                    wasde_published_dt = datetime.strptime(clean_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                else:
+                    wasde_published_dt = datetime.now(timezone.utc)
+            except (ValueError, TypeError):
+                wasde_published_dt = datetime.now(timezone.utc)
+
             title = (
                 f"[WASDE] {q['label']} — {q['statisticcat_desc'].title()}: "
                 f"{value} {unit} ({period} {current_year}){revision_str}"
@@ -1904,7 +1970,7 @@ def fetch_usda_wasde() -> list[NewsItem]:
                 title=title,
                 source="USDA",
                 url="https://www.usda.gov/oce/commodity/wasde",
-                published=datetime.now(timezone.utc),
+                published=wasde_published_dt,
                 related_tickers=q["tickers"],
                 source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
             ))
@@ -2191,6 +2257,16 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
                     title_lower = entry.get("title", "").lower()
                     for disease, info in disease_keywords.items():
                         if disease in title_lower:
+                            # Parse RSS published date
+                            rss_published_dt = datetime.now(timezone.utc)
+                            if hasattr(entry, "published_parsed") and entry.published_parsed:
+                                try:
+                                    import calendar
+                                    rss_published_dt = datetime.fromtimestamp(
+                                        calendar.timegm(entry.published_parsed), tz=timezone.utc
+                                    )
+                                except (ValueError, TypeError, OverflowError):
+                                    pass
                             title = (
                                 f"[WOAH ALERTE] {info['severity']}: {entry.get('title', '')} — "
                                 f"Impact potentiel betail/feed"
@@ -2199,7 +2275,7 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
                                 title=title,
                                 source="WOAH",
                                 url=entry.get("link", "https://wahis.woah.org/"),
-                                published=datetime.now(timezone.utc),
+                                published=rss_published_dt,
                                 related_tickers=info["tickers"],
                                 source_weight=SOURCE_WEIGHTS.get("WOAH", 1.15),
                             ))
@@ -2219,6 +2295,18 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
 
             for disease_key, info in disease_keywords.items():
                 if disease_key in disease_name:
+                    # Parse eventDate for accurate published timestamp
+                    woah_published_dt = datetime.now(timezone.utc)
+                    if event_date:
+                        try:
+                            # WOAH dates: "2025-08-12", "2025-08-12T00:00:00Z", or "2025-08-12T00:00:00"
+                            clean = event_date.strip().replace("Z", "+00:00")
+                            if "T" in clean:
+                                woah_published_dt = datetime.fromisoformat(clean)
+                            else:
+                                woah_published_dt = datetime.strptime(clean.split(" ")[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                        except (ValueError, TypeError):
+                            pass
                     title = (
                         f"[WOAH ALERTE] {info['severity']} — {disease_name.title()} "
                         f"detecte en {country} ({event_date}) — "
@@ -2228,7 +2316,7 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
                         title=title,
                         source="WOAH",
                         url="https://wahis.woah.org/",
-                        published=datetime.now(timezone.utc),
+                        published=woah_published_dt,
                         related_tickers=info["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("WOAH", 1.15),
                     ))
@@ -2681,9 +2769,9 @@ def collect_structured_data() -> list[NewsItem]:
         ("dark_pool", fetch_dark_pool_signals),
     ]
 
-    # max_workers=3: Replit kills process on too many concurrent threads.
-    # 17 sources / 3 workers = ~6 waves. Slower but avoids thread limit crash.
-    executor = ThreadPoolExecutor(max_workers=3)
+    # max_workers=5: balanced concurrency for 17 sources.
+    # 17 sources / 5 workers = ~4 waves.
+    executor = ThreadPoolExecutor(max_workers=5)
     futures = {executor.submit(fn): name for name, fn in sources}
     try:
         for future in as_completed(futures, timeout=120):

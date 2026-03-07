@@ -1,8 +1,20 @@
 """Data models for the news trading application."""
 
+import logging
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
+
+# v5.0 O11: Canonical news categories — validated across the system
+VALID_NEWS_CATEGORIES = {
+    "earnings", "macro", "geopolitical", "regulatory", "m_a",
+    "sector", "commodity", "weather", "supply_chain",
+    "central_bank_subtle", "other",
+}
 
 
 class Direction(str, Enum):
@@ -59,6 +71,15 @@ class ScoredNews(BaseModel):
     category_score_mult: float = 1.0  # Edge-priority multiplier from config
     chain_reactions: list[ChainReaction] = Field(default_factory=list)
     convergence_count: int = 0  # v3.6: number of independent sources confirming signal
+
+    # v5.0 O11: Validate news_category against canonical set
+    @field_validator("news_category")
+    @classmethod
+    def _validate_news_category(cls, v: str) -> str:
+        if v not in VALID_NEWS_CATEGORIES:
+            logger.warning("Unknown news_category '%s' — defaulting to 'other'", v)
+            return "other"
+        return v
 
     @property
     def total_score(self) -> float:
@@ -167,6 +188,15 @@ class TradeRecommendation(BaseModel):
     price_at_scan: float | None = None               # Ticker price when scan ran
     publication_move_pct: float | None = None        # Move from publication to scan
 
+    # v5.0 O11: Validate news_category
+    @field_validator("news_category")
+    @classmethod
+    def _validate_news_category(cls, v: str) -> str:
+        if v not in VALID_NEWS_CATEGORIES:
+            logger.warning("Unknown news_category '%s' in TradeRecommendation — defaulting to 'other'", v)
+            return "other"
+        return v
+
 
 class ScanResult(BaseModel):
     """Full result of a scan — may contain multiple trades (v3.5).
@@ -260,6 +290,15 @@ class JournalEntry(BaseModel):
     bar_coverage: int | None = None              # Number of post-entry bars available
     bar_interval: str | None = None              # Bar interval used (15min, 1h, 1day)
     realized_rr: float | None = None             # Actual risk/reward ratio achieved
+
+    # v5.0 O11: Validate news_category
+    @field_validator("news_category")
+    @classmethod
+    def _validate_news_category(cls, v: str) -> str:
+        if v not in VALID_NEWS_CATEGORIES:
+            logger.warning("Unknown news_category '%s' in JournalEntry — defaulting to 'other'", v)
+            return "other"
+        return v
 
 
 class PerformanceStats(BaseModel):

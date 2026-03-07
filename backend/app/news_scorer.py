@@ -24,6 +24,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -112,10 +114,12 @@ def _get_model() -> str:
     return os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL)
 
 
-# ── v4.3 F2: Score cache ────────────────────────────────────────
+# ── v4.3 F2: Score cache (v5.0: thread-safe, stores post-hard-cap values) ──
 # Cache scored headlines by hash(title+description) to avoid re-scoring
 # the same news across consecutive scans. TTL 4 hours.
+# v5.0 C1: Cache stores POST-hard-cap values to avoid bypassing safety caps.
 _score_cache: dict[str, tuple[dict, float]] = {}  # hash -> (score_entry, timestamp)
+_score_cache_lock = threading.Lock()
 SCORE_CACHE_TTL_SECONDS = 4 * 3600  # 4 hours
 
 
@@ -127,23 +131,25 @@ def _get_cache_key(title: str, description: str | None) -> str:
 
 def _get_cached_score(key: str) -> dict | None:
     """Return cached score if exists and not expired."""
-    if key in _score_cache:
-        entry, ts = _score_cache[key]
-        if time.time() - ts < SCORE_CACHE_TTL_SECONDS:
-            return entry
-        del _score_cache[key]
+    with _score_cache_lock:
+        if key in _score_cache:
+            entry, ts = _score_cache[key]
+            if time.time() - ts < SCORE_CACHE_TTL_SECONDS:
+                return entry
+            del _score_cache[key]
     return None
 
 
 def _set_cached_score(key: str, score_entry: dict) -> None:
     """Store a score in the cache."""
-    _score_cache[key] = (score_entry, time.time())
-    # Prune old entries
-    now = time.time()
-    stale = [k for k, (_, ts) in _score_cache.items()
-             if now - ts > SCORE_CACHE_TTL_SECONDS]
-    for k in stale:
-        del _score_cache[k]
+    with _score_cache_lock:
+        _score_cache[key] = (score_entry, time.time())
+        # Prune old entries
+        now = time.time()
+        stale = [k for k, (_, ts) in _score_cache.items()
+                 if now - ts > SCORE_CACHE_TTL_SECONDS]
+        for k in stale:
+            del _score_cache[k]
 
 
 # ── v4.3 F4: Token usage tracking ───────────────────────────────
@@ -551,24 +557,23 @@ Headlines :
                 timeout=120.0,  # 120s timeout — generous margin for API congestion
             )
 
-            # v4.3 F4: Track token usage
-            if hasattr(response, "usage"):
-                _scan_token_usage["input_tokens"] += getattr(response.usage, "input_tokens", 0)
-                _scan_token_usage["output_tokens"] += getattr(response.usage, "output_tokens", 0)
-                _scan_token_usage["scans"] += 1
-                # Log cache performance if available
-                cache_read = getattr(response.usage, "cache_read_input_tokens", 0)
-                cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0)
-                if cache_read > 0 or cache_creation > 0:
-                    logger.info("Prompt cache: read=%d, creation=%d tokens",
-                                cache_read, cache_creation)
-
             # Detect truncation — if max_tokens was hit, scores are likely incomplete
             if response.stop_reason == "max_tokens":
                 logger.warning("Claude response truncated (max_tokens hit, attempt %d) — retrying", attempt + 1)
                 if attempt < max_retries:
                     time.sleep(2 ** attempt)
                     continue
+
+            # v5.0 N4: Track token usage only on final successful response (not retries)
+            if hasattr(response, "usage"):
+                _scan_token_usage["input_tokens"] += getattr(response.usage, "input_tokens", 0)
+                _scan_token_usage["output_tokens"] += getattr(response.usage, "output_tokens", 0)
+                # Log cache performance if available
+                cache_read = getattr(response.usage, "cache_read_input_tokens", 0)
+                cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0)
+                if cache_read > 0 or cache_creation > 0:
+                    logger.info("Prompt cache: read=%d, creation=%d tokens",
+                                cache_read, cache_creation)
 
             # (#9) Extract structured tool_use response
             for block in response.content:
@@ -704,6 +709,10 @@ def score_news_batch(
                 direction = Direction.NEUTRAL
             news_cat = cached.get("news_category", "other")
             cat_mult = CATEGORY_SCORE_MULTIPLIERS.get(news_cat, 0.7)
+            # v5.0 O4: Restore accumulation boost from cached entry
+            cached_accum = cached.get("_accumulation_boost", 1.0)
+            if cached_accum > 1.0:
+                cat_mult *= cached_accum
             impacted = cached.get("impacted_tickers", [])
             chain_reactions = _detect_chain_reactions(impacted, direction)
             for cr in chain_reactions:
@@ -714,6 +723,7 @@ def score_news_batch(
                 surprise=cached.get("surprise", 0),
                 freshness=freshness,
                 directional_clarity=cached.get("directional_clarity", 0),
+                # v5.0 C1: These are now post-hard-cap values from cache
                 transmission_delay=cached.get("transmission_delay", 50),
                 market_awareness=cached.get("market_awareness", 50),
                 expected_magnitude=cached.get("expected_magnitude", 50),
@@ -749,6 +759,9 @@ def score_news_batch(
             batch_scored = _score_batch(client, batch_items, session_context, batch_start)
             claude_scored.extend(batch_scored)
 
+        # v5.0 N5: Increment scan counter once per score_news_batch call (not per batch)
+        _scan_token_usage["scans"] += 1
+
     # Combine all sources
     all_scored = pre_filtered_scored + cached_scored + claude_scored
     all_scored.sort(key=lambda s: s.total_score, reverse=True)
@@ -779,6 +792,7 @@ def _score_batch(
     (used to map scores back to the correct NewsItem).
     """
     # Build the headlines payload — include description when available for more context
+    # v5.0 O6: Sanitize titles/descriptions to mitigate prompt injection from RSS feeds
     headlines = []
     for i, item in enumerate(batch_items):
         age_str = ""
@@ -786,8 +800,12 @@ def _score_batch(
             age_h = (datetime.now(timezone.utc) - item.published).total_seconds() / 3600
             age_str = f" [il y a {age_h:.1f}h]"
         tickers_str = f" (lie a: {', '.join(item.related_tickers)})" if item.related_tickers else ""
-        desc_str = f" | {item.description}" if item.description else ""
-        headlines.append(f"{i+1}. {item.title}{desc_str}{tickers_str}{age_str}")
+        # Sanitize: strip HTML tags, truncate, remove control chars
+        safe_title = re.sub(r'<[^>]+>', '', item.title or "")[:200]
+        safe_desc = ""
+        if item.description:
+            safe_desc = f" | {re.sub(r'<[^>]+>', '', item.description)[:300]}"
+        headlines.append(f"{i+1}. {safe_title}{safe_desc}{tickers_str}{age_str}")
 
     scores = _call_claude_with_retry(client, headlines, session_context)
 
@@ -795,14 +813,24 @@ def _score_batch(
         return []
 
     # v4.0: Build direction map for convergence validation (first pass)
+    # v5.0 O5: Also build ticker map with chain reactions for symmetric convergence
     scored_directions: dict[int, Direction] = {}
+    scored_tickers: dict[int, list[str]] = {}
     for entry in scores:
         idx = entry.get("index", 0) - 1
         if 0 <= idx < len(batch_items):
             try:
-                scored_directions[idx] = Direction(entry.get("direction", "NEUTRAL"))
+                d = Direction(entry.get("direction", "NEUTRAL"))
+                scored_directions[idx] = d
             except ValueError:
-                scored_directions[idx] = Direction.NEUTRAL
+                d = Direction.NEUTRAL
+                scored_directions[idx] = d
+            tickers = list(entry.get("impacted_tickers", []))
+            cr = _detect_chain_reactions(tickers, d)
+            for c in cr:
+                if c.ticker not in tickers:
+                    tickers.append(c.ticker)
+            scored_tickers[idx] = tickers
 
     # Map scores back to ScoredNews objects
     scored: list[ScoredNews] = []
@@ -937,7 +965,8 @@ def _score_batch(
 
         # v3.6: Count independent sources confirming same signal (convergence)
         # v4.0: Pass scored directions to validate direction consistency
-        convergence_count = _count_convergence(item, impacted, direction, batch_items, scored_directions)
+        # v5.0 O5: Pass scored_tickers for symmetric convergence detection
+        convergence_count = _count_convergence(item, impacted, direction, batch_items, scored_directions, scored_tickers)
 
         scored.append(ScoredNews(
             news=item,
@@ -957,9 +986,16 @@ def _score_batch(
             convergence_count=convergence_count,
         ))
 
-        # v4.3 F2: Cache the score for future scans
+        # v5.0 C1: Cache POST-hard-cap values (not raw Claude output)
+        # This ensures cached scores respect hard-caps on earnings/macro/etc.
+        post_hardcap_entry = dict(entry)
+        post_hardcap_entry["transmission_delay"] = transmission_delay
+        post_hardcap_entry["market_awareness"] = market_awareness
+        post_hardcap_entry["_accumulation_boost"] = accum_boost
+        if confirmed_event is not None:
+            post_hardcap_entry["confirmed_event"] = confirmed_event
         cache_key = _get_cache_key(item.title, item.description)
-        _set_cached_score(cache_key, entry)
+        _set_cached_score(cache_key, post_hardcap_entry)
 
     if scored and len(scored) < len(batch_items):
         logger.warning("Claude scored only %d/%d items in batch (possible truncation or index mismatch)",
@@ -996,13 +1032,18 @@ def _count_convergence(
     direction: Direction,
     all_items: list[NewsItem],
     all_scored_directions: dict[int, Direction] | None = None,
+    all_scored_tickers: dict[int, list[str]] | None = None,
 ) -> int:
     """Count independent sources confirming the same signal (I. convergence detection).
 
     Two items converge if they:
     1. Come from different sources
-    2. Impact at least one common ticker
+    2. Impact at least one common ticker (including chain reactions)
     3. Have the same directional implication (not opposing directions)
+
+    v5.0 O5: Uses scored impacted_tickers (with chain reactions) for both
+    current and other items, fixing the asymmetry where only the current item
+    had chain reaction tickers.
 
     Returns count of additional confirming sources (0 = no convergence).
     """
@@ -1015,8 +1056,11 @@ def _count_convergence(
             continue
         if other.source.lower() == item_source:
             continue  # Same source = not independent
-        # Check if related_tickers overlap with impacted_tickers
-        other_tickers = set(other.related_tickers)
+        # v5.0 O5: Use scored impacted_tickers (with chain reactions) when available
+        if all_scored_tickers and idx in all_scored_tickers:
+            other_tickers = set(all_scored_tickers[idx])
+        else:
+            other_tickers = set(other.related_tickers)
         if item_tickers & other_tickers:
             # v4.0: Verify direction consistency — opposing directions = divergence, not convergence
             if all_scored_directions and idx in all_scored_directions:

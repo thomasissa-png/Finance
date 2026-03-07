@@ -499,7 +499,6 @@ def select_trades(
         session_adj = learning_adjustments.get("session_adj", {})
         newscat_adj = learning_adjustments.get("newscat_adj", {})
         regime_adj = learning_adjustments.get("regime_adj", {})
-        hour_adj = learning_adjustments.get("hour_adj", {})
         direction_adj = learning_adjustments.get("direction_adj", {})
         delay_bias_adj = learning_adjustments.get("delay_bias_adj", 1.0)
         learning_state_for_log = learning_adjustments
@@ -509,7 +508,6 @@ def select_trades(
         session_adj = {}
         newscat_adj = {}
         regime_adj = {}
-        hour_adj = {}
         direction_adj = {}
         delay_bias_adj = 1.0
         learning_state_for_log = learning_adjustments
@@ -518,7 +516,6 @@ def select_trades(
         session_adj = {}
         newscat_adj = {}
         regime_adj = {}
-        hour_adj = {}
         direction_adj = {}
         delay_bias_adj = 1.0
         learning_state_for_log = None
@@ -534,14 +531,6 @@ def select_trades(
     else:
         regime_lookup = "high_vol"
     current_regime_mult = regime_adj.get(regime_lookup, 1.0)
-
-    # v4.2 B4: Hour multiplier from current time
-    try:
-        from zoneinfo import ZoneInfo
-        current_hour_label = f"{now.astimezone(ZoneInfo('Europe/Paris')).hour:02d}h"
-    except Exception:
-        current_hour_label = "unknown"
-    current_hour_mult = hour_adj.get(current_hour_label, 1.0)
 
     # Build the full scored news log for journal (all Claude reasoning)
     all_scored_log = _build_scored_news_log(scored_news) if scored_news else None
@@ -638,7 +627,7 @@ def select_trades(
         dir_mult = direction_adj.get(sn.direction.value, 1.0)  # v4.2 B5
         # v4.2: Full contextual multiplier with all dimensions
         multiplier = (base_mult * current_session_mult * nc_mult
-                      * current_regime_mult * current_hour_mult
+                      * current_regime_mult
                       * dir_mult * delay_bias_adj)
         multiplier = max(0.5, min(1.5, multiplier))  # Clamp
 
@@ -652,7 +641,7 @@ def select_trades(
             logger.info("Convergence boost for '%s': %d sources → %.2fx",
                         sn.news.title[:60], sn.convergence_count, convergence_boost)
 
-        candidates.append((sn, adjusted_score, eligible_for_news))
+        candidates.append((sn, adjusted_score, eligible_for_news, multiplier))
 
     candidates.sort(key=lambda x: x[1], reverse=True)
 
@@ -675,7 +664,7 @@ def select_trades(
     # Pre-fetch prices for all candidate tickers in parallel to avoid sequential yfinance calls
     from concurrent.futures import ThreadPoolExecutor
     candidate_tickers = set()
-    for sn, _, elig_tickers in candidates:
+    for sn, _, elig_tickers, _m in candidates:
         for t in elig_tickers:
             candidate_tickers.add(t)
 
@@ -715,7 +704,7 @@ def select_trades(
     vix_val = market_context.get("vix") if market_context else None
     regime_val = market_context.get("regime") if market_context else None
 
-    for rank, (best_news, best_score, elig_tickers) in enumerate(candidates):
+    for rank, (best_news, best_score, elig_tickers, ranking_multiplier) in enumerate(candidates):
         # Recompute convergence boost for this candidate (needed for TradeRecommendation)
         _cand_convergence_boost = 1.0
         if hasattr(best_news, 'convergence_count') and best_news.convergence_count >= 2:
@@ -769,19 +758,19 @@ def select_trades(
             })
             continue
 
-        # v4.2: Recompute full contextual multiplier for this candidate
-        nc_mult = newscat_adj.get(best_news.news_category, 1.0)
-        base_mult = ticker_adj.get(ticker, 1.0)
-        dir_mult = direction_adj.get(best_news.direction.value, 1.0)
-        multiplier = (base_mult * current_session_mult * nc_mult
-                      * current_regime_mult * current_hour_mult
-                      * dir_mult * delay_bias_adj)
-        multiplier = max(0.5, min(1.5, multiplier))
+        # v4.3 M5: Use the SAME multiplier that was used during ranking
+        # (averaged across all eligible tickers) instead of recomputing for single ticker.
+        # This ensures ranking score and recorded multiplier are consistent.
+        multiplier = ranking_multiplier
 
         # v4.0 B4: Spread filter — reject if spread eats >40% of target
         spread_pct = ESTIMATED_SPREADS.get(ticker, DEFAULT_SPREAD)
         if avg_range > 0 and spread_pct > 0:
-            estimated_target = avg_range * (0.25 + (best_news.total_score / 100) * 0.45)
+            # v4.3 M3: Convex formula matching calibration (mid-tier as conservative estimate)
+            _ns = best_news.total_score / 100
+            _sf = 0.20 + 0.50 * (_ns ** 1.5)
+            _mf = 0.7 + 0.6 * (getattr(best_news, 'expected_magnitude', 50) / 100)
+            estimated_target = avg_range * _sf * _mf
             if spread_pct / estimated_target > 0.4:
                 reason = f"Spread {spread_pct:.2f}% trop large vs target estime {estimated_target:.2f}% ({ticker})"
                 logger.info("Skipping %s: %s", ticker, reason)
@@ -795,13 +784,19 @@ def select_trades(
         # v3.7: Instead of rejecting partially-priced moves, REDUCE the target.
         # v4.0 B5: Use today_open (intraday reference) instead of prev_close when available.
         # A scan at 17h comparing to yesterday's close misses the intraday move since 9h.
+        # v4.3 M4: Convex formula matching calibration tiers
+        _ns_pre = best_news.total_score / 100
+        _mf_pre = 0.7 + 0.6 * (getattr(best_news, 'expected_magnitude', 50) / 100)
         if avg_range < 1.0:
-            _pre_factor = 0.35 + (best_news.total_score / 100) * 0.55
+            # Low-vol tier
+            _sf_pre = 0.30 + 0.60 * (_ns_pre ** 1.5)
         elif avg_range > 5.0:
-            _pre_factor = 0.15 + (best_news.total_score / 100) * 0.30
+            # High-vol tier
+            _sf_pre = 0.10 + 0.35 * (_ns_pre ** 1.5)
         else:
-            _pre_factor = 0.25 + (best_news.total_score / 100) * 0.45
-        target_move_expected = avg_range * _pre_factor
+            # Normal tier
+            _sf_pre = 0.20 + 0.50 * (_ns_pre ** 1.5)
+        target_move_expected = avg_range * _sf_pre * _mf_pre
         # v4.0 B5: Prefer today_open for intraday pre-move — captures moves since market open
         pre_move_ref = today_open if today_open is not None else prev_close
         pre_move_pct = _detect_pre_move(price, pre_move_ref, target_move_expected)
@@ -931,7 +926,7 @@ def select_trades(
             f"Score brut Claude={raw_score:.1f}, learning_mult={multiplier:.3f} "
             f"(base={base_mult:.3f}, session={current_session_mult:.3f}, "
             f"newscat={nc_mult:.3f}, regime={current_regime_mult:.3f}, "
-            f"hour={current_hour_mult:.3f}, dir={dir_mult:.3f}, delay_bias={delay_bias_adj:.3f}), "
+            f"dir={dir_mult:.3f}, delay_bias={delay_bias_adj:.3f}), "
             f"score ajuste={best_score:.1f} | "
             f"News: '{best_news.news.title[:80]}' | "
             f"Categorie: {best_news.news_category}, edge={best_news.transmission_delay}/{best_news.market_awareness}"
