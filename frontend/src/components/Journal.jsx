@@ -39,11 +39,17 @@ export default function Journal({ isActive }) {
     }
   }, []);
 
-  // Fetch on mount + poll every 60s
+  // Fetch on mount + poll every 60s + auto-retry if empty
   useEffect(() => {
-    fetchEntries().finally(() => setIsLoading(false));
+    let retryTimer;
+    fetchEntries().then(() => {
+      // Auto-retry once after 3s if first fetch returned empty (PG cold start)
+      if (!hasFetched.current) {
+        retryTimer = setTimeout(fetchEntries, 3000);
+      }
+    }).finally(() => setIsLoading(false));
     const interval = setInterval(fetchEntries, 60_000);
-    return () => clearInterval(interval);
+    return () => { clearInterval(interval); clearTimeout(retryTimer); };
   }, [fetchEntries]);
 
   // Refetch when tab becomes active
@@ -181,7 +187,7 @@ export default function Journal({ isActive }) {
     );
   }
 
-  // ── Empty state ──
+  // ── Empty state — auto-retry instead of dead end ──
   if (validEntries.length === 0) {
     return (
       <div>
@@ -189,13 +195,14 @@ export default function Journal({ isActive }) {
           <button className="trigger-btn" onClick={confirmTrigger} disabled={loading}>
             {loading ? <><span className="spinner spinner-inline" />Génération...</> : "Générer journal (22h)"}
           </button>
+          <button className="refresh-btn" onClick={fetchEntries} title="Rafraîchir">{"\u21BB"}</button>
         </div>
         {triggerMsg && <div className={`journal-trigger-msg ${triggerMsg.type}`}>{triggerMsg.text}</div>}
         <div className="no-trade">
-          <div className="no-trade-icon">--</div>
-          <div className="no-trade-title">Aucune entrée de journal</div>
+          <div className="no-trade-icon"><span className="spinner" /></div>
+          <div className="no-trade-title">Chargement du journal...</div>
           <div className="no-trade-reason">
-            Le journal est généré automatiquement à 22h00 CET chaque jour ouvré.
+            Si les données ne s'affichent pas, cliquez sur le bouton de rafraîchissement ci-dessus.
           </div>
           <div className="no-trade-meta">
             <span className="no-trade-tag">Auto : 22h00 CET</span>
@@ -296,6 +303,27 @@ export default function Journal({ isActive }) {
                     </span>
                     <span className="journal-compact-chevron">{isExpanded ? "\u25B2" : "\u25BC"}</span>
                   </div>
+                  {/* News headline — always visible below compact row */}
+                  {e.news_title && (
+                    <div
+                      className="journal-news-preview"
+                      onClick={() => setExpandedEntry(isExpanded ? null : key)}
+                    >
+                      {e.news_url ? (
+                        <a href={e.news_url} target="_blank" rel="noopener noreferrer"
+                          onClick={(ev) => ev.stopPropagation()}
+                          className="journal-news-link"
+                        >
+                          {e.news_title}
+                        </a>
+                      ) : (
+                        e.news_title
+                      )}
+                      {e.news_source && e.news_source !== "—" && (
+                        <span className="journal-news-source">{e.news_source}</span>
+                      )}
+                    </div>
+                  )}
 
                   {/* Expanded detail */}
                   {isExpanded && (
@@ -614,6 +642,15 @@ export default function Journal({ isActive }) {
                       <span className={`result-badge sm ${r.cls}`}>{r.label}</span>
                     </div>
                   </div>
+                  {/* News headline on mobile */}
+                  {e.news_title && (
+                    <div style={{ padding: "4px 12px", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.3, borderLeft: "2px solid var(--border)" }}>
+                      {e.news_title}
+                      {e.news_source && e.news_source !== "—" && (
+                        <span style={{ marginLeft: 6, opacity: 0.6 }}>{e.news_source}</span>
+                      )}
+                    </div>
+                  )}
                   <div className="trade-mobile-card-body">
                     <div>
                       <div className="trade-mobile-label">Entrée</div>

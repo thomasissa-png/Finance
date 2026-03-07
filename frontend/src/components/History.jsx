@@ -280,6 +280,7 @@ export default function History({ isActive }) {
   const [tradePage, setTradePage] = useState(1);
   // (O2) Export feedback
   const [exporting, setExporting] = useState(false);
+  const [closing, setClosing] = useState(false);
 
   const fetchData = useCallback(() => {
     if (document.hidden) return;
@@ -354,6 +355,18 @@ export default function History({ isActive }) {
 
   const pendingTrades = useMemo(() => trades.filter((t) => t.result === "PENDING"), [trades]);
 
+  // Force-close PENDING trades by triggering the journal
+  const forceClosePending = async () => {
+    setClosing(true);
+    try {
+      await fetch("/api/journal/trigger", { method: "POST" });
+      // Wait a moment for backend processing, then refresh
+      setTimeout(() => { fetchData(); setClosing(false); }, 3000);
+    } catch {
+      setClosing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div>
@@ -389,6 +402,14 @@ export default function History({ isActive }) {
           <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
             {pendingTrades.map((t) => `${t.ticker} ${t.direction}`).join(", ")}
           </span>
+          <button
+            className="trigger-btn"
+            style={{ marginLeft: "auto", padding: "4px 12px", fontSize: 12 }}
+            onClick={forceClosePending}
+            disabled={closing}
+          >
+            {closing ? "Fermeture..." : "Clore les trades"}
+          </button>
         </div>
       )}
 
