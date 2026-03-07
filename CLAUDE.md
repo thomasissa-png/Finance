@@ -1,4 +1,4 @@
-# OneShot News Trading System — v5.1 Backtest & Learning Integrity Pipeline
+# OneShot News Trading System — v5.2 Learning Integrity & Granular Commodities
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -199,12 +199,19 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 - **L3** : Instructions scoring enrichies — guidance specifique pour Claude basee sur les metriques (EXPIRED rate, streaks, direction)
 - **Endpoints** : `/api/backtest/replay`, `/api/price-archive/stats`, `/api/price-archive/fill`
 
+#### 14. Learning Integrity & Granular Commodities v5.2 — 5 ameliorations
+- **L4** : Split "commodities" en 5 sous-categories: commodities_energy, commodities_agri, commodities_soft, commodities_industrial, commodities_livestock
+- **L5** : `cat_adj` desactive pour toutes les commodities — le learning ne penalise jamais les commodities en tant que classe (regle absolue)
+- **L6** : `newscat_adj` cross-dimension newscat+ticker (ex: weather+ZW=F) — evite que weather+ZW=F perde penalise weather+CC=F
+- **L7** : Fallback broad newscat toujours calcule — les tickers sans assez de donnees cross-dimension utilisent le signal pooled
+- **L8** : PRE_MOVE_THRESHOLDS et CATEGORIES mis a jour pour les nouvelles sous-categories commodity
+
 ### Etat actuel des fichiers cles
 - `backend/app/main.py` : 4 scans + journal 22h + startup recovery + keepalive + debug endpoints + event check q10min
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/database.py` : PG persistence layer, 5 tables (trades/journal/scan_history/last_scans/price_archive), pool, CRUD
 - `backend/app/journal.py` : v4.1+, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, price archiving post-journal
-- `backend/app/learning.py` : v4.2+, 7 learning dimensions, alerts-only summary, data integrity filters, actionable Claude instructions
+- `backend/app/learning.py` : v5.2, 6 learning dimensions (hour_adj removed), newscat+ticker cross-dimension, cat_adj disabled for commodities, alerts-only summary, data integrity filters
 - `backend/app/trade_selector.py` : v4.0+, convex calibration, fallback ticker, spread filter, VIX daily cap, backtest-enriched scored_news_log
 - `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache, coherence FIX (not just warn), prompt caching
 - `backend/app/backtest.py` : parameter sweep + news replay backtest (v5.1), re-scoring with current formula
@@ -612,7 +619,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **Prix indisponibles** : si le fetch de prix echoue, le trade est marque EXPIRED avec entry_price comme fallback
   - `update_trade_result()` est TOUJOURS appele (plus de trades stuck PENDING)
 - **Categories de news**: earnings, macro, geopolitical, regulatory, m_a, sector, commodity, weather, supply_chain, central_bank_subtle, other
-- **Categories d'actifs**: actions_europe, metaux, forex, commodities, indices
+- **Categories d'actifs**: actions_europe, metaux, forex, commodities_energy, commodities_agri, commodities_soft, commodities_industrial, commodities_livestock, indices
 - **Learning**: apres chaque cloture, les resultats alimentent `compute_learning_adjustments()`
 - **Frontend**: onglet "Journal" avec tableau groupe par date, badges categorie news et actif
 - **API**: `GET /api/journal`, `GET /api/journal/{date}`, `POST /api/journal/trigger`, `GET /api/journal/debug`
@@ -627,29 +634,29 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `vix_at_trade` / `market_regime` : contexte marche au moment du trade
   - `predicted_transmission_delay` / `actual_pricing_time_hours` / `delay_accuracy` : tracking precision
 
-## Learning adaptatif (v4.2 — audit complet)
-- **Par ticker**: ajustement 0.5-1.5 (min **8** trades, t-stat > **1.5**)
-- **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0)
-- **Par categorie de news**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.0) — applique contextuellement par la news_category du trade courant
-- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades, t-stat > 1.0) — applique par le scan courant
-- **Par regime VIX** (v4.2 C1): ajustement 0.7-1.3, **2 buckets** (low_vol=calm+normal, high_vol=elevated+stress), **min 15 trades** (was 5)
+## Learning adaptatif (v5.2 — granular commodities, newscat cross-dimension)
+- **Par ticker**: ajustement 0.5-1.5 (min **8** trades, t-stat > **2.0**)
+- **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.5) — **DESACTIVE pour commodities** (v5.2: le learning ne penalise jamais les commodities en tant que classe)
+- **Par newscat+ticker** (v5.2): ajustement 0.7-1.3 (min 4 trades) — cross-dimension granulaire (ex: weather+ZW=F au lieu de weather global)
+  - Fallback broad category si le combo n'a pas assez de donnees
+  - Applique contextuellement par la news_category + ticker du trade courant
+- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades, t-stat > 1.5) — applique par le scan courant
+- **Par regime VIX** (v4.2 C1): ajustement 0.7-1.3, **2 buckets** (low_vol=calm+normal, high_vol=elevated+stress), **min 15 trades**
   - Merged from 4 regimes to 2 for larger sample sizes — reduces overfitting
-- **Par heure d'entree** (v4.2 B4 NEW): ajustement 0.85-1.15 (min 8 trades) — heures Paris
-- **Par direction** (v4.2 B5 NEW): ajustement 0.8-1.2 (LONG vs SHORT accuracy, min 8 trades)
-- **Delay bias** (v4.2 B1 NEW): ajustement global basé sur la précision des prédictions transmission_delay
+- **Par direction** (v4.2 B5): ajustement 0.8-1.2 (LONG vs SHORT accuracy, min 8 trades)
+- **Delay bias** (v4.2 B1): ajustement global basé sur la précision des prédictions transmission_delay
   - Si surestimation systématique → pénalise (on entre trop agressivement)
   - Si sous-estimation → booste (on rate de l'edge)
-- **Blending multiplicatif** (v4.2): `final_mult = base(ticker*cat) * session * newscat * regime * hour * direction * delay_bias`
-  - 7 dimensions (was 4) — toutes appliquées contextuellement par `select_trade()`
+- **Blending multiplicatif** (v5.2): `final_mult = base(ticker*cat) * session * newscat_ticker * regime * direction * delay_bias`
+  - 6 dimensions (was 7, hour_adj removed M8: worst data-to-noise ratio)
   - Clamp final [0.5, 1.5]
 - **A5: Average ticker mults** (v4.2): utilise la moyenne des multipliers de TOUS les tickers éligibles (pas juste le premier)
 - **Significance test**: pseudo t-test avec **effet size minimum** (v4.2 A3)
   - A2: stderr=0 vérifie min_effect_size au lieu de retourner True aveuglément
   - A3: |mean| doit être >= 0.1 (ignore les signaux négligeables)
-  - Per-ticker: t > 1.5, min 8 trades
-  - Per-category/session/newscat: t > 1.0, min 5 trades
-  - Per-regime: t > 1.0, min 15 trades (raised from 5)
-  - Per-hour/direction: t > 1.0, min 8 trades
+  - Per-ticker: t > 2.0, min 8 trades (v5.2: raised from 1.5)
+  - Per-category/session/newscat: t > 1.5, min 5 trades (v5.2: raised from 1.0)
+  - Per-regime: t > 1.5, min 15 trades (v5.2: raised from 1.0)
 - **Signal PnL-signe**: `_compute_adjustment()` normalise par 1.0 (v4.2 A4, was 2.0 — doublait la sensibilité)
   - Formule: `1.0 + clamp(avg_pnl / 1.0, -cap, cap) * sensitivity`
 - **Decay temporel adaptatif**: demi-vie 45j (peu de trades) → 30j (beaucoup de trades)
@@ -672,15 +679,14 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - Derniers 10 trades (compact)
   - Instructions scoring compactes
 - **Score decomposition**: chaque trade stocke `raw_claude_score` et `learning_multiplier`
-- **Decomposition par dimension**: logs détaillent `ticker_mult`, `cat_mult`, `session_mult`, `newscat_mult`, `regime_mult`, `hour_mult`, `dir_mult`, `delay_bias_adj`
+- **Decomposition par dimension**: logs détaillent `ticker_mult`, `cat_mult`, `session_mult`, `newscat_mult`, `regime_mult`, `dir_mult`, `delay_bias_adj`
 - **learning_helped tracking**: chaque trade tracke si le learning a boosté ou pénalisé la sélection
 - **Cache learning**: invalidé après le journal 22h
 - **Return format** (v4.2): `compute_learning_adjustments()` retourne un dict structuré :
   - `adjustments`: dict[ticker, multiplier] — base blend ticker*cat
   - `session_adj`: dict[scan_type, multiplier] — appliqué par scan courant
-  - `newscat_adj`: dict[news_category, multiplier] — appliqué par news courante
+  - `newscat_adj`: dict[newscat+ticker OR newscat, multiplier] — cross-dimension v5.2 (ex: "weather+ZW=F" ou "weather" fallback)
   - `regime_adj`: dict[regime, multiplier] — low_vol/high_vol (v4.2 merged)
-  - `hour_adj`: dict[hour_label, multiplier] — v4.2 B4
   - `direction_adj`: dict[direction, multiplier] — v4.2 B5
   - `delay_bias_adj`: float — v4.2 B1
   - `decomposition`: dict[ticker, {ticker_mult, cat_mult}] — pour diagnostics
