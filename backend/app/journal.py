@@ -1064,14 +1064,7 @@ def run_daily_journal() -> list[dict]:
                 logger.warning("Source health: %d sources had issues today: %s",
                                len(failed_sources), ", ".join(failed_sources))
 
-        # Weekly review every Monday
-        today_dt = datetime.now(PARIS_TZ)
-        if today_dt.weekday() == 0:  # Monday
-            review_entry = create_weekly_review_journal_entry()
-            if review_entry:
-                logger.info("Weekly source health review created (severity: %s, dead: %d, degraded: %d)",
-                            review_entry.get("severity"), review_entry.get("dead_count", 0),
-                            review_entry.get("degraded_count", 0))
+        # Weekly review is handled by a dedicated Sunday job in main.py
     except Exception as exc:
         logger.warning("Source health reporting failed: %s", exc)
 

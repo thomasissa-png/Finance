@@ -386,6 +386,35 @@ def _run_daily_journal() -> None:
     thread.start()
 
 
+def _run_weekly_source_review() -> None:
+    """Run weekly source health review — Sunday 20:00 CET.
+
+    Analyzes the last 7 days of source health data, generates recommendations
+    (dead/degraded sources, new source suggestions), and saves the review.
+    Runs before Monday trading starts so issues are visible before first scan.
+    """
+    def _review_worker():
+        try:
+            from .source_monitor import get_tracker, create_weekly_review_journal_entry
+            review_entry = create_weekly_review_journal_entry()
+            if review_entry:
+                logger.info(
+                    "Weekly source health review: severity=%s, dead=%d, degraded=%d, stable=%d",
+                    review_entry.get("severity"), review_entry.get("dead_count", 0),
+                    review_entry.get("degraded_count", 0), review_entry.get("stable_count", 0),
+                )
+                for rec in review_entry.get("recommendations", []):
+                    if rec:  # skip empty separator strings
+                        logger.info("  → %s", rec)
+            else:
+                logger.info("Weekly source review: no data available (first week?)")
+        except Exception as exc:
+            logger.error("Weekly source health review failed: %s", exc)
+
+    thread = threading.Thread(target=_review_worker, daemon=True, name="weekly-source-review")
+    thread.start()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _last_scans
@@ -418,8 +447,11 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,22,37,52", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
     # Conditional post-EIA scan: Wednesday 16:45 CET (EIA petroleum report at 16:30)
     bg_scheduler.add_job(_run_post_eia_scan, CronTrigger(hour=16, minute=45, day_of_week="wed", timezone="Europe/Paris"), id="post_eia_scan", misfire_grace_time=60)
+    # v5.2: Weekly source health review — Sunday 20:00 CET (before Monday trading)
+    # misfire_grace_time=3600: safe to run late, pure data analysis
+    bg_scheduler.add_job(_run_weekly_source_review, CronTrigger(hour=20, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="weekly_source_review", misfire_grace_time=3600)
     bg_scheduler.start()
-    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check q10min, position monitor q15min, post-EIA Wed 16:45, journal at 22:00 CET (weekdays only)")
+    logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check q10min, position monitor q15min, post-EIA Wed 16:45, journal at 22:00 CET (weekdays), source review Sun 20:00")
 
     # Startup recovery: close any old PENDING trades that were missed by the 22:00 journal
     # (e.g., app was down overnight, Replit killed the process before journal ran)
