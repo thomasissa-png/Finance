@@ -109,19 +109,23 @@ class MessageBus:
                 from ..database import get_conn
                 with get_conn() as conn:
                     with conn.cursor() as cur:
-                        # Fetch messages targeted to this agent or broadcast
+                        # Use CTE to select oldest N messages first, then update
                         cur.execute("""
-                            UPDATE agent_messages
+                            WITH to_consume AS (
+                                SELECT id FROM agent_messages
+                                WHERE consumed = FALSE
+                                  AND msg_type = ANY(%s)
+                                  AND (to_agent IS NULL OR to_agent = %s)
+                                ORDER BY timestamp ASC
+                                LIMIT %s
+                            )
+                            UPDATE agent_messages m
                             SET consumed = TRUE
-                            WHERE consumed = FALSE
-                              AND msg_type = ANY(%s)
-                              AND (to_agent IS NULL OR to_agent = %s)
-                            RETURNING id, timestamp, from_agent, to_agent, msg_type, payload
-                            ORDER BY timestamp ASC
-                            LIMIT %s
+                            FROM to_consume tc
+                            WHERE m.id = tc.id
+                            RETURNING m.id, m.timestamp, m.from_agent,
+                                      m.to_agent, m.msg_type, m.payload
                         """, (msg_types, agent_name, limit))
-                        # Note: RETURNING with ORDER BY may not be supported everywhere
-                        # but works in PostgreSQL
                         rows = cur.fetchall()
                         return [
                             {

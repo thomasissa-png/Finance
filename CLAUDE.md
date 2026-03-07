@@ -1,4 +1,4 @@
-# OneShot News Trading System — v6.0 Multi-Agent Architecture
+# OneShot News Trading System — v6.1 Multi-Agent Architecture
 
 ## Philosophie fondamentale (CRUCIAL)
 **Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
@@ -244,8 +244,9 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **MessageBus** : communication inter-agents via `agent_messages` (PG, fallback in-memory)
 - **AgentLogger** : logs structurés dans `agent_logs` (PG), niveaux INFO/WARN/ERROR/DECISION
 - **Registry** : singletons, orchestration `run_scan_pipeline()` (News → Scoring → Trader)
-- **Agent Auditeur** : audit profondeur de chaque agent, 5 profils d'expertise, note /10, persistance rapports
-  - Checks par agent : source coverage, score distribution, win rate, bar coverage, commodity protection...
+- **Agent Auditeur** : audit profondeur de chaque agent, 6 profils d'expertise (news, scoring, trader_1, journal, learning, ux), note /10, persistance rapports
+  - Checks par agent : source coverage, score distribution, win rate, bar coverage, commodity protection, component coverage...
+  - **Profil UX** (v6.1) : component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility
   - Rapports persistés dans `audit_reports` (PG) ou `data/audit_reports.json`
   - API : `POST /api/agents/auditor/audit/{agent}`, `GET /api/agents/auditor/reports`
 - **Scheduler** délègue aux agents (plus d'appels directs aux modules)
@@ -256,6 +257,14 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - Les agents wrappent les modules existants — zéro réécriture logique métier
 - Architecture multi-trader prête (agent_trader_2.py, agent_trader_3.py...)
 
+#### 16. Database Audit & Agent Infrastructure v6.1
+- **MessageBus SQL fix** : `consume()` utilisait `RETURNING ... ORDER BY ... LIMIT` (invalide en PG) — réécrit en CTE
+- **Pruning agent tables** : `pg_prune_agent_messages(30j)`, `pg_prune_agent_logs(90j)`, `pg_prune_audit_reports(100)` — appelées automatiquement dans `pg_run_maintenance()`
+- **VACUUM ANALYZE** : étendu aux 7 tables (ajout `agent_messages`, `agent_logs`, `audit_reports`)
+- **pg_table_stats()** : monitoring étendu aux 7 tables
+- **Profil UX auditeur** : 7 checks (component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility)
+- **42 tests agents** (`test_agents.py`) : MessageBus (10), AgentLogger (5), BaseAgent (6), Registry (6), Auditor (6), per-agent init (5), pruning (3), status (1)
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), helpers
@@ -264,10 +273,10 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/agents/agent_trader.py` : décision trade, position monitor, multi-trader ready, daily counters
 - `backend/app/agents/agent_journal.py` : clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_learning.py` : 6 dims ML, anomaly detection, cache learning, performance summary
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 5 profils d'expertise, note /10, persistance rapports
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 6 profils d'expertise (+ UX v6.1), note /10, persistance rapports
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
-- `backend/app/database.py` : v6.0, 8 tables PG (+ agent_messages, agent_logs, audit_reports), pool, CRUD
+- `backend/app/database.py` : v6.1, 8 tables PG, pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 7 tables
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/journal.py` : v4.1+, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout
 - `backend/app/learning.py` : v5.2, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities
@@ -862,4 +871,6 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **test_data_persistence.py** : PG fallback, JSON guard, corrupt file resilience, auto-migration
 - v5.1 tests ajoutés (12 tests) :
   - **test_data_persistence.py** : scan_history_retention_365, scored_news_log_includes_description, price_archive_table_creation, price_archive_stats_without_pg, rescore_headline_formula, rescore_headline_zero_edge, replay_backtest_no_history, coherence_validation_returns_fixed_values, learning_filters_anomalous_pnl, review_insights_filter_pending_trades, price_archive_endpoint, backtest_replay_endpoint
+- v6.1 tests ajoutés (42 tests) :
+  - **test_agents.py** : MessageBus (singleton, publish/consume, targeted, broadcast, subscribe, limit, filter, recent, maxlen), AgentLogger (log/duration/filter/limit/maxlen), BaseAgent (status, execute success/failure, log_decision, metrics, publish), Registry (get_all, get_by_name, unknown, status with UX, metrics, status fields), Auditor (profiles present, UX profile, checks, invalid target, metrics, UX audit runs), per-agent init+metrics (News, Scoring, Trader, Journal, Learning), Database pruning (messages, logs, reports no-PG)
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data

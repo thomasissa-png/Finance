@@ -1001,6 +1001,72 @@ def pg_save_all_last_scans(scans: dict[str, dict]) -> None:
     _pg_retry(_save)
 
 
+# ── Agent table pruning ──────────────────────────────────────────────
+
+
+def pg_prune_agent_messages(max_age_days: int = 30) -> int:
+    """Prune old consumed agent messages. Keep unconsumed indefinitely."""
+    def _prune():
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM agent_messages WHERE consumed = TRUE AND timestamp < %s",
+                    (cutoff,))
+                pruned = cur.rowcount
+                if pruned > 0:
+                    logger.info("Pruned %d old agent messages (>%d days)", pruned, max_age_days)
+                return pruned
+    if not is_pg_enabled():
+        return 0
+    return _pg_retry(_prune)
+
+
+def pg_prune_agent_logs(max_age_days: int = 90) -> int:
+    """Prune old agent logs. Keep 90 days for analysis."""
+    def _prune():
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM agent_logs WHERE timestamp < %s",
+                    (cutoff,))
+                pruned = cur.rowcount
+                if pruned > 0:
+                    logger.info("Pruned %d old agent logs (>%d days)", pruned, max_age_days)
+                return pruned
+    if not is_pg_enabled():
+        return 0
+    return _pg_retry(_prune)
+
+
+def pg_prune_audit_reports(max_reports: int = 100) -> int:
+    """Keep only the N most recent audit reports."""
+    def _prune():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM audit_reports")
+                count = cur.fetchone()[0]
+                if count <= max_reports:
+                    return 0
+                to_delete = count - max_reports
+                cur.execute("""
+                    DELETE FROM audit_reports
+                    WHERE id IN (
+                        SELECT id FROM audit_reports
+                        ORDER BY created_at ASC
+                        LIMIT %s
+                    )
+                """, (to_delete,))
+                pruned = cur.rowcount
+                if pruned > 0:
+                    logger.info("Pruned %d old audit reports (keeping %d)", pruned, max_reports)
+                return pruned
+    if not is_pg_enabled():
+        return 0
+    return _pg_retry(_prune)
+
+
 # ── M4: Maintenance ──────────────────────────────────────────────────
 
 
@@ -1012,8 +1078,17 @@ def pg_run_maintenance() -> dict:
     if not is_pg_enabled():
         return {"status": "skipped", "reason": "PG not enabled"}
 
+    # Prune agent tables before VACUUM
+    try:
+        pg_prune_agent_messages(max_age_days=30)
+        pg_prune_agent_logs(max_age_days=90)
+        pg_prune_audit_reports(max_reports=100)
+    except Exception as exc:
+        logger.warning("Agent table pruning failed: %s", exc)
+
     results = {}
-    tables = ["trades", "journal_entries", "scan_history", "last_scans"]
+    tables = ["trades", "journal_entries", "scan_history", "last_scans",
+              "agent_messages", "agent_logs", "audit_reports"]
     for table in tables:
         try:
             pool = _get_pool()
@@ -1049,7 +1124,8 @@ def pg_table_stats() -> dict:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 stats = {}
-                for table in ["trades", "journal_entries", "scan_history", "last_scans"]:
+                for table in ["trades", "journal_entries", "scan_history", "last_scans",
+                              "agent_messages", "agent_logs", "audit_reports"]:
                     cur.execute(f"SELECT COUNT(*) as row_count FROM {table}")
                     row_count = cur.fetchone()["row_count"]
 

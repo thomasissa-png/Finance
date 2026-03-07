@@ -99,6 +99,18 @@ AUDIT_PROFILES = {
             "data_integrity",        # Les données sont-elles propres (pas de PnL > 50%) ?
         ],
     },
+    "ux": {
+        "expertise": "Expert frontend & UX, 10+ ans en dashboards temps réel et data visualization pour le trading",
+        "checks": [
+            "component_coverage",    # Tous les composants nécessaires sont-ils présents et fonctionnels ?
+            "api_integration",       # Tous les endpoints API sont-ils correctement appelés et gérés ?
+            "error_handling",        # Les erreurs réseau/API sont-elles gérées proprement ?
+            "polling_efficiency",    # Le polling est-il optimisé (skip quand masqué, intervals adaptés) ?
+            "responsive_design",     # Le design est-il responsive et accessible ?
+            "data_display",          # Les données trading sont-elles affichées correctement et lisiblement ?
+            "agent_visibility",      # Chaque agent est-il visible et ses métriques accessibles ?
+        ],
+    },
 }
 
 
@@ -171,6 +183,8 @@ class AgentAuditor(BaseAgent):
                 self._audit_journal(report, focus)
             elif target_agent == "learning":
                 self._audit_learning(report, focus)
+            elif target_agent == "ux":
+                self._audit_ux(report, focus)
 
             # Calculate final score (average of breakdown)
             if report["score_breakdown"]:
@@ -810,6 +824,146 @@ class AgentAuditor(BaseAgent):
             "file": "CLAUDE.md",
             "section": "Learning adaptatif",
             "update": "Add audit trail: last audit date + score for learning system",
+        })
+
+    def _audit_ux(self, report: dict, focus: str | None):
+        """Audit Agent UX — frontend components, API integration, polling, accessibility."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from pathlib import Path
+            frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "src"
+
+            # 1. Component coverage — check all key components exist
+            required_components = [
+                "components/Dashboard.jsx",
+                "components/Journal.jsx",
+                "components/History.jsx",
+                "components/Performance.jsx",
+                "components/AgentSidebar.jsx",
+                "components/AgentOverview.jsx",
+                "components/AgentDetail.jsx",
+            ]
+            existing = [c for c in required_components if (frontend_dir / c).exists()]
+            missing = [c for c in required_components if c not in existing]
+            findings.append({
+                "area": "component_coverage",
+                "status": "OK" if not missing else "CRITICAL",
+                "detail": f"Components: {len(existing)}/{len(required_components)} present"
+                          + (f", missing: {missing}" if missing else ""),
+            })
+            scores["component_coverage"] = 10 if not missing else max(3, 10 - len(missing) * 2)
+
+            # 2. API integration — check App.jsx fetches /api/agents
+            app_jsx = frontend_dir / "App.jsx"
+            app_content = app_jsx.read_text() if app_jsx.exists() else ""
+            api_calls = []
+            for endpoint in ["/api/agents", "/api/health"]:
+                if endpoint in app_content:
+                    api_calls.append(endpoint)
+            findings.append({
+                "area": "api_integration",
+                "status": "OK" if len(api_calls) >= 2 else "WARN",
+                "detail": f"API endpoints used in App.jsx: {api_calls}",
+            })
+            scores["api_integration"] = 10 if len(api_calls) >= 2 else 6
+
+            # 3. Error handling — check ErrorBoundary exists
+            has_error_boundary = "ErrorBoundary" in app_content
+            has_disconnect_banner = "disconnect-banner" in app_content or "backendUp" in app_content
+            findings.append({
+                "area": "error_handling",
+                "status": "OK" if has_error_boundary and has_disconnect_banner else "WARN",
+                "detail": f"ErrorBoundary: {has_error_boundary}, Disconnect banner: {has_disconnect_banner}",
+            })
+            scores["error_handling"] = 10 if (has_error_boundary and has_disconnect_banner) else 6
+
+            # 4. Polling efficiency
+            has_interval_cleanup = "clearInterval" in app_content
+            has_suspense = "Suspense" in app_content
+            findings.append({
+                "area": "polling_efficiency",
+                "status": "OK" if has_interval_cleanup and has_suspense else "WARN",
+                "detail": f"Interval cleanup: {has_interval_cleanup}, Suspense: {has_suspense}",
+            })
+            scores["polling_efficiency"] = 9 if (has_interval_cleanup and has_suspense) else 6
+
+            # 5. Agent visibility — check all 7 agents are represented
+            agent_detail = frontend_dir / "components" / "AgentDetail.jsx"
+            agent_overview = frontend_dir / "components" / "AgentOverview.jsx"
+            overview_content = agent_overview.read_text() if agent_overview.exists() else ""
+            agents_in_config = []
+            for agent_key in ["news", "scoring", "trader_1", "journal", "learning", "auditor", "ux"]:
+                if agent_key in overview_content:
+                    agents_in_config.append(agent_key)
+            missing_agents = [a for a in ["news", "scoring", "trader_1", "journal", "learning", "auditor", "ux"]
+                              if a not in agents_in_config]
+            findings.append({
+                "area": "agent_visibility",
+                "status": "OK" if not missing_agents else "WARN",
+                "detail": f"Agents in overview config: {len(agents_in_config)}/7"
+                          + (f", missing: {missing_agents}" if missing_agents else ""),
+            })
+            scores["agent_visibility"] = 10 if not missing_agents else max(5, 10 - len(missing_agents))
+
+            # 6. Data display — check AgentDetail exists and has log filtering
+            detail_content = agent_detail.read_text() if agent_detail.exists() else ""
+            has_log_filter = "level" in detail_content.lower() and "filter" in detail_content.lower()
+            has_metrics = "metrics" in detail_content.lower()
+            findings.append({
+                "area": "data_display",
+                "status": "OK" if has_log_filter and has_metrics else "WARN",
+                "detail": f"Log filtering: {has_log_filter}, Metrics display: {has_metrics}",
+            })
+            scores["data_display"] = 9 if (has_log_filter and has_metrics) else 6
+
+            # 7. CSS/responsive — check App.css has sidebar styles
+            app_css = frontend_dir / "App.css"
+            css_content = app_css.read_text() if app_css.exists() else ""
+            has_responsive = "@media" in css_content
+            has_sidebar_style = "agent-sidebar" in css_content
+            findings.append({
+                "area": "responsive_design",
+                "status": "OK" if has_responsive and has_sidebar_style else "WARN",
+                "detail": f"Responsive: {has_responsive}, Sidebar styled: {has_sidebar_style}",
+            })
+            scores["responsive_design"] = 9 if (has_responsive and has_sidebar_style) else 5
+
+            # Improvements
+            if missing:
+                improvements.append({
+                    "priority": "HIGH",
+                    "action": f"Create missing components: {missing}",
+                    "rationale": "Components manquants empêchent l'affichage correct du dashboard",
+                })
+            if missing_agents:
+                improvements.append({
+                    "priority": "MEDIUM",
+                    "action": f"Add agent configs for: {missing_agents} in AgentOverview",
+                    "rationale": "Chaque agent doit avoir une carte visible avec ses métriques",
+                })
+            if "document.hidden" not in app_content:
+                improvements.append({
+                    "priority": "LOW",
+                    "action": "Skip agent polling when tab is hidden (document.hidden)",
+                    "rationale": "Réduit la charge réseau quand l'utilisateur n'est pas sur l'onglet",
+                })
+
+        except Exception as exc:
+            findings.append({"area": "ux", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        tests.append("test_ux_agent_all_components_exist")
+        tests.append("test_ux_agent_api_endpoints_integrated")
+        tests.append("test_ux_agent_error_boundary_present")
+
+        report["memory_updates"].append({
+            "file": "CLAUDE.md",
+            "section": "Agent Auditor",
+            "update": "Added UX audit profile with 7 checks: component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility",
         })
 
     # ── Helpers ────────────────────────────────────────────────────
