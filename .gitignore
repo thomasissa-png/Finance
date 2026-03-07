@@ -13,7 +13,4 @@ frontend/dist/
 venv/
 
 # Runtime data — NEVER commit, created automatically at startup
-data/trades.json
-data/journal.json
-data/scan_history.json
-data/last_scans.json
+data/
