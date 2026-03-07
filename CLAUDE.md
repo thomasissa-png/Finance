@@ -306,21 +306,27 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **P4** : Dead code dans `_check_correlation()` — `in_static_group` toujours False car la branche `and` est inatteignable après le `return True`. Réécrit avec tracking `ticker_in_any_group`/`existing_in_any_group` séparés, skip dynamic si les deux sont dans des groupes statiques
 - **P5** : `reset_daily_counters()` jamais appelé — wirée dans `_run_daily_journal()` post-journal 22h pour préparer le lendemain
 
+#### 20. Audit Trader (Journal+Learning perspective) v6.4 — 3 fixes
+- **J1/L1 (CRITIQUE)** : Trailing stop NON persisté — `position_monitor.py:223` modifiait `trade.stop_price` en mémoire sans sauver en PG/JSON. Au cycle suivant (15min), `load_trades()` restaurait le stop original. Le Journal à 22h et le Learning utilisaient des données de stop incorrectes. Fix : ajout `update_trade_stop()` (learning.py) + `pg_update_trade_stop()` (database.py), appelé après chaque trailing adjustment
+- **J1b** : Ordre incorrect dans `monitor_positions()` — SL check (step 2) AVANT trailing stop (step 3). Réordonné : TP → Trailing → SL → Time stop. Maintenant le SL check utilise le stop potentiellement resserré
+- **J2/L2/L3** : `getattr(trade, "field", default)` inutiles sur 12 champs déclarés avec defaults Pydantic dans `journal.py` (4) et `learning.py` (8). Remplacés par accès directs (`trade.field`, `t.field`, `je.field`). Cohérent avec le fix v6.3 P3 pour `news_category`
+- **7 tests** : trailing stop order, persistence call, update_trade_stop exists + JSON fallback, pg_update_trade_stop exists, no getattr in journal, no getattr in learning
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), run_learning_update(), helpers
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
-- `backend/app/agents/agent_trader.py` : v6.3, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
+- `backend/app/agents/agent_trader.py` : v6.4, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
 - `backend/app/agents/agent_journal.py` : clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_learning.py` : 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_auditor.py` : audit profondeur, 8 profils d'expertise (+ UX v6.1, + self-audit v6.2), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
-- `backend/app/database.py` : v6.3, 8 tables PG, pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 7 tables, 9 scoring columns on trades (v6.3)
+- `backend/app/database.py` : v6.4, 8 tables PG, pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 7 tables, 9 scoring columns on trades (v6.3), pg_update_trade_stop (v6.4)
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
-- `backend/app/journal.py` : v6.3, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours computation
-- `backend/app/learning.py` : v6.3, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback
+- `backend/app/journal.py` : v6.4, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours, direct field access (no getattr)
+- `backend/app/learning.py` : v6.4, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback, update_trade_stop for trailing persistence, direct field access (no getattr)
 - `backend/app/trade_selector.py` : v6.3, convex calibration, fallback ticker, spread filter, VIX daily cap, fixed static group correlation check
 - `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
 - `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
@@ -917,4 +923,6 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - v6.3 tests ajoutés (10 tests) :
   - **test_learning.py** (5) : PG trade columns include scoring fields, EXPIRED pricing_hours computation, news_category direct access, extract_structured_anomalies returns typed dicts, performance summary uses journal MAE
   - **test_agents.py** (5) : raw_claude_score not score on TradeRecommendation, direction enum serialization, reset_daily_counters, static group correlation skip, position_monitor returns dict
+- v6.4 tests ajoutés (7 tests) :
+  - **test_agents.py** (7) : trailing_stop_before_sl_check, trailing_stop_calls_persist, update_trade_stop_exists, update_trade_stop_json_fallback, pg_update_trade_stop_function_exists, journal_no_getattr_on_trade, learning_no_getattr_on_trade
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data

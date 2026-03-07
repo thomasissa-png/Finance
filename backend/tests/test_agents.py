@@ -613,3 +613,86 @@ class TestAgentTraderAuditV63:
             result = agent.run_position_monitor()
             assert isinstance(result, dict)
             assert "actions_taken" in result
+
+
+class TestTraderAuditJournalLearningV64:
+    """v6.4: Trader audit from Journal & Learning perspective — trailing stop persistence."""
+
+    def test_trailing_stop_before_sl_check(self):
+        """J1: Trailing stop adjustment happens BEFORE SL check in position monitor."""
+        import inspect
+        from backend.app.position_monitor import monitor_positions
+        source = inspect.getsource(monitor_positions)
+        # Find positions of key comments/calls
+        trailing_pos = source.find("Trailing stop adjustment")
+        sl_pos = source.find("Check SL hit")
+        tp_pos = source.find("Check TP hit")
+        # TP should be first, then trailing, then SL
+        assert tp_pos < trailing_pos < sl_pos, \
+            "Order must be: TP check → Trailing stop → SL check"
+
+    def test_trailing_stop_calls_persist(self):
+        """J1: Trailing stop adjustment calls update_trade_stop to persist."""
+        import inspect
+        from backend.app.position_monitor import monitor_positions
+        source = inspect.getsource(monitor_positions)
+        assert "update_trade_stop" in source, \
+            "monitor_positions must call update_trade_stop to persist trailing changes"
+
+    def test_update_trade_stop_exists(self):
+        """J1: update_trade_stop function exists in learning module."""
+        from backend.app.learning import update_trade_stop
+        assert callable(update_trade_stop)
+
+    def test_update_trade_stop_json_fallback(self):
+        """J1: update_trade_stop works with JSON storage (no PG)."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch, MagicMock
+        from backend.app.models import TradeRecommendation, Direction, ScanType, TradeResult
+
+        trade = TradeRecommendation(
+            scan_type=ScanType.EUROPE, timestamp=datetime(2026, 3, 7, 8, 0, tzinfo=timezone.utc),
+            ticker="ZW=F", asset_name="Wheat", category="commodities_agri",
+            direction=Direction.LONG, catalyst="Test",
+            entry_price=600.0, target_price=610.0, stop_price=594.0,
+            target_pct=1.67, stop_pct=1.0, risk_reward=1.67,
+            confidence=75, time_window="09:00 — 20:00",
+        )
+
+        with patch("backend.app.learning.is_pg_enabled", return_value=False), \
+             patch("backend.app.learning._load_trades_uncached", return_value=[trade]), \
+             patch("backend.app.learning._write_trades") as mock_write, \
+             patch("backend.app.learning._invalidate_trades_cache"):
+            from backend.app.learning import update_trade_stop
+            update_trade_stop(trade.timestamp, trade.ticker, 600.0)
+            # Should have written trades with updated stop
+            assert mock_write.called
+            written_trades = mock_write.call_args[0][0]
+            assert written_trades[0].stop_price == 600.0
+
+    def test_pg_update_trade_stop_function_exists(self):
+        """J1: pg_update_trade_stop function exists in database module."""
+        from backend.app.database import pg_update_trade_stop
+        assert callable(pg_update_trade_stop)
+
+    def test_journal_no_getattr_on_trade(self):
+        """J2: journal.py uses direct field access, not getattr on TradeRecommendation."""
+        import inspect
+        from backend.app.journal import _build_review
+        source = inspect.getsource(_build_review)
+        # Should use trade.news_category, not getattr(trade, "news_category", ...)
+        assert 'getattr(trade,' not in source, \
+            "_build_review should use direct field access, not getattr"
+
+    def test_learning_no_getattr_on_trade(self):
+        """L2/L3: learning.py uses direct field access on TradeRecommendation."""
+        from backend.app import learning
+        import inspect
+        # Check compute_learning_adjustments
+        source = inspect.getsource(learning.compute_learning_adjustments)
+        assert 'getattr(t,' not in source, \
+            "compute_learning_adjustments should use direct field access"
+        # Check build_performance_summary
+        source2 = inspect.getsource(learning.build_performance_summary)
+        assert 'getattr(t,' not in source2, \
+            "build_performance_summary should use direct field access on trades"

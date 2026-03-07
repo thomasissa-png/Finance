@@ -531,7 +531,7 @@ def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: floa
             insights.append(f"Drawdown important (MAE {mae:.2f}%) avant TP — trade volatile, risque de SL.")
 
     # Category-specific insight
-    news_cat = getattr(trade, "news_category", "other")
+    news_cat = trade.news_category
     if result == TradeResult.SL_HIT and news_cat in ("earnings", "macro"):
         insights.append("Categorie zero-edge (earnings/macro) — le learning penalisera ce type de signal.")
     elif result == TradeResult.TP_HIT and news_cat in ("weather", "supply_chain", "commodity"):
@@ -544,7 +544,7 @@ def _build_review(trade: TradeRecommendation, result: TradeResult, pnl_pct: floa
         insights.append("Volume faible — prudence sur les signaux sans confirmation volume.")
 
     # Learning multiplier feedback
-    mult = getattr(trade, "learning_multiplier", None)
+    mult = trade.learning_multiplier
     if mult is not None:
         if mult < 0.8 and result == TradeResult.TP_HIT:
             insights.append(f"Learning penalisait ce trade ({mult:.2f}x) mais il a gagne — possible sous-estimation.")
@@ -974,8 +974,8 @@ def run_daily_journal() -> list[dict]:
             review=review,
             binary_event_warning=trade.binary_event_warning,
             # v5.1: Full news & trade context
-            news_url=getattr(trade, "news_url", "") or "",
-            news_description=getattr(trade, "news_description", "") or "",
+            news_url=trade.news_url or "",
+            news_description=trade.news_description or "",
             target_price=trade.target_price,
             stop_price=trade.stop_price,
             target_pct=trade.target_pct,

@@ -786,6 +786,23 @@ def pg_update_trade_result(
     return _pg_retry(_update)
 
 
+def pg_update_trade_stop(ticker: str, timestamp, new_stop: float) -> bool:
+    """Update the stop_price of a PENDING trade (trailing stop persistence).
+
+    Called by position_monitor when trailing stop is tightened.
+    Returns True if the trade was found and updated.
+    """
+    def _update():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE trades SET stop_price = %s
+                    WHERE ticker = %s AND timestamp = %s AND result = 'PENDING'
+                """, (new_stop, ticker, timestamp))
+                return cur.rowcount > 0
+    return _pg_retry(_update)
+
+
 # ── Journal CRUD ─────────────────────────────────────────────────────
 
 _JOURNAL_COLUMNS = [

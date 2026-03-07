@@ -207,6 +207,34 @@ def save_trade(trade: TradeRecommendation) -> None:
     logger.info("Saved trade: %s %s %s", trade.direction, trade.ticker, trade.catalyst[:50])
 
 
+def update_trade_stop(timestamp: datetime, ticker: str, new_stop: float) -> None:
+    """Persist a trailing stop update for a PENDING trade.
+
+    Called by position_monitor when the trailing stop is tightened.
+    H2: Invalidates trades cache after update.
+    """
+    if is_pg_enabled():
+        from .database import pg_update_trade_stop
+        updated = pg_update_trade_stop(ticker, timestamp, new_stop)
+        if updated:
+            logger.info("Trailing stop updated %s: new_stop=%.4f", ticker, new_stop)
+            _invalidate_trades_cache()
+        else:
+            logger.warning("Trade not found for stop update: %s %s", ticker, timestamp)
+        return
+
+    trades = _load_trades_uncached()
+    for trade in trades:
+        if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
+            trade.stop_price = new_stop
+            _write_trades(trades)
+            _invalidate_trades_cache()
+            logger.info("Trailing stop updated %s: new_stop=%.4f", ticker, new_stop)
+            return
+
+    logger.warning("Trade not found for stop update: %s %s", ticker, timestamp)
+
+
 def update_trade_result(
     timestamp: datetime,
     ticker: str,
@@ -638,7 +666,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     regime_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
-            raw_regime = getattr(t, "market_regime", None) or "normal"
+            raw_regime = t.market_regime or "normal"
             # C1: Merge into 2 buckets for larger sample sizes
             if raw_regime in ("calm", "normal"):
                 merged_regime = "low_vol"
@@ -676,8 +704,8 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     delay_bias_adj = 1.0
     delay_errors = []
     for t in closed:
-        predicted = getattr(t, "predicted_transmission_delay", None)
-        actual_h = getattr(t, "actual_pricing_time_hours", None)
+        predicted = t.predicted_transmission_delay
+        actual_h = t.actual_pricing_time_hours
         if predicted is not None and actual_h is not None and t.pnl_pct is not None:
             actual_score = min(100, actual_h / TRANSMISSION_DELAY_BASELINE_HOURS * 100)
             error = predicted - actual_score  # positive = overestimate delay
@@ -1036,8 +1064,8 @@ def build_performance_summary(max_recent: int = 15,
     # Transmission delay bias — only if significant
     delay_errors = []
     for t in closed:
-        predicted = getattr(t, "predicted_transmission_delay", None)
-        actual_h = getattr(t, "actual_pricing_time_hours", None)
+        predicted = t.predicted_transmission_delay
+        actual_h = t.actual_pricing_time_hours
         if predicted is not None and actual_h is not None:
             actual_score = min(100, actual_h / TRANSMISSION_DELAY_BASELINE_HOURS * 100)
             delay_errors.append(predicted - actual_score)
@@ -1057,14 +1085,12 @@ def build_performance_summary(max_recent: int = 15,
         journal_mae: dict[str, float] = {}
         journal_slippage: dict[str, float] = {}
         for je in journal_entries:
-            key = getattr(je, "ticker", None)
+            key = je.ticker
             if key:
-                mae_val = getattr(je, "max_adverse_excursion", None)
-                if mae_val is not None:
-                    journal_mae[key] = mae_val
-                slip_val = getattr(je, "slippage_pct", None)
-                if slip_val is not None:
-                    journal_slippage[key] = slip_val
+                if je.max_adverse_excursion is not None:
+                    journal_mae[key] = je.max_adverse_excursion
+                if je.slippage_pct is not None:
+                    journal_slippage[key] = je.slippage_pct
         # E2: MAE analysis
         mae_values = [v for v in journal_mae.values() if v is not None]
         if len(mae_values) >= 5:
@@ -1090,7 +1116,7 @@ def build_performance_summary(max_recent: int = 15,
     reliability_results: dict[str, dict] = {"high": {"wins": 0, "total": 0},
                                              "low": {"wins": 0, "total": 0}}
     for t in closed:
-        rel = getattr(t, "signal_reliability", None)
+        rel = t.signal_reliability
         if rel is not None:
             bucket = "high" if rel >= 70 else "low"
             reliability_results[bucket]["total"] += 1
@@ -1109,7 +1135,7 @@ def build_performance_summary(max_recent: int = 15,
     # B2: magnitude_accuracy tracking
     mag_errors = []
     for t in closed:
-        mag = getattr(t, "expected_magnitude", None)
+        mag = t.expected_magnitude
         if mag is not None and t.pnl_pct is not None:
             actual_mag = abs(t.pnl_pct)
             # Normalize: expected_magnitude 50 ≈ 1-3% move → use 2% as mid reference
@@ -1248,7 +1274,7 @@ def extract_structured_anomalies(trades: list[TradeRecommendation] | None = None
     high_rel = {"wins": 0, "total": 0}
     low_rel = {"wins": 0, "total": 0}
     for t in closed:
-        rel = getattr(t, "signal_reliability", None)
+        rel = t.signal_reliability
         if rel is not None:
             bucket = high_rel if rel >= 70 else low_rel
             bucket["total"] += 1

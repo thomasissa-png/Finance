@@ -15,7 +15,7 @@ import math
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
-from .learning import load_trades, update_trade_result
+from .learning import load_trades, update_trade_result, update_trade_stop
 from .market_data import fetch_history
 from .models import Direction, TradeRecommendation, TradeResult
 
@@ -202,7 +202,25 @@ def monitor_positions() -> list[dict]:
                         trade.ticker, current_price, pnl)
             continue
 
-        # 2. Check SL hit (including trailing stop)
+        # 2. Trailing stop adjustment — BEFORE SL check so tightened stop is used
+        # v6.4 J1: Persist trailing stop to PG/JSON so Journal and Learning use correct stop
+        new_stop = _compute_trailing_stop(trade, current_price, progress)
+        if new_stop is not None:
+            old_stop = trade.stop_price
+            trade.stop_price = new_stop
+            # Persist the new stop so it survives across monitor cycles and Journal at 22h
+            update_trade_stop(trade.timestamp, trade.ticker, new_stop)
+            action = {
+                "ticker": trade.ticker, "action": "TRAILING_STOP",
+                "old_stop": old_stop, "new_stop": new_stop,
+                "progress": round(progress * 100, 1),
+                "reason": f"Trailing stop: {old_stop:.4f} → {new_stop:.4f} ({progress*100:.0f}% progression)",
+            }
+            actions.append(action)
+            logger.info("POSITION MONITOR: %s trailing stop %.4f → %.4f (progress: %.0f%%)",
+                        trade.ticker, old_stop, new_stop, progress * 100)
+
+        # 3. Check SL hit (uses potentially tightened stop from step 2)
         if _check_stop_hit(trade, current_price):
             pnl = _compute_pnl(trade, trade.stop_price)
             update_trade_result(trade.timestamp, trade.ticker, TradeResult.SL_HIT, trade.stop_price)
@@ -215,21 +233,6 @@ def monitor_positions() -> list[dict]:
             logger.info("POSITION MONITOR: %s SL HIT at %.4f (PnL: %+.2f%%)",
                         trade.ticker, current_price, pnl)
             continue
-
-        # 3. Trailing stop adjustment
-        new_stop = _compute_trailing_stop(trade, current_price, progress)
-        if new_stop is not None:
-            old_stop = trade.stop_price
-            trade.stop_price = new_stop
-            action = {
-                "ticker": trade.ticker, "action": "TRAILING_STOP",
-                "old_stop": old_stop, "new_stop": new_stop,
-                "progress": round(progress * 100, 1),
-                "reason": f"Trailing stop: {old_stop:.4f} → {new_stop:.4f} ({progress*100:.0f}% progression)",
-            }
-            actions.append(action)
-            logger.info("POSITION MONITOR: %s trailing stop %.4f → %.4f (progress: %.0f%%)",
-                        trade.ticker, old_stop, new_stop, progress * 100)
 
         # 4. Time stop check
         should_close, reason = _check_time_stop(trade, progress, now)
