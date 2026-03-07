@@ -266,7 +266,7 @@ function ScanHistorySection({ scanHistory }) {
 
 /* ── Main History component ──────────────────────────────── */
 
-export default function History() {
+export default function History({ isActive }) {
   const [trades, setTrades] = useState([]);
   const [scanHistory, setScanHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -293,10 +293,23 @@ export default function History() {
     }).finally(() => setIsLoading(false));
   }, []);
 
+  // Fetch on mount + poll every 60s
   useEffect(() => {
     fetchData();
     const id = setInterval(fetchData, 60_000);
     return () => clearInterval(id);
+  }, [fetchData]);
+
+  // Refetch when tab becomes active
+  useEffect(() => {
+    if (isActive) fetchData();
+  }, [isActive, fetchData]);
+
+  // Refetch when browser tab regains focus
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) fetchData(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [fetchData]);
 
   // (C5) Filter trades
@@ -364,8 +377,21 @@ export default function History() {
     );
   }
 
+  const pendingTrades = useMemo(() => trades.filter((t) => t.result === "PENDING"), [trades]);
+
   return (
     <div>
+      {/* Pending trades banner */}
+      {pendingTrades.length > 0 && (
+        <div className="pending-banner">
+          <span className="pending-dot" />
+          <strong>{pendingTrades.length} trade{pendingTrades.length > 1 ? "s" : ""} en cours</strong>
+          <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
+            {pendingTrades.map((t) => `${t.ticker} ${t.direction}`).join(", ")}
+          </span>
+        </div>
+      )}
+
       {/* Sub-tab switcher */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
         <div className="sub-tabs">
@@ -376,11 +402,14 @@ export default function History() {
             Signaux scorés ({scanHistory.length})
           </button>
         </div>
-        {activeTab === "trades" && (
-          <button className="trigger-btn export" onClick={handleExport} disabled={exporting} style={{ marginLeft: "auto" }}>
-            {exporting ? <><span className="spinner spinner-inline" />Export...</> : "Export CSV"}
-          </button>
-        )}
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {activeTab === "trades" && (
+            <button className="trigger-btn export" onClick={handleExport} disabled={exporting}>
+              {exporting ? <><span className="spinner spinner-inline" />Export...</> : "Export CSV"}
+            </button>
+          )}
+          <button className="refresh-btn" onClick={fetchData} title="Rafraîchir">&#8635;</button>
+        </span>
       </div>
 
       {activeTab === "trades" && (

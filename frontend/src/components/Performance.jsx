@@ -112,7 +112,7 @@ function EquityTooltip({ active, payload }) {
   );
 }
 
-export default function Performance() {
+export default function Performance({ isActive }) {
   const [stats, setStats] = useState(null);
   const [trades, setTrades] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -131,10 +131,23 @@ export default function Performance() {
     }).finally(() => setIsLoading(false));
   }, []);
 
+  // Fetch on mount + poll every 60s
   useEffect(() => {
     fetchAll();
     const id = setInterval(fetchAll, 60_000);
     return () => clearInterval(id);
+  }, [fetchAll]);
+
+  // Refetch when tab becomes active
+  useEffect(() => {
+    if (isActive) fetchAll();
+  }, [isActive, fetchAll]);
+
+  // Refetch when browser tab regains focus
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) fetchAll(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [fetchAll]);
 
   // Period-filtered data
@@ -381,8 +394,11 @@ export default function Performance() {
         </div>
       )}
 
-      {/* (O1) Last update */}
-      {lastUpdate && <div className="last-update">MAJ {timeAgo(lastUpdate)}</div>}
+      {/* (O1) Last update + refresh */}
+      <div className="last-update-bar">
+        {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
+        <button className="refresh-btn" onClick={fetchAll} title="Rafraîchir">&#8635;</button>
+      </div>
     </div>
   );
 }

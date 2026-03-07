@@ -79,7 +79,7 @@ function getApiError(scans) {
   return null;
 }
 
-export default function Dashboard() {
+export default function Dashboard({ isActive }) {
   const [scans, setScans] = useState({});
   const [loading, setLoading] = useState({});
   const [scanInfo, setScanInfo] = useState(getNextScanInfo);
@@ -103,10 +103,23 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Fetch on mount + poll every 60s
   useEffect(() => {
     fetchScans();
     const interval = setInterval(fetchScans, 60_000);
     return () => clearInterval(interval);
+  }, [fetchScans]);
+
+  // Refetch when tab becomes active (no more stale data on switch)
+  useEffect(() => {
+    if (isActive) fetchScans();
+  }, [isActive, fetchScans]);
+
+  // Refetch when browser tab regains focus
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) fetchScans(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [fetchScans]);
 
   useEffect(() => {
@@ -245,10 +258,11 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* (O1) Last update timestamp */}
-      {lastUpdate && (
-        <div className="last-update">MAJ {timeAgo(lastUpdate)}</div>
-      )}
+      {/* (O1) Last update + manual refresh */}
+      <div className="last-update-bar">
+        {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
+        <button className="refresh-btn" onClick={fetchScans} title="Rafraîchir">&#8635;</button>
+      </div>
 
       {/* Toast container — (O5) dismissable */}
       {toasts.length > 0 && (

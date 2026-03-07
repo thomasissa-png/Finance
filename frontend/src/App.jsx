@@ -194,11 +194,19 @@ export default function App() {
 
       <ErrorBoundary>
         <Suspense fallback={<LoadingFallback />}>
-          <div className="tab-content" key={activeTab}>
-            {activeTab === "dashboard" && <Dashboard />}
-            {activeTab === "journal" && <Journal />}
-            {activeTab === "history" && <History />}
-            {activeTab === "performance" && <Performance />}
+          {/* Keep all tabs mounted — use CSS to hide inactive ones.
+              This prevents the skeleton flash on every tab switch. */}
+          <div className="tab-content" style={{ display: activeTab === "dashboard" ? "block" : "none" }}>
+            <Dashboard isActive={activeTab === "dashboard"} />
+          </div>
+          <div className="tab-content" style={{ display: activeTab === "journal" ? "block" : "none" }}>
+            <Journal isActive={activeTab === "journal"} />
+          </div>
+          <div className="tab-content" style={{ display: activeTab === "history" ? "block" : "none" }}>
+            <History isActive={activeTab === "history"} />
+          </div>
+          <div className="tab-content" style={{ display: activeTab === "performance" ? "block" : "none" }}>
+            <Performance isActive={activeTab === "performance"} />
           </div>
         </Suspense>
       </ErrorBoundary>

@@ -4,10 +4,11 @@ import {
   pnlColor, scoreColor, timeAgo, paginate, totalPages, PAGE_SIZE,
 } from "../utils/format";
 
-export default function Journal() {
+export default function Journal({ isActive }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const hasFetched = React.useRef(false);
   const [triggerMsg, setTriggerMsg] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
   // (C4) Expanded journal entries
@@ -24,23 +25,37 @@ export default function Journal() {
   const [exporting, setExporting] = useState(false);
 
   const fetchEntries = useCallback(async () => {
-    if (document.hidden) return;
+    if (document.hidden && hasFetched.current) return;
     try {
       const res = await fetch("/api/journal");
       if (res.ok) {
         const data = await res.json();
         setEntries(Array.isArray(data) ? data : []);
         setLastUpdate(new Date());
+        hasFetched.current = true;
       }
     } catch (err) {
       console.error("Journal fetch failed:", err);
     }
   }, []);
 
+  // Fetch on mount + poll every 60s
   useEffect(() => {
     fetchEntries().finally(() => setIsLoading(false));
     const interval = setInterval(fetchEntries, 60_000);
     return () => clearInterval(interval);
+  }, [fetchEntries]);
+
+  // Refetch when tab becomes active
+  useEffect(() => {
+    if (isActive) fetchEntries();
+  }, [isActive, fetchEntries]);
+
+  // Refetch when browser tab regains focus
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) fetchEntries(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [fetchEntries]);
 
   // (M5) Trigger with confirmation
@@ -201,7 +216,10 @@ export default function Journal() {
         <button className="trigger-btn export" onClick={handleExport} disabled={exporting}>
           {exporting ? <><span className="spinner spinner-inline" />Export...</> : "Export CSV"}
         </button>
-        {lastUpdate && <span className="last-update" style={{ marginLeft: "auto" }}>MAJ {timeAgo(lastUpdate)}</span>}
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
+          <button className="refresh-btn" onClick={fetchEntries} title="Rafraîchir">&#8635;</button>
+        </span>
       </div>
 
       {triggerMsg && <div className={`journal-trigger-msg ${triggerMsg.type}`}>{triggerMsg.text}</div>}
