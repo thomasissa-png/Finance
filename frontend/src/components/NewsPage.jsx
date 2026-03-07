@@ -18,17 +18,26 @@ export default function NewsPage({ isActive }) {
   const [weeklyReview, setWeeklyReview] = useState(null);
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const [shRes, wrRes, logRes] = await Promise.all([
-      fetch("/api/source-health?days=7").then((r) => r.json()).catch(() => null),
-      fetch("/api/source-health/weekly").then((r) => r.json()).catch(() => null),
-      fetch(`/api/agents/news/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-        .then((r) => r.json()).catch(() => []),
-    ]);
-    setSourceHealth(shRes);
-    setWeeklyReview(wrRes);
-    setLogs(Array.isArray(logRes) ? logRes : []);
+    try {
+      const [shRes, wrRes, logRes] = await Promise.all([
+        fetch("/api/source-health?days=7").then((r) => { if (!r.ok) throw new Error(`Santé sources: ${r.status}`); return r.json(); }).catch(() => null),
+        fetch("/api/source-health/weekly").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch(`/api/agents/news/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
+          .then((r) => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      setSourceHealth(shRes);
+      setWeeklyReview(wrRes);
+      setLogs(Array.isArray(logRes) ? logRes : []);
+      setFetchError(null);
+    } catch (err) {
+      setFetchError(err.message || "Erreur de chargement");
+    } finally {
+      setLoading(false);
+    }
   }, [logFilter]);
 
   useEffect(() => {
@@ -64,13 +73,17 @@ export default function NewsPage({ isActive }) {
         <span className="agent-page-desc">Collecte, curation, sant\u00e9 des sources, d\u00e9tection d'\u00e9v\u00e9nements</span>
       </div>
 
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
+      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
+
       {/* Source Health */}
       <div className="section-card">
         <h3>Sant\u00e9 des sources</h3>
         {sources.length === 0 ? (
           <div className="agent-logs-empty">Aucune donn\u00e9e de sant\u00e9 disponible. Les donn\u00e9es apparaissent apr\u00e8s le premier scan.</div>
         ) : (
-          <div className="compact-table">
+          <>
+          <div className="compact-table desktop-only">
             <table>
               <thead>
                 <tr>
@@ -108,6 +121,25 @@ export default function NewsPage({ isActive }) {
               </tbody>
             </table>
           </div>
+          <div className="mobile-only">
+            {sources.sort((a, b) => (a.success_rate ?? 1) - (b.success_rate ?? 1)).map((s) => (
+              <div key={s.name} className="mobile-card">
+                <div className="mobile-card-header">
+                  <span className="ticker-cell">{s.name}</span>
+                  <span style={{ color: (s.success_rate ?? 1) >= 0.8 ? "var(--green)" : (s.success_rate ?? 1) >= 0.5 ? "var(--yellow)" : "var(--red)" }}>
+                    {s.success_rate != null ? `${(s.success_rate * 100).toFixed(0)}%` : "—"}
+                  </span>
+                </div>
+                <HealthBar rate={s.success_rate} />
+                <div className="mobile-card-body">
+                  <span>\u00c9checs : <strong style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</strong></span>
+                  <span>Latence : {s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "—"}</span>
+                </div>
+                {s.last_error && <div className="mobile-card-error">{String(s.last_error).slice(0, 80)}</div>}
+              </div>
+            ))}
+          </div>
+          </>
         )}
       </div>
 

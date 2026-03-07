@@ -19,17 +19,26 @@ export default function ScoringPage({ isActive }) {
   const [logs, setLogs] = useState([]);
   const [expandedScan, setExpandedScan] = useState(null);
   const [logFilter, setLogFilter] = useState("ALL");
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const [hRes, lRes, logRes] = await Promise.all([
-      fetch("/api/scan-history?limit=20").then((r) => r.json()).catch(() => []),
-      fetch("/api/learning").then((r) => r.json()).catch(() => null),
-      fetch(`/api/agents/scoring/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-        .then((r) => r.json()).catch(() => []),
-    ]);
-    setHistory(Array.isArray(hRes) ? hRes : []);
-    setLearning(lRes);
-    setLogs(Array.isArray(logRes) ? logRes : []);
+    try {
+      const [hRes, lRes, logRes] = await Promise.all([
+        fetch("/api/scan-history?limit=20").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/learning").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch(`/api/agents/scoring/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
+          .then((r) => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      setHistory(Array.isArray(hRes) ? hRes : []);
+      setLearning(lRes);
+      setLogs(Array.isArray(logRes) ? logRes : []);
+      setFetchError(null);
+    } catch (err) {
+      setFetchError(err.message || "Erreur de chargement");
+    } finally {
+      setLoading(false);
+    }
   }, [logFilter]);
 
   useEffect(() => {
@@ -46,6 +55,9 @@ export default function ScoringPage({ isActive }) {
         <h2>\ud83c\udfaf Agent Scoring</h2>
         <span className="agent-page-desc">Notation edge-weighted, analyse Claude, d\u00e9tection de signaux</span>
       </div>
+
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
+      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
 
       {/* Newscat learning adjustments */}
       {Object.keys(newscatAdj).length > 0 && (

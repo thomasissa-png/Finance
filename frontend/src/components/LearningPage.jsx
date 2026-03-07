@@ -29,17 +29,26 @@ export default function LearningPage({ isActive }) {
   const [perf, setPerf] = useState(null);
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const [lRes, pRes, logRes] = await Promise.all([
-      fetch("/api/learning").then((r) => r.json()).catch(() => null),
-      fetch("/api/performance").then((r) => r.json()).catch(() => null),
-      fetch(`/api/agents/learning/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-        .then((r) => r.json()).catch(() => []),
-    ]);
-    setLearning(lRes);
-    setPerf(pRes);
-    setLogs(Array.isArray(logRes) ? logRes : []);
+    try {
+      const [lRes, pRes, logRes] = await Promise.all([
+        fetch("/api/learning").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch(`/api/agents/learning/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
+          .then((r) => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      setLearning(lRes);
+      setPerf(pRes);
+      setLogs(Array.isArray(logRes) ? logRes : []);
+      setFetchError(null);
+    } catch (err) {
+      setFetchError(err.message || "Erreur de chargement");
+    } finally {
+      setLoading(false);
+    }
   }, [logFilter]);
 
   useEffect(() => {
@@ -66,6 +75,9 @@ export default function LearningPage({ isActive }) {
         <h2>{"\ud83e\udde0"} Agent Learning</h2>
         <span className="agent-page-desc">6 dimensions d'apprentissage adaptatif, d\u00e9tection d'anomalies, optimisation continue</span>
       </div>
+
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
+      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
 
       {/* KPIs */}
       <div className="kpi-row">

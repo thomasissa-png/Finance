@@ -96,43 +96,30 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchAgents]);
 
-  // Fetch notifications (WARN/ERROR logs from all agents)
+  // Fetch notifications (WARN/ERROR logs from all agents) — single flat Promise.all
   const fetchNotifications = useCallback(() => {
     const agentNames = ["news", "scoring", "trader_1", "journal", "learning", "auditor"];
-    Promise.all(
-      agentNames.map((name) =>
-        fetch(`/api/agents/${name}/logs?limit=20&level=WARN`)
-          .then((r) => r.json())
-          .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
-          .catch(() => [])
-      )
-    ).then((results) => {
-      const all = results.flat().sort((a, b) =>
-        new Date(b.timestamp) - new Date(a.timestamp)
-      ).slice(0, 50);
-      // Also fetch ERROR level
-      Promise.all(
-        agentNames.map((name) =>
-          fetch(`/api/agents/${name}/logs?limit=10&level=ERROR`)
-            .then((r) => r.json())
-            .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
-            .catch(() => [])
-        )
-      ).then((errorResults) => {
-        const errors = errorResults.flat();
-        const combined = [...errors, ...all]
-          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-          .slice(0, 50);
-        // Deduplicate by timestamp+agent
-        const seen = new Set();
-        const deduped = combined.filter((n) => {
-          const key = `${n.timestamp}-${n.agent}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        setNotifications(deduped);
-      });
+    const requests = agentNames.flatMap((name) => [
+      fetch(`/api/agents/${name}/logs?limit=20&level=WARN`)
+        .then((r) => r.json())
+        .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
+        .catch(() => []),
+      fetch(`/api/agents/${name}/logs?limit=10&level=ERROR`)
+        .then((r) => r.json())
+        .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
+        .catch(() => []),
+    ]);
+    Promise.all(requests).then((results) => {
+      const combined = results.flat()
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      const seen = new Set();
+      const deduped = combined.filter((n) => {
+        const key = `${n.timestamp}-${n.agent}-${n.action}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 50);
+      setNotifications(deduped);
     });
   }, []);
 

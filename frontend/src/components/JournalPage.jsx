@@ -8,15 +8,24 @@ export default function JournalPage({ isActive }) {
   const [learning, setLearning] = useState(null);
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
   const fetchExtra = useCallback(async () => {
-    const [lRes, logRes] = await Promise.all([
-      fetch("/api/learning").then((r) => r.json()).catch(() => null),
-      fetch(`/api/agents/journal/logs?limit=30${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-        .then((r) => r.json()).catch(() => []),
-    ]);
-    setLearning(lRes);
-    setLogs(Array.isArray(logRes) ? logRes : []);
+    try {
+      const [lRes, logRes] = await Promise.all([
+        fetch("/api/learning").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch(`/api/agents/journal/logs?limit=30${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
+          .then((r) => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      setLearning(lRes);
+      setLogs(Array.isArray(logRes) ? logRes : []);
+      setFetchError(null);
+    } catch (err) {
+      setFetchError(err.message || "Erreur de chargement");
+    } finally {
+      setLoading(false);
+    }
   }, [logFilter]);
 
   useEffect(() => {
@@ -31,6 +40,9 @@ export default function JournalPage({ isActive }) {
         <h2>{"\ud83d\udcd3"} Agent Journal</h2>
         <span className="agent-page-desc">Documentation, cl\u00f4ture des trades, analyse P&L, MAE/MFE</span>
       </div>
+
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
+      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
 
       {/* Existing Journal component */}
       <Journal isActive={isActive} />

@@ -31,15 +31,25 @@ export default function AuditorPage({ isActive }) {
   const [logFilter, setLogFilter] = useState("ALL");
   const [auditLoading, setAuditLoading] = useState({});
   const [expandedReport, setExpandedReport] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
+  const [auditFeedback, setAuditFeedback] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const [rRes, logRes] = await Promise.all([
-      fetch("/api/agents/auditor/reports?limit=20").then((r) => r.json()).catch(() => []),
-      fetch(`/api/agents/auditor/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-        .then((r) => r.json()).catch(() => []),
-    ]);
-    setReports(Array.isArray(rRes) ? rRes : []);
-    setLogs(Array.isArray(logRes) ? logRes : []);
+    try {
+      const [rRes, logRes] = await Promise.all([
+        fetch("/api/agents/auditor/reports?limit=20").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch(`/api/agents/auditor/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
+          .then((r) => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      setReports(Array.isArray(rRes) ? rRes : []);
+      setLogs(Array.isArray(logRes) ? logRes : []);
+      setFetchError(null);
+    } catch (err) {
+      setFetchError(err.message || "Erreur de chargement");
+    } finally {
+      setLoading(false);
+    }
   }, [logFilter]);
 
   useEffect(() => {
@@ -50,16 +60,21 @@ export default function AuditorPage({ isActive }) {
 
   const triggerAudit = async (target) => {
     setAuditLoading((prev) => ({ ...prev, [target]: true }));
+    setAuditFeedback(null);
     try {
       const res = await fetch(`/api/agents/auditor/audit/${target}`, { method: "POST" });
       if (res.ok) {
-        // Refresh reports after audit
-        setTimeout(fetchData, 1000);
+        setAuditFeedback({ type: "success", message: `Audit ${TARGET_LABELS[target] || target} lancé avec succès` });
+        setTimeout(fetchData, 1500);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setAuditFeedback({ type: "error", message: err.detail || `Erreur lors de l'audit ${target}` });
       }
     } catch (err) {
-      console.error("Audit trigger failed:", err);
+      setAuditFeedback({ type: "error", message: `Erreur réseau : ${err.message}` });
     } finally {
       setAuditLoading((prev) => ({ ...prev, [target]: false }));
+      setTimeout(() => setAuditFeedback(null), 5000);
     }
   };
 
@@ -69,6 +84,14 @@ export default function AuditorPage({ isActive }) {
         <h2>{"\ud83d\udd0d"} Agent Auditeur</h2>
         <span className="agent-page-desc">Audit en profondeur de chaque agent, note /10, am\u00e9liorations, tendances</span>
       </div>
+
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
+      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
+      {auditFeedback && (
+        <div className={`agent-${auditFeedback.type === "success" ? "success" : "error"}-banner`}>
+          {auditFeedback.message}
+        </div>
+      )}
 
       {/* Audit triggers */}
       <div className="section-card">

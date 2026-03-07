@@ -15,19 +15,28 @@ export default function TraderPage({ isActive }) {
   const [page, setPage] = useState(1);
   const [logFilter, setLogFilter] = useState("DECISION");
   const [expandedTrade, setExpandedTrade] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const [tRes, pRes, lRes, logRes] = await Promise.all([
-      fetch("/api/trades").then((r) => r.json()).catch(() => []),
-      fetch("/api/performance").then((r) => r.json()).catch(() => null),
-      fetch("/api/learning").then((r) => r.json()).catch(() => null),
-      fetch(`/api/agents/trader_1/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-        .then((r) => r.json()).catch(() => []),
-    ]);
-    setTrades(Array.isArray(tRes) ? tRes : []);
-    setPerf(pRes);
-    setLearning(lRes);
-    setLogs(Array.isArray(logRes) ? logRes : []);
+    try {
+      const [tRes, pRes, lRes, logRes] = await Promise.all([
+        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch("/api/learning").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch(`/api/agents/trader_1/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
+          .then((r) => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      setTrades(Array.isArray(tRes) ? tRes : []);
+      setPerf(pRes);
+      setLearning(lRes);
+      setLogs(Array.isArray(logRes) ? logRes : []);
+      setFetchError(null);
+    } catch (err) {
+      setFetchError(err.message || "Erreur de chargement");
+    } finally {
+      setLoading(false);
+    }
   }, [logFilter]);
 
   useEffect(() => {
@@ -59,6 +68,9 @@ export default function TraderPage({ isActive }) {
         <h2>\ud83d\udcb9 Agent Trader</h2>
         <span className="agent-page-desc">D\u00e9cisions d'investissement, position monitoring, risk management</span>
       </div>
+
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
+      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
 
       {/* KPIs */}
       {perf && (
