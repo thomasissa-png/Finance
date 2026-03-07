@@ -14,6 +14,9 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 - Decisions de taux / NFP / CPI → les algos reagissent en microsecondes, zero edge
 - Headlines CNN/BBC/trending Twitter → 100% des participants ont deja vu
 
+**REGLE ABSOLUE — Commodities :**
+On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity ne marchent pas, le probleme est dans le scoring ou l'analyse — PAS dans la categorie elle-meme. Le learning ne doit JAMAIS penaliser les commodities en tant que classe. Les ajustements se font au niveau ticker+newscat (granulaire), jamais au niveau categorie d'actif pour les commodities.
+
 ## Architecture
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite

@@ -241,23 +241,28 @@ ASSETS: list[Asset] = [
     Asset("EURJPY=X", "EUR/JPY", "forex", "JPY"),
     # P3-2: China offshore yuan — key for China demand/policy signals
     Asset("USDCNH=X", "USD/CNH", "forex", "CNH"),
-    # ── COMMODITIES (14) ──────────────────────────────────────────
-    Asset("CL=F", "Pétrole WTI", "commodities", "USD"),
-    Asset("BZ=F", "Pétrole Brent", "commodities", "USD"),
-    Asset("NG=F", "Gaz Naturel", "commodities", "USD"),
-    Asset("ZC=F", "Maïs", "commodities", "USD"),
-    Asset("ZW=F", "Blé", "commodities", "USD"),
-    Asset("ZS=F", "Soja", "commodities", "USD"),
-    Asset("KC=F", "Café", "commodities", "USD"),
-    Asset("SB=F", "Sucre", "commodities", "USD"),
-    Asset("CC=F", "Cacao", "commodities", "USD"),
-    Asset("CT=F", "Coton", "commodities", "USD"),
-    Asset("OJ=F", "Jus d'Orange", "commodities", "USD"),
-    Asset("HG=F", "Cuivre", "commodities", "USD"),
-    Asset("LE=F", "Bétail Vivant", "commodities", "USD"),
-    Asset("HE=F", "Porc Maigre", "commodities", "USD"),
+    # ── COMMODITIES — v5.2: split into sub-categories for learning granularity ──
+    # Energy (3)
+    Asset("CL=F", "Pétrole WTI", "commodities_energy", "USD"),
+    Asset("BZ=F", "Pétrole Brent", "commodities_energy", "USD"),
+    Asset("NG=F", "Gaz Naturel", "commodities_energy", "USD"),
+    # Agriculture (4)
+    Asset("ZC=F", "Maïs", "commodities_agri", "USD"),
+    Asset("ZW=F", "Blé", "commodities_agri", "USD"),
+    Asset("ZS=F", "Soja", "commodities_agri", "USD"),
+    Asset("CT=F", "Coton", "commodities_agri", "USD"),
+    # Tropical softs (4)
+    Asset("KC=F", "Café", "commodities_soft", "USD"),
+    Asset("SB=F", "Sucre", "commodities_soft", "USD"),
+    Asset("CC=F", "Cacao", "commodities_soft", "USD"),
+    Asset("OJ=F", "Jus d'Orange", "commodities_soft", "USD"),
+    # Industrial metals (1)
+    Asset("HG=F", "Cuivre", "commodities_industrial", "USD"),
+    # Livestock (2)
+    Asset("LE=F", "Bétail Vivant", "commodities_livestock", "USD"),
+    Asset("HE=F", "Porc Maigre", "commodities_livestock", "USD"),
     # P3-2: Uranium — energy transition + geopolitical hedge
-    Asset("URA", "Uranium ETF", "commodities", "USD"),
+    Asset("URA", "Uranium ETF", "commodities_energy", "USD"),
     # ── INDICES (8) ──────────────────────────────────────────────
     Asset("^FCHI", "CAC 40", "indices", "EUR"),
     Asset("^GSPC", "S&P 500", "indices", "USD"),
@@ -277,7 +282,11 @@ CATEGORIES = {
     "actions_europe": "Actions Euronext Paris",
     "metaux": "Métaux Précieux",
     "forex": "Forex",
-    "commodities": "Commodities",
+    "commodities_energy": "Énergie",
+    "commodities_agri": "Agriculture",
+    "commodities_soft": "Soft Commodities",
+    "commodities_industrial": "Métaux Industriels",
+    "commodities_livestock": "Bétail",
     "indices": "Indices Boursiers",
 }
 

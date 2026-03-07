@@ -188,7 +188,7 @@ def test_save_trade_preserves_existing():
         existing = TradeRecommendation(
             scan_type=ScanType.EUROPE,
             timestamp=datetime(2026, 2, 25, 8, 0, tzinfo=timezone.utc),
-            ticker="ZW=F", asset_name="Wheat", category="commodities",
+            ticker="ZW=F", asset_name="Wheat", category="commodities_agri",
             direction=Direction.LONG, catalyst="test",
             entry_price=550, target_price=560, stop_price=545,
             target_pct=1.8, stop_pct=0.9, risk_reward=2.0, confidence=70,
@@ -202,7 +202,7 @@ def test_save_trade_preserves_existing():
             new_trade = TradeRecommendation(
                 scan_type=ScanType.US,
                 timestamp=datetime(2026, 2, 25, 15, 0, tzinfo=timezone.utc),
-                ticker="CL=F", asset_name="WTI Crude", category="commodities",
+                ticker="CL=F", asset_name="WTI Crude", category="commodities_energy",
                 direction=Direction.SHORT, catalyst="test2",
                 entry_price=75, target_price=73, stop_price=76,
                 target_pct=2.6, stop_pct=1.3, risk_reward=2.0, confidence=65,
@@ -806,7 +806,7 @@ def test_learning_filters_anomalous_pnl():
         TradeRecommendation(
             scan_type=ScanType.EUROPE,
             timestamp=datetime(2026, 3, 2, 8, 0, tzinfo=timezone.utc),
-            ticker="ZC=F", asset_name="Corn", category="commodities",
+            ticker="ZC=F", asset_name="Corn", category="commodities_agri",
             direction=Direction.LONG, catalyst="anomalous trade",
             entry_price=400, target_price=410, stop_price=395,
             target_pct=2.5, stop_pct=1.25, risk_reward=2.0, confidence=70,

@@ -35,7 +35,12 @@ def test_category_counts():
     assert counts["actions_europe"] == 7  # Was 10, removed SU.PA, SAF.PA, RI.PA (no source, no chain)
     assert counts["metaux"] == 4  # PL=F and PA=F kept (now covered by GNews mine strike query)
     assert counts["forex"] == 7  # +USDCNH=X (China yuan proxy)
-    assert counts["commodities"] == 15  # +URA (uranium ETF)
+    # v5.2: "commodities" split into sub-categories
+    assert counts["commodities_energy"] == 4   # CL=F, BZ=F, NG=F, URA
+    assert counts["commodities_agri"] == 4     # ZC=F, ZW=F, ZS=F, CT=F
+    assert counts["commodities_soft"] == 4     # KC=F, SB=F, CC=F, OJ=F
+    assert counts["commodities_industrial"] == 1  # HG=F
+    assert counts["commodities_livestock"] == 2   # LE=F, HE=F
     assert counts["indices"] == 8  # Was 12, removed IBEX, FTSEMIB, HSI, AXJO
 
 

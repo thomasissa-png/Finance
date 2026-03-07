@@ -113,7 +113,7 @@ def _make_trade(**overrides):
         timestamp=datetime.now(timezone.utc),
         ticker="CL=F",
         asset_name="Pétrole WTI",
-        category="commodities",
+        category="commodities_energy",
         direction=Direction.LONG,
         news_headline="Oil supply disruption",
         news_category="commodity",
@@ -532,7 +532,7 @@ class TestLearningPipeline:
     """Verify the full learning cycle: results → adjustments → feedback."""
 
     def _make_closed_trades(self, n_wins, n_losses, ticker="CL=F",
-                            category="commodities", news_cat="commodity"):
+                            category="commodities_energy", news_cat="commodity"):
         """Generate a mix of closed trades for learning tests."""
         trades = []
         base_time = datetime.now(timezone.utc) - timedelta(days=30)
@@ -678,7 +678,7 @@ class TestFullPipelineIntegration:
 
         # Day 1: Good commodity trade → TP
         all_trades.append(_make_trade(
-            timestamp=base, ticker="CL=F", category="commodities",
+            timestamp=base, ticker="CL=F", category="commodities_energy",
             news_category="commodity", direction=Direction.LONG,
             entry_price=70.0, target_price=72.0, stop_price=69.0,
             result=TradeResult.TP_HIT, pnl_pct=2.86,
@@ -688,7 +688,7 @@ class TestFullPipelineIntegration:
         # Day 2: Bad weather trade → SL
         all_trades.append(_make_trade(
             timestamp=base + timedelta(days=1), ticker="ZC=F",
-            asset_name="Maïs", category="commodities",
+            asset_name="Maïs", category="commodities_agri",
             news_category="weather", direction=Direction.LONG,
             entry_price=450.0, target_price=460.0, stop_price=445.0,
             result=TradeResult.SL_HIT, pnl_pct=-1.11,
@@ -1157,7 +1157,7 @@ class TestLearningV41:
     """Tests for v4.1 learning improvements."""
 
     def _make_closed_trades(self, n_wins, n_losses, ticker="CL=F",
-                            category="commodities", news_cat="commodity",
+                            category="commodities_energy", news_cat="commodity",
                             base_days_ago=30):
         trades = []
         base_time = datetime.now(timezone.utc) - timedelta(days=base_days_ago)

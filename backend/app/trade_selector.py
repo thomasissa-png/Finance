@@ -27,7 +27,11 @@ from .config import (
 # Forex: tight (0.3% overnight is normal), Commodities: loose (2-3% moves are common)
 PRE_MOVE_THRESHOLDS: dict[str, float] = {
     "forex": 0.6,       # 60% of expected move — forex has small ATR, overnight gap is normal
-    "commodities": 0.85, # 85% — commodities can move 3%+ on real signals, don't reject too early
+    "commodities_energy": 0.85,     # 85% — energy can move 3%+ on real signals
+    "commodities_agri": 0.85,       # 85% — grains can gap hard on USDA/weather
+    "commodities_soft": 0.85,       # 85% — tropical softs very volatile
+    "commodities_industrial": 0.8,  # 80% — copper tracks China/macro
+    "commodities_livestock": 0.85,  # 85% — livestock gaps on disease outbreaks
     "metaux": 0.8,       # 80% — metals are volatile but less than soft commodities
     "actions_europe": 0.8,  # 80% — stocks gap on earnings etc
     "indices": 0.75,     # 75% — indices reflect broad sentiment, pre-move is more informative

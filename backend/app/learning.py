@@ -570,9 +570,12 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
             ticker_adj[ticker] = adj
 
     # ── Per-category adjustments (with decay + significance) ──────
+    # v5.2: Skip commodity sub-categories — failing on oil shouldn't penalize wheat.
+    # Commodity learning happens at ticker level (ticker_adj) and newscat+ticker level.
+    # cat_adj is only useful for homogeneous groups (actions_europe, forex, indices).
     cat_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
-        if t.pnl_pct is not None:
+        if t.pnl_pct is not None and not t.category.startswith("commodities_"):
             w = _compute_decay_weight(t.timestamp, half_life)
             cat_weighted.setdefault(t.category, []).append((t.pnl_pct, w))
 
@@ -620,14 +623,15 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
                                   t_threshold=1.5)
         if adj is not None:
             newscat_adj[combo] = adj
-    # Broad category fallback (only if no cross-dimension entries exist for that category)
+    # Broad category fallback — always computed so tickers without enough
+    # cross-dimension data can still benefit from the pooled category signal.
+    # Lookup priority in trade_selector: cross-key > broad category > 1.0
     for ncat, entries in newscat_weighted.items():
-        if ncat not in newscat_adj and not any(k.startswith(f"{ncat}+") for k in newscat_adj):
-            adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                      bounds=(0.7, 1.3), min_significant=5,
-                                      t_threshold=1.5)
-            if adj is not None:
-                newscat_adj[ncat] = adj
+        adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
+                                  bounds=(0.7, 1.3), min_significant=5,
+                                  t_threshold=1.5)
+        if adj is not None:
+            newscat_adj[ncat] = adj
 
     # ── v3.4 #1 + v4.2 C1: Per-regime adjustments ──
     # C1: Merge to 2 buckets (calm+normal, elevated+stress) and raise min to 15
