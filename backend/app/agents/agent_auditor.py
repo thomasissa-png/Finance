@@ -17,6 +17,20 @@ Résultat de chaque audit :
 
 Les rapports d'audit sont persistés (PG ou JSON) pour être consultables
 quelle que soit la session Claude Code.
+
+## Règle d'interaction — Confirmation utilisateur
+
+Quand l'audit identifie des améliorations à implémenter, l'auditeur doit
+**demander confirmation à l'utilisateur** avant de coder si :
+- Le changement touche la logique métier (scoring, trade selection, learning)
+- Le changement a un impact potentiel sur les performances de trading
+- Le scope de l'amélioration est ambigu ou pourrait être interprété de plusieurs façons
+- Le changement nécessite un choix d'architecture (ex: nouveau module vs extension existante)
+- Il y a un doute sur la pertinence ou la priorité de l'amélioration
+
+L'auditeur présente ses trouvailles et recommandations, puis attend le feu vert
+de l'utilisateur avant d'implémenter. Les fixes purement techniques (bugs évidents,
+typos, missing error handling) peuvent être appliqués directement.
 """
 
 import json
