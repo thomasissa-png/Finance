@@ -318,6 +318,31 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **P3** : `getattr(best_news, 'expected_magnitude', 50)` aux lignes 804 et 827 + `getattr(best_news, 'convergence_count', 0)` à la ligne 1040 — mêmes champs déclarés avec defaults sur `ScoredNews`. Remplacés par accès directs (cohérent avec le pattern v6.4)
 - **6 tests** : highvol_formula_synced, spread_filter_matches_calibrate, no_hasattr_on_scored_news, no_getattr_on_scored_news, scored_news_has_all_trader_fields, scoring_agent_returns_all_needed_keys
 
+#### 22. Timeout Audit v6.5 — 8 fixes Replit compatibility
+- **P1** : `position_monitor.py` — `shutdown(wait=True)` bloquait le scheduler → `shutdown(wait=False, cancel_futures=True)` + global timeout 45s + `TimeoutError` séparé de `Exception`
+- **P2** : `event_scanner.py` — timeout per-feed 5s→15s (DNS cold-start Replit), logging debug→warning
+- **P3** : `journal.py` — `as_completed()` sans timeout global (bloquait indéfiniment) → timeout dynamique + force-close trades PENDING restants
+- **P4** : `news_scorer.py` — Claude API timeout 120s→45s (120s×3 retries causait health check failures)
+- **P5** : `trade_selector.py` — shutdown explicite + fallback gracieux
+- **P6** : `data_apis.py` — `TimeoutError` séparé de `Exception` pour tracking précis
+- **P7** : `data_apis.py` — `max_workers` 5→3 (Replit OOM kills)
+- **P8** : `news_collector.py` — `TimeoutError` séparé dans `collect_rss_news()` et `collect_early_signal_news()`
+
+#### 23. Frontend UX Redesign v7.0 — Navigation centrée agents
+- **Navigation** : suppression des 4 onglets, remplacement par sidebar-driven routing
+  - Hash routing : `#dashboard`, `#news`, `#scoring`, `#trader`, `#journal`, `#learning`, `#auditor`
+  - Sidebar : Dashboard + 6 agents + bouton Alertes avec badge notifications
+  - 7 pages lazy-loadées via `React.lazy` + `Suspense`
+- **DashboardPage** : KPIs globaux (trades, win rate, P&L, pending) + agent overview cards + scan triggers + progress + toasts
+- **TraderPage** : KPIs, positions PENDING, historique trades (filtres résultat/direction/catégorie, pagination, expandable), ajustements learning per-ticker avec décomposition, dimensions session/direction/delay_bias, logs DECISION
+- **ScoringPage** : historique scans avec news scorées (expandable, 6 barres dimensions scoring), rejets, ajustements newscat learning, logs agent
+- **JournalPage** : wrapper Journal existant + contexte learning injecté (session, régime, delay bias) + logs agent journal
+- **NewsPage** : santé sources (tableau succès/échecs/latence/erreurs avec health bars), revue hebdomadaire, logs agent
+- **LearningPage** : 6 dimensions learning avec descriptions (per-ticker, session, newscat, régime VIX, direction, delay bias), KPIs boosts/pénalités, logs agent
+- **AuditorPage** : trigger audit par agent, rapports (score /10 circle, tendances improving/declining, constats, améliorations, détail checks), logs agent
+- **NotificationCenter** : panneau slide-in (overlay + animation), alertes WARN/ERROR de tous les agents, filtres agent/niveau, clic → navigation vers page agent
+- **CSS** : ~500 lignes ajoutées (KPI cards, section cards, compact tables, learning grid, scoring dimension bars, health bars, notification panel, audit report cards, score circles, mobile responsive)
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), run_learning_update(), helpers
@@ -339,10 +364,18 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES
 - `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr)
 - `backend/app/scan_history.py` : PG support, pruning 365j
-- `frontend/src/App.jsx` : v6.0, sidebar agents, agent overview cards, agent detail view, hash routing
-- `frontend/src/components/AgentSidebar.jsx` : sidebar 7 agents avec status dots
+- `frontend/src/App.jsx` : v7.0, navigation centrée agents (sidebar-driven), hash routing (#dashboard, #news, #scoring, #trader, #journal, #learning, #auditor), lazy-load pages, notification polling, health check
+- `frontend/src/components/AgentSidebar.jsx` : v7.0, navigation principale (Dashboard + 6 agents + Alertes), status dots, notification badge
 - `frontend/src/components/AgentOverview.jsx` : 7 cards métriques live sur dashboard
-- `frontend/src/components/AgentDetail.jsx` : vue détail agent, métriques grid, filtre logs, timeline
+- `frontend/src/components/DashboardPage.jsx` : v7.0, KPIs globaux (trades, win rate, P&L, pending), agent overview cards, scan triggers, progress, toasts
+- `frontend/src/components/TraderPage.jsx` : v7.0, KPIs trader, positions en cours, historique trades (filtres résultat/direction/catégorie, pagination), ajustements learning (per-ticker, session, direction, delay bias), logs DECISION
+- `frontend/src/components/ScoringPage.jsx` : v7.0, historique scans (news scorées, dimensions barres, rejets), ajustements newscat learning, logs agent
+- `frontend/src/components/JournalPage.jsx` : v7.0, wrapper Journal existant + contexte learning injecté + logs agent journal
+- `frontend/src/components/Journal.jsx` : composant journal inchangé (763 lignes, filtres, pagination, expandable entries, export CSV)
+- `frontend/src/components/NewsPage.jsx` : v7.0, santé sources (tableau taux succès/échecs/latence/erreurs, health bars), revue hebdomadaire, logs agent
+- `frontend/src/components/LearningPage.jsx` : v7.0, 6 dimensions learning (per-ticker, session, newscat, régime VIX, direction, delay bias), KPIs (boosts/pénalités), descriptions, logs agent
+- `frontend/src/components/AuditorPage.jsx` : v7.0, trigger audit par agent, rapports (note /10, tendances improving/declining, constats, améliorations, détail checks), logs agent
+- `frontend/src/components/NotificationCenter.jsx` : v7.0, panneau latéral slide-in, alertes WARN/ERROR de tous les agents, filtres agent/niveau, navigation vers page agent
 
 ## REGLE ABSOLUE — Protection des donnees de production
 
@@ -875,11 +908,15 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **CFTC COT CSV** : cache 24h (publie hebdomadairement, inutile de re-telecharger a chaque scan)
 - **Health check yfinance** : cache 5 min (evite de bloquer `/api/health`)
 
-### Frontend — React
-- **React.lazy + Suspense** : code splitting par onglet (Dashboard, Journal, History, Performance)
+### Frontend — React (v7.0 — navigation centrée agents)
+- **React.lazy + Suspense** : code splitting par page agent (7 pages lazy-loadées)
+- **Navigation centrée agents** : sidebar comme navigation principale, hash routing (#dashboard, #news, #scoring, #trader, #journal, #learning, #auditor)
+- **Pages dédiées** : chaque agent a sa propre page riche (données + learning + logs)
+- **Centre de notifications** : panneau slide-in, alertes WARN/ERROR de tous les agents, filtres, badge compteur
 - **ErrorBoundary** : capture les erreurs de rendu avec bouton de recovery
-- **Polling intelligent** : Dashboard skip le polling quand l'onglet est masque (`document.hidden`)
-- **Loading states** : tous les onglets affichent un etat de chargement pendant le fetch
+- **Polling intelligent** : agents status 5s, data 60s, notifications 30s, skip quand tab masqué (`document.hidden`)
+- **KPIs** : cards compactes (win rate, P&L, trades) sur Dashboard et page Trader
+- **Learning visualisation** : 6 dimensions avec multipliers, grilles, barres de dimension scoring
 - **useMemo** : grouping/sorting du journal memoize pour eviter les re-calculs
 - **Keys stables** : `timestamp-ticker` au lieu de `key={i}` dans les tables
 - **Preconnect** : `<link rel="preconnect">` pour Google Fonts (gain ~100ms)

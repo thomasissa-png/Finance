@@ -1,52 +1,38 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { getParisHour, getParisDay } from "./utils/format";
 import AgentSidebar from "./components/AgentSidebar";
-import AgentOverview from "./components/AgentOverview";
-import AgentDetail from "./components/AgentDetail";
+import NotificationCenter from "./components/NotificationCenter";
 
-// (F1) Lazy-load tab components for code splitting
-const Dashboard = lazy(() => import("./components/Dashboard"));
-const Journal = lazy(() => import("./components/Journal"));
-const History = lazy(() => import("./components/History"));
-const Performance = lazy(() => import("./components/Performance"));
+// Lazy-load all pages
+const DashboardPage = lazy(() => import("./components/DashboardPage"));
+const TraderPage = lazy(() => import("./components/TraderPage"));
+const ScoringPage = lazy(() => import("./components/ScoringPage"));
+const JournalPage = lazy(() => import("./components/JournalPage"));
+const NewsPage = lazy(() => import("./components/NewsPage"));
+const LearningPage = lazy(() => import("./components/LearningPage"));
+const AuditorPage = lazy(() => import("./components/AuditorPage"));
 
-const TABS = [
-  { id: "dashboard", label: "Dashboard", shortcut: "1" },
-  { id: "journal", label: "Journal", shortcut: "2" },
-  { id: "history", label: "Historique", shortcut: "3" },
-  { id: "performance", label: "Performance", shortcut: "4" },
+const PAGES = [
+  "dashboard", "news", "scoring", "trader", "journal", "learning", "auditor",
 ];
 
-const TAB_IDS = TABS.map((t) => t.id);
-
-// (C3) Hash routing — read initial tab from URL hash
-function getTabFromHash() {
+function getPageFromHash() {
   const hash = window.location.hash.replace("#", "");
-  if (hash.startsWith("agent:")) return "dashboard";
-  return TAB_IDS.includes(hash) ? hash : "dashboard";
+  return PAGES.includes(hash) ? hash : "dashboard";
 }
 
-function getAgentFromHash() {
-  const hash = window.location.hash.replace("#", "");
-  if (hash.startsWith("agent:")) return hash.split(":")[1];
-  return null;
-}
-
-// (F5) ErrorBoundary — catches render errors in child components
+// ErrorBoundary
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
     this.state = { hasError: false, error: null };
   }
-
   static getDerivedStateFromError(error) {
     return { hasError: true, error };
   }
-
   componentDidCatch(error, info) {
-    console.error("ErrorBoundary caught:", error, info);
+    console.error("ErrorBoundary:", error, info);
   }
-
   render() {
     if (this.state.hasError) {
       return (
@@ -57,17 +43,11 @@ class ErrorBoundary extends React.Component {
             {this.state.error?.message || "Une erreur inattendue est survenue"}
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 12 }}>
-            <button
-              className="trigger-btn"
-              onClick={() => this.setState({ hasError: false, error: null })}
-            >
+            <button className="trigger-btn" onClick={() => this.setState({ hasError: false, error: null })}>
               Réessayer
             </button>
-            <button
-              className="trigger-btn export"
-              onClick={() => window.location.reload()}
-            >
-              Recharger la page
+            <button className="trigger-btn export" onClick={() => window.location.reload()}>
+              Recharger
             </button>
           </div>
         </div>
@@ -77,7 +57,6 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-// (O8) Skeleton loading fallback
 const LoadingFallback = () => (
   <div>
     <div className="skeleton skeleton-card" />
@@ -86,33 +65,28 @@ const LoadingFallback = () => (
   </div>
 );
 
-// (M7) Timezone-aware status — uses Europe/Paris
 function getHeaderStatus() {
   const day = getParisDay();
-  if (day === 0 || day === 6) {
-    return { cls: "weekend", text: "Marchés fermés" };
-  }
+  if (day === 0 || day === 6) return { cls: "weekend", text: "Marchés fermés" };
   const hour = getParisHour();
-  if (hour >= 7 && hour < 20) {
-    return { cls: "online", text: "Marchés ouverts" };
-  }
+  if (hour >= 7 && hour < 20) return { cls: "online", text: "Marchés ouverts" };
   return { cls: "offline", text: "Hors session" };
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState(getTabFromHash);
-  const [selectedAgent, setSelectedAgent] = useState(getAgentFromHash);
+  const [activePage, setActivePage] = useState(getPageFromHash);
   const [status, setStatus] = useState(getHeaderStatus);
   const [backendUp, setBackendUp] = useState(true);
   const [agents, setAgents] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [lastNotifCheck, setLastNotifCheck] = useState(Date.now());
 
   // Fetch agents status
   const fetchAgents = useCallback(() => {
     fetch("/api/agents")
       .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) setAgents(data);
-      })
+      .then((data) => { if (Array.isArray(data)) setAgents(data); })
       .catch(() => {});
   }, []);
 
@@ -122,54 +96,94 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchAgents]);
 
-  // Tab switching
-  const switchTab = useCallback((tabId) => {
-    setActiveTab(tabId);
-    setSelectedAgent(null);
-    window.location.hash = tabId;
+  // Fetch notifications (WARN/ERROR logs from all agents)
+  const fetchNotifications = useCallback(() => {
+    const agentNames = ["news", "scoring", "trader_1", "journal", "learning", "auditor"];
+    Promise.all(
+      agentNames.map((name) =>
+        fetch(`/api/agents/${name}/logs?limit=20&level=WARN`)
+          .then((r) => r.json())
+          .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
+          .catch(() => [])
+      )
+    ).then((results) => {
+      const all = results.flat().sort((a, b) =>
+        new Date(b.timestamp) - new Date(a.timestamp)
+      ).slice(0, 50);
+      // Also fetch ERROR level
+      Promise.all(
+        agentNames.map((name) =>
+          fetch(`/api/agents/${name}/logs?limit=10&level=ERROR`)
+            .then((r) => r.json())
+            .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
+            .catch(() => [])
+        )
+      ).then((errorResults) => {
+        const errors = errorResults.flat();
+        const combined = [...errors, ...all]
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, 50);
+        // Deduplicate by timestamp+agent
+        const seen = new Set();
+        const deduped = combined.filter((n) => {
+          const key = `${n.timestamp}-${n.agent}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        setNotifications(deduped);
+      });
+    });
   }, []);
 
-  // Agent selection
-  const selectAgent = useCallback((agentName) => {
-    setSelectedAgent(agentName);
-    if (agentName) {
-      window.location.hash = `agent:${agentName}`;
-    } else {
-      window.location.hash = activeTab;
-    }
-  }, [activeTab]);
-
-  // (C3) Listen to popstate (back/forward)
   useEffect(() => {
-    const onHash = () => {
-      setActiveTab(getTabFromHash());
-      setSelectedAgent(getAgentFromHash());
-    };
+    fetchNotifications();
+    const id = setInterval(fetchNotifications, 30000);
+    return () => clearInterval(id);
+  }, [fetchNotifications]);
+
+  // Count unread notifications
+  const unreadCount = notifications.filter(
+    (n) => new Date(n.timestamp).getTime() > lastNotifCheck
+  ).length;
+
+  const markAllRead = useCallback(() => {
+    setLastNotifCheck(Date.now());
+  }, []);
+
+  // Navigate
+  const navigate = useCallback((pageId) => {
+    setActivePage(pageId);
+    setShowNotifications(false);
+    window.location.hash = pageId;
+  }, []);
+
+  // Hash change listener
+  useEffect(() => {
+    const onHash = () => setActivePage(getPageFromHash());
     window.addEventListener("hashchange", onHash);
-    if (!window.location.hash) {
-      window.location.hash = "dashboard";
-    }
+    if (!window.location.hash) window.location.hash = "dashboard";
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Update header status every minute
+  // Header status update
   useEffect(() => {
     const interval = setInterval(() => setStatus(getHeaderStatus()), 60_000);
     return () => clearInterval(interval);
   }, []);
 
-  // Fix 4: Force dark theme
+  // Force dark theme
   useEffect(() => {
     document.body.classList.remove("light");
     localStorage.removeItem("theme");
   }, []);
 
-  // (D12) Scroll to top on tab change
+  // Scroll to top on page change
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [activeTab, selectedAgent]);
+  }, [activePage]);
 
-  // (M3) Backend health check
+  // Backend health check
   useEffect(() => {
     let mounted = true;
     const check = () => {
@@ -182,40 +196,35 @@ export default function App() {
     return () => { mounted = false; clearInterval(id); };
   }, []);
 
-  // (N4) Keyboard shortcuts: 1-4 for tabs, Escape to close agent detail
+  // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
-      if (e.key === "Escape" && selectedAgent) {
-        selectAgent(null);
-        return;
-      }
-      const idx = parseInt(e.key, 10);
-      if (idx >= 1 && idx <= 4) {
-        switchTab(TABS[idx - 1].id);
+      if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) return;
+      if (e.key === "Escape") {
+        if (showNotifications) setShowNotifications(false);
+        else navigate("dashboard");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [switchTab, selectAgent, selectedAgent]);
+  }, [navigate, showNotifications]);
 
-  // Count working agents for header
   const workingCount = agents.filter((a) => a.status === "working").length;
   const errorCount = agents.filter((a) => a.status === "error").length;
 
-  // Get selected agent data
-  const selectedAgentData = agents.find((a) => a.name === selectedAgent);
-
   return (
     <div className="app app-with-sidebar">
-      {/* Agent Sidebar */}
       <AgentSidebar
         agents={agents}
-        selectedAgent={selectedAgent}
-        onSelectAgent={selectAgent}
+        activePage={activePage}
+        onNavigate={navigate}
+        notificationCount={unreadCount}
+        onToggleNotifications={() => {
+          setShowNotifications(!showNotifications);
+          if (!showNotifications) markAllRead();
+        }}
       />
 
-      {/* Main content */}
       <div className="app-main">
         <header className="app-header">
           <div>
@@ -223,14 +232,10 @@ export default function App() {
             <div className="app-subtitle">
               7 agents autonomes
               {workingCount > 0 && (
-                <span className="header-agents-working">
-                  {" "}&mdash; {workingCount} en cours
-                </span>
+                <span className="header-agents-working"> &mdash; {workingCount} en cours</span>
               )}
               {errorCount > 0 && (
-                <span className="header-agents-error">
-                  {" "}&mdash; {errorCount} erreur{errorCount > 1 ? "s" : ""}
-                </span>
+                <span className="header-agents-error"> &mdash; {errorCount} erreur{errorCount > 1 ? "s" : ""}</span>
               )}
             </div>
           </div>
@@ -242,7 +247,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* Backend disconnect banner */}
         {!backendUp && (
           <div className="disconnect-banner">
             <span className="status-dot offline" />
@@ -250,56 +254,26 @@ export default function App() {
           </div>
         )}
 
-        {/* Show agent detail if selected */}
-        {selectedAgent ? (
-          <ErrorBoundary>
-            <AgentDetail
-              agentName={selectedAgent}
-              agentData={selectedAgentData}
-              isActive={true}
-            />
-          </ErrorBoundary>
-        ) : (
-          <>
-            {/* Agent Overview cards on dashboard */}
-            {activeTab === "dashboard" && (
-              <ErrorBoundary>
-                <AgentOverview agents={agents} onSelectAgent={selectAgent} />
-              </ErrorBoundary>
-            )}
-
-            <nav className="tabs">
-              {TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  className={`tab ${activeTab === tab.id ? "active" : ""}`}
-                  onClick={() => switchTab(tab.id)}
-                >
-                  {tab.label}
-                  <span className="tab-shortcut">{tab.shortcut}</span>
-                </button>
-              ))}
-            </nav>
-
-            <ErrorBoundary>
-              <Suspense fallback={<LoadingFallback />}>
-                <div className="tab-content" style={{ display: activeTab === "dashboard" ? "block" : "none" }}>
-                  <Dashboard isActive={activeTab === "dashboard"} />
-                </div>
-                <div className="tab-content" style={{ display: activeTab === "journal" ? "block" : "none" }}>
-                  <Journal isActive={activeTab === "journal"} />
-                </div>
-                <div className="tab-content" style={{ display: activeTab === "history" ? "block" : "none" }}>
-                  <History isActive={activeTab === "history"} />
-                </div>
-                <div className="tab-content" style={{ display: activeTab === "performance" ? "block" : "none" }}>
-                  <Performance isActive={activeTab === "performance"} />
-                </div>
-              </Suspense>
-            </ErrorBoundary>
-          </>
-        )}
+        <ErrorBoundary>
+          <Suspense fallback={<LoadingFallback />}>
+            {activePage === "dashboard" && <DashboardPage isActive={true} agents={agents} />}
+            {activePage === "news" && <NewsPage isActive={true} />}
+            {activePage === "scoring" && <ScoringPage isActive={true} />}
+            {activePage === "trader" && <TraderPage isActive={true} />}
+            {activePage === "journal" && <JournalPage isActive={true} />}
+            {activePage === "learning" && <LearningPage isActive={true} />}
+            {activePage === "auditor" && <AuditorPage isActive={true} />}
+          </Suspense>
+        </ErrorBoundary>
       </div>
+
+      {showNotifications && (
+        <NotificationCenter
+          notifications={notifications}
+          onClose={() => setShowNotifications(false)}
+          onNavigate={navigate}
+        />
+      )}
     </div>
   );
 }
