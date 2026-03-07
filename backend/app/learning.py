@@ -609,7 +609,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     newscat_ticker_weighted: dict[str, list[tuple[float, float]]] = {}
     newscat_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
-        if t.pnl_pct is not None and hasattr(t, "news_category"):
+        if t.pnl_pct is not None:
             w = _compute_decay_weight(t.timestamp, half_life)
             combo_key = f"{t.news_category}+{t.ticker}"
             newscat_ticker_weighted.setdefault(combo_key, []).append((t.pnl_pct, w))
@@ -1048,16 +1048,43 @@ def build_performance_summary(max_recent: int = 15,
             direction_word = "SURESTIMES" if avg_error > 0 else "SOUS-ESTIMES"
             parts.append(f"BIAIS DELAY: {direction_word} de {abs(avg_error):.0f}pts")
 
-    # E2: MAE feedback — average max adverse excursion
-    mae_values = [getattr(t, "mae", None) for t in closed if getattr(t, "mae", None) is not None]
-    if len(mae_values) >= 5:
-        avg_mae = statistics.mean(mae_values)
-        # Only alert if MAE suggests stops are too tight
-        sl_hit_count = len(losses)
-        if sl_hit_count > 0 and len(closed) > 0:
-            sl_rate = sl_hit_count / len(closed) * 100
-            if sl_rate > 40 and avg_mae > 0:
-                parts.append(f"MAE moy={avg_mae:.2f}% avec SL_HIT={sl_rate:.0f}% — stops possiblement trop serres")
+    # E2: MAE feedback — load from journal entries (fields are on JournalEntry, not TradeRecommendation)
+    # B3: Slippage feedback — same, loaded from journal entries
+    try:
+        from .journal import load_journal
+        journal_entries = load_journal()
+        # Index by (ticker, entry_time date) for cross-reference
+        journal_mae: dict[str, float] = {}
+        journal_slippage: dict[str, float] = {}
+        for je in journal_entries:
+            key = getattr(je, "ticker", None)
+            if key:
+                mae_val = getattr(je, "max_adverse_excursion", None)
+                if mae_val is not None:
+                    journal_mae[key] = mae_val
+                slip_val = getattr(je, "slippage_pct", None)
+                if slip_val is not None:
+                    journal_slippage[key] = slip_val
+        # E2: MAE analysis
+        mae_values = [v for v in journal_mae.values() if v is not None]
+        if len(mae_values) >= 5:
+            avg_mae = statistics.mean(mae_values)
+            sl_hit_count = len(losses)
+            if sl_hit_count > 0 and len(closed) > 0:
+                sl_rate = sl_hit_count / len(closed) * 100
+                if sl_rate > 40 and avg_mae > 0:
+                    parts.append(f"MAE moy={avg_mae:.2f}% avec SL_HIT={sl_rate:.0f}% — stops possiblement trop serres")
+        # B3: Slippage vs estimated spread — now using journal_slippage
+        slippage_values = [v for v in journal_slippage.values() if v is not None]
+        if len(slippage_values) >= 5:
+            avg_slippage = statistics.mean([abs(s) for s in slippage_values])
+            from .config import ESTIMATED_SPREADS, DEFAULT_SPREAD
+            avg_spread = statistics.mean([ESTIMATED_SPREADS.get(t.ticker, DEFAULT_SPREAD) for t in closed])
+            if avg_slippage > avg_spread * 2:
+                parts.append(f"SLIPPAGE: {avg_slippage:.3f}% vs spread estime {avg_spread:.3f}% — "
+                             "execution degradee ou spreads sous-estimes")
+    except Exception as exc:
+        logger.debug("E2/B3: Could not load journal for MAE/slippage: %s", exc)
 
     # E3: signal_reliability precision tracking
     reliability_results: dict[str, dict] = {"high": {"wins": 0, "total": 0},
@@ -1096,16 +1123,7 @@ def build_performance_summary(max_recent: int = 15,
         elif avg_mag_err > 1.0:
             parts.append(f"Magnitude sous-estimee de {avg_mag_err:.1f}pp — augmente expected_magnitude")
 
-    # B3: Slippage vs estimated spread feedback
-    slippage_values = [getattr(t, "slippage", None) for t in closed
-                       if getattr(t, "slippage", None) is not None]
-    if len(slippage_values) >= 5:
-        avg_slippage = statistics.mean([abs(s) for s in slippage_values])
-        from .config import ESTIMATED_SPREADS, DEFAULT_SPREAD
-        avg_spread = statistics.mean([ESTIMATED_SPREADS.get(t.ticker, DEFAULT_SPREAD) for t in closed])
-        if avg_slippage > avg_spread * 2:
-            parts.append(f"SLIPPAGE: {avg_slippage:.3f}% vs spread estime {avg_spread:.3f}% — "
-                         "execution degradee ou spreads sous-estimes")
+    # B3: Slippage — now handled above in E2/B3 journal-based block
 
     # Recent trades (compact — last 10)
     # v5.1: Only include trades with verified PnL (prevent NULL data in Claude prompt)
@@ -1145,3 +1163,103 @@ def build_performance_summary(max_recent: int = 15,
     result = "\n".join(parts)
     _cached_perf_summary = result
     return result
+
+
+def extract_structured_anomalies(trades: list[TradeRecommendation] | None = None) -> list[dict]:
+    """Extract structured anomalies from trade data for Agent Learning.
+
+    Returns a list of dicts with 'type' and 'message' keys, avoiding fragile text parsing.
+    """
+    try:
+        if trades is None:
+            trades = load_trades()
+    except Exception:
+        return []
+
+    closed = [t for t in trades if t.result != TradeResult.PENDING and t.pnl_pct is not None]
+    if len(closed) < 5:
+        return []
+
+    anomalies = []
+    wins = [t for t in closed if t.result == TradeResult.TP_HIT]
+    losses = [t for t in closed if t.result == TradeResult.SL_HIT]
+    expired = [t for t in closed if t.result == TradeResult.EXPIRED]
+    pnls = [t.pnl_pct for t in closed]
+
+    # EXPIRED rate
+    if len(closed) >= 10:
+        expired_rate = len(expired) / len(closed) * 100
+        if expired_rate > 40:
+            anomalies.append({"type": "expired_rate", "message": f"EXPIRED={expired_rate:.0f}%",
+                              "severity": "critical" if expired_rate > 60 else "warning"})
+
+    # Drawdown / streaks
+    sorted_closed = sorted(closed, key=lambda t: t.timestamp)
+    max_streak = 0
+    cur = 0
+    for t in sorted_closed:
+        if t.pnl_pct is not None and t.pnl_pct < 0:
+            cur += 1
+            max_streak = max(max_streak, cur)
+        else:
+            cur = 0
+    if max_streak >= 3:
+        anomalies.append({"type": "drawdown", "message": f"{max_streak} pertes consecutives",
+                          "severity": "warning"})
+
+    # Skewness
+    if len(pnls) >= 10:
+        try:
+            mean_pnl = statistics.mean(pnls)
+            std_pnl = statistics.stdev(pnls)
+            if std_pnl > 0:
+                skew = sum((p - mean_pnl) ** 3 for p in pnls) / (len(pnls) * std_pnl ** 3)
+                if skew < -0.5:
+                    anomalies.append({"type": "skewness", "message": f"skewness={skew:.2f}",
+                                      "severity": "warning"})
+        except Exception:
+            pass
+
+    # Direction accuracy
+    dir_correct = sum(1 for t in closed if t.pnl_pct and t.pnl_pct > 0)
+    dir_total = sum(1 for t in closed if t.pnl_pct and t.pnl_pct != 0)
+    if dir_total >= 10:
+        acc = dir_correct / dir_total * 100
+        if acc < 45:
+            anomalies.append({"type": "direction_accuracy", "message": f"direction={acc:.0f}%",
+                              "severity": "warning"})
+
+    # MAE from journal
+    try:
+        from .journal import load_journal
+        journal_entries = load_journal()
+        mae_vals = [getattr(je, "max_adverse_excursion", None) for je in journal_entries
+                    if getattr(je, "max_adverse_excursion", None) is not None]
+        if len(mae_vals) >= 5:
+            avg_mae = statistics.mean(mae_vals)
+            sl_rate = len(losses) / len(closed) * 100 if closed else 0
+            if sl_rate > 40 and avg_mae > 0:
+                anomalies.append({"type": "mae", "message": f"MAE={avg_mae:.2f}% SL_HIT={sl_rate:.0f}%",
+                                  "severity": "warning"})
+    except Exception:
+        pass
+
+    # Reliability inversion
+    high_rel = {"wins": 0, "total": 0}
+    low_rel = {"wins": 0, "total": 0}
+    for t in closed:
+        rel = getattr(t, "signal_reliability", None)
+        if rel is not None:
+            bucket = high_rel if rel >= 70 else low_rel
+            bucket["total"] += 1
+            if t.result == TradeResult.TP_HIT:
+                bucket["wins"] += 1
+    if high_rel["total"] >= 5 and low_rel["total"] >= 5:
+        h_wr = high_rel["wins"] / high_rel["total"] * 100
+        l_wr = low_rel["wins"] / low_rel["total"] * 100
+        if l_wr > h_wr + 10:
+            anomalies.append({"type": "reliability_inversion",
+                              "message": f"low-rel WR={l_wr:.0f}% > high-rel WR={h_wr:.0f}%",
+                              "severity": "critical"})
+
+    return anomalies

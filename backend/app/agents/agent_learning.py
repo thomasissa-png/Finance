@@ -108,7 +108,7 @@ class AgentLearning(BaseAgent):
                         "adjustments": significant,
                     })
 
-            # Step 3: Compute performance summary
+            # Step 3: Compute performance summary + structured anomalies
             try:
                 perf = self.execute(
                     "Building performance summary",
@@ -116,10 +116,14 @@ class AgentLearning(BaseAgent):
                 )
                 result["performance_summary"] = perf
 
-                # Detect anomalies from the summary
-                anomalies = self._extract_anomalies(perf)
-                result["anomalies"] = anomalies
-                self._last_anomalies = anomalies
+                # P5: Detect anomalies via structured extraction (not text parsing)
+                anomalies = self.execute(
+                    "Extracting anomalies",
+                    self._extract_structured_anomalies,
+                )
+                anomaly_messages = [a.get("message", str(a)) for a in anomalies]
+                result["anomalies"] = anomaly_messages
+                self._last_anomalies = anomaly_messages
 
                 if anomalies:
                     self.log("Anomalies detected", {
@@ -166,9 +170,15 @@ class AgentLearning(BaseAgent):
         return self._cached_adjustments
 
     def invalidate_cache(self):
-        """Invalidate the learning cache (called after journal)."""
+        """Invalidate the learning cache and perf summary cache (called after journal)."""
         self._cache_valid = False
-        self.log("Learning cache invalidated")
+        # P3+P7: Also invalidate the performance summary cache so next scan gets fresh data
+        try:
+            from ..learning import invalidate_perf_summary_cache
+            invalidate_perf_summary_cache()
+        except Exception:
+            pass
+        self.log("Learning cache invalidated (incl. perf summary)")
 
     # ── Private helpers ────────────────────────────────────────────
 
@@ -179,6 +189,11 @@ class AgentLearning(BaseAgent):
     def _build_performance_summary(self):
         from ..learning import build_performance_summary
         return build_performance_summary()
+
+    def _extract_structured_anomalies(self) -> list[dict]:
+        """P5: Extract structured anomalies from trade data."""
+        from ..learning import extract_structured_anomalies
+        return extract_structured_anomalies()
 
     def _extract_anomalies(self, perf_summary) -> list[str]:
         """Extract anomaly strings from the performance summary."""

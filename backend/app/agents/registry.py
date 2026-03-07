@@ -200,6 +200,12 @@ def run_position_monitor() -> dict:
     return _agents["trader_1"].run_position_monitor()
 
 
+def run_learning_update() -> dict:
+    """Run full learning update after journal — computes adjustments, detects anomalies, publishes."""
+    _ensure_agents()
+    return _agents["learning"].run()
+
+
 def invalidate_learning_cache():
     """Invalidate learning cache after journal."""
     _ensure_agents()

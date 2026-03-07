@@ -26,6 +26,7 @@ from .agents.registry import (
     get_all_status as get_agents_status,
     get_agent,
     invalidate_learning_cache,
+    run_learning_update,
     run_daily_journal as agents_run_journal,
     run_event_check as agents_run_event_check,
     run_journal_recovery,
@@ -383,8 +384,12 @@ def _run_daily_journal() -> None:
             return
         try:
             agents_run_journal()
-            # Invalidate learning cache — Agent Learning will recompute on next request
+            # Invalidate learning cache and run full learning update
             invalidate_learning_cache()
+            try:
+                run_learning_update()
+            except Exception as exc:
+                logger.warning("Learning update after journal failed: %s", exc)
             # Clear scan cache after journal
             with _scans_lock:
                 _last_scans = {}
