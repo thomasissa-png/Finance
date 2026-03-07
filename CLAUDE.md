@@ -280,9 +280,28 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **File lock fix** : `_load_reports()` utilise `fcntl.LOCK_SH` pour lectures concurrentes sûres
 - **47 tests agents** (`test_agents.py`) : +5 tests (self_audit_runs, auditor_profile_has_checks, trend_tracking_empty, trend_tracking_with_history, analyze_agent_errors)
 
+#### 18. Agent Audit Round 1-3 — Journal↔Learning data integrity v6.3
+- **Round 1 — Audit Learning** (7 fixes) :
+  - `AgentLearning.run()` was dead code — wired into pipeline via `run_learning_update()` in registry
+  - MAE/slippage feedback loaded from JournalEntry (not broken `getattr(t, "mae")` on TradeRecommendation)
+  - `invalidate_cache()` also invalidates perf summary cache
+  - `extract_structured_anomalies()` — typed dicts replace fragile text parsing
+  - Removed unnecessary `hasattr(t, "news_category")` guards
+- **Round 2 — Audit Journal** (5 fixes) :
+  - `run_daily_journal()` returns `list[dict]`, not `dict` — agent_journal.py `isinstance` check
+  - SHORT slippage formula was identical to LONG (copy-paste bug) — inverted
+  - Dead import `run_journal_recovery` removed from main.py
+  - File locking added to `_load_scan_decision_data()`
+  - Learning update called after journal in main.py scheduler
+- **Round 3 — Audit Journal→Learning data flow** (3 fixes) :
+  - **P1** : 9 missing columns added to PG trades DDL + `_TRADE_COLUMNS` (surprise, directional_clarity, signal_reliability, expected_magnitude, position_size_pct, convergence_count, convergence_boost, news_url, news_description) — fields existed on Pydantic model but silently dropped on PG write, breaking Learning's signal_reliability and magnitude feedback loops
+  - **P2** : EXPIRED trades now compute `actual_pricing_hours` (remaining trading window entry→20h) — Learning couldn't learn delay_bias from EXPIRED outcomes
+  - **P3** : Defensive `getattr(t, "news_category", "other")` replaced with direct `t.news_category` in learning.py (4 occurrences) — field has default on model, getattr masked real errors
+- **Data contract verified** : all 6 learning dimensions have correct data flow Journal→TradeRecommendation→Learning
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
-- `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), helpers
+- `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), run_learning_update(), helpers
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
 - `backend/app/agents/agent_trader.py` : décision trade, position monitor, multi-trader ready, daily counters
@@ -291,10 +310,10 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/agents/agent_auditor.py` : audit profondeur, 8 profils d'expertise (+ UX v6.1, + self-audit v6.2), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
-- `backend/app/database.py` : v6.1, 8 tables PG, pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 7 tables
+- `backend/app/database.py` : v6.3, 8 tables PG, pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 7 tables, 9 scoring columns on trades (v6.3)
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
-- `backend/app/journal.py` : v4.1+, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout
-- `backend/app/learning.py` : v5.2, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities
+- `backend/app/journal.py` : v6.3, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours computation
+- `backend/app/learning.py` : v6.3, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback
 - `backend/app/trade_selector.py` : v4.0+, convex calibration, fallback ticker, spread filter, VIX daily cap
 - `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
 - `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
@@ -888,4 +907,6 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - **test_data_persistence.py** : scan_history_retention_365, scored_news_log_includes_description, price_archive_table_creation, price_archive_stats_without_pg, rescore_headline_formula, rescore_headline_zero_edge, replay_backtest_no_history, coherence_validation_returns_fixed_values, learning_filters_anomalous_pnl, review_insights_filter_pending_trades, price_archive_endpoint, backtest_replay_endpoint
 - v6.1 tests ajoutés (42 tests) :
   - **test_agents.py** : MessageBus (singleton, publish/consume, targeted, broadcast, subscribe, limit, filter, recent, maxlen), AgentLogger (log/duration/filter/limit/maxlen), BaseAgent (status, execute success/failure, log_decision, metrics, publish), Registry (get_all, get_by_name, unknown, status with UX, metrics, status fields), Auditor (profiles present, UX profile, checks, invalid target, metrics, UX audit runs), per-agent init+metrics (News, Scoring, Trader, Journal, Learning), Database pruning (messages, logs, reports no-PG)
+- v6.3 tests ajoutés (5 tests) :
+  - **test_learning.py** : PG trade columns include scoring fields, EXPIRED pricing_hours computation, news_category direct access, extract_structured_anomalies returns typed dicts, performance summary uses journal MAE
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data

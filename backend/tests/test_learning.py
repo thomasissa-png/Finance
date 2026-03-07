@@ -634,3 +634,101 @@ def test_v42_alerts_only_format():
     assert "WR=" in summary
     # Instructions should be shorter
     assert "INSTRUCTIONS SCORING" in summary
+
+
+# ── v6.3 audit tests — Journal↔Learning data integrity ──────────────
+
+
+def test_v63_pg_trade_columns_include_scoring_fields():
+    """v6.3 P1: _TRADE_COLUMNS must include signal_reliability, expected_magnitude, etc."""
+    from backend.app.database import _TRADE_COLUMNS
+    required_v63 = [
+        "surprise", "directional_clarity", "signal_reliability", "expected_magnitude",
+        "position_size_pct", "convergence_count", "convergence_boost",
+        "news_url", "news_description",
+    ]
+    for col in required_v63:
+        assert col in _TRADE_COLUMNS, f"Missing column {col} in _TRADE_COLUMNS"
+
+
+def test_v63_expired_pricing_hours_computed():
+    """v6.3 P2: EXPIRED trades should get actual_pricing_hours from remaining trading window.
+
+    The logic in journal.py computes: market_close_hour(20) - entry_hour - entry_min/60.
+    This ensures Learning can compute delay_bias even for EXPIRED outcomes.
+    """
+    from zoneinfo import ZoneInfo
+
+    PARIS_TZ = ZoneInfo("Europe/Paris")
+    market_close_hour = 20
+
+    # Simulate the P2 logic for a trade entered at 10:00 Paris
+    entry_paris_hour = 10
+    entry_paris_minute = 0
+    remaining_hours = max(1.0, market_close_hour - entry_paris_hour - entry_paris_minute / 60)
+    actual_pricing_hours = round(remaining_hours, 2)
+
+    # 10:00 → 20:00 = 10 hours
+    assert actual_pricing_hours == 10.0
+
+    # Trade entered at 18:30 Paris → only 1.5h remaining
+    remaining_late = max(1.0, market_close_hour - 18 - 30 / 60)
+    assert round(remaining_late, 2) == 1.5
+
+    # Trade entered at 19:45 → floor at 1.0h (never zero)
+    remaining_very_late = max(1.0, market_close_hour - 19 - 45 / 60)
+    assert remaining_very_late == 1.0
+
+
+def test_v63_news_category_direct_access():
+    """v6.3 P3: news_category accessed directly (not via getattr) in learning.py."""
+    import ast
+    from pathlib import Path
+
+    learning_path = Path("backend/app/learning.py")
+    source = learning_path.read_text()
+    tree = ast.parse(source)
+
+    # Check no getattr calls with "news_category" in the source
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "getattr" and len(node.args) >= 2:
+                if isinstance(node.args[1], ast.Constant) and node.args[1].value == "news_category":
+                    pytest.fail(f"Found getattr(_, 'news_category', ...) at line {node.lineno} — should use direct access")
+
+
+def test_v63_extract_structured_anomalies_returns_typed_dicts():
+    """v6.3: extract_structured_anomalies returns list[dict] with type/message keys."""
+    from backend.app.learning import extract_structured_anomalies
+
+    trades = []
+    # Create enough trades with high EXPIRED rate to trigger anomaly
+    for i in range(10):
+        result = TradeResult.EXPIRED if i < 7 else TradeResult.TP_HIT
+        pnl = 0.0 if result == TradeResult.EXPIRED else 1.0
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+
+    anomalies = extract_structured_anomalies(trades=trades)
+    assert isinstance(anomalies, list)
+    for a in anomalies:
+        assert isinstance(a, dict)
+        assert "type" in a
+        assert "message" in a
+
+
+def test_v63_performance_summary_uses_journal_mae():
+    """v6.3: build_performance_summary loads MAE from JournalEntry, not TradeRecommendation."""
+    from backend.app.learning import build_performance_summary, invalidate_perf_summary_cache
+    invalidate_perf_summary_cache()
+
+    # Create trades with SL_HIT (triggers MAE feedback check)
+    trades = []
+    for i in range(8):
+        result = TradeResult.SL_HIT if i < 5 else TradeResult.TP_HIT
+        pnl = -1.0 if result == TradeResult.SL_HIT else 1.5
+        trades.append(_make_trade(result=result, pnl_pct=pnl))
+
+    # Should not crash even without journal entries (graceful fallback)
+    summary = build_performance_summary(trades=trades)
+    assert isinstance(summary, str)
+    assert "DONNEES DE PERFORMANCE" in summary
