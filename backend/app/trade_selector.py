@@ -668,7 +668,7 @@ def select_trades(
 
         # v3.6 (I): Multi-source convergence boost
         convergence_boost = 1.0
-        if hasattr(sn, 'convergence_count') and sn.convergence_count >= 2:
+        if sn.convergence_count >= 2:
             convergence_boost = min(1.5, 1.0 + sn.convergence_count * 0.15)
             adjusted_score *= convergence_boost
             logger.info("Convergence boost for '%s': %d sources → %.2fx",
@@ -740,7 +740,7 @@ def select_trades(
     for rank, (best_news, best_score, elig_tickers, ranking_multiplier) in enumerate(candidates):
         # Recompute convergence boost for this candidate (needed for TradeRecommendation)
         _cand_convergence_boost = 1.0
-        if hasattr(best_news, 'convergence_count') and best_news.convergence_count >= 2:
+        if best_news.convergence_count >= 2:
             _cand_convergence_boost = min(1.5, 1.0 + best_news.convergence_count * 0.15)
         # Daily cap reached during iteration
         if len(selected_trades) >= daily_slots_remaining:
@@ -801,11 +801,11 @@ def select_trades(
         if avg_range > 0 and spread_pct > 0:
             # v5.2: Use volatility-tier-adapted formula (same as pre-move and calibration)
             _ns = best_news.total_score / 100
-            _mf = 0.7 + 0.6 * (getattr(best_news, 'expected_magnitude', 50) / 100)
+            _mf = 0.7 + 0.6 * (best_news.expected_magnitude / 100)
             if avg_range < 1.0:
                 _sf = 0.30 + 0.60 * (_ns ** 1.5)  # Low-vol tier
             elif avg_range > 5.0:
-                _sf = 0.10 + 0.35 * (_ns ** 1.5)  # High-vol tier
+                _sf = 0.12 + 0.33 * (_ns ** 1.5)  # High-vol tier — synced with _calibrate_trade
             else:
                 _sf = 0.20 + 0.50 * (_ns ** 1.5)  # Normal tier
             estimated_target = avg_range * _sf * _mf
@@ -824,13 +824,13 @@ def select_trades(
         # A scan at 17h comparing to yesterday's close misses the intraday move since 9h.
         # v4.3 M4: Convex formula matching calibration tiers
         _ns_pre = best_news.total_score / 100
-        _mf_pre = 0.7 + 0.6 * (getattr(best_news, 'expected_magnitude', 50) / 100)
+        _mf_pre = 0.7 + 0.6 * (best_news.expected_magnitude / 100)
         if avg_range < 1.0:
             # Low-vol tier
             _sf_pre = 0.30 + 0.60 * (_ns_pre ** 1.5)
         elif avg_range > 5.0:
-            # High-vol tier
-            _sf_pre = 0.10 + 0.35 * (_ns_pre ** 1.5)
+            # High-vol tier — synced with _calibrate_trade
+            _sf_pre = 0.12 + 0.33 * (_ns_pre ** 1.5)
         else:
             # Normal tier
             _sf_pre = 0.20 + 0.50 * (_ns_pre ** 1.5)
@@ -1037,7 +1037,7 @@ def select_trades(
             # v3.6: Position sizing
             position_size_pct=position_size,
             # v3.6: Multi-source convergence
-            convergence_count=getattr(best_news, 'convergence_count', 0),
+            convergence_count=best_news.convergence_count,
             convergence_boost=_cand_convergence_boost if _cand_convergence_boost > 1.0 else None,
             # v3.6: Price at publication
             price_at_publication=price_at_pub,

@@ -696,3 +696,112 @@ class TestTraderAuditJournalLearningV64:
         source2 = inspect.getsource(learning.build_performance_summary)
         assert 'getattr(t,' not in source2, \
             "build_performance_summary should use direct field access on trades"
+
+
+class TestScoringAuditFromTraderV65:
+    """v6.5: Scoring audit from Trader perspective — formula sync, field access."""
+
+    def test_highvol_formula_synced_with_calibrate(self):
+        """P1: High-vol tier formula in spread filter and pre-move must match _calibrate_trade."""
+        import inspect
+        from backend.app.trade_selector import _calibrate_trade, select_trades
+        # Extract calibration coefficients from _calibrate_trade source
+        cal_source = inspect.getsource(_calibrate_trade)
+        # High-vol tier in calibrate: 0.12 + 0.33
+        assert "0.12" in cal_source and "0.33" in cal_source, \
+            "_calibrate_trade high-vol tier should use 0.12 + 0.33"
+        # select_trades must use the same coefficients
+        sel_source = inspect.getsource(select_trades)
+        # Count occurrences of the OLD wrong formula — should be zero
+        assert "0.10 + 0.35" not in sel_source, \
+            "select_trades should NOT use 0.10 + 0.35 (old mismatched formula)"
+        # Should use the synced formula
+        assert "0.12 + 0.33" in sel_source, \
+            "select_trades high-vol tier should use 0.12 + 0.33 (synced with _calibrate_trade)"
+
+    def test_highvol_spread_filter_matches_calibrate(self):
+        """P1: Spread filter estimated target matches what _calibrate_trade produces."""
+        from backend.app.trade_selector import _calibrate_trade
+        from backend.app.models import Direction
+        # Test with high-vol ticker: avg_range=6%, score=50
+        score = 50
+        avg_range = 6.0
+        entry_price = 100.0
+        target_price, _, target_pct, _, _ = _calibrate_trade(
+            Direction.LONG, entry_price, avg_range, score, ticker="NG=F",
+        )
+        # Compute estimated target using the same formula as spread filter
+        ns = score / 100
+        sf = 0.12 + 0.33 * (ns ** 1.5)
+        mf = 0.7 + 0.6 * (50 / 100)  # default magnitude=50
+        estimated_target = avg_range * sf * mf
+        # They should be close (category multipliers excluded for direct comparison)
+        assert abs(target_pct - estimated_target) < 0.5, \
+            f"Spread filter estimate {estimated_target:.2f}% vs calibrate {target_pct:.2f}% — should be close"
+
+    def test_no_hasattr_on_scored_news(self):
+        """P2: trade_selector.py should NOT use hasattr on ScoredNews declared fields."""
+        import inspect
+        from backend.app.trade_selector import select_trades
+        source = inspect.getsource(select_trades)
+        assert "hasattr(sn," not in source, \
+            "select_trades should use direct field access on ScoredNews, not hasattr"
+        assert "hasattr(best_news," not in source, \
+            "select_trades should use direct field access on ScoredNews, not hasattr"
+
+    def test_no_getattr_on_scored_news(self):
+        """P3: trade_selector.py should NOT use getattr on ScoredNews declared fields."""
+        import inspect
+        from backend.app.trade_selector import select_trades
+        source = inspect.getsource(select_trades)
+        assert "getattr(best_news," not in source, \
+            "select_trades should use direct field access on ScoredNews, not getattr"
+        assert "getattr(sn," not in source, \
+            "select_trades should use direct field access on ScoredNews, not getattr"
+
+    def test_scored_news_has_all_trader_fields(self):
+        """Verify ScoredNews exposes all fields the trader needs."""
+        from backend.app.models import ScoredNews, NewsItem, Direction
+        item = NewsItem(title="Test", source="test")
+        sn = ScoredNews(
+            news=item, surprise=70, freshness=90, directional_clarity=80,
+            transmission_delay=75, market_awareness=15,
+            expected_magnitude=60, signal_reliability=85,
+            direction=Direction.LONG,
+            impacted_tickers=["ZW=F"],
+            reasoning="Test signal",
+            news_category="weather",
+        )
+        # All fields the trader accesses must exist with correct types
+        assert isinstance(sn.convergence_count, int)
+        assert isinstance(sn.expected_magnitude, int)
+        assert isinstance(sn.signal_reliability, int)
+        assert isinstance(sn.transmission_delay, int)
+        assert isinstance(sn.market_awareness, int)
+        assert isinstance(sn.category_score_mult, float)
+        assert isinstance(sn.total_score, float)
+        assert isinstance(sn.chain_reactions, list)
+        assert sn.convergence_count == 0  # default
+
+    def test_scoring_agent_returns_all_needed_keys(self):
+        """Agent Scoring result dict must contain 'scored' and 'market_context'."""
+        from backend.app.agents.agent_scoring import AgentScoring
+        agent = AgentScoring()
+        # Mock the scoring to return known data
+        from backend.app.models import ScoredNews, NewsItem, Direction, ScanType
+        item = NewsItem(title="Test drought", source="NOAA")
+        sn = ScoredNews(
+            news=item, surprise=80, freshness=95, directional_clarity=90,
+            transmission_delay=85, market_awareness=10,
+            direction=Direction.LONG, impacted_tickers=["ZW=F"],
+            reasoning="Drought", news_category="weather",
+        )
+        mock_ctx = {"vix": 18.5, "regime": "normal"}
+        with patch.object(agent, '_score_batch', return_value=([sn], mock_ctx)), \
+             patch("backend.app.news_scorer._is_zero_edge_headline", return_value=None), \
+             patch("backend.app.news_scorer.get_token_usage", return_value={"total_input": 100, "total_output": 50}):
+            result = agent.run([item], ScanType.EUROPE)
+        assert "scored" in result
+        assert "market_context" in result
+        assert len(result["scored"]) == 1
+        assert result["market_context"] == mock_ctx
