@@ -309,7 +309,7 @@ class TestAgentAuditor:
 
     def test_all_audit_profiles_present(self):
         from backend.app.agents.agent_auditor import AUDIT_PROFILES
-        expected = {"news", "scoring", "trader_1", "journal", "learning", "ux"}
+        expected = {"news", "scoring", "trader_1", "journal", "learning", "ux", "auditor"}
         assert set(AUDIT_PROFILES.keys()) == expected
 
     def test_ux_profile_has_checks(self):
@@ -365,6 +365,74 @@ class TestAgentAuditor:
         assert report["score"] > 0
         assert len(report["findings"]) > 0
         assert len(report["score_breakdown"]) > 0
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_audit_self_runs(self, _m1, _m2):
+        """Test that self-audit runs and produces a valid report."""
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_auditor import AgentAuditor
+        auditor = AgentAuditor()
+        report = auditor.run("auditor")
+        assert "error" not in report
+        assert report["target_agent"] == "auditor"
+        assert report["score"] > 0
+        assert "profile_coverage" in report["score_breakdown"]
+        assert "check_implementation" in report["score_breakdown"]
+
+    def test_auditor_profile_has_checks(self):
+        from backend.app.agents.agent_auditor import AUDIT_PROFILES
+        aud = AUDIT_PROFILES["auditor"]
+        assert "expertise" in aud
+        assert len(aud["checks"]) >= 5
+        assert "profile_coverage" in aud["checks"]
+        assert "check_implementation" in aud["checks"]
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_trend_tracking_empty(self, _m1, _m2):
+        """Test trend computation with no history."""
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_auditor import AgentAuditor
+        auditor = AgentAuditor()
+        # Clear any history loaded from previous tests or persisted files
+        auditor._audit_history = []
+        trends = auditor._compute_trends()
+        assert isinstance(trends, dict)
+        assert len(trends) == 0
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_trend_tracking_with_history(self, _m1, _m2):
+        """Test trend computation with 2 audit reports for same agent."""
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_auditor import AgentAuditor
+        auditor = AgentAuditor()
+        auditor._audit_history = [
+            {"target_agent": "news", "score": 6.0},
+            {"target_agent": "news", "score": 8.0},
+        ]
+        trends = auditor._compute_trends()
+        assert "news" in trends
+        assert trends["news"]["delta"] == 2.0
+        assert trends["news"]["current"] == 8.0
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_analyze_agent_errors(self, _m1, _m2):
+        """Test error log analysis helper."""
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_auditor import AgentAuditor
+        auditor = AgentAuditor()
+        findings = []
+        scores = {}
+        improvements = []
+        # Should not crash even with no logs
+        auditor._analyze_agent_errors(findings, scores, improvements, "news")
 
 
 # ── Individual Agent Init & Metrics ────────────────────────────────

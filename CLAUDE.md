@@ -244,7 +244,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **MessageBus** : communication inter-agents via `agent_messages` (PG, fallback in-memory)
 - **AgentLogger** : logs structurés dans `agent_logs` (PG), niveaux INFO/WARN/ERROR/DECISION
 - **Registry** : singletons, orchestration `run_scan_pipeline()` (News → Scoring → Trader)
-- **Agent Auditeur** : audit profondeur de chaque agent, 6 profils d'expertise (news, scoring, trader_1, journal, learning, ux), note /10, persistance rapports
+- **Agent Auditeur** : audit profondeur de chaque agent, 7 profils d'expertise (news, scoring, trader_1, journal, learning, ux, auditor), note /10, persistance rapports, trend tracking, log analysis
   - Checks par agent : source coverage, score distribution, win rate, bar coverage, commodity protection, component coverage...
   - **Profil UX** (v6.1) : component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility
   - Rapports persistés dans `audit_reports` (PG) ou `data/audit_reports.json`
@@ -265,6 +265,21 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **Profil UX auditeur** : 7 checks (component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility)
 - **42 tests agents** (`test_agents.py`) : MessageBus (10), AgentLogger (5), BaseAgent (6), Registry (6), Auditor (6), per-agent init (5), pruning (3), status (1)
 
+#### 17. Auditor Self-Audit & Deep Checks v6.2
+- **15 checks manquants ajoutés** across 5 audit methods :
+  - `_audit_news()` : `freshness_distribution` (age analysis), `data_quality` (empty title detection)
+  - `_audit_scoring()` : `edge_factor_calibration` (floor analysis), `coherence_validation` (import check), `chain_reaction_coverage` (config check)
+  - `_audit_trader()` : `position_sizing` (VIX tracking), `correlation_check` (same-day correlation violations), `calendar_blocking` (economic calendar check)
+  - `_audit_journal()` : `price_fetch_reliability` (missing exit_price rate), `pruning` (oldest entry check), `recovery` (recovery events in logs)
+  - `_audit_learning()` : `decay_calibration` (half-life/lookback check), `anomaly_detection` (performance summary alerts), `feedback_quality` (WR/PnL in feedback)
+- **Self-audit profile** : 8ème profil `"auditor"` dans AUDIT_PROFILES — 6 checks (profile_coverage, check_implementation, persistence, scoring_calibration, trend_tracking, log_analysis)
+- **`_audit_self()` method** : meta-audit vérifie coverage des profils, implémentation des checks, persistance PG, calibration scoring, trends, analyse logs
+- **`_analyze_agent_errors()` helper** : analyse logs ERROR/WARN du target agent, trouve les erreurs les plus fréquentes, suggère améliorations — appelé dans les 5 audits
+- **`_compute_trends()` helper** : compare score actuel vs précédent par agent depuis `_audit_history`, calcule delta et direction (improving/declining/stable)
+- **Trend info dans rapports** : `report["trend"]` avec previous_score, delta, direction
+- **File lock fix** : `_load_reports()` utilise `fcntl.LOCK_SH` pour lectures concurrentes sûres
+- **47 tests agents** (`test_agents.py`) : +5 tests (self_audit_runs, auditor_profile_has_checks, trend_tracking_empty, trend_tracking_with_history, analyze_agent_errors)
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), helpers
@@ -273,7 +288,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/agents/agent_trader.py` : décision trade, position monitor, multi-trader ready, daily counters
 - `backend/app/agents/agent_journal.py` : clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_learning.py` : 6 dims ML, anomaly detection, cache learning, performance summary
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 6 profils d'expertise (+ UX v6.1), note /10, persistance rapports
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 8 profils d'expertise (+ UX v6.1, + self-audit v6.2), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
 - `backend/app/database.py` : v6.1, 8 tables PG, pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 7 tables

@@ -34,8 +34,11 @@ DATA_FILES = [
 
 
 def test_gitignore_contains_data_files():
-    """All data/*.json files must be listed in .gitignore."""
+    """All data/*.json files must be covered by .gitignore."""
     gitignore = (PROJECT_ROOT / ".gitignore").read_text()
+    # Accept either the whole data/ directory or individual file entries
+    if "data/" in gitignore:
+        return  # data/ covers all files
     for f in DATA_FILES:
         assert f in gitignore, (
             f"{f} is NOT in .gitignore — deploying will overwrite production data!"
