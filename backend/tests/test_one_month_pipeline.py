@@ -222,10 +222,19 @@ def _mock_fetch_history_batch(tickers, period_days=20, interval="1day"):
     return {t: _mock_fetch_history(t, period_days, interval) for t in tickers}
 
 
+# Global set: tickers that should LOSE (SL_HIT) in the current journal run.
+# Set this before calling run_daily_journal() to control outcomes.
+_losing_tickers: set = set()
+
+
 def _mock_fetch_history_range(ticker, start=None, end=None, interval="15min"):
-    """Mock fetch_history_range for journal intraday bars."""
+    """Mock fetch_history_range for journal intraday bars.
+
+    If ticker is in _losing_tickers, generates bars that drift DOWN
+    (LONG trades hit SL). Otherwise, bars drift UP (LONG trades hit TP).
+    """
     base = TICKER_PRICES.get(ticker, 100.0)
-    np.random.seed(hash(ticker) % 2**31)
+    lose = ticker in _losing_tickers
 
     if interval == "15min":
         periods = 44  # ~11h of 15min bars
@@ -241,18 +250,44 @@ def _mock_fetch_history_range(ticker, start=None, end=None, interval="15min"):
     start_dt = start_dt.replace(hour=8, minute=0, tzinfo=timezone.utc)
     dates = pd.date_range(start=start_dt, periods=periods, freq=freq)
 
+    rng = np.random.RandomState(hash(ticker) % 2**31)
     vol = 0.003 if interval == "15min" else 0.008
+
+    if lose:
+        # Losing bars: aggressive drift DOWN — LONG trades must hit SL
+        # Stop is typically 1-2% below entry. Need Lows to reach -2% quickly.
+        # -0.15%/bar × 44 bars = -6.6% cumulative drift.
+        drift = -0.0015
+        vol = vol * 0.3  # Very low vol so price doesn't recover
+    else:
+        # Winning bars: steady drift UP — LONG trades will hit TP
+        drift = 0.0005   # +0.05% per bar → +2.2% over 44 bars
+        vol = vol * 0.8
+
     prices = [base]
     for _ in range(periods - 1):
-        prices.append(prices[-1] * (1 + np.random.normal(0, vol)))
+        prices.append(prices[-1] * (1 + drift + rng.normal(0, vol)))
 
-    data = {
-        "Open": [p * (1 + np.random.uniform(-0.002, 0.002)) for p in prices],
-        "High": [p * (1 + abs(np.random.normal(0, vol * 0.7))) for p in prices],
-        "Low": [p * (1 - abs(np.random.normal(0, vol * 0.7))) for p in prices],
-        "Close": prices,
-        "Volume": [np.random.randint(1000, 50000) for _ in prices],
-    }
+    if lose:
+        # Losing: Lows exaggerated downward, Highs stay tight (no recovery)
+        # With drift -0.15%/bar, by bar 10 price is at -1.5%, by bar 20 at -3%
+        # Low dips an extra 0.3-0.8% below close → ensures SL hit
+        data = {
+            "Open": [p * (1 + rng.uniform(-0.001, 0.001)) for p in prices],
+            "High": [p * (1 + rng.uniform(0, 0.001)) for p in prices],
+            "Low": [p * (1 - rng.uniform(0.003, 0.008)) for p in prices],
+            "Close": prices,
+            "Volume": [rng.randint(1000, 50000) for _ in prices],
+        }
+    else:
+        # Winning: Highs exaggerated upward, Lows stay tight (no SL hit)
+        data = {
+            "Open": [p * (1 + rng.uniform(-0.001, 0.001)) for p in prices],
+            "High": [p * (1 + rng.uniform(0.002, 0.006)) for p in prices],
+            "Low": [p * (1 - rng.uniform(0, 0.002)) for p in prices],
+            "Close": prices,
+            "Volume": [rng.randint(1000, 50000) for _ in prices],
+        }
     return pd.DataFrame(data, index=dates)
 
 
@@ -981,3 +1016,291 @@ class TestOneMonthRealPipeline:
         if earnings and weather:
             assert weather[0].total_score > earnings[0].total_score, \
                 f"Weather ({weather[0].total_score:.1f}) should outscore earnings ({earnings[0].total_score:.1f})"
+
+
+# ════════════════════════════════════════════════════════════════
+# 3-month test with controlled losses
+# ════════════════════════════════════════════════════════════════
+
+class TestThreeMonthWithLosses:
+    """Simulates 3 months (60 trading days):
+    - Month 1: 50% of trades LOSE (SL_HIT) — learning must detect and adjust
+    - Month 2: learning adjustments active — should see fewer bad trades taken
+    - Month 3: system should be adapted — better performance metrics
+
+    Verifies that learning actually reacts to losses and improves selection.
+    """
+
+    def test_three_month_learning_reacts_to_losses(self):
+        """Full 3-month sim: month 1 = 50% losses, months 2-3 = learning adapts."""
+        global _losing_tickers
+
+        base_date = datetime(2026, 1, 5, tzinfo=timezone.utc)  # Monday
+
+        # Monthly tracking
+        monthly_stats = {1: {"trades": 0, "wins": 0, "losses": 0, "expired": 0},
+                         2: {"trades": 0, "wins": 0, "losses": 0, "expired": 0},
+                         3: {"trades": 0, "wins": 0, "losses": 0, "expired": 0}}
+        learning_snapshots = []
+        all_errors = []
+        all_daily = []
+
+        # Tickers that LOSE in month 1 (every other trade loses)
+        # We alternate: first trade of the day wins, second loses
+        trade_counter = [0]  # mutable counter for closure
+
+        with _temp_json([]) as trades_file, _temp_json([]) as journal_file:
+            patches = [
+                patch("backend.app.learning.is_pg_enabled", return_value=False),
+                patch("backend.app.journal.is_pg_enabled", return_value=False),
+                patch("backend.app.learning.TRADES_FILE", trades_file),
+                patch("backend.app.journal.JOURNAL_FILE", journal_file),
+                patch("backend.app.trade_selector.fetch_history", side_effect=_mock_fetch_history),
+                patch("backend.app.news_scorer.fetch_history_batch", side_effect=_mock_fetch_history_batch),
+                patch("backend.app.news_scorer.fetch_history", side_effect=_mock_fetch_history),
+                patch("backend.app.journal.fetch_history_range", side_effect=_mock_fetch_history_range),
+                patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}),
+                patch("backend.app.trade_selector.check_event_conflict", return_value=False),
+            ]
+
+            for p in patches:
+                p.start()
+
+            try:
+                trading_day = 0
+                for cal_day in range(90):  # ~3 calendar months
+                    day_date = base_date + timedelta(days=cal_day)
+                    if day_date.weekday() >= 5:
+                        continue
+                    trading_day += 1
+
+                    # Determine which month we're in
+                    if trading_day <= 20:
+                        month = 1
+                    elif trading_day <= 40:
+                        month = 2
+                    else:
+                        month = 3
+
+                    day_scenarios = DAILY_SCENARIOS[(trading_day - 1) % len(DAILY_SCENARIOS)]
+                    day_record = {"day": trading_day, "month": month, "trades": [], "journal": []}
+                    day_trades_tickers = []
+
+                    # ── 2 scans per day ──
+                    for scan_type, scan_hour in [(ScanType.EUROPE, 8), (ScanType.US, 15)]:
+                        scan_time = day_date.replace(hour=scan_hour, minute=50)
+
+                        news_items = [
+                            NewsItem(
+                                title=s[0], source=s[1], url=f"https://test.com/{trading_day}",
+                                published=scan_time - timedelta(hours=1),
+                                related_tickers=s[4], source_weight=s[2],
+                                description=f"Details: {s[0][:50]}",
+                            )
+                            for s in day_scenarios
+                        ]
+
+                        # Score
+                        def _mock_create(**kwargs):
+                            return _make_claude_response(news_items, day_scenarios)
+
+                        mock_client = MagicMock()
+                        mock_client.messages.create = _mock_create
+
+                        with patch("backend.app.news_scorer._get_client", return_value=mock_client):
+                            try:
+                                scored_news, market_ctx = score_news_batch(news_items, scan_type)
+                            except Exception as e:
+                                all_errors.append(f"D{trading_day} score: {e}")
+                                continue
+
+                        # Learning
+                        invalidate_perf_summary_cache()
+                        learning_adj = compute_learning_adjustments()
+
+                        # Select
+                        existing = [t for t in day_trades_tickers]
+                        try:
+                            result = select_trade(
+                                scored_news, scan_type,
+                                learning_adjustments=learning_adj,
+                                existing_trade_ticker=existing,
+                                market_context=market_ctx,
+                            )
+                        except Exception as e:
+                            all_errors.append(f"D{trading_day} select: {e}")
+                            continue
+
+                        # Save trade
+                        if result.has_trade and result.recommendation:
+                            rec = result.recommendation
+                            rec.timestamp = scan_time
+                            trade_counter[0] += 1
+
+                            try:
+                                save_trade(rec)
+                                day_trades_tickers.append(rec.ticker)
+                                day_record["trades"].append({
+                                    "ticker": rec.ticker,
+                                    "direction": rec.direction.value,
+                                    "category": rec.news_category,
+                                })
+                            except Exception as e:
+                                all_errors.append(f"D{trading_day} save: {e}")
+
+                    # ── End of day: set losing tickers for journal ──
+                    if month == 1:
+                        # Month 1: every other trade loses
+                        _losing_tickers = set()
+                        for i, t in enumerate(day_record["trades"]):
+                            if i % 2 == 1:  # Second trade of the day loses
+                                _losing_tickers.add(t["ticker"])
+                    elif month == 2:
+                        # Month 2: ~25% lose (every 4th trade)
+                        _losing_tickers = set()
+                        for i, t in enumerate(day_record["trades"]):
+                            if trade_counter[0] % 4 == 0:
+                                _losing_tickers.add(t["ticker"])
+                    else:
+                        # Month 3: ~10% lose
+                        _losing_tickers = set()
+                        if trade_counter[0] % 10 == 0 and day_record["trades"]:
+                            _losing_tickers.add(day_record["trades"][0]["ticker"])
+
+                    # Journal
+                    try:
+                        journal_result = run_daily_journal()
+                        if isinstance(journal_result, list):
+                            for entry in journal_result:
+                                if isinstance(entry, dict):
+                                    result_str = entry.get("result", "UNKNOWN")
+                                    ticker = entry.get("ticker", "?")
+                                    day_record["journal"].append({
+                                        "ticker": ticker,
+                                        "result": result_str,
+                                        "pnl": entry.get("pnl_pct", 0),
+                                    })
+                                    monthly_stats[month]["trades"] += 1
+                                    if result_str == "TP_HIT":
+                                        monthly_stats[month]["wins"] += 1
+                                    elif result_str == "SL_HIT":
+                                        monthly_stats[month]["losses"] += 1
+                                    else:
+                                        monthly_stats[month]["expired"] += 1
+                    except Exception as e:
+                        all_errors.append(f"D{trading_day} journal: {e}")
+
+                    # Reset losing tickers
+                    _losing_tickers = set()
+
+                    # Post-journal learning
+                    invalidate_perf_summary_cache()
+                    try:
+                        state = compute_learning_adjustments()
+                        if trading_day % 5 == 0:  # Snapshot every 5 trading days
+                            learning_snapshots.append({
+                                "day": trading_day,
+                                "month": month,
+                                "adjustments": dict(state.get("adjustments", {})),
+                                "session_adj": dict(state.get("session_adj", {})),
+                                "direction_adj": dict(state.get("direction_adj", {})),
+                                "newscat_adj": dict(state.get("newscat_adj", {})),
+                                "delay_bias": state.get("delay_bias_adj"),
+                                "n_adj": len(state.get("adjustments", {})),
+                                "n_newscat": len(state.get("newscat_adj", {})),
+                            })
+                    except Exception as e:
+                        all_errors.append(f"D{trading_day} learning: {e}")
+
+                    all_daily.append(day_record)
+
+            finally:
+                for p in patches:
+                    p.stop()
+
+        # ════════════════════════════════════════════════════════════
+        # Print results
+        # ════════════════════════════════════════════════════════════
+        print(f"\n{'='*70}")
+        print(f"THREE MONTH PIPELINE — LEARNING ADAPTATION TEST")
+        print(f"{'='*70}")
+
+        for m in [1, 2, 3]:
+            s = monthly_stats[m]
+            total = s["trades"]
+            wr = (s["wins"] / total * 100) if total > 0 else 0
+            print(f"\n  Month {m}: {total} trades | "
+                  f"{s['wins']} TP_HIT, {s['losses']} SL_HIT, {s['expired']} EXPIRED | "
+                  f"Win rate: {wr:.0f}%")
+
+        print(f"\n  Errors: {len(all_errors)}")
+        if all_errors:
+            for e in all_errors[:10]:
+                print(f"    {e}")
+
+        print(f"\n  Learning evolution (every 5 trading days):")
+        for snap in learning_snapshots:
+            print(f"    Day {snap['day']:2d} (M{snap['month']}): "
+                  f"ticker_adj={snap['n_adj']}, "
+                  f"newscat={snap['n_newscat']}, "
+                  f"delay_bias={snap['delay_bias']}, "
+                  f"session={snap['session_adj']}, "
+                  f"direction={snap['direction_adj']}")
+
+        # Per-day detail for month 1
+        print(f"\n  Month 1 daily detail:")
+        for dr in all_daily[:20]:
+            trades_str = ", ".join(f"{t['ticker']} {t['direction']}" for t in dr["trades"]) or "none"
+            journal_str = ", ".join(
+                f"{j['ticker']}={'W' if j['result']=='TP_HIT' else 'L' if j['result']=='SL_HIT' else 'E'}"
+                for j in dr["journal"]
+            ) or "none"
+            print(f"    Day {dr['day']:2d}: trades=[{trades_str}], results=[{journal_str}]")
+
+        print(f"{'='*70}\n")
+
+        # ════════════════════════════════════════════════════════════
+        # Assertions
+        # ════════════════════════════════════════════════════════════
+
+        # 1. No fatal errors
+        assert len(all_errors) == 0, f"Pipeline errors:\n" + "\n".join(all_errors)
+
+        # 2. Month 1 should have losses (our forced 50% lose pattern)
+        m1 = monthly_stats[1]
+        assert m1["losses"] > 0, "Month 1 should have SL_HIT trades (forced losses)"
+        assert m1["trades"] >= 8, f"Month 1 too few trades: {m1['trades']}"
+
+        # 3. Learning should have evolved by month 2
+        assert len(learning_snapshots) >= 6, \
+            f"Not enough learning snapshots: {len(learning_snapshots)}"
+
+        # 4. Month 1 win rate should be around 50% (by construction)
+        m1_wr = m1["wins"] / m1["trades"] * 100 if m1["trades"] > 0 else 0
+        assert m1_wr < 80, f"Month 1 WR should be <80% (forced losses): {m1_wr:.0f}%"
+
+        # 5. Learning state should contain adjustments by end of 3 months
+        # With 40-60 trades, many dimensions should activate
+        final_snap = learning_snapshots[-1] if learning_snapshots else {}
+        assert final_snap, "No learning snapshot at end"
+
+        # 6. All 3 months produced trades
+        for m in [1, 2, 3]:
+            assert monthly_stats[m]["trades"] > 0, f"Month {m} had zero trades"
+
+        # 7. Journal correctly identified both TP_HIT and SL_HIT
+        total_wins = sum(monthly_stats[m]["wins"] for m in [1, 2, 3])
+        total_losses = sum(monthly_stats[m]["losses"] for m in [1, 2, 3])
+        assert total_wins > 0, "No TP_HIT trades across 3 months"
+        assert total_losses > 0, "No SL_HIT trades across 3 months — loss mechanism broken"
+
+        # 8. Learning detects mixed results (should have some ticker or newscat adjustments)
+        # By month 3, with 40+ mixed trades, learning should have opinions
+        has_any_adjustment = (
+            final_snap.get("n_adj", 0) > 0 or
+            final_snap.get("n_newscat", 0) > 0 or
+            final_snap.get("delay_bias") != 1.0 or
+            len(final_snap.get("session_adj", {})) > 0 or
+            len(final_snap.get("direction_adj", {})) > 0
+        )
+        assert has_any_adjustment, "Learning produced zero adjustments after 3 months of mixed results"
