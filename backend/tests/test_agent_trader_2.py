@@ -396,6 +396,69 @@ class TestRegistration:
         assert "status" in status
 
 
+class TestConfidenceBounds:
+    def test_confidence_bounded_0_100_on_init(self, agent, tmp_path):
+        """Confidence must be 0 on initial NEUTRAL positions."""
+        pos_file = tmp_path / "pos.json"
+        pos_file.write_text("{}")
+
+        with patch("backend.app.database.is_pg_enabled", return_value=False), \
+             patch("backend.app.agents.agent_trader_2.POSITIONS_FILE", pos_file), \
+             patch("backend.app.agents.agent_trader_2._fetch_current_price", return_value=50.0):
+            result = agent.run(scored_news=[], scan_type=ScanType.EUROPE)
+
+        for ticker, pos in result["positions"].items():
+            assert 0 <= pos["confidence"] <= 100, f"{ticker} confidence {pos['confidence']} out of bounds"
+
+    def test_confidence_bounded_0_100_after_flip(self, agent):
+        """Confidence must stay in [0, 100] after a direction change."""
+        position = {
+            "direction": "NEUTRAL",
+            "confidence": 0,
+            "entry_price": 100.0,
+            "current_price": 100.0,
+            "unrealized_pnl_pct": 0.0,
+            "entry_time": datetime.now(timezone.utc).isoformat(),
+            "last_update": datetime.now(timezone.utc).isoformat(),
+            "total_switches": 0,
+            "realized_pnl_pct": 0.0,
+            "history": [],
+            "key_catalysts": [],
+            "reasoning": "",
+            "name": "Test",
+            "category": "test",
+            "ticker": "HG=F",
+        }
+        # Very strong signal — confidence should cap at 100
+        news = [
+            _make_scored_news("HG=F", "LONG", score_surprise=100, reliability=100, clarity=100,
+                              title=f"Strong signal {i}")
+            for i in range(5)
+        ]
+        change = agent._evaluate_ticker("HG=F", news, position)
+        assert change is not None
+        assert 0 <= change["new_position"]["confidence"] <= 100
+
+
+class TestAuditProfile:
+    def test_trader_2_audit_profile_exists(self):
+        """Trader 2 must have an audit profile in the auditor."""
+        from backend.app.agents.agent_auditor import AUDIT_PROFILES
+        assert "trader_2" in AUDIT_PROFILES
+        profile = AUDIT_PROFILES["trader_2"]
+        assert len(profile["checks"]) >= 8
+
+    def test_trader_2_audit_runs_without_error(self):
+        """Audit should complete even with no positions."""
+        with patch("backend.app.agents.agent_trader_2._fetch_current_price", return_value=100.0):
+            from backend.app.agents.agent_auditor import AgentAuditor
+            auditor = AgentAuditor()
+            report = auditor.run(target_agent="trader_2")
+            assert "error" not in report
+            assert report["score"] > 0
+            assert len(report["findings"]) > 0
+
+
 class TestDatabaseTable:
     def test_trend_positions_ddl_in_init_db(self):
         """The trend_positions table DDL should be in database.py."""

@@ -19,13 +19,14 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 
 ## Architecture v6.0 — Multi-Agent
 
-### 7 Agents Autonomes (`backend/app/agents/`)
+### 8 Agents Autonomes (`backend/app/agents/`)
 
 | Agent | Fichier | Expertise | Rôle |
 |-------|---------|-----------|------|
 | **News** | `agent_news.py` | Data engineering, news sourcing | Collecte, dédup, santé sources, event detection |
 | **Scoring** | `agent_scoring.py` | 15+ ans edge detection, spéculation | Score Claude, formule edge, chain reactions |
 | **Trader 1** | `agent_trader.py` | 15+ ans news trading | Décision trade, position monitoring, risk mgmt |
+| **Trader 2** | `agent_trader_2.py` | 15+ ans spéculation tendance commodities | Trend following sur 4 commodities, positions longue durée |
 | **Journal** | `agent_journal.py` | Business analyse, spéculation | Clôture trades, P&L, MAE/MFE, analyse qualité |
 | **Learning** | `agent_learning.py` | 10+ ans ML, trading quantitatif | 6 dimensions learning, anomalie detection |
 | **Auditeur** | `agent_auditor.py` | Se met dans la peau de chaque agent | Audit profondeur, note /10, améliorations |
@@ -33,13 +34,28 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 
 ### Infrastructure agents
 - **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
-- **`registry.py`** : singletons, orchestration `News → Scoring → Trader`, helpers
+- **`registry.py`** : singletons, orchestration `News → Scoring → Trader 1 + Trader 2`, helpers
 - **Message Bus** : `agent_messages` (PG) — communication inter-agents async
 - **Logs structurés** : `agent_logs` (PG) — niveaux INFO/WARN/ERROR/DECISION, visibles frontend
 - **Audit Reports** : `audit_reports` (PG) + `data/audit_reports.json` (fallback) — persistés entre sessions
 
 ### Architecture multi-trader
-Le framework supporte N traders : `agent_trader_2.py`, `agent_trader_3.py`... chacun avec sa propre logique de sélection mais partageant le bus et les données de scoring/learning.
+Le framework supporte N traders partageant le bus et les données de scoring/learning.
+
+#### Agent Trader 2 — Trend Following Commodities
+- **Fichier** : `agent_trader_2.py`
+- **Stratégie** : Trend following sur 4 commodities sélectionnées. Positions longue durée (jours/semaines), contrairement au Trader 1 (intraday).
+- **4 tickers suivis** (`TREND_TICKERS`) : HG=F (cuivre), CC=F (cacao), KC=F (café), ZW=F (blé)
+- **Logique** : Chaque scan accumule un signal net (LONG/SHORT) basé sur les news scorées. Si le signal net dépasse un seuil de confiance et contredit la position actuelle, la position est flippée. Sinon, la position est confirmée.
+- **Catégories filtrées** (`RELEVANT_CATEGORIES`) : commodity, weather, supply_chain, geopolitical, regulatory, sector, other (exclut earnings, macro, m_a, central_bank_subtle)
+- **Score minimum** (`MIN_NEWS_SCORE`) : 15 (plus bas que Trader 1, car les signaux de tendance s'accumulent)
+- **P&L tracking** : Réalisé (cumulé à chaque flip) + Latent (position courante) + Historique des changements
+- **Persistence** : Table PG `trend_positions` (ticker VARCHAR PK, data JSONB, updated_at) + fallback JSON `data/trend_positions.json`
+- **Pipeline** : Exécuté dans `run_scan_pipeline()` après Trader 1, non-bloquant (erreur Trader 2 n'affecte pas Trader 1)
+- **API** : `GET /api/trader2/positions`, `GET /api/trader2/positions/{ticker}/history`
+- **Frontend** : `Trader2Page.jsx` — KPIs, cards positions, historique flips, logs DECISION
+- **Audit** : Profil `trader_2` dans l'auditeur — 8 checks (position_coverage, direction_coherence, flip_frequency, pnl_tracking, news_filtering, confidence_evolution, history_integrity, persistence)
+- **Tests** : 27 tests dans `test_agent_trader_2.py`
 
 ### Agent Auditeur — utilisation
 L'auditeur s'appelle manuellement via l'API ou Claude Code :
@@ -244,14 +260,14 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **MessageBus** : communication inter-agents via `agent_messages` (PG, fallback in-memory)
 - **AgentLogger** : logs structurés dans `agent_logs` (PG), niveaux INFO/WARN/ERROR/DECISION
 - **Registry** : singletons, orchestration `run_scan_pipeline()` (News → Scoring → Trader)
-- **Agent Auditeur** : audit profondeur de chaque agent, 7 profils d'expertise (news, scoring, trader_1, journal, learning, ux, auditor), note /10, persistance rapports, trend tracking, log analysis
+- **Agent Auditeur** : audit profondeur de chaque agent, 9 profils d'expertise (news, scoring, trader_1, trader_2, journal, learning, ux, auditor), note /10, persistance rapports, trend tracking, log analysis
   - Checks par agent : source coverage, score distribution, win rate, bar coverage, commodity protection, component coverage...
   - **Profil UX** (v6.1) : component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility
   - Rapports persistés dans `audit_reports` (PG) ou `data/audit_reports.json`
   - API : `POST /api/agents/auditor/audit/{agent}`, `GET /api/agents/auditor/reports`
 - **Scheduler** délègue aux agents (plus d'appels directs aux modules)
 - **main.py** : nouveaux endpoints `/api/agents/*`, `/api/agents/auditor/*`
-- **Frontend** : sidebar 7 agents, overview cards, agent detail avec métriques + logs timeline
+- **Frontend** : sidebar 8 agents, overview cards, agent detail avec métriques + logs timeline
 - **Weekly source review** déplacée au dimanche 20h (avant le trading lundi)
 - **3 tables PG ajoutées** : `agent_messages`, `agent_logs`, `audit_reports`
 - Les agents wrappent les modules existants — zéro réécriture logique métier
@@ -345,16 +361,17 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
-- `backend/app/agents/registry.py` : 7 singletons, run_scan_pipeline (News→Scoring→Trader), run_learning_update(), helpers
+- `backend/app/agents/registry.py` : 8 singletons, run_scan_pipeline (News→Scoring→Trader 1+2), run_learning_update(), helpers
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
 - `backend/app/agents/agent_trader.py` : v6.4, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
+- `backend/app/agents/agent_trader_2.py` : trend following sur 4 commodities (HG=F, CC=F, KC=F, ZW=F), positions longue durée, P&L tracking, flip history, persistence PG/JSON
 - `backend/app/agents/agent_journal.py` : clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_learning.py` : 6 dims ML, anomaly detection, cache learning, performance summary
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 8 profils d'expertise (+ UX v6.1, + self-audit v6.2), note /10, persistance rapports, trend tracking, log analysis
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 9 profils d'expertise (+ UX v6.1, + self-audit v6.2, + trader_2), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
-- `backend/app/database.py` : v6.4, 8 tables PG, pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 7 tables, 9 scoring columns on trades (v6.3), pg_update_trade_stop (v6.4)
+- `backend/app/database.py` : v6.4, 9 tables PG (+ trend_positions), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 8 tables, 9 scoring columns on trades (v6.3), pg_update_trade_stop (v6.4)
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/journal.py` : v6.4, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours, direct field access (no getattr)
 - `backend/app/learning.py` : v6.4, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback, update_trade_stop for trailing persistence, direct field access (no getattr)
@@ -392,6 +409,7 @@ Fichiers proteges :
 - `data/last_scans.json` — cache des derniers scans (volatile)
 - `data/audit_reports.json` — rapports d'audit de l'Agent Auditeur (persistés entre sessions)
 - `data/source_health.json` — données santé sources (Agent News)
+- `data/trend_positions.json` — positions tendance Agent Trader 2 (persistées entre sessions)
 
 Regles :
 1. **Ne JAMAIS `git add data/`** ou `git add -A` sans verifier
@@ -968,4 +986,5 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - **test_agents.py** (5) : raw_claude_score not score on TradeRecommendation, direction enum serialization, reset_daily_counters, static group correlation skip, position_monitor returns dict
 - v6.4 tests ajoutés (7 tests) :
   - **test_agents.py** (7) : trailing_stop_before_sl_check, trailing_stop_calls_persist, update_trade_stop_exists, update_trade_stop_json_fallback, pg_update_trade_stop_function_exists, journal_no_getattr_on_trade, learning_no_getattr_on_trade
+- **27 tests trader_2** (`test_agent_trader_2.py`) : init (4), tickers (1), persistence JSON (5), news filtering (5), direction evaluation (4), P&L tracking (3), agent run (2), registration (2), database DDL (1)
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data
