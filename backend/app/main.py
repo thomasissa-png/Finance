@@ -372,8 +372,12 @@ def _run_position_monitor() -> None:
 
 
 def _run_post_eia_scan() -> None:
-    """Run conditional post-EIA scan on Wednesdays at 16:45 CET."""
-    _run_scheduled_scan("us_session")
+    """Run conditional post-EIA scan on Wednesdays at 16:45 CET.
+
+    Uses scan_key "post_eia" (not "us_session") to avoid conflicting with the
+    regular 17:00 us_session scan. Both map to ScanType.US for asset selection.
+    """
+    _run_scheduled_scan("post_eia")
     logger.info("Post-EIA conditional scan triggered (Wednesday 16:45 CET)")
 
 

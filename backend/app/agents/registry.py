@@ -33,28 +33,41 @@ _init_lock = threading.Lock()
 
 
 def _ensure_agents():
-    """Lazily initialize all agents (singleton)."""
+    """Lazily initialize all agents (singleton).
+
+    Each agent is initialized independently — if one fails, the others
+    still start. This prevents a single broken agent from killing the
+    entire system.
+    """
     global _agents
     if _agents:
         return
     with _init_lock:
         if _agents:
             return
-        _agents = {
-            "news": AgentNews(),
-            "scoring": AgentScoring(),
-            "scoring_2": AgentScoring2(),
-            "trader_1": AgentTrader(),
-            "trader_2": AgentTrader2(),
-            "journal": AgentJournal(),
-            "journal_2": AgentJournal2(),
-            "learning": AgentLearning(),
-            "learning_2": AgentLearning2(),
-            "infrastructure": AgentInfrastructure(),
-            "performance": AgentPerformance(),
-            "auditor": AgentAuditor(),
-        }
-        logger.info("Agent registry initialized: %s", list(_agents.keys()))
+        agent_classes = [
+            ("news", AgentNews),
+            ("scoring", AgentScoring),
+            ("scoring_2", AgentScoring2),
+            ("trader_1", AgentTrader),
+            ("trader_2", AgentTrader2),
+            ("journal", AgentJournal),
+            ("journal_2", AgentJournal2),
+            ("learning", AgentLearning),
+            ("learning_2", AgentLearning2),
+            ("infrastructure", AgentInfrastructure),
+            ("performance", AgentPerformance),
+            ("auditor", AgentAuditor),
+        ]
+        result = {}
+        for name, cls in agent_classes:
+            try:
+                result[name] = cls()
+            except Exception as exc:
+                logger.error("Failed to initialize agent '%s': %s", name, exc)
+        _agents = result
+        logger.info("Agent registry initialized: %d/%d agents — %s",
+                     len(_agents), len(agent_classes), list(_agents.keys()))
 
 
 def get_agent(name: str):

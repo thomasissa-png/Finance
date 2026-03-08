@@ -16,6 +16,7 @@ SCAN_KEY_TO_TYPE: dict[str, str] = {
     "mid_session": "europe",
     "us": "us",
     "us_session": "us",
+    "post_eia": "us",  # Wednesday 16:45 post-EIA — separate key to avoid conflict with 17:00
 }
 
 TARGET_PERCENT = 0.5  # Objectif minimum de mouvement en % (baisse de 1.0 — adapte levier 5-10x, 0.5% x 10x = 5%)
