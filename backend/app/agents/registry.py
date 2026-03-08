@@ -13,6 +13,7 @@ from typing import Any
 
 from .agent_auditor import AgentAuditor
 from .agent_infrastructure import AgentInfrastructure
+from .agent_performance import AgentPerformance
 from .agent_news import AgentNews
 from .agent_scoring import AgentScoring
 from .agent_scoring_2 import AgentScoring2
@@ -50,6 +51,7 @@ def _ensure_agents():
             "learning": AgentLearning(),
             "learning_2": AgentLearning2(),
             "infrastructure": AgentInfrastructure(),
+            "performance": AgentPerformance(),
             "auditor": AgentAuditor(),
         }
         logger.info("Agent registry initialized: %s", list(_agents.keys()))
@@ -289,6 +291,24 @@ def run_infra_report() -> dict:
     """Run full infrastructure report."""
     _ensure_agents()
     return _agents["infrastructure"].run(action="full_report")
+
+def run_performance_snapshot() -> dict:
+    """Run hourly performance snapshot."""
+    _ensure_agents()
+    return _agents["performance"].run(action="snapshot")
+
+
+def run_performance_daily() -> dict:
+    """Run daily performance report (after journal)."""
+    _ensure_agents()
+    return _agents["performance"].run(action="daily_report")
+
+
+def run_performance_weekly() -> dict:
+    """Run weekly performance trends."""
+    _ensure_agents()
+    return _agents["performance"].run(action="weekly_trends")
+
 
 # ── Helpers ────────────────────────────────────────────────────────────
 

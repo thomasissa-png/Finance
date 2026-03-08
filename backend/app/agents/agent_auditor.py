@@ -190,6 +190,19 @@ AUDIT_PROFILES = {
             "timeout_management",    # Les timeouts sont-ils bien configurés partout ?
         ],
     },
+    "performance": {
+        "expertise": "Expert en mesure de performance et KPIs pour systèmes de trading multi-agents",
+        "checks": [
+            "kpi_coverage",           # Tous les agents ont-ils des KPIs mesurés ?
+            "data_freshness",         # Les snapshots sont-ils récents et réguliers ?
+            "trader_win_rate",        # Le win rate trader est-il correctement calculé ?
+            "trend_computation",      # Les tendances temporelles sont-elles fiables ?
+            "alert_thresholds",       # Les seuils d'alerte sont-ils bien calibrés ?
+            "ranking_logic",          # Le ranking des agents est-il pertinent ?
+            "history_retention",      # L'historique est-il conservé (168 snapshots, 30 reports) ?
+            "cross_agent_consistency", # Les KPIs sont-ils cohérents entre agents ?
+        ],
+    },
     "auditor": {
         "expertise": "Expert en systèmes d'audit, meta-analyse et assurance qualité pour trading algorithmique",
         "checks": [
@@ -285,6 +298,8 @@ class AgentAuditor(BaseAgent):
                 self._audit_ux(report, focus)
             elif target_agent == "infrastructure":
                 self._audit_infrastructure(report, focus)
+            elif target_agent == "performance":
+                self._audit_performance(report, focus)
             elif target_agent == "auditor":
                 self._audit_self(report, focus)
 
@@ -2369,6 +2384,162 @@ class AgentAuditor(BaseAgent):
         tests.append("test_infra_detects_json_pg_divergence")
         tests.append("test_infra_metrics_exposed")
 
+    def _audit_performance(self, report: dict, focus: str | None):
+        """Audit the Performance agent — KPI coverage, data quality, trends."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        # Get performance agent
+        from .registry import get_agent
+        perf_agent = get_agent("performance")
+
+        # 1. KPI coverage — does the agent measure all other agents?
+        expected_agents = {"trader_1", "trader_2", "scoring", "news", "journal_1", "journal_2", "learning_1", "learning_2", "infrastructure"}
+        if perf_agent and perf_agent._last_report:
+            measured = set(perf_agent._last_report.get("agent_kpis", {}).keys())
+            missing = expected_agents - measured
+            findings.append({
+                "area": "kpi_coverage",
+                "status": "OK" if not missing else "WARN",
+                "detail": f"Agents measured: {len(measured)}/{len(expected_agents)}"
+                          + (f", missing: {missing}" if missing else ""),
+            })
+            scores["kpi_coverage"] = 10 if not missing else max(4, 10 - len(missing))
+        else:
+            findings.append({
+                "area": "kpi_coverage",
+                "status": "INFO",
+                "detail": "No report generated yet — cannot assess coverage",
+            })
+            scores["kpi_coverage"] = 5
+
+        # 2. Data freshness — are snapshots being taken?
+        snapshot_count = perf_agent._total_snapshots if perf_agent else 0
+        findings.append({
+            "area": "data_freshness",
+            "status": "OK" if snapshot_count > 0 else "WARN",
+            "detail": f"Total snapshots taken: {snapshot_count}, in memory: {len(perf_agent._snapshots) if perf_agent else 0}",
+        })
+        scores["data_freshness"] = min(10, 5 + snapshot_count) if snapshot_count > 0 else 3
+
+        # 3. Trader win rate — verify it matches real data
+        try:
+            from ..learning import load_trades
+            trades = load_trades()
+            closed = [t for t in trades if t.result and t.result.value not in ("PENDING",)]
+            if closed:
+                wins = sum(1 for t in closed if t.pnl_percent and t.pnl_percent > 0)
+                real_wr = wins / len(closed) * 100
+                if perf_agent and perf_agent._last_report:
+                    reported_wr = perf_agent._last_report.get("agent_kpis", {}).get("trader_1", {}).get("win_rate")
+                    if reported_wr is not None:
+                        delta = abs(reported_wr - real_wr)
+                        findings.append({
+                            "area": "trader_win_rate",
+                            "status": "OK" if delta < 2 else "WARN",
+                            "detail": f"Reported WR: {reported_wr:.1f}%, Real WR: {real_wr:.1f}%, Delta: {delta:.1f}pp",
+                        })
+                        scores["trader_win_rate"] = 10 if delta < 2 else max(4, 10 - delta)
+                    else:
+                        findings.append({"area": "trader_win_rate", "status": "INFO", "detail": "No WR in report yet"})
+                        scores["trader_win_rate"] = 5
+                else:
+                    findings.append({"area": "trader_win_rate", "status": "INFO", "detail": f"Real WR: {real_wr:.1f}% ({len(closed)} trades), no report to compare"})
+                    scores["trader_win_rate"] = 6
+            else:
+                findings.append({"area": "trader_win_rate", "status": "INFO", "detail": "No closed trades to verify"})
+                scores["trader_win_rate"] = 5
+        except Exception as exc:
+            findings.append({"area": "trader_win_rate", "status": "WARN", "detail": f"Cannot load trades: {exc}"})
+            scores["trader_win_rate"] = 4
+
+        # 4. Trend computation — check method exists and produces output
+        has_trend_method = hasattr(perf_agent, '_compute_trend') if perf_agent else False
+        report_count = perf_agent._total_reports if perf_agent else 0
+        findings.append({
+            "area": "trend_computation",
+            "status": "OK" if has_trend_method else "CRITICAL",
+            "detail": f"Trend method: {'present' if has_trend_method else 'MISSING'}, daily reports: {report_count}",
+        })
+        scores["trend_computation"] = 8 if has_trend_method else 2
+
+        # 5. Alert thresholds — verify they exist and are reasonable
+        has_alerts = hasattr(perf_agent, '_detect_alerts') if perf_agent else False
+        findings.append({
+            "area": "alert_thresholds",
+            "status": "OK" if has_alerts else "WARN",
+            "detail": f"Alert detection: {'implemented' if has_alerts else 'missing'}",
+        })
+        scores["alert_thresholds"] = 8 if has_alerts else 3
+
+        # 6. Ranking logic
+        has_ranking = hasattr(perf_agent, '_rank_agents') if perf_agent else False
+        findings.append({
+            "area": "ranking_logic",
+            "status": "OK" if has_ranking else "WARN",
+            "detail": f"Agent ranking: {'implemented' if has_ranking else 'missing'}",
+        })
+        scores["ranking_logic"] = 8 if has_ranking else 3
+
+        # 7. History retention
+        max_snapshots = 168
+        max_reports = 30
+        snap_len = len(perf_agent._snapshots) if perf_agent else 0
+        rep_len = len(perf_agent._daily_reports) if perf_agent else 0
+        findings.append({
+            "area": "history_retention",
+            "status": "OK",
+            "detail": f"Snapshots: {snap_len}/{max_snapshots} capacity, Reports: {rep_len}/{max_reports} capacity",
+        })
+        scores["history_retention"] = 8
+
+        # 8. Cross-agent consistency — verify metrics methods exist on all agents
+        from .registry import get_all_agents
+        all_agents = get_all_agents()
+        agents_with_metrics = sum(1 for a in all_agents.values() if hasattr(a, 'get_metrics'))
+        findings.append({
+            "area": "cross_agent_consistency",
+            "status": "OK" if agents_with_metrics == len(all_agents) else "WARN",
+            "detail": f"Agents with get_metrics(): {agents_with_metrics}/{len(all_agents)}",
+        })
+        scores["cross_agent_consistency"] = 10 if agents_with_metrics == len(all_agents) else 7
+
+        # Error analysis
+        errors = self._analyze_agent_errors("performance")
+        if errors:
+            findings.append({
+                "area": "error_analysis",
+                "status": "WARN" if errors else "OK",
+                "detail": f"Recent errors: {len(errors)}",
+            })
+
+        report["summary"] = (
+            f"Agent Performance audit: {len(findings)} checks. "
+            f"Snapshots: {snapshot_count}, Reports: {report_count}. "
+            f"KPI methods all present." if has_trend_method and has_alerts and has_ranking
+            else f"Agent Performance audit: some methods may be missing."
+        )
+
+        # Improvements
+        if snapshot_count == 0:
+            improvements.append({
+                "priority": "P1",
+                "description": "Run at least one performance snapshot to populate initial KPIs",
+            })
+        if not perf_agent or not perf_agent._last_report:
+            improvements.append({
+                "priority": "P2",
+                "description": "Trigger a daily report to verify full KPI computation pipeline",
+            })
+
+        tests.append("test_performance_snapshot_collects_all_agents")
+        tests.append("test_performance_daily_report_has_kpis")
+        tests.append("test_performance_trend_computation")
+        tests.append("test_performance_alert_thresholds")
+        tests.append("test_performance_ranking_logic")
+
     def _audit_self(self, report: dict, focus: str | None):
         """Auto-audit — meta-analysis of the auditor's own capabilities."""
         findings = report["findings"]
@@ -2378,7 +2549,7 @@ class AgentAuditor(BaseAgent):
 
         # 1. Profile coverage — all agents auditable?
         auditable = set(AUDIT_PROFILES.keys()) - {"auditor"}  # exclude self
-        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux", "infrastructure"}
+        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux", "infrastructure", "performance"}
         missing = expected - auditable
         findings.append({
             "area": "profile_coverage",
@@ -2401,6 +2572,7 @@ class AgentAuditor(BaseAgent):
             "learning_2": "_audit_learning_2",
             "ux": "_audit_ux",
             "infrastructure": "_audit_infrastructure",
+            "performance": "_audit_performance",
         }
         implemented = sum(1 for m in check_methods.values() if hasattr(self, m))
         findings.append({

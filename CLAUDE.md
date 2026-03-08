@@ -24,7 +24,7 @@ Le système est organisé en **équipes autonomes**. Chaque équipe a son propre
 
 Le framework est conçu pour ajouter facilement de nouvelles équipes : créer un trio trader/journal/learning, les enregistrer dans le registry, wirer le scheduler, et l'auditeur les couvrira automatiquement via ses profils.
 
-### 12 Agents Autonomes (`backend/app/agents/`)
+### 13 Agents Autonomes (`backend/app/agents/`)
 
 | Agent | Fichier | Équipe | Rôle |
 |-------|---------|--------|------|
@@ -38,7 +38,8 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 | **Journal 2** | `agent_journal_2.py` | Équipe 2 | Journal des flips, MAE/MFE daily bars |
 | **Learning 2** | `agent_learning_2.py` | Équipe 2 | 4 dimensions learning trend, calibration seuil |
 | **Infrastructure** | `agent_infrastructure.py` | Partagé | Santé PG, maintenance VACUUM, fallbacks, timeouts |
-| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 13 profils |
+| **Performance** | `agent_performance.py` | Partagé | KPIs tous agents, tendances, ranking, alertes |
+| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 14 profils |
 | **UX** | (virtuel) | Partagé | Frontend React |
 
 ### Équipe 1 — Day Trading Intraday
@@ -57,7 +58,7 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 
 ### Infrastructure agents
 - **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
-- **`registry.py`** : 12 singletons (2 équipes + infra + audit), orchestration `News → Scoring → Scoring 2 → Trader 1 + Trader 2`, helpers pour les 2 équipes
+- **`registry.py`** : 13 singletons (2 équipes + infra + perf + audit), orchestration `News → Scoring → Scoring 2 → Trader 1 + Trader 2`, helpers pour les 2 équipes
 - **Agent Infrastructure** (`agent_infrastructure.py`) : surveillance continue de l'infrastructure système
   - Health check toutes les 15 min : connexion PG, pool, pending trades, fallback JSON
   - Maintenance quotidienne 23h : VACUUM ANALYZE, pruning agent tables, stats
@@ -137,6 +138,30 @@ News → Scoring → [Learning 1 cache] → Trader 1
 - **Frontend** : `Learning2Page.jsx` — 4 dimensions avec barres, anomalies, calibration seuil, logs
 - **Audit** : Profil `learning_2` — 8 checks (sample_size, ticker_calibration, newscat_calibration, direction_balance, threshold_stability, churning_detection, anomaly_detection, feedback_loop)
 - **Tests** : 35 tests dans `test_journal2_learning2.py`
+
+#### Agent Performance — KPIs & Suivi
+- **Fichier** : `agent_performance.py`
+- **Mission** : Mesurer et suivre les KPIs de TOUS les agents, identifier les performants/sous-performants, tracker l'évolution temporelle
+- **KPIs par agent** :
+  - **Trader 1** : win_rate, pnl_total, avg_pnl, expired_rate, best/worst ticker, R/R réalisé
+  - **Trader 2** : realized_pnl, unrealized_pnl, flip_accuracy, positions_coverage
+  - **Scoring** : avg_score, zero_edge_filter_rate, cache_hit_rate, tokens_per_scan
+  - **News** : items_per_scan, source_error_rate, dedup_rate, collection_speed
+  - **Journal 1** : closure_rate, price_fetch_success, mae_avg, bar_coverage
+  - **Journal 2** : flip_coverage, snapshot_quality, mae_mfe_enrichment
+  - **Learning 1** : adjustment_count, anomaly_rate, cache_freshness
+  - **Learning 2** : calibration_stability, churning_detection
+  - **Infra** : pg_uptime, maintenance_regularity
+- **3 actions** :
+  - `snapshot` (toutes les heures 7h-22h, léger) : collecte get_metrics() de tous les agents
+  - `daily_report` (22h30, après journal) : KPIs complets avec données trades/journal, ranking, alertes
+  - `weekly_trends` (dimanche 21h30) : évolution des KPIs, tendances improving/declining/stable
+- **Ranking** : identifie top_performers et underperformers par score normalisé
+- **Alertes** : win_rate < 35% = CRITICAL, expired_rate > 50% = WARN, price_fetch < 70% = WARN, pg_failures >= 3 = CRITICAL
+- **Tendances** : comparaison first-half/second-half des snapshots, classification improving/declining/stable
+- **Rétention** : 168 snapshots (1 semaine horaire), 30 rapports quotidiens
+- **API** : `GET /api/performance/snapshot`, `GET /api/performance/report`, `GET /api/performance/history`, `POST /api/performance/trigger/{action}`
+- **Audit** : Profil `performance` — 8 checks (kpi_coverage, data_freshness, trader_win_rate, trend_computation, alert_thresholds, ranking_logic, history_retention, cross_agent_consistency)
 
 ### Agent Auditeur — utilisation
 L'auditeur s'appelle manuellement via l'API ou Claude Code :
@@ -442,7 +467,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
-- `backend/app/agents/registry.py` : 12 singletons (2 équipes + infra + audit), run_scan_pipeline (News→Scoring→Scoring 2→Trader 1+2 avec Learning), helpers journal_2/learning_2/infrastructure
+- `backend/app/agents/registry.py` : 13 singletons (2 équipes + infra + perf + audit), run_scan_pipeline (News→Scoring→Scoring 2→Trader 1+2 avec Learning), helpers journal_2/learning_2/infrastructure
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
 - `backend/app/agents/agent_scoring_2.py` : Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored
@@ -453,7 +478,8 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
 - `backend/app/agents/agent_infrastructure.py` : v7.5, health check 15min (PG, pool, pending, fallbacks), maintenance 23h (VACUUM, pruning, stats), rapport hebdomadaire dim 21h, détection divergence JSON/PG
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 13 profils d'expertise (+ scoring_2, journal_2, learning_2, infrastructure), note /10, persistance rapports, trend tracking, log analysis
+- `backend/app/agents/agent_performance.py` : KPIs tous agents, 3 actions (snapshot horaire, daily report 22h30, weekly trends dim 21h30), ranking, alertes, tendances, rétention 168 snapshots + 30 reports
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 14 profils d'expertise (+ scoring_2, journal_2, learning_2, infrastructure, performance), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
 - `backend/app/database.py` : v7.0, 10 tables PG (+ trend_positions, trend_journal_entries), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 9 tables, pg_update_trade_stop (v6.4)

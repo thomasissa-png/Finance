@@ -437,6 +437,41 @@ def _run_weekly_source_review() -> None:
     thread.start()
 
 
+def _run_performance_snapshot() -> None:
+    """Run hourly performance snapshot — lightweight KPI collection."""
+    try:
+        from .agents.registry import run_performance_snapshot
+        run_performance_snapshot()
+    except Exception as exc:
+        logger.error("Performance snapshot failed: %s", exc)
+
+
+def _run_performance_daily() -> None:
+    """Run daily performance report at 22h30 — after journal, full trade analysis."""
+    def _worker():
+        try:
+            from .agents.registry import run_performance_daily
+            run_performance_daily()
+        except Exception as exc:
+            logger.error("Performance daily report failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="performance-daily")
+    thread.start()
+
+
+def _run_performance_weekly() -> None:
+    """Run weekly performance trends — Sunday 21h30."""
+    def _worker():
+        try:
+            from .agents.registry import run_performance_weekly
+            run_performance_weekly()
+        except Exception as exc:
+            logger.error("Performance weekly trends failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="performance-weekly")
+    thread.start()
+
+
 def _run_infra_health_check() -> None:
     """Run infrastructure health check every 15 min."""
     try:
@@ -511,6 +546,10 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
     bg_scheduler.add_job(_run_infra_maintenance, CronTrigger(hour=23, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_maintenance", misfire_grace_time=3600)
     bg_scheduler.add_job(_run_infra_report, CronTrigger(hour=21, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="infra_report", misfire_grace_time=3600)
+    # v8.0: Performance agent — hourly snapshot, daily report 22h30, weekly trends Sun 21h30
+    bg_scheduler.add_job(_run_performance_snapshot, CronTrigger(minute=0, hour="7-22", day_of_week="mon-fri", timezone="Europe/Paris"), id="performance_snapshot", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_performance_daily, CronTrigger(hour=22, minute=30, day_of_week="mon-fri", timezone="Europe/Paris"), id="performance_daily", misfire_grace_time=3600)
+    bg_scheduler.add_job(_run_performance_weekly, CronTrigger(hour=21, minute=30, day_of_week="sun", timezone="Europe/Paris"), id="performance_weekly", misfire_grace_time=3600)
     bg_scheduler.start()
     logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check q10min, position monitor q15min, post-EIA Wed 16:45, journal at 22:00 CET (weekdays), source review Sun 20:00")
 
@@ -1166,6 +1205,50 @@ def get_infra_report():
     """Get full infrastructure report."""
     from .agents.registry import run_infra_report
     return run_infra_report()
+
+
+# ── Agent Performance API ────────────────────────────────────────
+
+
+@app.get("/api/performance/snapshot")
+def get_performance_snapshot():
+    """Get latest performance snapshot (lightweight KPIs)."""
+    agent = get_agent("performance")
+    if not agent:
+        return {"error": "Performance agent not available"}
+    return agent.get_metrics()
+
+
+@app.get("/api/performance/report")
+def get_performance_report():
+    """Get latest daily performance report."""
+    agent = get_agent("performance")
+    if not agent:
+        return {"error": "Performance agent not available"}
+    return agent._last_report or {"message": "No report yet"}
+
+
+@app.get("/api/performance/history")
+def get_performance_history():
+    """Get performance snapshots history."""
+    agent = get_agent("performance")
+    if not agent:
+        return {"snapshots": [], "daily_reports": []}
+    return {
+        "snapshots": agent._snapshots,
+        "daily_reports": agent._daily_reports,
+    }
+
+
+@app.post("/api/performance/trigger/{action}")
+def trigger_performance(action: str):
+    """Trigger a performance action (snapshot, daily_report, weekly_trends)."""
+    agent = get_agent("performance")
+    if not agent:
+        raise HTTPException(status_code=404, detail="Performance agent not available")
+    if action not in ("snapshot", "daily_report", "weekly_trends"):
+        raise HTTPException(status_code=400, detail=f"Invalid action: {action}")
+    return agent.run(action=action)
 
 
 # ── Agent Trader 2 — Trend Positions API ────────────────────────
