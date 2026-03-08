@@ -243,12 +243,20 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
         agent_trader3 = _agents.get("trader_3")
         agent_learning3 = _agents.get("learning_3")
         if agent_scoring3 and agent_trader3:
-            tech_scoring = agent_scoring3.run(scan_type=scan_type)
+            # Get weekly config and learning adjustments
+            weekly_config = (agent_learning3.get_weekly_config()
+                             if agent_learning3 else None)
             learning3_data = (agent_learning3.get_adjustments()
                               if agent_learning3 else {})
+            # Pass weekly_config to Scoring 3 (strategy filtering, params)
+            tech_scoring = agent_scoring3.run(
+                scan_type=scan_type,
+                weekly_config=weekly_config)
+            # Pass weekly_config and learning to Trader 3
             agent_trader3.run(tech_scoring=tech_scoring,
                               scan_type=scan_type,
-                              learning_data=learning3_data)
+                              learning_data=learning3_data,
+                              weekly_config=weekly_config)
     except Exception as exc:
         logger.warning("Équipe 3 technical evaluation failed: %s", exc)
 
@@ -390,6 +398,18 @@ def get_learning_3_adjustments() -> dict:
     """Get cached tech learning adjustments."""
     _ensure_agents()
     return _agents["learning_3"].get_adjustments()
+
+
+def generate_weekly_config_3() -> dict:
+    """Generate weekly strategy config for Team 3 (called Sunday)."""
+    _ensure_agents()
+    return _agents["learning_3"].generate_weekly_config()
+
+
+def get_weekly_config_3() -> dict | None:
+    """Get current weekly config for Team 3."""
+    _ensure_agents()
+    return _agents["learning_3"].get_weekly_config()
 
 
 # ── Équipe 4 helpers ──────────────────────────────────────────────────

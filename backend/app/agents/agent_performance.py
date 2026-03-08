@@ -670,12 +670,18 @@ class AgentPerformance(BaseAgent):
         return kpis
 
     def _compute_trader_3_kpis(self) -> dict:
-        """Compute Trader 3 (technical) KPIs from positions."""
+        """Compute Trader 3 (technical) KPIs from positions.
+
+        v2.0: Added weekly config status, Sharpe ratio, regime match stats,
+        correlation check, and R/R tracking.
+        """
         kpis: dict[str, Any] = {
             "active_positions": 0,
             "total_realized_pnl": None,
             "evaluations_today": 0,
             "strategies_active": 0,
+            "has_weekly_config": False,
+            "validated_strategies": 0,
         }
         try:
             from . import registry
@@ -685,11 +691,41 @@ class AgentPerformance(BaseAgent):
                 kpis["active_positions"] = metrics.get("active_positions", 0)
                 kpis["total_realized_pnl"] = metrics.get("total_realized_pnl")
                 kpis["evaluations_today"] = metrics.get("evaluations_today", 0)
-                # Strategy performance if available
+                # Strategy performance with Sharpe/R/R
                 if hasattr(t3, "get_strategy_performance"):
                     sp = t3.get_strategy_performance()
-                    kpis["strategies_active"] = len([s for s in sp.values() if s.get("count", 0) > 0])
+                    kpis["strategies_active"] = len(
+                        [s for s in sp.values() if s.get("trades", 0) > 0])
                     kpis["strategy_performance"] = sp
+
+            # Learning 3 status
+            l3 = registry.get_agent("learning_3")
+            if l3:
+                l3_metrics = l3.get_metrics()
+                kpis["has_weekly_config"] = l3_metrics.get("has_weekly_config", False)
+                config = l3.get_weekly_config()
+                if config:
+                    kpis["validated_strategies"] = len(
+                        config.get("validated_strategies", []))
+                    kpis["enabled_strategies"] = len(
+                        config.get("enabled_strategies", []))
+                    kpis["disabled_strategies"] = config.get("disabled_strategies", [])
+
+            # Journal 3 stats
+            j3 = registry.get_agent("journal_3")
+            if j3:
+                j3_metrics = j3.get_metrics()
+                kpis["total_journal_entries"] = j3_metrics.get("total_entries", 0)
+
+                # Weekly summary for the report
+                try:
+                    weekly = j3.compute_weekly_summary()
+                    kpis["weekly_win_rate"] = weekly.get("win_rate", 0)
+                    kpis["weekly_pnl"] = weekly.get("total_pnl", 0)
+                    kpis["weekly_trades"] = weekly.get("entries_count", 0)
+                except Exception:
+                    pass
+
         except Exception as exc:
             self.log("Trader 3 KPI error", {"error": str(exc)}, level="WARN")
         return kpis

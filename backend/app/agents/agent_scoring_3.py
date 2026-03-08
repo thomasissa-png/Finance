@@ -3,9 +3,9 @@
 Responsibilities:
 - Computes technical indicator scores for trading signals
 - NOT based on news — Team 3 trades purely on technical indicators
-- Multi-timeframe analysis: 15min, 1h, 4h, daily
+- Multi-timeframe confluence: daily (primary) + intraday (confirmation)
 - Indicators: RSI (14, 21), MACD (12,26,9), Bollinger Bands (20,2),
-  SMA/EMA crossovers (20/50, 50/200), Stochastic, ADX, Volume analysis
+  SMA/EMA crossovers (20/50/200), Stochastic, ADX, Volume analysis
 - For each ticker in TECH_TICKERS (20 liquid assets)
 - Produces scored trade setups with direction, strategy, score, targets
 - Publishes "tech_scored" on bus -> Trader 3 consumes
@@ -15,7 +15,7 @@ Differences with Scoring 1/2:
 - Scoring 2: evaluates trend relevance for commodity news
 - Scoring 3: evaluates technical setups (indicators, price action)
 - NO Claude API calls — pure computational analysis
-- Multi-timeframe confluence scoring
+- Multi-timeframe confluence scoring (daily + 1h confirmation)
 """
 
 import logging
@@ -57,9 +57,11 @@ TECH_TICKERS = {
     "TTE.PA":   {"name": "TotalEnergies", "category": "equities", "atr_mult": 1.0},
 }
 
-# ── Timeframes ────────────────────────────────────────────────────
-TIMEFRAMES = ["15m", "1h", "4h", "1d"]
-TIMEFRAME_WEIGHTS = {"15m": 0.15, "1h": 0.25, "4h": 0.30, "1d": 0.30}
+# ── Multi-timeframe confluence ────────────────────────────────────
+# Primary = daily (strategy detection), confirmation = 1h (entry timing)
+# 4h not used (Twelve Data free tier limits); 15m too noisy for daily strategies
+TIMEFRAMES = ["1d", "1h"]  # Primary + confirmation
+TIMEFRAME_WEIGHTS = {"1d": 0.70, "1h": 0.30}  # Daily dominates
 
 # ── Strategy definitions ──────────────────────────────────────────
 STRATEGIES = {
@@ -87,6 +89,12 @@ STRATEGIES = {
         "name": "Momentum Divergence",
         "description": "Price/indicator divergence (RSI or MACD)",
         "weight": 1.1,
+    },
+    "stochastic_reversal": {
+        "name": "Stochastic Reversal",
+        "description": "Stochastic K/D extreme zones with reversal confirmation",
+        "weight": 0.9,
+        "preferred_regime": "ranging",  # T3: better in ranging markets
     },
 }
 
@@ -501,9 +509,10 @@ def _detect_bollinger_squeeze(indicators: dict) -> dict | None:
 
 
 def _detect_ma_trend(indicators: dict) -> dict | None:
-    """Detect moving average alignment setups."""
+    """Detect moving average alignment setups (P5: now uses SMA 200)."""
     sma_20 = indicators.get("sma_20")
     sma_50 = indicators.get("sma_50")
+    sma_200 = indicators.get("sma_200")
     ema_20 = indicators.get("ema_20")
     adx = indicators.get("adx")
     last_close = indicators.get("last_close")
@@ -526,6 +535,9 @@ def _detect_ma_trend(indicators: dict) -> dict | None:
             distance = (last_close - sma_50) / sma_50 * 100
             if distance > 2:
                 score += 10
+        # SMA 200 confirmation: full alignment (golden cross confirmed)
+        if sma_200 is not None and sma_50 > sma_200:
+            score += 10
         # ADX confirms trend
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 15
@@ -542,6 +554,9 @@ def _detect_ma_trend(indicators: dict) -> dict | None:
             distance = (sma_50 - last_close) / sma_50 * 100
             if distance > 2:
                 score += 10
+        # SMA 200 confirmation: death cross confirmed
+        if sma_200 is not None and sma_50 < sma_200:
+            score += 10
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 15
         elif adx is not None and adx > 20:
@@ -557,6 +572,7 @@ def _detect_ma_trend(indicators: dict) -> dict | None:
         "signals": {
             "sma_20": round(sma_20, 4),
             "sma_50": round(sma_50, 4),
+            "sma_200": round(sma_200, 4) if sma_200 else None,
             "ema_20": round(ema_20, 4) if ema_20 else None,
             "adx": adx,
             "close": round(last_close, 4),
@@ -629,6 +645,136 @@ def _detect_momentum_divergence(indicators: dict) -> dict | None:
     }
 
 
+def _detect_stochastic_reversal(indicators: dict) -> dict | None:
+    """Detect Stochastic K/D reversal setups (T3: was unused, now a strategy).
+
+    Stochastic works best in ranging markets (ADX < 25).
+    """
+    stoch = indicators.get("stochastic")
+    adx = indicators.get("adx")
+    rsi_14 = indicators.get("rsi_14")
+
+    if stoch is None:
+        return None
+
+    k = stoch["k"]
+    d = stoch["d"]
+    score = 0
+    direction = None
+
+    # Oversold zone + K crosses above D → LONG
+    if k < 20 and d < 25 and k > d:
+        direction = "LONG"
+        score = 45 + (20 - k) * 1.5  # Deeper oversold = stronger
+        # RSI confirmation
+        if rsi_14 is not None and rsi_14 < 40:
+            score += 10
+        # Ranging market = stochastic works better
+        if adx is not None and adx < 25:
+            score += 10
+
+    # Overbought zone + K crosses below D → SHORT
+    elif k > 80 and d > 75 and k < d:
+        direction = "SHORT"
+        score = 45 + (k - 80) * 1.5
+        if rsi_14 is not None and rsi_14 > 60:
+            score += 10
+        if adx is not None and adx < 25:
+            score += 10
+
+    if direction is None or score < MIN_SETUP_SCORE:
+        return None
+
+    return {
+        "strategy": "stochastic_reversal",
+        "direction": direction,
+        "score": min(100, round(score, 1)),
+        "signals": {
+            "stoch_k": k,
+            "stoch_d": d,
+            "rsi_14": rsi_14,
+            "adx": adx,
+        },
+    }
+
+
+# ── Regime-strategy compatibility (J3) ──────────────────────────
+# Some strategies work better in trending markets, others in ranging
+STRATEGY_REGIME_PREFERENCE = {
+    "rsi_reversal": "ranging",       # Reversal = mean reversion = ranging
+    "macd_crossover": "trending",    # Trend-following signal
+    "bollinger_squeeze": "ranging",  # Breakout from compression
+    "ma_trend": "trending",          # Trend alignment
+    "momentum_divergence": None,     # Works in both
+    "stochastic_reversal": "ranging",  # Oscillator = ranging
+}
+
+# Regime mismatch penalty
+REGIME_MISMATCH_PENALTY = 0.80  # -20% score if regime doesn't match
+
+
+# ── Pivot detection helper (C7) ──────────────────────────────────
+
+def _find_recent_pivot(closes: list[float], min_lookback: int = 3,
+                       max_lookback: int = 20) -> int | None:
+    """Find the index of the most recent swing pivot in closes.
+
+    A swing low is a bar lower than both neighbors.
+    A swing high is a bar higher than both neighbors.
+    Returns the index of the most recent pivot within [min_lookback, max_lookback]
+    bars from the end. Returns None if no pivot found.
+    """
+    if len(closes) < min_lookback + 2:
+        return None
+
+    end = len(closes) - 1
+    search_start = max(1, end - max_lookback)
+    search_end = end - min_lookback
+
+    for i in range(search_end, search_start - 1, -1):
+        # Swing low
+        if closes[i] <= closes[i - 1] and closes[i] <= closes[i + 1]:
+            return i
+        # Swing high
+        if closes[i] >= closes[i - 1] and closes[i] >= closes[i + 1]:
+            return i
+
+    return None
+
+
+# ── Multi-timeframe confluence helper ────────────────────────────
+
+def _compute_intraday_confirmation(ticker: str, direction: str) -> float:
+    """Fetch 1h data and check if intraday trend confirms the daily signal.
+
+    Returns a confluence boost: 1.0 (no data/neutral), 1.1 (confirming), 0.9 (opposing).
+    """
+    try:
+        ohlcv = _fetch_ohlcv(ticker, period="1mo", interval="1h")
+        if not ohlcv or len(ohlcv["close"]) < 20:
+            return 1.0
+
+        closes = ohlcv["close"]
+        # Check short-term trend (last 10 hourly bars)
+        sma_fast = sum(closes[-5:]) / 5
+        sma_slow = sum(closes[-10:]) / 10
+
+        if direction == "LONG":
+            if sma_fast > sma_slow:
+                return 1.1  # Intraday confirms bullish
+            elif sma_fast < sma_slow * 0.998:
+                return 0.9  # Intraday opposes
+        elif direction == "SHORT":
+            if sma_fast < sma_slow:
+                return 1.1  # Intraday confirms bearish
+            elif sma_fast > sma_slow * 1.002:
+                return 0.9  # Intraday opposes
+
+        return 1.0
+    except Exception:
+        return 1.0
+
+
 # ── Main scoring function ────────────────────────────────────────
 
 def _fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> dict | None:
@@ -671,15 +817,23 @@ def _compute_all_indicators(ohlcv: dict) -> dict:
 
     indicators = {
         "last_close": closes[-1] if closes else None,
-        "prev_close": closes[-5] if len(closes) >= 5 else (closes[-2] if len(closes) >= 2 else None),
     }
 
     # RSI
     indicators["rsi_14"] = _compute_rsi(closes, 14)
     indicators["rsi_21"] = _compute_rsi(closes, 21)
-    # Prev RSI (5 bars ago for divergence detection)
-    if len(closes) > 5:
+    # Prev RSI for divergence (C7: use pivot-based lookback, not fixed 5 bars)
+    # Find the most recent swing low/high in price for proper divergence detection
+    pivot_idx = _find_recent_pivot(closes)
+    if pivot_idx is not None and pivot_idx > 0:
+        indicators["rsi_prev"] = _compute_rsi(closes[:pivot_idx + 1], 14)
+        indicators["prev_close"] = closes[pivot_idx]
+        indicators["pivot_lookback"] = len(closes) - 1 - pivot_idx
+    elif len(closes) > 5:
         indicators["rsi_prev"] = _compute_rsi(closes[:-5], 14)
+        indicators["prev_close"] = closes[-5] if len(closes) >= 5 else (
+            closes[-2] if len(closes) >= 2 else None)
+        indicators["pivot_lookback"] = 5
 
     # MACD
     indicators["macd"] = _compute_macd(closes)
@@ -687,12 +841,14 @@ def _compute_all_indicators(ohlcv: dict) -> dict:
     # Bollinger Bands
     indicators["bollinger"] = _compute_bollinger(closes)
 
-    # Moving Averages
+    # Moving Averages (P5: SMA 200 now computed)
     sma_20 = _compute_sma(closes, SMA_FAST)
     sma_50 = _compute_sma(closes, SMA_MID)
+    sma_200 = _compute_sma(closes, SMA_SLOW)
     ema_20 = _compute_ema(closes, SMA_FAST)
     indicators["sma_20"] = sma_20[-1] if sma_20 else None
     indicators["sma_50"] = sma_50[-1] if sma_50 else None
+    indicators["sma_200"] = sma_200[-1] if sma_200 else None
     indicators["ema_20"] = ema_20[-1] if ema_20 else None
 
     # Stochastic
@@ -761,6 +917,7 @@ def score_technical_setups(tickers: dict | None = None,
         "bollinger_squeeze": _detect_bollinger_squeeze,
         "ma_trend": _detect_ma_trend,
         "momentum_divergence": _detect_momentum_divergence,
+        "stochastic_reversal": _detect_stochastic_reversal,
     }
     strategy_detectors = [
         (name, fn) for name, fn in detector_map.items()
@@ -833,8 +990,14 @@ def score_technical_setups(tickers: dict | None = None,
             elif vol_ratio > 1.5:
                 volume_boost = 1.15
 
-            # Compute final score with strategy weight and volume
-            final_score = min(100, setup["score"] * strategy_weight * volume_boost)
+            # J3: Regime filter — penalize strategies in wrong regime
+            preferred_regime = STRATEGY_REGIME_PREFERENCE.get(strategy_name)
+            regime_mult = 1.0
+            if preferred_regime and preferred_regime != regime:
+                regime_mult = REGIME_MISMATCH_PENALTY
+
+            # Compute final score with strategy weight, volume, and regime
+            final_score = min(100, setup["score"] * strategy_weight * volume_boost * regime_mult)
 
             # Compute target and stop from ATR
             atr_mult = info.get("atr_mult", 1.0)
@@ -845,6 +1008,18 @@ def score_technical_setups(tickers: dict | None = None,
                 target_pct = round(atr_pct * 1.5 * atr_mult, 2)
                 stop_pct = round(atr_pct * 1.0 * atr_mult, 2)
 
+            # P4: Confidence = signal quality, not just score * 0.9
+            # Based on: number of confirming signals + regime match + volume
+            signal_count = sum(1 for v in setup.get("signals", {}).values()
+                               if v is not None)
+            regime_conf = 1.0 if (not preferred_regime or preferred_regime == regime) else 0.8
+            vol_conf = min(1.2, vol_ratio / 1.5) if vol_ratio > 1.0 else 0.8
+            confidence = min(100, int(
+                (signal_count / 4 * 40) +  # Signal richness (max 40)
+                (regime_conf * 30) +         # Regime match (max 30)
+                (vol_conf * 30)              # Volume confirmation (max 30)
+            ))
+
             entry = {
                 "ticker": ticker,
                 "name": info["name"],
@@ -853,7 +1028,7 @@ def score_technical_setups(tickers: dict | None = None,
                 "strategy_name": STRATEGIES[strategy_name]["name"],
                 "direction": setup["direction"],
                 "score": round(final_score, 1),
-                "confidence": min(100, int(final_score * 0.9)),
+                "confidence": confidence,
                 "entry_price": round(last_close, 4),
                 "target_pct": target_pct,
                 "stop_pct": stop_pct,
@@ -861,6 +1036,7 @@ def score_technical_setups(tickers: dict | None = None,
                 "volume_ratio": vol_ratio,
                 "adx": adx,
                 "regime": regime,
+                "regime_match": (not preferred_regime or preferred_regime == regime),
                 "signals": setup.get("signals", {}),
                 "timeframe": "1d",  # Primary timeframe used
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -869,6 +1045,20 @@ def score_technical_setups(tickers: dict | None = None,
             all_setups.append(entry)
 
     # Sort by score descending
+    all_setups.sort(key=lambda s: s["score"], reverse=True)
+
+    # Multi-timeframe confirmation for top setups (avoid API abuse for all)
+    for setup in all_setups[:10]:
+        if setup["score"] >= params.get("min_setup_score", MIN_SETUP_SCORE):
+            try:
+                mtf_boost = _compute_intraday_confirmation(
+                    setup["ticker"], setup["direction"])
+                setup["score"] = round(min(100, setup["score"] * mtf_boost), 1)
+                setup["mtf_confirmation"] = mtf_boost
+            except Exception:
+                setup["mtf_confirmation"] = 1.0
+
+    # Re-sort after MTF adjustment
     all_setups.sort(key=lambda s: s["score"], reverse=True)
 
     result["setups"] = all_setups
@@ -905,7 +1095,7 @@ class AgentScoring3(BaseAgent):
 
     name = "scoring_3"
     description = "Technical indicators scoring — multi-strategy, multi-timeframe"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()

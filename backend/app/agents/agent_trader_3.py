@@ -52,8 +52,9 @@ MIN_TRADE_SCORE = 45.0
 # Maximum positions per ticker
 MAX_PER_TICKER = 2
 
-# Maximum positions per strategy
-MAX_PER_STRATEGY = 4
+# Maximum positions per strategy (J4: base value, dynamic via weekly_config)
+MAX_PER_STRATEGY_BASE = 4
+MAX_PER_STRATEGY_VALIDATED = 6  # J4: validated strategies get more budget
 
 # Timeout constants
 GLOBAL_TIMEOUT_S = 120
@@ -61,6 +62,16 @@ PER_FETCH_TIMEOUT_S = 15
 
 # History pruning
 HISTORY_MAX_AGE_DAYS = 365
+
+# P8: Correlation groups — prevent conflicting positions
+TECH_CORRELATION_GROUPS = {
+    "gold_silver": ["GC=F", "SI=F"],
+    "energy": ["CL=F", "BZ=F"],
+    "agri": ["ZC=F", "ZW=F"],
+    "risk_eu": ["^FCHI", "^GDAXI"],
+    "risk_us": ["^GSPC"],
+    "aud_copper": ["AUDUSD=X", "HG=F"],  # Correlated via China
+}
 
 # Persistence file (JSON fallback)
 POSITIONS_FILE = Path(os.getenv("DATA_DIR", "data")) / "tech_positions.json"
@@ -192,7 +203,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()
@@ -200,16 +211,21 @@ class AgentTrader3(BaseAgent):
         self._trades_closed_total: int = 0
         self._evaluations_today: int = 0
         self._current_learning: dict = {}
+        self._weekly_config: dict | None = None  # J5: weekly strategy config
 
-    def run(self, tech_scoring=None, learning_data=None, **kwargs) -> dict:
+    def run(self, tech_scoring=None, learning_data=None,
+            weekly_config=None, **kwargs) -> dict:
         """Evaluate scored technical setups and manage positions.
 
         Args:
             tech_scoring: dict from Agent Scoring 3 (setups)
             learning_data: dict from Agent Learning 3 (adjustments)
+            weekly_config: dict from Learning 3 (validated strategies, budgets)
 
         Returns: dict with positions state and changes.
         """
+        if weekly_config is not None:
+            self._weekly_config = weekly_config
         self._set_status(AgentStatus.WORKING, "Evaluating technical setups")
 
         start = time.monotonic()
@@ -379,8 +395,22 @@ class AgentTrader3(BaseAgent):
                 newly_closed.append(pos)
                 continue
 
-            # Check stop hit
-            if stop_pct > 0 and pnl_pct <= -stop_pct:
+            # J2: Trailing stop per-strategy — BEFORE SL check
+            # so trailing-adjusted stop is used in SL evaluation
+            strategy = pos.get("strategy", "")
+            trailing_pct = self._get_trailing_threshold(strategy)
+            if target_pct > 0 and pnl_pct > target_pct * trailing_pct:
+                pos["trailing_active"] = True
+                # Move stop to breakeven + small buffer
+                new_stop = -0.1  # Breakeven with 0.1% buffer
+                pos["effective_stop"] = max(
+                    pos.get("effective_stop", -stop_pct),
+                    new_stop
+                )
+
+            # Check stop hit (uses potentially trailed effective_stop)
+            effective_stop = pos.get("effective_stop", -stop_pct)
+            if stop_pct > 0 and pnl_pct <= effective_stop:
                 pos["result"] = "SL_HIT"
                 pos["pnl_pct"] = round(pnl_pct, 2)
                 pos["close_time"] = now.isoformat()
@@ -399,18 +429,79 @@ class AgentTrader3(BaseAgent):
                 newly_closed.append(pos)
                 continue
 
-            # Trailing stop: if P&L > 50% of target, tighten stop to breakeven
-            if target_pct > 0 and pnl_pct > target_pct * 0.5:
-                pos["trailing_active"] = True
-                # Move stop to breakeven + small buffer
-                pos["effective_stop"] = max(
-                    pos.get("effective_stop", -stop_pct),
-                    -0.1  # Breakeven with 0.1% buffer
-                )
-
             still_active.append(pos)
 
         return still_active, newly_closed
+
+    def _get_trailing_threshold(self, strategy: str) -> float:
+        """J2: Get trailing stop activation threshold per strategy.
+
+        Returns the fraction of target_pct at which trailing stop activates.
+        Momentum strategies trail tighter, reversal strategies wider.
+        """
+        # Weekly config can override
+        if self._weekly_config:
+            overrides = self._weekly_config.get("trailing_thresholds", {})
+            if strategy in overrides:
+                return overrides[strategy]
+
+        defaults = {
+            "rsi_reversal": 0.60,       # Reversal: let it run a bit more
+            "macd_crossover": 0.40,     # Trend: trail early
+            "bollinger_squeeze": 0.45,  # Breakout: moderate
+            "ma_trend": 0.35,           # Strong trend: trail tight
+            "momentum_divergence": 0.50,
+            "stochastic_reversal": 0.55,
+        }
+        return defaults.get(strategy, 0.50)
+
+    def _check_correlation_conflict(self, ticker: str, direction: str,
+                                     active_positions: list[dict]) -> bool:
+        """P8: Check if opening ticker+direction would conflict with existing positions.
+
+        Returns True if there's a conflict (should SKIP this setup).
+        """
+        # Find which group this ticker belongs to
+        ticker_group = None
+        for group_name, group_tickers in TECH_CORRELATION_GROUPS.items():
+            if ticker in group_tickers:
+                ticker_group = group_name
+                break
+
+        if ticker_group is None:
+            return False  # No group, no conflict
+
+        # Check existing active positions for same-group conflicts
+        group_tickers = TECH_CORRELATION_GROUPS[ticker_group]
+        for pos in active_positions:
+            pos_ticker = pos.get("ticker", "")
+            pos_dir = pos.get("direction", "")
+            if pos_ticker in group_tickers and pos_ticker != ticker:
+                # Same group, different ticker — conflict if opposing directions
+                if pos_dir != direction:
+                    return True  # Opposing direction in correlated group = conflict
+
+        return False
+
+    def _get_max_per_strategy(self, strategy: str) -> int:
+        """J4: Dynamic MAX_PER_STRATEGY based on validation status."""
+        if self._weekly_config:
+            validated = self._weekly_config.get("validated_strategies", [])
+            if strategy in validated:
+                return MAX_PER_STRATEGY_VALIDATED
+            budgets = self._weekly_config.get("strategy_budgets", {})
+            if strategy in budgets:
+                return budgets[strategy]
+        return MAX_PER_STRATEGY_BASE
+
+    def _get_agent_versions(self) -> dict:
+        """P6: Get current agent versions for position stamping."""
+        try:
+            from .registry import get_all_agents
+            agents = get_all_agents()
+            return {name: getattr(a, "version", "?") for name, a in agents.items()}
+        except Exception:
+            return {"trader_3": self.version}
 
     def _evaluate_setups(self, setups: list[dict],
                          current_active: list[dict]) -> list[dict]:
@@ -442,6 +533,9 @@ class AgentTrader3(BaseAgent):
         ticker_adj = learning.get("ticker_adj", {})
         timeframe_adj = learning.get("timeframe_adj", {})
 
+        # P6: Get agent versions for stamping
+        agent_versions = self._get_agent_versions()
+
         for setup in setups:
             if len(current_active) + len(new_positions) >= MAX_POSITIONS:
                 break
@@ -459,7 +553,14 @@ class AgentTrader3(BaseAgent):
             # Position limits
             if ticker_counts.get(ticker, 0) >= MAX_PER_TICKER:
                 continue
-            if strategy_counts.get(strategy, 0) >= MAX_PER_STRATEGY:
+            # J4: Dynamic MAX_PER_STRATEGY
+            max_for_strategy = self._get_max_per_strategy(strategy)
+            if strategy_counts.get(strategy, 0) >= max_for_strategy:
+                continue
+
+            # P8: Correlation conflict check
+            all_active = list(current_active) + new_positions
+            if self._check_correlation_conflict(ticker, direction, all_active):
                 continue
 
             # Apply learning multipliers
@@ -496,6 +597,8 @@ class AgentTrader3(BaseAgent):
                 "trailing_active": False,
                 "entry_time": now_iso,
                 "timeframe": timeframe,
+                "regime_at_entry": setup.get("regime"),
+                "regime_match": setup.get("regime_match", True),
                 "signals_at_entry": setup.get("signals", {}),
                 "atr_at_entry": setup.get("atr"),
                 "adx_at_entry": setup.get("adx"),
@@ -503,6 +606,13 @@ class AgentTrader3(BaseAgent):
                 "unrealized_pnl_pct": 0.0,
                 "high_watermark": setup.get("entry_price", 0),
                 "low_watermark": setup.get("entry_price", 0),
+                # P6: Version stamping
+                "agent_versions": agent_versions,
+                # J1: Strategy version for param tracking
+                "strategy_version": (
+                    self._weekly_config.get("strategy_versions", {}).get(strategy, "1.0")
+                    if self._weekly_config else "1.0"
+                ),
             }
 
             new_positions.append(position)

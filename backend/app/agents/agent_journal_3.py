@@ -18,6 +18,7 @@ Differences with Journal 1/2:
 import json
 import logging
 import fcntl
+import math
 import os
 import time
 from collections import Counter
@@ -98,18 +99,24 @@ def _pg_load_entries() -> list[dict]:
 
 
 def _pg_save_entries(entries: list[dict]):
-    """Save to PostgreSQL (append new only, dedup by ticker+entry_time)."""
+    """Save to PostgreSQL (append new only, dedup by ticker+strategy+entry_time).
+
+    BUG FIX: PG schema has UNIQUE(ticker, strategy, entry_time) but INSERT
+    was using ON CONFLICT(ticker, entry_time) — mismatched constraint.
+    """
     try:
         from ..database import get_conn
         with get_conn() as conn:
             with conn.cursor() as cur:
                 for entry in entries:
                     cur.execute("""
-                        INSERT INTO tech_journal_entries (ticker, entry_time, data, created_at)
-                        VALUES (%s, %s, %s, NOW())
-                        ON CONFLICT (ticker, entry_time) DO NOTHING
+                        INSERT INTO tech_journal_entries
+                            (ticker, strategy, entry_time, data, created_at)
+                        VALUES (%s, %s, %s, %s, NOW())
+                        ON CONFLICT (ticker, strategy, entry_time) DO NOTHING
                     """, (
                         entry.get("ticker"),
+                        entry.get("strategy", ""),
                         entry.get("entry_time"),
                         json.dumps(entry, default=str),
                     ))
@@ -171,7 +178,7 @@ class AgentJournal3(BaseAgent):
 
     name = "journal_3"
     description = "Journal & A/B analysis — technical trading strategies"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()
@@ -293,9 +300,10 @@ class AgentJournal3(BaseAgent):
             closed.extend(force_closed)
 
             # Step 3: Create journal entries for all closed positions not yet journaled
+            # Dedup key = (ticker, strategy, entry_time) to match PG UNIQUE constraint
             existing_entries = _load_journal_entries()
             existing_keys = {
-                (e.get("ticker"), e.get("entry_time"))
+                (e.get("ticker"), e.get("strategy", ""), e.get("entry_time"))
                 for e in existing_entries
             }
 
@@ -303,13 +311,14 @@ class AgentJournal3(BaseAgent):
             for trade in closed:
                 entry_time = trade.get("entry_time", "")
                 ticker = trade.get("ticker", "")
-                if (ticker, entry_time) in existing_keys:
+                strategy = trade.get("strategy", "")
+                if (ticker, strategy, entry_time) in existing_keys:
                     continue
 
                 entry = self._process_closed_trade(trade)
                 if entry:
                     new_entries.append(entry)
-                    existing_keys.add((ticker, entry_time))
+                    existing_keys.add((ticker, strategy, entry_time))
 
             # Step 4: Save journal entries
             if new_entries:
@@ -418,6 +427,17 @@ class AgentJournal3(BaseAgent):
             except (ValueError, AttributeError, TypeError):
                 pass
 
+        # L4: Compute realized R/R ratio
+        pnl = trade.get("pnl_pct", 0)
+        stop_pct_val = trade.get("stop_pct", 0)
+        target_pct_val = trade.get("target_pct", 0)
+        realized_rr = None
+        if stop_pct_val > 0:
+            realized_rr = round(pnl / stop_pct_val, 2)
+        predicted_rr = None
+        if stop_pct_val > 0 and target_pct_val > 0:
+            predicted_rr = round(target_pct_val / stop_pct_val, 2)
+
         entry = {
             "ticker": ticker,
             "name": trade.get("name", ticker),
@@ -430,7 +450,7 @@ class AgentJournal3(BaseAgent):
             "close_price": trade.get("close_price"),
             "entry_time": entry_time,
             "close_time": close_time,
-            "pnl_pct": trade.get("pnl_pct", 0),
+            "pnl_pct": pnl,
             "mae_pct": mae_pct,
             "mfe_pct": mfe_pct,
             "holding_hours": holding_hours,
@@ -443,15 +463,27 @@ class AgentJournal3(BaseAgent):
             "atr_at_entry": trade.get("atr_at_entry"),
             "adx_at_entry": trade.get("adx_at_entry"),
             "volume_ratio_at_entry": trade.get("volume_ratio_at_entry", 1.0),
-            "target_pct": trade.get("target_pct", 0),
-            "stop_pct": trade.get("stop_pct", 0),
+            "target_pct": target_pct_val,
+            "stop_pct": stop_pct_val,
             "trailing_active": trade.get("trailing_active", False),
+            # L4: R/R réalisé par stratégie
+            "realized_rr": realized_rr,
+            "predicted_rr": predicted_rr,
+            # Regime context
+            "regime_at_entry": trade.get("regime_at_entry"),
+            "regime_match": trade.get("regime_match", True),
+            # Version tracking
+            "agent_versions": trade.get("agent_versions", {}),
+            "strategy_version": trade.get("strategy_version", "1.0"),
         }
 
         return entry
 
     def _compute_strategy_ab(self, entries: list[dict]) -> dict:
-        """Compute A/B strategy performance from journal entries."""
+        """Compute A/B strategy performance from journal entries.
+
+        L4: Includes realized R/R per strategy.
+        """
         perf: dict[str, dict] = {}
 
         for entry in entries:
@@ -460,16 +492,19 @@ class AgentJournal3(BaseAgent):
                 perf[strategy] = {
                     "trades": 0, "wins": 0, "total_pnl": 0.0,
                     "tp_hits": 0, "sl_hits": 0, "expired": 0,
-                    "avg_mae": 0.0, "avg_mfe": 0.0,
                     "mae_sum": 0.0, "mfe_sum": 0.0,
                     "mae_count": 0, "mfe_count": 0,
-                    "avg_holding_hours": 0.0, "total_holding": 0.0,
+                    "total_holding": 0.0,
+                    "rr_sum": 0.0, "rr_count": 0,
+                    "regime_match_wins": 0, "regime_match_total": 0,
+                    "pnl_list": [],  # For Sharpe computation
                 }
 
             p = perf[strategy]
             p["trades"] += 1
             pnl = entry.get("pnl_pct", 0)
             p["total_pnl"] += pnl
+            p["pnl_list"].append(pnl)
             if pnl > 0:
                 p["wins"] += 1
 
@@ -493,6 +528,18 @@ class AgentJournal3(BaseAgent):
 
             p["total_holding"] += entry.get("holding_hours", 0)
 
+            # L4: R/R réalisé tracking
+            rr = entry.get("realized_rr")
+            if rr is not None:
+                p["rr_sum"] += rr
+                p["rr_count"] += 1
+
+            # Regime match tracking
+            if entry.get("regime_match") is not None:
+                p["regime_match_total"] += 1
+                if entry.get("regime_match") and pnl > 0:
+                    p["regime_match_wins"] += 1
+
         # Compute averages and clean up internal fields
         for strategy, p in perf.items():
             n = p["trades"]
@@ -503,14 +550,66 @@ class AgentJournal3(BaseAgent):
             p["avg_mfe"] = round(p["mfe_sum"] / p["mfe_count"], 2) if p["mfe_count"] > 0 else None
             p["avg_holding_hours"] = round(p["total_holding"] / n, 1) if n > 0 else 0
 
+            # L4: Average realized R/R
+            p["avg_realized_rr"] = (
+                round(p["rr_sum"] / p["rr_count"], 2) if p["rr_count"] > 0 else None
+            )
+
+            # L5: Sharpe ratio per strategy (annualized, assuming daily returns)
+            pnl_list = p["pnl_list"]
+            if len(pnl_list) >= 5:
+                mean_pnl = sum(pnl_list) / len(pnl_list)
+                variance = sum((x - mean_pnl) ** 2 for x in pnl_list) / (len(pnl_list) - 1)
+                std_pnl = math.sqrt(variance) if variance > 0 else 0
+                p["sharpe_ratio"] = round(
+                    mean_pnl / std_pnl * math.sqrt(252) if std_pnl > 0 else 0, 2
+                )
+            else:
+                p["sharpe_ratio"] = None
+
+            # Regime match win rate
+            p["regime_match_wr"] = (
+                round(p["regime_match_wins"] / p["regime_match_total"] * 100, 1)
+                if p["regime_match_total"] > 0 else None
+            )
+
             # Clean up internal accumulators
-            del p["mae_sum"]
-            del p["mfe_sum"]
-            del p["mae_count"]
-            del p["mfe_count"]
-            del p["total_holding"]
+            for key in ["mae_sum", "mfe_sum", "mae_count", "mfe_count",
+                        "total_holding", "rr_sum", "rr_count", "pnl_list",
+                        "regime_match_wins", "regime_match_total"]:
+                p.pop(key, None)
 
         return perf
+
+    def compute_weekly_summary(self) -> dict:
+        """L1/C5: Compute weekly aggregated summary for Learning 3.
+
+        Groups entries by week and computes aggregate stats per strategy per week.
+        Returns dict with weekly stats for the validation cycle.
+        """
+        entries = _load_journal_entries()
+        now = datetime.now(timezone.utc)
+        one_week_ago = (now - timedelta(days=7)).isoformat()
+
+        # Filter to this week's entries
+        this_week = [
+            e for e in entries
+            if (e.get("close_time") or e.get("entry_time", "")) >= one_week_ago
+        ]
+
+        weekly_perf = self._compute_strategy_ab(this_week)
+
+        return {
+            "period_start": one_week_ago,
+            "period_end": now.isoformat(),
+            "entries_count": len(this_week),
+            "strategy_performance": weekly_perf,
+            "total_pnl": round(sum(e.get("pnl_pct", 0) for e in this_week), 2),
+            "win_rate": round(
+                sum(1 for e in this_week if (e.get("pnl_pct") or 0) > 0)
+                / len(this_week) * 100 if this_week else 0, 1
+            ),
+        }
 
     def get_entries(self) -> list[dict]:
         """Get all journal entries (for API/frontend)."""

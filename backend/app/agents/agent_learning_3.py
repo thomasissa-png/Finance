@@ -3,11 +3,13 @@
 Responsibilities:
 - Consumes closed trade entries from Journal 3
 - Calculates 5 learning dimensions adapted for technical trading:
-  1. Per-strategy: which indicator combos work best (A/B comparison)
+  1. Per-strategy: which indicator combos work best (adjustment applied)
   2. Per-ticker: which assets respond well to technical signals
   3. Per-timeframe: which timeframes are most reliable
   4. Per-market-regime: trending vs ranging (ADX-based)
-  5. AB-test: compares strategy variants, identifies winners
+  5. AB-test: strategy ranking → generates weekly_config with
+     enabled/disabled strategies, weight overrides, budget allocation
+- Generates weekly_config for Scoring 3 and Trader 3 (Sunday validation cycle)
 - Publishes adjustments on bus -> Trader 3 consumes
 - Detects anomalies (overtrading, strategy degradation, regime shifts)
 
@@ -15,7 +17,7 @@ Differences with Learning 1/2:
 - Learning 1: learns from intraday trades (TP/SL/EXPIRED), 6 dimensions, news-oriented
 - Learning 2: learns from trend flips on 4 commodities, 4 dimensions
 - Learning 3: learns from multi-strategy technical trades, 5 dimensions,
-  includes A/B testing framework for strategy comparison
+  includes weekly strategy validation cycle and A/B-driven config
 """
 
 import logging
@@ -249,7 +251,7 @@ def compute_tech_learning(entries: list[dict]) -> dict:
             if adj is not None:
                 result["regime_adj"][regime] = adj
 
-    # ── 5. A/B test — strategy comparison ──
+    # ── 5. A/B test — strategy comparison (C4: now produces real adjustments) ──
     ab_test: dict[str, dict] = {}
     for strategy, pairs in strategy_groups.items():
         n = len(pairs)
@@ -257,19 +259,37 @@ def compute_tech_learning(entries: list[dict]) -> dict:
             continue
         wins = sum(1 for p, _ in pairs if p > 0)
         total_pnl_strat = sum(p for p, _ in pairs)
+        avg_pnl_strat = total_pnl_strat / n
+
+        # L5: Sharpe ratio per strategy
+        pnls = [p for p, _ in pairs]
+        sharpe = None
+        if n >= 5:
+            mean_p = sum(pnls) / n
+            var_p = sum((x - mean_p) ** 2 for x in pnls) / (n - 1)
+            std_p = math.sqrt(var_p) if var_p > 0 else 0
+            sharpe = round(mean_p / std_p * math.sqrt(252), 2) if std_p > 0 else 0
+
         ab_test[strategy] = {
             "trades": n,
             "wins": wins,
             "win_rate": round(wins / n * 100, 1),
-            "avg_pnl": round(total_pnl_strat / n, 2),
+            "avg_pnl": round(avg_pnl_strat, 2),
             "total_pnl": round(total_pnl_strat, 2),
+            "sharpe_ratio": sharpe,
         }
 
-    # Rank strategies by score (win_rate * 0.4 + avg_pnl_normalized * 0.6)
+    # Rank strategies by score (win_rate * 0.3 + avg_pnl_normalized * 0.4 + sharpe * 0.3)
     if ab_test:
         max_avg = max(abs(s["avg_pnl"]) for s in ab_test.values()) or 1
+        max_sharpe = max(abs(s.get("sharpe_ratio") or 0) for s in ab_test.values()) or 1
         for strategy, stats in ab_test.items():
-            score = stats["win_rate"] * 0.4 + (stats["avg_pnl"] / max_avg * 50 + 50) * 0.6
+            pnl_norm = stats["avg_pnl"] / max_avg * 50 + 50
+            sharpe_norm = (
+                ((stats.get("sharpe_ratio") or 0) / max_sharpe * 50 + 50)
+                if stats.get("sharpe_ratio") is not None else 50
+            )
+            score = (stats["win_rate"] * 0.3 + pnl_norm * 0.4 + sharpe_norm * 0.3)
             stats["ab_score"] = round(score, 1)
 
         # Assign ranks
@@ -277,8 +297,23 @@ def compute_tech_learning(entries: list[dict]) -> dict:
         for rank, (strategy, stats) in enumerate(ranked, 1):
             stats["rank"] = rank
 
-        # Identify winner and loser
+        # C4: AB-test produces real strategy weight adjustments
+        # Top strategies get a boost, bottom get a penalty
         if len(ranked) >= 2:
+            n_strats = len(ranked)
+            for rank, (strategy, stats) in enumerate(ranked, 1):
+                if stats["trades"] >= MIN_TRADES_AB:
+                    # Rank-based adjustment: top gets boost, bottom gets penalty
+                    rank_pct = (n_strats - rank) / max(1, n_strats - 1)
+                    ab_adj = _clamp(0.9 + 0.2 * rank_pct, 0.85, 1.15)
+                    stats["ab_adj"] = round(ab_adj, 3)
+
+                    # Apply AB adjustment to strategy_adj (blended)
+                    existing = result["strategy_adj"].get(strategy, 1.0)
+                    result["strategy_adj"][strategy] = round(
+                        _clamp(existing * ab_adj), 3
+                    )
+
             winner = ranked[0]
             loser = ranked[-1]
             if (winner[1]["trades"] >= MIN_TRADES_AB
@@ -366,7 +401,7 @@ class AgentLearning3(BaseAgent):
 
     name = "learning_3"
     description = "Learning & A/B testing — technical trading strategies"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()
@@ -375,6 +410,8 @@ class AgentLearning3(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        self._weekly_config: dict | None = None  # C3: weekly strategy config
+        self._config_history: list[dict] = []  # L2: track config changes
 
     def run(self, **kwargs) -> dict:
         """Recalculate technical learning dimensions and publish adjustments.
@@ -522,10 +559,122 @@ class AgentLearning3(BaseAgent):
         adj = self.get_adjustments()
         return adj.get("ab_test", {})
 
+    def generate_weekly_config(self) -> dict:
+        """C3/C6/P3: Generate weekly strategy configuration.
+
+        Called Sunday evening to validate strategies for the coming week.
+        Based on AB test results and recent performance.
+
+        Returns weekly_config dict consumed by Scoring 3 and Trader 3.
+        """
+        self.log("Generating weekly strategy config")
+
+        adj = self.get_adjustments()
+        ab_test = adj.get("ab_test", {})
+        strategy_adj = adj.get("strategy_adj", {})
+        stats = adj.get("stats", {})
+
+        # Default: all strategies enabled
+        from .agent_scoring_3 import STRATEGIES, DEFAULT_PARAMS
+        all_strategies = list(STRATEGIES.keys())
+
+        # Determine which strategies to enable/disable
+        enabled_strategies = []
+        disabled_strategies = []
+        strategy_weights = {}
+        strategy_budgets = {}
+        validated_strategies = []
+
+        for strategy in all_strategies:
+            ab = ab_test.get(strategy, {})
+            trades = ab.get("trades", 0)
+            wr = ab.get("win_rate", 50)
+            sharpe = ab.get("sharpe_ratio")
+            adj_val = strategy_adj.get(strategy, 1.0)
+
+            if trades >= MIN_TRADES_AB:
+                # Enough data to make a decision
+                if wr < 25 and adj_val < 0.8:
+                    # Disable clearly losing strategies
+                    disabled_strategies.append(strategy)
+                    self.log(f"DISABLE {strategy}: WR={wr}%, adj={adj_val}", level="WARN")
+                    continue
+
+                if wr >= 45 and adj_val >= 0.9:
+                    # Validated: good WR + learning confirms
+                    validated_strategies.append(strategy)
+                    strategy_budgets[strategy] = 6  # More budget
+                else:
+                    strategy_budgets[strategy] = 4  # Standard budget
+
+                enabled_strategies.append(strategy)
+                # Weight from AB ranking
+                strategy_weights[strategy] = round(
+                    STRATEGIES[strategy].get("weight", 1.0) * adj_val, 2
+                )
+            else:
+                # Not enough data — keep enabled for testing
+                enabled_strategies.append(strategy)
+                strategy_weights[strategy] = STRATEGIES[strategy].get("weight", 1.0)
+
+        # Generate config
+        config = {
+            "enabled_strategies": enabled_strategies,
+            "disabled_strategies": disabled_strategies,
+            "validated_strategies": validated_strategies,
+            "strategy_weights": strategy_weights,
+            "strategy_budgets": strategy_budgets,
+            "params": dict(DEFAULT_PARAMS),  # Base params (could override per strategy in future)
+            "strategy_versions": {s: "2.0" for s in all_strategies},
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "based_on_trades": stats.get("total_trades", 0),
+            "ab_rankings": {
+                s: {"rank": d.get("rank"), "wr": d.get("win_rate"),
+                    "sharpe": d.get("sharpe_ratio")}
+                for s, d in ab_test.items()
+            },
+        }
+
+        # L2: Track config changes
+        self._config_history.append({
+            "timestamp": config["generated_at"],
+            "enabled": enabled_strategies,
+            "disabled": disabled_strategies,
+            "validated": validated_strategies,
+        })
+        # Keep last 10 configs
+        self._config_history = self._config_history[-10:]
+
+        self._weekly_config = config
+
+        self.log("Weekly config generated", {
+            "enabled": len(enabled_strategies),
+            "disabled": len(disabled_strategies),
+            "validated": len(validated_strategies),
+        })
+
+        # Publish for other agents
+        self.publish("learning_3_weekly_config", {
+            "config": config,
+            "timestamp": config["generated_at"],
+        })
+
+        return config
+
+    def get_weekly_config(self) -> dict | None:
+        """Get the current weekly config (if generated)."""
+        return self._weekly_config
+
+    def get_config_history(self) -> list[dict]:
+        """L2: Get history of weekly config changes."""
+        return self._config_history
+
     def get_metrics(self) -> dict:
         return {
             "last_adjustment_count": self._last_adjustment_count,
             "anomalies": self._last_anomalies[:5],
             "total_recalculations": self._total_recalculations,
             "cache_valid": self._cache_valid,
+            "has_weekly_config": self._weekly_config is not None,
+            "config_history_count": len(self._config_history),
         }

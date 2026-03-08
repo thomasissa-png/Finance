@@ -497,6 +497,26 @@ def _run_performance_daily() -> None:
     thread.start()
 
 
+def _run_team3_weekly_config() -> None:
+    """Generate weekly strategy config for Team 3 — Sunday 20:30 CET.
+
+    Runs after the weekly source review (20:00) and before performance weekly (21:30).
+    Validates strategies for the coming week based on A/B results.
+    """
+    def _worker():
+        try:
+            from .agents.registry import generate_weekly_config_3
+            config = generate_weekly_config_3()
+            logger.info("Team 3 weekly config generated: %d enabled, %d validated",
+                        len(config.get("enabled_strategies", [])),
+                        len(config.get("validated_strategies", [])))
+        except Exception as exc:
+            logger.error("Team 3 weekly config generation failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="team3-weekly-config")
+    thread.start()
+
+
 def _run_performance_weekly() -> None:
     """Run weekly performance trends — Sunday 21h30."""
     def _worker():
@@ -584,6 +604,8 @@ async def lifespan(app: FastAPI):
     # v5.2: Weekly source health review — Sunday 20:00 CET (before Monday trading)
     # misfire_grace_time=3600: safe to run late, pure data analysis
     bg_scheduler.add_job(_run_weekly_source_review, CronTrigger(hour=20, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="weekly_source_review", misfire_grace_time=3600)
+    # v2.0: Team 3 weekly strategy config — Sunday 20:30 CET (after source review, before Monday)
+    bg_scheduler.add_job(_run_team3_weekly_config, CronTrigger(hour=20, minute=30, day_of_week="sun", timezone="Europe/Paris"), id="team3_weekly_config", misfire_grace_time=3600)
     # v7.5: Infrastructure health check every 15 min, maintenance daily at 23h, report weekly Sun 21h
     bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
     bg_scheduler.add_job(_run_infra_maintenance, CronTrigger(hour=23, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_maintenance", misfire_grace_time=3600)
@@ -1439,6 +1461,33 @@ def trigger_learning_3():
     if not agent:
         raise HTTPException(500, "Learning 3 agent not available")
     return agent.run()
+
+
+@app.post("/api/learning3/weekly-config")
+def generate_learning3_weekly_config():
+    """Generate weekly strategy config for Team 3."""
+    agent = get_agent("learning_3")
+    if not agent:
+        raise HTTPException(500, "Learning 3 agent not available")
+    return agent.generate_weekly_config()
+
+
+@app.get("/api/learning3/weekly-config")
+def get_learning3_weekly_config():
+    """Get current weekly config for Team 3."""
+    agent = get_agent("learning_3")
+    if not agent:
+        return {}
+    return agent.get_weekly_config() or {}
+
+
+@app.get("/api/journal3/weekly-summary")
+def get_journal3_weekly_summary():
+    """Get weekly aggregated summary from Journal 3."""
+    agent = get_agent("journal_3")
+    if not agent:
+        return {}
+    return agent.compute_weekly_summary()
 
 
 # ── Équipe 4 — Meta/Ensemble API ────────────────────────────────

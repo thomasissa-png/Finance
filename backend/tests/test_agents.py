@@ -1063,3 +1063,250 @@ class TestAgentScoringAuditV74:
         from backend.app.agents.agent_scoring import AgentScoring
         source = inspect.getsource(AgentScoring.run)
         assert '"cache_hits"' in source
+
+
+# ── Team 3 v2.0 Audit Tests ─────────────────────────────────────────
+
+
+class TestTeam3V2Scoring3:
+    """Tests for Scoring 3 v2.0 audit fixes."""
+
+    def test_stochastic_reversal_strategy_exists(self):
+        """T3: stochastic_reversal should be a valid strategy."""
+        from backend.app.agents.agent_scoring_3 import STRATEGIES
+        assert "stochastic_reversal" in STRATEGIES
+        assert STRATEGIES["stochastic_reversal"]["weight"] == 0.9
+
+    def test_sma_200_computed(self):
+        """P5: SMA 200 should be computed in indicators."""
+        from backend.app.agents.agent_scoring_3 import _compute_all_indicators
+        closes = [100 + i * 0.1 for i in range(250)]
+        ohlcv = {
+            "close": closes,
+            "high": [c + 1 for c in closes],
+            "low": [c - 1 for c in closes],
+            "volume": [1000] * 250,
+        }
+        indicators = _compute_all_indicators(ohlcv)
+        assert "sma_200" in indicators
+        assert indicators["sma_200"] is not None
+
+    def test_regime_strategy_preference_defined(self):
+        """J3: Each strategy should have a regime preference."""
+        from backend.app.agents.agent_scoring_3 import (
+            STRATEGY_REGIME_PREFERENCE, STRATEGIES)
+        for strategy in STRATEGIES:
+            assert strategy in STRATEGY_REGIME_PREFERENCE
+
+    def test_default_params_configurable(self):
+        """C1: All indicator params should be in DEFAULT_PARAMS."""
+        from backend.app.agents.agent_scoring_3 import DEFAULT_PARAMS
+        assert "rsi_oversold" in DEFAULT_PARAMS
+        assert "bb_squeeze_threshold" in DEFAULT_PARAMS
+        assert "adx_trend_threshold" in DEFAULT_PARAMS
+        assert "min_setup_score" in DEFAULT_PARAMS
+
+    def test_pivot_detection(self):
+        """C7: Pivot detection should find swing points."""
+        from backend.app.agents.agent_scoring_3 import _find_recent_pivot
+        # Create a V-shaped price series
+        closes = [100, 99, 98, 97, 96, 97, 98, 99, 100]
+        pivot = _find_recent_pivot(closes, min_lookback=2, max_lookback=7)
+        assert pivot is not None
+        assert closes[pivot] == 96  # The swing low
+
+    def test_confidence_not_score_times_09(self):
+        """P4: Confidence should NOT be score * 0.9."""
+        import inspect
+        from backend.app.agents.agent_scoring_3 import score_technical_setups
+        source = inspect.getsource(score_technical_setups)
+        assert "final_score * 0.9" not in source
+
+    def test_volume_boost_order_correct(self):
+        """P2: vol_ratio > 2.0 should be checked before > 1.5."""
+        import inspect
+        from backend.app.agents.agent_scoring_3 import score_technical_setups
+        source = inspect.getsource(score_technical_setups)
+        pos_2 = source.index("vol_ratio > 2.0")
+        pos_15 = source.index("vol_ratio > 1.5")
+        assert pos_2 < pos_15  # 2.0 check before 1.5 check
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_scoring_3 import AgentScoring3
+        assert AgentScoring3.version == "2.0"
+
+    def test_stochastic_reversal_detector(self):
+        """T3: Stochastic reversal should detect oversold conditions."""
+        from backend.app.agents.agent_scoring_3 import _detect_stochastic_reversal
+        indicators = {
+            "stochastic": {"k": 15, "d": 20},  # Oversold, K > D expected
+            "adx": 18,  # Ranging
+            "rsi_14": 35,
+        }
+        # K=15 < 20, D=20 < 25, K < D → no signal (need K > D for bullish)
+        result = _detect_stochastic_reversal(indicators)
+        # K < D, so no bullish signal → None
+        assert result is None
+
+        # Fix: K crosses above D
+        indicators["stochastic"] = {"k": 18, "d": 17}
+        result = _detect_stochastic_reversal(indicators)
+        assert result is not None
+        assert result["direction"] == "LONG"
+
+
+class TestTeam3V2Trader3:
+    """Tests for Trader 3 v2.0 audit fixes."""
+
+    def test_correlation_groups_defined(self):
+        """P8: Correlation groups should prevent conflicting positions."""
+        from backend.app.agents.agent_trader_3 import TECH_CORRELATION_GROUPS
+        assert "gold_silver" in TECH_CORRELATION_GROUPS
+        assert "GC=F" in TECH_CORRELATION_GROUPS["gold_silver"]
+        assert "SI=F" in TECH_CORRELATION_GROUPS["gold_silver"]
+
+    def test_correlation_conflict_detection(self):
+        """P8: Should detect opposing directions in correlated group."""
+        from backend.app.agents.agent_trader_3 import AgentTrader3
+        trader = AgentTrader3()
+        active = [{"ticker": "GC=F", "direction": "LONG"}]
+        # SI=F SHORT should conflict with GC=F LONG (gold_silver group)
+        assert trader._check_correlation_conflict("SI=F", "SHORT", active) is True
+        # SI=F LONG should NOT conflict (same direction)
+        assert trader._check_correlation_conflict("SI=F", "LONG", active) is False
+        # AAPL SHORT should NOT conflict (different group)
+        assert trader._check_correlation_conflict("AAPL", "SHORT", active) is False
+
+    def test_trailing_threshold_per_strategy(self):
+        """J2: Trailing stop threshold should vary by strategy."""
+        from backend.app.agents.agent_trader_3 import AgentTrader3
+        trader = AgentTrader3()
+        assert trader._get_trailing_threshold("ma_trend") < trader._get_trailing_threshold("rsi_reversal")
+
+    def test_dynamic_max_per_strategy(self):
+        """J4: Validated strategies should get higher budget."""
+        from backend.app.agents.agent_trader_3 import (
+            AgentTrader3, MAX_PER_STRATEGY_BASE, MAX_PER_STRATEGY_VALIDATED)
+        trader = AgentTrader3()
+        # No weekly config → base
+        assert trader._get_max_per_strategy("rsi_reversal") == MAX_PER_STRATEGY_BASE
+        # With weekly config → validated gets more
+        trader._weekly_config = {"validated_strategies": ["rsi_reversal"]}
+        assert trader._get_max_per_strategy("rsi_reversal") == MAX_PER_STRATEGY_VALIDATED
+        assert trader._get_max_per_strategy("ma_trend") == MAX_PER_STRATEGY_BASE
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_trader_3 import AgentTrader3
+        assert AgentTrader3.version == "2.0"
+
+
+class TestTeam3V2Journal3:
+    """Tests for Journal 3 v2.0 audit fixes."""
+
+    def test_pg_conflict_includes_strategy(self):
+        """BUG FIX: ON CONFLICT must include strategy to match UNIQUE constraint."""
+        import inspect
+        from backend.app.agents.agent_journal_3 import _pg_save_entries
+        source = inspect.getsource(_pg_save_entries)
+        assert "ticker, strategy, entry_time" in source
+        assert "ON CONFLICT (ticker, entry_time) DO NOTHING" not in source
+
+    def test_dedup_key_includes_strategy(self):
+        """Dedup key should be (ticker, strategy, entry_time)."""
+        import inspect
+        from backend.app.agents.agent_journal_3 import AgentJournal3
+        source = inspect.getsource(AgentJournal3.run)
+        assert 'e.get("strategy"' in source
+
+    def test_realized_rr_computed(self):
+        """L4: Journal entries should include realized R/R."""
+        from backend.app.agents.agent_journal_3 import AgentJournal3
+        j = AgentJournal3()
+        trade = {
+            "ticker": "GC=F", "name": "Gold", "category": "commodities",
+            "strategy": "rsi_reversal", "strategy_name": "RSI Reversal",
+            "direction": "LONG", "result": "TP_HIT",
+            "entry_price": 2000, "close_price": 2040,
+            "entry_time": "2026-03-01T10:00:00Z",
+            "close_time": "2026-03-02T15:00:00Z",
+            "pnl_pct": 2.0, "target_pct": 2.5, "stop_pct": 1.5,
+            "high_watermark": 2050, "low_watermark": 1990,
+        }
+        entry = j._process_closed_trade(trade)
+        assert entry is not None
+        assert "realized_rr" in entry
+        assert entry["realized_rr"] is not None
+        assert entry["predicted_rr"] is not None
+        assert entry["predicted_rr"] == round(2.5 / 1.5, 2)
+
+    def test_sharpe_ratio_in_strategy_ab(self):
+        """L5: Strategy A/B should include Sharpe ratio."""
+        from backend.app.agents.agent_journal_3 import AgentJournal3
+        j = AgentJournal3()
+        entries = [
+            {"strategy": "rsi_reversal", "pnl_pct": 1.5, "result": "TP_HIT",
+             "mae_pct": -0.5, "mfe_pct": 2.0, "holding_hours": 10},
+        ] * 10  # 10 identical entries for Sharpe
+        perf = j._compute_strategy_ab(entries)
+        assert "rsi_reversal" in perf
+        assert "sharpe_ratio" in perf["rsi_reversal"]
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_journal_3 import AgentJournal3
+        assert AgentJournal3.version == "2.0"
+
+
+class TestTeam3V2Learning3:
+    """Tests for Learning 3 v2.0 audit fixes."""
+
+    def test_ab_test_produces_adjustments(self):
+        """C4: AB-test should produce real strategy_adj, not just analytics."""
+        from backend.app.agents.agent_learning_3 import compute_tech_learning
+        entries = []
+        for i in range(20):
+            entries.append({
+                "strategy": "rsi_reversal", "ticker": "GC=F",
+                "timeframe": "1d", "adx_at_entry": 18,
+                "pnl_pct": 1.5, "result": "TP_HIT",
+                "close_time": f"2026-03-{i+1:02d}T10:00:00Z",
+            })
+        for i in range(20):
+            entries.append({
+                "strategy": "ma_trend", "ticker": "GC=F",
+                "timeframe": "1d", "adx_at_entry": 30,
+                "pnl_pct": -1.0, "result": "SL_HIT",
+                "close_time": f"2026-03-{i+1:02d}T11:00:00Z",
+            })
+        result = compute_tech_learning(entries)
+        # Both strategies should have adjustments
+        assert "rsi_reversal" in result["strategy_adj"]
+        assert "ma_trend" in result["strategy_adj"]
+        # Winner should be boosted, loser penalized
+        assert result["strategy_adj"]["rsi_reversal"] > result["strategy_adj"]["ma_trend"]
+        # AB test should include sharpe
+        assert "sharpe_ratio" in result["ab_test"]["rsi_reversal"]
+
+    def test_weekly_config_generation(self):
+        """C3: Learning 3 should generate weekly config."""
+        from backend.app.agents.agent_learning_3 import AgentLearning3
+        l3 = AgentLearning3()
+        # No data → config still generates with all strategies enabled
+        config = l3.generate_weekly_config()
+        assert "enabled_strategies" in config
+        assert "strategy_weights" in config
+        assert "generated_at" in config
+        assert len(config["enabled_strategies"]) > 0
+
+    def test_config_history_tracking(self):
+        """L2: Config changes should be tracked."""
+        from backend.app.agents.agent_learning_3 import AgentLearning3
+        l3 = AgentLearning3()
+        l3.generate_weekly_config()
+        l3.generate_weekly_config()
+        history = l3.get_config_history()
+        assert len(history) == 2
+        assert "timestamp" in history[0]
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_learning_3 import AgentLearning3
+        assert AgentLearning3.version == "2.0"

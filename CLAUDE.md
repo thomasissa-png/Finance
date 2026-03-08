@@ -45,19 +45,19 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | News | 7.5 | 10 news pipeline fixes |
 | Scoring | 7.4 | 9 fixes, token tracking |
 | Scoring 2 | 7.3 | 13 fixes, category mults |
-| Scoring 3 | 1.0 | Initial — technical indicators (RSI, MACD, Bollinger, etc.) |
+| Scoring 3 | 2.0 | Multi-timeframe, SMA 200, stochastic strategy, regime filter, configurable params |
 | Scoring 4 | 1.0 | Initial — meta-scorer combining Teams 1/2/3 signals |
 | Trader 1 | 6.5 | Timeout audit, trailing stop |
 | Trader 2 | 7.2 | 16 fixes, flip history |
-| Trader 3 | 1.0 | Initial — multi-strategy technical trading |
+| Trader 3 | 2.0 | Correlation check, trailing per-strategy, regime filter, agent_versions, weekly config |
 | Trader 4 | 1.0 | Initial — confluence-driven ensemble trading |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
 | Journal 2 | 7.1 | 17 fixes, daily bars |
-| Journal 3 | 1.0 | Initial — technical positions journal |
+| Journal 3 | 2.0 | PG fix, weekly summary, R/R réalisé, Sharpe ratio, dedup fix |
 | Journal 4 | 1.0 | Initial — meta positions journal |
 | Learning 1 | 5.2 | 6 dims, granular commodities |
 | Learning 2 | 7.1 | 4 dims trend, churning |
-| Learning 3 | 1.0 | Initial — 3 dims (strategy, ticker, timeframe) |
+| Learning 3 | 2.0 | Weekly config generation, Sharpe ranking, AB-test as dimension, param tracking |
 | Learning 4 | 1.0 | Initial — weight optimization, combination analysis |
 | Infrastructure | 7.5 | Health check, VACUUM 9 tables |
 | Performance | 8.1 | PG persistence, version-aware, Teams 3/4 KPIs |
@@ -110,14 +110,16 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 - **Boucle** : Journal 2 → Learning 2 → cache invalidé → Trader 2 utilise au prochain scan
 - **Feedback loop** : Learning 2 ajuste les poids de signal par ticker/newscat/direction + seuil de flip adaptatif (base 20, ×threshold_adj)
 
-### Équipe 3 — Technical Indicators Trading
-- **Scoring 3** : indicateurs techniques purs (RSI 14/21, MACD 12/26/9, Bollinger 20/2, SMA/EMA 20/50/200, Stochastic 14/3, ADX 14) sur 20 tickers liquides. NE rappelle PAS Claude — pur calcul. Utilise market_data.py (Twelve Data + yfinance fallback). 5 stratégies : rsi_reversal, macd_crossover, bollinger_squeeze, ma_trend, momentum_divergence.
-- **Trader 3** : positions multiples (max 10), holding 1-3 jours, TP/SL/trailing stop, A/B testing des stratégies. Consomme Learning 3 (strategy_adj, ticker_adj, timeframe_adj).
-- **Journal 3** : journalise les positions fermées, MAE/MFE, analyse par stratégie (win_rate, avg_pnl, tp/sl/expired). Dedup par (ticker, strategy, entry_time). Persistence PG (tech_journal_entries) + JSON.
-- **Learning 3** : 3 dimensions (per-strategy, per-ticker, per-timeframe), ranking stratégies par weighted avg PnL, anomaly detection (underperformance, consecutive losses, low WR). Bounds [0.5, 1.5], decay 30j.
-- **Boucle** : Journal 3 → Learning 3 → cache invalidé → Trader 3 utilise au prochain scan
+### Équipe 3 — Technical Indicators Trading (v2.0)
+- **Scoring 3** (v2.0) : indicateurs techniques (RSI 14/21, MACD 12/26/9, Bollinger 20/2, SMA/EMA 20/50/200, Stochastic 14/3, ADX 14) sur 20 tickers liquides. NE rappelle PAS Claude — pur calcul. Utilise market_data.py (Twelve Data + yfinance fallback). **6 stratégies** : rsi_reversal, macd_crossover, bollinger_squeeze, ma_trend, momentum_divergence, **stochastic_reversal** (v2.0). Multi-timeframe (daily primary + 1h confirmation). Paramètres configurables via weekly_config de Learning 3. Filtre de régime trending/ranging par stratégie. Confidence basée sur signal count + régime + volume (pas score * 0.9). Pivot-based momentum divergence (pas closes[-5] fixe).
+- **Trader 3** (v2.0) : positions multiples (max 10), holding 1-3 jours, TP/SL/trailing stop **per-strategy** (J2), A/B testing des stratégies. Consomme Learning 3 (strategy_adj, ticker_adj, timeframe_adj) + **weekly_config** (enabled strategies, budgets). **Correlation check** (P8) entre positions dans le même groupe. **agent_versions** (P6) stamped sur chaque position. **Dynamic MAX_PER_STRATEGY** (J4) : strategies validées obtiennent plus de budget (6 vs 4). **strategy_version** (J1) pour tracking des paramètres.
+- **Journal 3** (v2.0) : journalise les positions fermées, MAE/MFE, **R/R réalisé** (L4), **Sharpe ratio** par stratégie (L5), **weekly summary** (L1/C5), regime match tracking. Dedup par (ticker, strategy, entry_time) — **corrigé PG ON CONFLICT** (était ticker+entry_time, ne matchait pas UNIQUE constraint). Persistence PG (tech_journal_entries) + JSON.
+- **Learning 3** (v2.0) : 5 dimensions (per-strategy, per-ticker, per-timeframe, per-regime, **AB-test → ajustements réels**). **Weekly config generation** (C3) : validation dimanche soir, enable/disable stratégies, poids par stratégie, budgets dynamiques. AB-test ranking basé sur WR 30% + avg_pnl 40% + **Sharpe 30%** (L5). **Parameter change tracking** (L2). Anomaly detection (overtrading, consecutive losses, MAE). Bounds [0.6, 1.4], decay 30j.
+- **Boucle quotidienne** : Journal 3 → Learning 3 → cache invalidé → Trader 3 utilise au prochain scan
+- **Boucle hebdomadaire** (dimanche 20h30) : Learning 3 → generate_weekly_config → Scoring 3 + Trader 3 consomment au scan suivant
 - **20 tickers** : EURUSD=X, GBPUSD=X, USDJPY=X, AUDUSD=X, ^GSPC, ^FCHI, ^GDAXI, GC=F, CL=F, BZ=F, HG=F, SI=F, ZC=F, ZW=F, AAPL, MSFT, TSLA, AMZN, BNP.PA, TTE.PA
 - **Persistence** : Tables PG `tech_positions` + `tech_journal_entries` + fallback JSON
+- **API** : `POST /api/learning3/weekly-config` (génère), `GET /api/learning3/weekly-config` (consulte), `GET /api/journal3/weekly-summary`
 
 ### Équipe 4 — Meta/Ensemble Trading
 - **Scoring 4** : combine les signaux des Teams 1 (news), 2 (trend), 3 (technique) en meta-scores unifiés par ticker. Poids configurables (news=0.35, trend=0.25, tech=0.40). Confluence detection : 2/3 teams agree → 1.2x boost, 3/3 → 1.5x boost. Seuil minimum 3 items/source. NE rappelle PAS Claude — pure agrégation.
