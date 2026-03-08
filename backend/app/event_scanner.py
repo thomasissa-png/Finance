@@ -7,6 +7,7 @@ in early-signal feeds, it triggers a full scan immediately (respecting cooldown)
 
 import logging
 import re
+import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -64,6 +65,9 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
         "lng terminal", "lng tanker", "gas pipeline",
         # Storage / inventory
         "storage capacity", "tank farm", "strategic reserve",
+        # T5: Copper/mining supply chain — critical for trend ticker HG=F
+        "copper shortage", "copper supply", "smelter fire", "smelter outage",
+        "mine closure", "mining strike", "copper mine",
     ],
     "geopolitical": [
         "military strike", "missile attack", "air strike", "invasion",
@@ -87,6 +91,9 @@ HIGH_IMPACT_KEYWORDS: dict[str, list[str]] = {
         "soybean import", "wheat export ban", "corn harvest delay",
         # China demand
         "china import", "china commodity", "china stockpile",
+        # T5: Copper/cocoa/coffee commodity signals
+        "copper demand", "copper deficit", "cocoa shortage", "coffee frost",
+        "coffee leaf rust",
         # Livestock disease — major supply shocks (swine fever, avian flu, BSE)
         "african swine fever", "avian flu", "bird flu", "avian influenza",
         "foot-and-mouth", "foot and mouth", "bse", "mad cow",
@@ -109,6 +116,8 @@ HIGH_PRIORITY_KEYWORDS: set[str] = {
     # Livestock disease outbreaks — massive supply shocks
     "african swine fever", "avian flu", "bird flu", "foot-and-mouth",
     "bse", "mad cow", "herd liquidation",
+    # T5: Copper/mining confirmed events
+    "mine collapse", "smelter fire", "copper shortage",
 }
 
 # Flatten for quick lookup
@@ -116,6 +125,10 @@ ALL_KEYWORDS: list[tuple[str, str]] = []
 for category, keywords in HIGH_IMPACT_KEYWORDS.items():
     for kw in keywords:
         ALL_KEYWORDS.append((kw.lower(), category))
+
+# N6: Thread lock for all global state — event scanner can be called
+# from scheduler thread + manual trigger concurrently
+_scanner_lock = threading.Lock()
 
 # Track last trigger time per category to respect category-specific cooldowns
 _last_event_trigger: float = 0.0
@@ -183,14 +196,18 @@ def scan_feeds_for_triggers() -> list[dict]:
 
     triggers: list[dict] = []
 
-    # Prune seen headlines if too many (remove oldest entries)
-    while len(_seen_headlines) > _MAX_SEEN:
-        _seen_headlines.popitem(last=False)
+    # N6: Lock for pruning + snapshot of seen headlines
+    with _scanner_lock:
+        # Prune seen headlines if too many (remove oldest entries)
+        while len(_seen_headlines) > _MAX_SEEN:
+            _seen_headlines.popitem(last=False)
 
-    # Snapshot seen headlines for thread-safe read (writes happen after)
-    seen_snapshot = set(_seen_headlines)
+        # Snapshot seen headlines for thread-safe read (writes happen after)
+        seen_snapshot = set(_seen_headlines)
 
     # max_workers=3: Replit kills process on too many concurrent threads.
+    # N6: Collect all results first, then update _seen_headlines under lock
+    all_results: list[dict] = []
     executor = ThreadPoolExecutor(max_workers=3)
     futures = {executor.submit(_fetch_feed_triggers, url, seen_snapshot): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
@@ -200,10 +217,7 @@ def scan_feeds_for_triggers() -> list[dict]:
             try:
                 results = future.result(timeout=15)
                 completed_count += 1
-                for r in results:
-                    if r["title"] not in _seen_headlines:
-                        _seen_headlines[r["title"]] = None
-                        triggers.append(r)
+                all_results.extend(results)
             except TimeoutError:
                 logger.warning("Event scan: feed timeout (15s) for %s", url)
             except Exception as exc:
@@ -214,6 +228,14 @@ def scan_feeds_for_triggers() -> list[dict]:
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
+    # N6: Update _seen_headlines under lock after thread pool completes
+    if all_results:
+        with _scanner_lock:
+            for r in all_results:
+                if r["title"] not in _seen_headlines:
+                    _seen_headlines[r["title"]] = None
+                    triggers.append(r)
+
     return triggers
 
 
@@ -221,7 +243,7 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
     """Determine if we should trigger an immediate scan.
 
     Checks:
-    1. Are we within trading hours? (07:00-20:00 CET)
+    1. Are we within trading hours? (07:00-19:30 CET)
     2. Are there high-impact signals in the feeds?
     3. Has enough time passed since last trigger? (category-specific cooldown)
 
@@ -238,73 +260,77 @@ def should_trigger_scan() -> tuple[bool, list[dict]]:
     if now.weekday() >= 5:  # 5=Saturday, 6=Sunday
         return False, []
 
+    # N7: Fixed doc — code correctly uses 19:30, not 20:00
     # Only trigger during trading hours (07:00-19:30 CET)
     if now.hour < 7 or now.hour > 19 or (now.hour == 19 and now.minute >= 30):
         return False, []
 
-    # Hard minimum cooldown: 30s between any triggers (prevent spam)
-    elapsed_global = time.time() - _last_event_trigger
-    if elapsed_global < 30:
-        return False, []
+    # N6: Lock for reading/writing cooldown timestamps
+    with _scanner_lock:
+        # Hard minimum cooldown: 30s between any triggers (prevent spam)
+        elapsed_global = time.time() - _last_event_trigger
+        if elapsed_global < 30:
+            return False, []
 
     triggers = scan_feeds_for_triggers()
 
     if not triggers:
         return False, []
 
-    # Filter triggers by category-specific cooldowns
+    # N6: Lock for reading/writing cooldown timestamps (filter + update)
     current_time = time.time()
     filtered_triggers = []
-    for t in triggers:
-        trigger_categories = t.get("categories", [])
-        trigger_keywords = [kw.lower() for kw in t.get("keywords", [])]
+    with _scanner_lock:
+        for t in triggers:
+            trigger_categories = t.get("categories", [])
+            trigger_keywords = [kw.lower() for kw in t.get("keywords", [])]
 
-        # High-priority keywords bypass category cooldown (only respect 30s global minimum)
-        # But enforce per-keyword cooldown of 10 min to avoid repeated triggers on same keyword
-        high_priority_keywords = [kw for kw in trigger_keywords if kw in HIGH_PRIORITY_KEYWORDS]
-        is_high_priority = False
-        if high_priority_keywords:
-            # Check per-keyword cooldown: at least one HIGH_PRIORITY keyword must not be on cooldown
-            for kw in high_priority_keywords:
-                last_kw_time = _last_keyword_trigger.get(kw, 0.0)
-                if current_time - last_kw_time >= _KEYWORD_COOLDOWN:
-                    is_high_priority = True
-                    break
+            # High-priority keywords bypass category cooldown (only respect 30s global minimum)
+            # But enforce per-keyword cooldown of 10 min to avoid repeated triggers on same keyword
+            high_priority_keywords = [kw for kw in trigger_keywords if kw in HIGH_PRIORITY_KEYWORDS]
+            is_high_priority = False
+            if high_priority_keywords:
+                # Check per-keyword cooldown: at least one HIGH_PRIORITY keyword must not be on cooldown
+                for kw in high_priority_keywords:
+                    last_kw_time = _last_keyword_trigger.get(kw, 0.0)
+                    if current_time - last_kw_time >= _KEYWORD_COOLDOWN:
+                        is_high_priority = True
+                        break
 
-        # Check category cooldown
-        should_include = is_high_priority  # High priority passes if keyword not on cooldown
-        if not should_include:
-            for cat in trigger_categories:
-                cat_cooldown = CATEGORY_COOLDOWNS.get(cat, TRIGGER_COOLDOWN_SECONDS)
-                last_cat_trigger = _last_category_trigger.get(cat, 0.0)
-                if current_time - last_cat_trigger >= cat_cooldown:
-                    should_include = True
-                    break
+            # Check category cooldown
+            should_include = is_high_priority  # High priority passes if keyword not on cooldown
+            if not should_include:
+                for cat in trigger_categories:
+                    cat_cooldown = CATEGORY_COOLDOWNS.get(cat, TRIGGER_COOLDOWN_SECONDS)
+                    last_cat_trigger = _last_category_trigger.get(cat, 0.0)
+                    if current_time - last_cat_trigger >= cat_cooldown:
+                        should_include = True
+                        break
 
-        if should_include:
-            filtered_triggers.append(t)
+            if should_include:
+                filtered_triggers.append(t)
 
-    if not filtered_triggers:
-        return False, []
+        if not filtered_triggers:
+            return False, []
 
-    # Log what we found
+        # Update cooldown timestamps (inside lock)
+        _last_event_trigger = current_time
+        for t in filtered_triggers:
+            for cat in t.get("categories", []):
+                _last_category_trigger[cat] = current_time
+            # Track per-keyword cooldown for HIGH_PRIORITY keywords
+            for kw in t.get("keywords", []):
+                kw_lower = kw.lower()
+                if kw_lower in HIGH_PRIORITY_KEYWORDS:
+                    _last_keyword_trigger[kw_lower] = current_time
+
+    # Log what we found (outside lock — logging can be slow)
     for t in filtered_triggers:
         priority = "HIGH-PRIORITY" if any(kw.lower() in HIGH_PRIORITY_KEYWORDS for kw in t.get("keywords", [])) else "SIGNAL"
         logger.info(
             "%s: '%s' (source: %s, keywords: %s, categories: %s)",
             priority, t["title"], t["source"], t["keywords"], t["categories"],
         )
-
-    # Update cooldown timestamps
-    _last_event_trigger = current_time
-    for t in filtered_triggers:
-        for cat in t.get("categories", []):
-            _last_category_trigger[cat] = current_time
-        # Track per-keyword cooldown for HIGH_PRIORITY keywords
-        for kw in t.get("keywords", []):
-            kw_lower = kw.lower()
-            if kw_lower in HIGH_PRIORITY_KEYWORDS:
-                _last_keyword_trigger[kw_lower] = current_time
 
     return True, filtered_triggers
 

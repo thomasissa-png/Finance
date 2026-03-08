@@ -8,7 +8,7 @@ All APIs are free-tier and optional (env var keys).
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -1231,7 +1231,7 @@ def fetch_cot_data() -> list[NewsItem]:
                         url="https://www.cftc.gov/dea/futures/deacmelf.htm",
                         published=cot_published_dt,
                         related_tickers=[info["ticker"]],
-                        source_weight=1.1,  # Higher weight for change signals
+                        source_weight=SOURCE_WEIGHTS.get("CFTC", 1.1),
                     ))
 
             # ── Alert 2: Extreme absolute positioning (commercial) ──
@@ -1248,7 +1248,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
                     published=cot_published_dt,
                     related_tickers=[info["ticker"]],
-                    source_weight=1.05,
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.05),
                 ))
 
             # ── Alert 3: Speculator extremes (overextension = reversal risk) ──
@@ -1266,7 +1266,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
                     published=cot_published_dt,
                     related_tickers=[info["ticker"]],
-                    source_weight=1.05,
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.05),
                 ))
             elif spec_net_pct < -20:
                 title = (
@@ -1282,7 +1282,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
                     published=cot_published_dt,
                     related_tickers=[info["ticker"]],
-                    source_weight=1.05,
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.05),
                 ))
 
             # ── Alert 4: Commercial vs speculator divergence (contrarian signal) ──
@@ -1300,7 +1300,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
                     published=cot_published_dt,
                     related_tickers=[info["ticker"]],
-                    source_weight=1.1,
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.1),
                 ))
             elif (current["comm_net"] < 0 and current["spec_net"] > 0
                     and abs(comm_net_pct) > 10 and abs(spec_net_pct) > 10):
@@ -1316,7 +1316,7 @@ def fetch_cot_data() -> list[NewsItem]:
                     url="https://www.cftc.gov/dea/futures/deacmelf.htm",
                     published=cot_published_dt,
                     related_tickers=[info["ticker"]],
-                    source_weight=1.1,
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.1),
                 ))
 
     except Exception as exc:
@@ -1664,7 +1664,7 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
                 url=event.get("link", "https://eonet.gsfc.nasa.gov/"),
                 published=eonet_published_dt,
                 related_tickers=list(set(final_tickers)),
-                source_weight=1.1,
+                source_weight=SOURCE_WEIGHTS.get("NASA EONET", 1.1),
             ))
 
     except Exception as exc:
@@ -1773,7 +1773,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                         url="https://agsi.gie.eu/",
                         published=agsi_published_dt,
                         related_tickers=["NG=F"],
-                        source_weight=1.1,
+                        source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),
                     ))
     except Exception as exc:
         logger.debug("GIE AGSI EU fetch error: %s", exc)
@@ -2374,7 +2374,7 @@ def fetch_satellite_ndvi() -> list[NewsItem]:
                 "community": "AG",
                 "longitude": zone["lon"],
                 "latitude": zone["lat"],
-                "start": (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=14)).strftime("%Y%m%d"),
+                "start": (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y%m%d"),
                 "end": datetime.now(timezone.utc).strftime("%Y%m%d"),
                 "format": "JSON",
             }

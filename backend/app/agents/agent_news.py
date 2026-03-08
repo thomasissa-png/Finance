@@ -6,6 +6,12 @@ Responsabilités :
 - Évalue la santé des sources (latence, taux d'erreur, sources mortes)
 - Publie les news brutes sur le message bus → Agent Scoring les consomme
 - Revue hebdomadaire dimanche 20h (santé sources + recommandations)
+
+Audit fixes v7.5:
+- N1: duration_ms published in bus message and stored in metrics
+- N2: Removed dead code (serialized list built but never used)
+- N3: hasattr guard removed — NewsItem always has .source field
+- N4: last_duration_ms exposed in get_metrics()
 """
 
 import time
@@ -24,6 +30,7 @@ class AgentNews(BaseAgent):
         self._last_source_errors: int = 0
         self._total_collected: int = 0
         self._total_filtered_dedup: int = 0
+        self._last_duration_ms: int = 0
 
     def run(self, scan_type=None, **kwargs) -> dict:
         """Collect news from all sources, dedup, publish to bus.
@@ -99,22 +106,15 @@ class AgentNews(BaseAgent):
             self._total_collected += len(news_items)
             result["news_items"] = news_items
 
-            # Serialize news items for the bus
-            serialized = []
-            for item in news_items:
-                serialized.append({
-                    "title": item.title,
-                    "description": item.description,
-                    "source": item.source,
-                    "source_weight": item.source_weight,
-                    "url": item.url,
-                    "published": item.published.isoformat() if item.published else None,
-                    "related_tickers": item.related_tickers,
-                })
+            # N1: Compute duration before publishing (consistent with Scoring agents)
+            duration_ms = int((time.monotonic() - start) * 1000)
+            self._last_duration_ms = duration_ms
 
+            # N2: Removed dead serialized code — bus message carries count, not items
             self.publish("news_collected", {
                 "scan_type": scan_type.value if scan_type else None,
                 "count": len(news_items),
+                "duration_ms": duration_ms,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
@@ -122,9 +122,9 @@ class AgentNews(BaseAgent):
                 "total": len(news_items),
                 "dedup_filtered": filtered,
                 "sources_ok": not bool(self._last_source_errors),
+                "duration_ms": duration_ms,
             })
 
-            duration_ms = int((time.monotonic() - start) * 1000)
             self._set_status(AgentStatus.IDLE, f"Collected {len(news_items)} news")
             return result
 
@@ -214,10 +214,10 @@ class AgentNews(BaseAgent):
         return get_tracker().get_scan_health_snapshot()
 
     def _count_by_source(self, news_items) -> dict:
+        # N3: Direct access — NewsItem.source always exists (has default)
         counts: dict[str, int] = {}
         for item in news_items:
-            src = item.source if hasattr(item, "source") else "unknown"
-            counts[src] = counts.get(src, 0) + 1
+            counts[item.source] = counts.get(item.source, 0) + 1
         return counts
 
     def get_metrics(self) -> dict:
@@ -226,4 +226,5 @@ class AgentNews(BaseAgent):
             "source_errors": self._last_source_errors,
             "total_collected": self._total_collected,
             "total_filtered_dedup": self._total_filtered_dedup,
+            "last_duration_ms": self._last_duration_ms,
         }

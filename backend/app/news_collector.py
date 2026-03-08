@@ -54,7 +54,7 @@ _RSS_KEYWORD_TICKERS: list[tuple[list[str], list[str]]] = [
     (["s&p 500", "s&p500", "wall street"], ["^GSPC"]),
     (["nasdaq"], ["^IXIC"]),
     (["cac 40", "cac40", "euronext paris"], ["^FCHI"]),
-    (["dax ", "german stocks"], ["^GDAXI"]),
+    (["dax", "german stocks"], ["^GDAXI"]),
     (["ftse", "london stock"], ["^FTSE"]),
     (["nikkei"], ["^N225"]),
     # Shipping / Supply chain
@@ -166,6 +166,18 @@ def collect_yfinance_news() -> list[NewsItem]:
                 if pub_ts:
                     published = datetime.fromtimestamp(pub_ts, tz=timezone.utc)
                 source = article.get("publisher", "Yahoo Finance")
+                # N10: Extract description from yfinance article for Claude context
+                desc = ""
+                if isinstance(article.get("relatedTickers"), list):
+                    pass  # yfinance doesn't provide article body
+                # Try to get summary/description from article
+                for desc_key in ("summary", "description", "text"):
+                    raw_desc = article.get(desc_key, "")
+                    if raw_desc:
+                        desc = raw_desc.strip()
+                        if len(desc) > 200:
+                            desc = desc[:197] + "..."
+                        break
                 items.append(NewsItem(
                     title=title,
                     source=source,
@@ -173,6 +185,7 @@ def collect_yfinance_news() -> list[NewsItem]:
                     published=published,
                     related_tickers=[ticker],
                     source_weight=_get_source_weight(source),
+                    description=desc,
                 ))
             completed += 1
         except Exception as exc:
