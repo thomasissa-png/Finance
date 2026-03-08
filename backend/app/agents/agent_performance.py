@@ -8,7 +8,7 @@ Responsabilités :
 
 KPIs par agent :
 - **Trader 1** : win_rate, pnl_total, avg_pnl, expired_rate, best/worst ticker, R/R réalisé
-- **Trader 2** : realized_pnl, unrealized_pnl, flip_accuracy, positions_coverage
+- **Trader 2** : realized_pnl, unrealized_pnl, flip_win_rate, avg_position_duration_days, by_ticker
 - **Scoring**  : avg_score, zero_edge_filter_rate, cache_hit_rate, tokens_per_scan
 - **News**     : items_per_scan, source_error_rate, dedup_rate, collection_speed
 - **Journal 1**: closure_rate, price_fetch_success, mae_avg, bar_coverage
@@ -250,10 +250,13 @@ class AgentPerformance(BaseAgent):
             if t1_pnls:
                 trends["trader_1_pnl"] = self._compute_trend(t1_pnls)
 
-            # Trader 2 trends
+            # Trader 2 trends — positions held days/weeks, measured by flip win rate
             t2_pnls = [r["trader_2"].get("total_realized_pnl") for r in reports if r.get("trader_2", {}).get("total_realized_pnl") is not None]
             if t2_pnls:
                 trends["trader_2_realized_pnl"] = self._compute_trend(t2_pnls)
+            t2_fwr = [r["trader_2"].get("flip_win_rate") for r in reports if r.get("trader_2", {}).get("flip_win_rate") is not None]
+            if t2_fwr:
+                trends["trader_2_flip_win_rate"] = self._compute_trend(t2_fwr)
 
             # Scoring trends
             score_avgs = [r["scoring"].get("avg_score") for r in reports if r.get("scoring", {}).get("avg_score") is not None]
@@ -375,12 +378,19 @@ class AgentPerformance(BaseAgent):
         return kpis
 
     def _compute_trader_2_kpis(self) -> dict:
-        """Compute Trader 2 (trend) KPIs from positions."""
+        """Compute Trader 2 (trend) KPIs from positions and Journal 2 flip data.
+
+        Trader 2 = trend following. Positions are held for days/weeks.
+        A position is only closed on a FLIP (direction change).
+        Win rate = percentage of flips that were profitable.
+        """
         kpis: dict[str, Any] = {
             "total_realized_pnl": None,
             "total_unrealized_pnl": None,
             "positions_coverage": 0,
             "flip_count": 0,
+            "flip_win_rate": None,
+            "avg_position_duration_days": None,
             "by_ticker": {},
         }
 
@@ -395,12 +405,53 @@ class AgentPerformance(BaseAgent):
                                               + metrics.get("positions_short", 0))
                 kpis["flip_count"] = metrics.get("position_changes_total", 0)
 
-                # Per-ticker positions
-                tickers = metrics.get("tickers_tracked", [])
-                for ticker in tickers:
-                    kpis["by_ticker"][ticker] = {
-                        "tracked": True,
-                    }
+            # Flip accuracy from Journal 2 entries
+            journal2 = registry.get_agent("journal_2")
+            if journal2:
+                entries = journal2.get_entries()
+                flips = [e for e in entries if e.get("entry_type") != "snapshot"]
+
+                if flips:
+                    # Win rate = flips with positive realized P&L
+                    flips_with_pnl = [f for f in flips if f.get("realized_pnl_pct") is not None]
+                    if flips_with_pnl:
+                        wins = sum(1 for f in flips_with_pnl if f["realized_pnl_pct"] > 0)
+                        kpis["flip_win_rate"] = round(wins / len(flips_with_pnl) * 100, 1)
+
+                    # Average position duration
+                    durations = [f.get("duration_days") for f in flips
+                                 if f.get("duration_days") is not None]
+                    if durations:
+                        kpis["avg_position_duration_days"] = round(
+                            sum(durations) / len(durations), 1)
+
+                    # Per-ticker breakdown
+                    by_ticker: dict[str, dict] = {}
+                    for f in flips:
+                        ticker = f.get("ticker", "?")
+                        if ticker not in by_ticker:
+                            by_ticker[ticker] = {"flips": 0, "wins": 0, "pnl": 0.0,
+                                                 "durations": []}
+                        by_ticker[ticker]["flips"] += 1
+                        pnl = f.get("realized_pnl_pct")
+                        if pnl is not None:
+                            by_ticker[ticker]["pnl"] += pnl
+                            if pnl > 0:
+                                by_ticker[ticker]["wins"] += 1
+                        dur = f.get("duration_days")
+                        if dur is not None:
+                            by_ticker[ticker]["durations"].append(dur)
+
+                    for ticker, stats in by_ticker.items():
+                        stats["win_rate"] = round(stats["wins"] / stats["flips"] * 100, 1) if stats["flips"] else 0
+                        stats["pnl"] = round(stats["pnl"], 2)
+                        stats["avg_duration_days"] = (
+                            round(sum(stats["durations"]) / len(stats["durations"]), 1)
+                            if stats["durations"] else None
+                        )
+                        del stats["durations"]  # Don't expose raw list
+                    kpis["by_ticker"] = by_ticker
+
         except Exception as exc:
             logger.debug("Trader 2 KPI computation error: %s", exc)
 
@@ -610,9 +661,15 @@ class AgentPerformance(BaseAgent):
             elif wr < 40:
                 scores.append(("trader_1", wr - 100, f"Win rate faible {wr}%"))
 
-        # Trader 2 scoring
+        # Trader 2 scoring — trend: measured by flip win rate + realized P&L
         t2 = report.get("trader_2", {})
-        if t2.get("total_realized_pnl") is not None:
+        if t2.get("flip_win_rate") is not None:
+            fwr = t2["flip_win_rate"]
+            if fwr >= 55:
+                scores.append(("trader_2", fwr, f"Flip win rate {fwr}%"))
+            elif fwr < 35:
+                scores.append(("trader_2", fwr - 100, f"Flip win rate faible {fwr}%"))
+        elif t2.get("total_realized_pnl") is not None:
             pnl = t2["total_realized_pnl"]
             if pnl > 0:
                 scores.append(("trader_2", pnl, f"P&L réalisé +{pnl:.1f}%"))
@@ -666,6 +723,15 @@ class AgentPerformance(BaseAgent):
                 "severity": "WARN",
                 "agent": "trader_1",
                 "message": f"EXPIRED rate élevé: {t1['expired_rate']}% — targets trop ambitieux",
+            })
+
+        # Trader 2 alerts — trend: flip win rate
+        t2 = report.get("trader_2", {})
+        if t2.get("flip_win_rate") is not None and t2["flip_win_rate"] < 35:
+            alerts.append({
+                "severity": "CRITICAL",
+                "agent": "trader_2",
+                "message": f"Flip win rate critique: {t2['flip_win_rate']}% — tendances mal détectées",
             })
 
         # Journal alerts

@@ -144,7 +144,7 @@ News → Scoring → [Learning 1 cache] → Trader 1
 - **Mission** : Mesurer et suivre les KPIs de TOUS les agents, identifier les performants/sous-performants, tracker l'évolution temporelle
 - **KPIs par agent** :
   - **Trader 1** : win_rate, pnl_total, avg_pnl, expired_rate, best/worst ticker, R/R réalisé
-  - **Trader 2** : realized_pnl, unrealized_pnl, flip_accuracy, positions_coverage
+  - **Trader 2** : realized_pnl, unrealized_pnl, flip_win_rate, avg_position_duration_days, by_ticker
   - **Scoring** : avg_score, zero_edge_filter_rate, cache_hit_rate, tokens_per_scan
   - **News** : items_per_scan, source_error_rate, dedup_rate, collection_speed
   - **Journal 1** : closure_rate, price_fetch_success, mae_avg, bar_coverage
