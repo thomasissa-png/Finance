@@ -87,6 +87,19 @@ AUDIT_PROFILES = {
             "calendar_blocking",     # Les events macro bloquent-ils correctement ?
         ],
     },
+    "trader_2": {
+        "expertise": "Expert spéculateur tendance, 15+ ans sur commodities, détection de retournements",
+        "checks": [
+            "position_coverage",     # Les 4 tickers sont-ils tous suivis avec une position ?
+            "direction_coherence",   # La direction est-elle cohérente avec les news récentes ?
+            "flip_frequency",        # Le taux de changement est-il raisonnable (pas trop/peu fréquent) ?
+            "pnl_tracking",          # Le P&L réalisé et latent est-il correctement calculé ?
+            "news_filtering",        # Les news non pertinentes sont-elles bien filtrées ?
+            "confidence_evolution",  # La confiance évolue-t-elle logiquement ?
+            "history_integrity",     # L'historique des positions est-il cohérent ?
+            "persistence",           # Les positions sont-elles bien persistées (PG/JSON) ?
+        ],
+    },
     "journal": {
         "expertise": "Expert en analyse business et documentation de trading, 15+ ans d'expérience",
         "checks": [
@@ -204,6 +217,8 @@ class AgentAuditor(BaseAgent):
                 self._audit_scoring(report, focus)
             elif target_agent == "trader_1":
                 self._audit_trader(report, focus)
+            elif target_agent == "trader_2":
+                self._audit_trader_2(report, focus)
             elif target_agent == "journal":
                 self._audit_journal(report, focus)
             elif target_agent == "learning":
@@ -899,6 +914,343 @@ class AgentAuditor(BaseAgent):
         tests.append("test_trader_agent_spread_filter_rejects_illiquid_trades")
         tests.append("test_trader_agent_fallback_ticker_works")
 
+    def _audit_trader_2(self, report: dict, focus: str | None):
+        """Audit Agent Trader 2 — trend following sur commodities.
+
+        En tant qu'expert spéculateur tendance avec 15+ ans sur commodities,
+        je vérifie que le Trader 2 gère correctement ses positions de tendance,
+        que ses changements de direction sont justifiés, et que le tracking
+        de performance est fiable.
+        """
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_trader_2 import (
+                AgentTrader2, TREND_TICKERS, RELEVANT_CATEGORIES,
+                MIN_NEWS_SCORE, _load_positions, POSITIONS_FILE,
+            )
+
+            positions = _load_positions()
+
+            # ── 1. Position coverage ──
+            # Les 4 tickers doivent tous avoir une position
+            covered = set(positions.keys()) & set(TREND_TICKERS.keys())
+            missing_tickers = set(TREND_TICKERS.keys()) - covered
+            has_direction = [t for t, p in positions.items()
+                            if t in TREND_TICKERS and p.get("direction") in ("LONG", "SHORT")]
+
+            if not positions:
+                findings.append({
+                    "area": "position_coverage",
+                    "status": "WARN",
+                    "detail": "Aucune position initialisée — l'agent n'a pas encore été exécuté",
+                })
+                scores["position_coverage"] = 3
+            elif missing_tickers:
+                findings.append({
+                    "area": "position_coverage",
+                    "status": "WARN",
+                    "detail": f"Tickers non couverts : {missing_tickers}. "
+                              f"Couverts : {len(covered)}/{len(TREND_TICKERS)}",
+                })
+                scores["position_coverage"] = max(3, int(len(covered) / len(TREND_TICKERS) * 10))
+            else:
+                neutral_count = sum(1 for t in TREND_TICKERS
+                                    if positions.get(t, {}).get("direction") == "NEUTRAL")
+                findings.append({
+                    "area": "position_coverage",
+                    "status": "OK" if neutral_count == 0 else "WARN",
+                    "detail": f"4/4 tickers couverts, {len(has_direction)} avec direction active, "
+                              f"{neutral_count} encore NEUTRAL",
+                })
+                scores["position_coverage"] = 10 if neutral_count == 0 else max(5, 10 - neutral_count * 2)
+
+            if not positions:
+                # Cannot audit further without positions
+                for check in ["direction_coherence", "flip_frequency", "pnl_tracking",
+                              "confidence_evolution", "history_integrity"]:
+                    scores[check] = 5
+                findings.append({
+                    "area": "overall",
+                    "status": "WARN",
+                    "detail": "Pas de positions — audit limité. L'agent doit être exécuté au moins une fois.",
+                })
+                improvements.append({
+                    "priority": "HIGH",
+                    "agent": "trader_2",
+                    "action": "Exécuter l'agent au moins une fois pour initialiser les positions",
+                    "rationale": "Sans positions, aucun audit de fond n'est possible",
+                })
+                self._analyze_agent_errors(findings, scores, improvements, "trader_2")
+                tests.append("test_trader_2_initializes_all_4_positions")
+                return
+
+            # ── 2. Direction coherence ──
+            # Vérifier que les directions sont valides
+            invalid_dirs = []
+            for ticker in TREND_TICKERS:
+                pos = positions.get(ticker, {})
+                d = pos.get("direction", "MISSING")
+                if d not in ("LONG", "SHORT", "NEUTRAL"):
+                    invalid_dirs.append(f"{ticker}: '{d}'")
+
+            if invalid_dirs:
+                findings.append({
+                    "area": "direction_coherence",
+                    "status": "CRITICAL",
+                    "detail": f"Directions invalides : {', '.join(invalid_dirs)}",
+                })
+                scores["direction_coherence"] = 2
+                improvements.append({
+                    "priority": "CRITICAL",
+                    "agent": "trader_2",
+                    "action": f"Corriger les directions invalides : {invalid_dirs}",
+                    "rationale": "Une direction invalide casse toute la logique de P&L",
+                })
+            else:
+                # Vérifier que le reasoning est présent et cohérent
+                no_reasoning = [t for t in TREND_TICKERS
+                                if not positions.get(t, {}).get("reasoning")]
+                findings.append({
+                    "area": "direction_coherence",
+                    "status": "OK" if not no_reasoning else "WARN",
+                    "detail": f"Toutes les directions sont valides. "
+                              + (f"Reasoning manquant pour : {no_reasoning}" if no_reasoning
+                                 else "Tous ont un reasoning."),
+                })
+                scores["direction_coherence"] = 10 if not no_reasoning else 7
+
+            # ── 3. Flip frequency ──
+            # Un bon trend follower ne change pas trop souvent (overtrading)
+            # ni trop rarement (manque de réactivité)
+            total_switches = sum(positions.get(t, {}).get("total_switches", 0)
+                                 for t in TREND_TICKERS)
+            avg_switches = total_switches / len(TREND_TICKERS) if TREND_TICKERS else 0
+
+            # Calculer l'âge des positions les plus anciennes
+            oldest_days = 0
+            for t in TREND_TICKERS:
+                entry_time = positions.get(t, {}).get("entry_time")
+                if entry_time:
+                    try:
+                        from datetime import datetime, timezone
+                        et = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
+                        age = (datetime.now(timezone.utc) - et).days
+                        oldest_days = max(oldest_days, age)
+                    except Exception:
+                        pass
+
+            if total_switches == 0:
+                flip_status = "WARN"
+                flip_detail = "Aucun changement de position enregistré — l'agent n'a pas encore détecté de retournement"
+                scores["flip_frequency"] = 5
+            elif avg_switches > 2 and oldest_days < 7:
+                flip_status = "WARN"
+                flip_detail = (f"{total_switches} changements en {oldest_days}j "
+                               f"(moy {avg_switches:.1f}/ticker) — possiblement trop fréquent (overtrading)")
+                scores["flip_frequency"] = 5
+                improvements.append({
+                    "priority": "MEDIUM",
+                    "agent": "trader_2",
+                    "action": "Revoir le seuil de renversement si les flips sont trop fréquents",
+                    "rationale": "Un trend follower doit rester en position — trop de flips = pas de tendance captée",
+                })
+            else:
+                flip_status = "OK"
+                flip_detail = (f"{total_switches} changements total "
+                               f"(moy {avg_switches:.1f}/ticker, oldest position: {oldest_days}j)")
+                scores["flip_frequency"] = 8
+
+            findings.append({
+                "area": "flip_frequency",
+                "status": flip_status,
+                "detail": flip_detail,
+            })
+
+            # ── 4. P&L tracking ──
+            pnl_issues = []
+            for ticker in TREND_TICKERS:
+                pos = positions.get(ticker, {})
+                entry = pos.get("entry_price")
+                current = pos.get("current_price")
+                unrealized = pos.get("unrealized_pnl_pct")
+                realized = pos.get("realized_pnl_pct", 0)
+                direction = pos.get("direction")
+
+                if entry is None:
+                    pnl_issues.append(f"{ticker}: entry_price manquant")
+                elif current is None:
+                    pnl_issues.append(f"{ticker}: current_price manquant")
+                elif direction in ("LONG", "SHORT") and unrealized is not None and entry > 0:
+                    # Vérifier la cohérence du P&L
+                    if direction == "LONG":
+                        expected_pnl = round((current - entry) / entry * 100, 2)
+                    else:
+                        expected_pnl = round((entry - current) / entry * 100, 2)
+                    if abs(expected_pnl - unrealized) > 0.1:
+                        pnl_issues.append(
+                            f"{ticker}: P&L incohérent (affiché {unrealized}%, "
+                            f"calculé {expected_pnl}%)")
+
+                # Vérifier que realized_pnl est un nombre
+                if not isinstance(realized, (int, float)):
+                    pnl_issues.append(f"{ticker}: realized_pnl n'est pas un nombre : {type(realized)}")
+
+            if pnl_issues:
+                findings.append({
+                    "area": "pnl_tracking",
+                    "status": "WARN" if len(pnl_issues) <= 2 else "CRITICAL",
+                    "detail": f"{len(pnl_issues)} problème(s) P&L : {'; '.join(pnl_issues[:5])}",
+                })
+                scores["pnl_tracking"] = max(3, 10 - len(pnl_issues) * 2)
+            else:
+                total_realized = sum(positions.get(t, {}).get("realized_pnl_pct", 0)
+                                     for t in TREND_TICKERS)
+                total_unrealized = sum(positions.get(t, {}).get("unrealized_pnl_pct", 0)
+                                       for t in TREND_TICKERS)
+                findings.append({
+                    "area": "pnl_tracking",
+                    "status": "OK",
+                    "detail": f"P&L cohérent. Réalisé total : {total_realized:+.2f}%, "
+                              f"Latent total : {total_unrealized:+.2f}%",
+                })
+                scores["pnl_tracking"] = 9
+
+            # ── 5. News filtering — vérifier la config ──
+            # Vérifier que les catégories filtrées sont cohérentes
+            expected_cats = {"commodity", "weather", "supply_chain", "geopolitical"}
+            missing_cats = expected_cats - RELEVANT_CATEGORIES
+            extra_cats = RELEVANT_CATEGORIES - expected_cats - {"regulatory", "sector", "other"}
+
+            findings.append({
+                "area": "news_filtering",
+                "status": "OK" if not missing_cats else "CRITICAL",
+                "detail": f"Catégories filtrées : {sorted(RELEVANT_CATEGORIES)}. "
+                          f"MIN_SCORE={MIN_NEWS_SCORE}. "
+                          + (f"Catégories manquantes : {missing_cats}" if missing_cats else "Toutes les catégories clés couvertes."),
+            })
+            scores["news_filtering"] = 10 if not missing_cats else 5
+
+            # ── 6. Confidence evolution ──
+            confidence_issues = []
+            for ticker in TREND_TICKERS:
+                pos = positions.get(ticker, {})
+                conf = pos.get("confidence", -1)
+                if not isinstance(conf, (int, float)):
+                    confidence_issues.append(f"{ticker}: confiance non numérique")
+                elif conf < 0 or conf > 100:
+                    confidence_issues.append(f"{ticker}: confiance hors limites ({conf})")
+
+            findings.append({
+                "area": "confidence_evolution",
+                "status": "OK" if not confidence_issues else "WARN",
+                "detail": "Confiances valides (0-100) pour tous les tickers"
+                          if not confidence_issues
+                          else f"Problèmes : {'; '.join(confidence_issues)}",
+            })
+            scores["confidence_evolution"] = 9 if not confidence_issues else 5
+
+            # ── 7. History integrity ──
+            history_issues = []
+            for ticker in TREND_TICKERS:
+                pos = positions.get(ticker, {})
+                history = pos.get("history", [])
+                if not isinstance(history, list):
+                    history_issues.append(f"{ticker}: history n'est pas une liste")
+                    continue
+                for i, h in enumerate(history[:10]):
+                    if not isinstance(h, dict):
+                        history_issues.append(f"{ticker}: history[{i}] n'est pas un dict")
+                        break
+                    required = {"from_direction", "to_direction", "time", "pnl_pct"}
+                    missing_fields = required - set(h.keys())
+                    if missing_fields:
+                        history_issues.append(
+                            f"{ticker}: history[{i}] champs manquants : {missing_fields}")
+                        break
+
+            findings.append({
+                "area": "history_integrity",
+                "status": "OK" if not history_issues else "WARN",
+                "detail": "Historique bien structuré pour tous les tickers"
+                          if not history_issues
+                          else f"Problèmes : {'; '.join(history_issues[:3])}",
+            })
+            scores["history_integrity"] = 9 if not history_issues else 5
+
+            # ── 8. Persistence ──
+            # Vérifier que le fichier/table existe
+            persistence_ok = True
+            try:
+                from ..database import is_pg_enabled
+                if is_pg_enabled():
+                    from ..database import get_conn
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT COUNT(*) FROM trend_positions")
+                            count = cur.fetchone()[0]
+                    findings.append({
+                        "area": "persistence",
+                        "status": "OK",
+                        "detail": f"Table PG trend_positions active, {count} ticker(s) persistés",
+                    })
+                else:
+                    if POSITIONS_FILE.exists():
+                        findings.append({
+                            "area": "persistence",
+                            "status": "OK",
+                            "detail": f"Fichier JSON {POSITIONS_FILE} présent (fallback)",
+                        })
+                    else:
+                        findings.append({
+                            "area": "persistence",
+                            "status": "WARN",
+                            "detail": "Ni PG ni fichier JSON trouvé — les positions seront perdues au redémarrage",
+                        })
+                        persistence_ok = False
+            except Exception as exc:
+                findings.append({
+                    "area": "persistence",
+                    "status": "WARN",
+                    "detail": f"Vérification persistence échouée : {exc}",
+                })
+                persistence_ok = False
+
+            scores["persistence"] = 9 if persistence_ok else 4
+
+        except ImportError as exc:
+            findings.append({
+                "area": "import",
+                "status": "CRITICAL",
+                "detail": f"Impossible d'importer agent_trader_2 : {exc}",
+            })
+            scores["overall"] = 2
+            improvements.append({
+                "priority": "CRITICAL",
+                "agent": "trader_2",
+                "action": "Corriger l'import de agent_trader_2",
+                "rationale": f"Erreur : {exc}",
+            })
+        except Exception as exc:
+            findings.append({
+                "area": "overall",
+                "status": "ERROR",
+                "detail": f"Erreur audit trader_2 : {exc}",
+            })
+            scores["overall"] = 3
+
+        # Log analysis
+        self._analyze_agent_errors(findings, scores, improvements, "trader_2")
+
+        tests.append("test_trader_2_all_4_positions_initialized")
+        tests.append("test_trader_2_flip_records_history")
+        tests.append("test_trader_2_pnl_calculation_matches_direction")
+        tests.append("test_trader_2_confidence_bounded_0_100")
+        tests.append("test_trader_2_persistence_pg_and_json")
+
     def _audit_journal(self, report: dict, focus: str | None):
         """Audit Agent Journal — closure accuracy, price reliability, metrics."""
         findings = report["findings"]
@@ -1360,7 +1712,7 @@ class AgentAuditor(BaseAgent):
 
         # 1. Profile coverage — all agents auditable?
         auditable = set(AUDIT_PROFILES.keys()) - {"auditor"}  # exclude self
-        expected = {"news", "scoring", "trader_1", "journal", "learning", "ux"}
+        expected = {"news", "scoring", "trader_1", "trader_2", "journal", "learning", "ux"}
         missing = expected - auditable
         findings.append({
             "area": "profile_coverage",
@@ -1375,6 +1727,7 @@ class AgentAuditor(BaseAgent):
             "news": "_audit_news",
             "scoring": "_audit_scoring",
             "trader_1": "_audit_trader",
+            "trader_2": "_audit_trader_2",
             "journal": "_audit_journal",
             "learning": "_audit_learning",
             "ux": "_audit_ux",

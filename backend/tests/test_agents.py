@@ -310,7 +310,7 @@ class TestAgentAuditor:
 
     def test_all_audit_profiles_present(self):
         from backend.app.agents.agent_auditor import AUDIT_PROFILES
-        expected = {"news", "scoring", "trader_1", "journal", "learning", "ux", "auditor"}
+        expected = {"news", "scoring", "trader_1", "trader_2", "journal", "learning", "ux", "auditor"}
         assert set(AUDIT_PROFILES.keys()) == expected
 
     def test_ux_profile_has_checks(self):
