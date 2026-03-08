@@ -259,8 +259,9 @@ class TestAgentRegistry:
         assert "learning" in agents
         assert "learning_2" in agents
         assert "scoring_2" in agents
+        assert "infrastructure" in agents
         assert "auditor" in agents
-        assert len(agents) == 10
+        assert len(agents) == 11
 
     @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
     @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
@@ -283,7 +284,7 @@ class TestAgentRegistry:
         statuses = get_all_status()
         names = [s["name"] for s in statuses]
         assert "ux" in names
-        assert len(statuses) == 11  # 10 real agents + virtual UX
+        assert len(statuses) == 12  # 11 real agents + virtual UX
 
     @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
     @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
@@ -313,7 +314,7 @@ class TestAgentAuditor:
 
     def test_all_audit_profiles_present(self):
         from backend.app.agents.agent_auditor import AUDIT_PROFILES
-        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux", "auditor"}
+        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux", "infrastructure", "auditor"}
         assert set(AUDIT_PROFILES.keys()) == expected
 
     def test_ux_profile_has_checks(self):
@@ -520,6 +521,47 @@ class TestAgentLearning:
         metrics = agent.get_metrics()
         assert "last_adjustment_count" in metrics
         assert "total_recalculations" in metrics
+
+
+class TestAgentInfrastructure:
+    """Test Agent Infrastructure initialization and metrics."""
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_init_and_metrics(self, _m1, _m2):
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_infrastructure import AgentInfrastructure
+        agent = AgentInfrastructure()
+        assert agent.name == "infrastructure"
+        metrics = agent.get_metrics()
+        assert "health_status" in metrics
+        assert "total_health_checks" in metrics
+        assert "total_maintenance_runs" in metrics
+        assert "consecutive_pg_failures" in metrics
+        assert "last_duration_ms" in metrics
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_health_check_no_pg(self, _m1, _m2):
+        from backend.app.agents.base import MessageBus
+        MessageBus._instance = None
+        from backend.app.agents.agent_infrastructure import AgentInfrastructure
+        agent = AgentInfrastructure()
+        result = agent.run_health_check()
+        assert "overall" in result
+        assert "pg_status" in result
+        assert "issues" in result
+        assert result["pg_status"] == "not_configured"
+
+    @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
+    @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
+    def test_infra_audit_profile_exists(self, _m1, _m2):
+        from backend.app.agents.agent_auditor import AUDIT_PROFILES
+        assert "infrastructure" in AUDIT_PROFILES
+        profile = AUDIT_PROFILES["infrastructure"]
+        assert "expertise" in profile
+        assert len(profile["checks"]) >= 8
 
 
 # ── Database Pruning ────────────────────────────────────────────────

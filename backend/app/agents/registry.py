@@ -12,6 +12,7 @@ import threading
 from typing import Any
 
 from .agent_auditor import AgentAuditor
+from .agent_infrastructure import AgentInfrastructure
 from .agent_news import AgentNews
 from .agent_scoring import AgentScoring
 from .agent_scoring_2 import AgentScoring2
@@ -48,6 +49,7 @@ def _ensure_agents():
             "journal_2": AgentJournal2(),
             "learning": AgentLearning(),
             "learning_2": AgentLearning2(),
+            "infrastructure": AgentInfrastructure(),
             "auditor": AgentAuditor(),
         }
         logger.info("Agent registry initialized: %s", list(_agents.keys()))
@@ -269,6 +271,24 @@ def get_learning_2_adjustments() -> dict:
     """Get cached trend learning adjustments."""
     _ensure_agents()
     return _agents["learning_2"].get_adjustments()
+
+
+def run_infra_health_check() -> dict:
+    """Run infrastructure health check."""
+    _ensure_agents()
+    return _agents["infrastructure"].run(action="health_check")
+
+
+def run_infra_maintenance() -> dict:
+    """Run infrastructure maintenance (VACUUM, pruning, stats)."""
+    _ensure_agents()
+    return _agents["infrastructure"].run(action="maintenance")
+
+
+def run_infra_report() -> dict:
+    """Run full infrastructure report."""
+    _ensure_agents()
+    return _agents["infrastructure"].run(action="full_report")
 
 # ── Helpers ────────────────────────────────────────────────────────────
 

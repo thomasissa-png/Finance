@@ -177,6 +177,19 @@ AUDIT_PROFILES = {
             "feedback_loop",         # Les ajustements sont-ils bien consommés par Trader 2 ?
         ],
     },
+    "infrastructure": {
+        "expertise": "Expert infrastructure & DevOps, 15+ ans en systèmes distribués temps réel et haute disponibilité",
+        "checks": [
+            "pg_connectivity",       # PostgreSQL est-il accessible et performant ?
+            "pool_health",           # Le pool de connexions est-il sain ?
+            "table_maintenance",     # VACUUM et pruning sont-ils exécutés régulièrement ?
+            "fallback_detection",    # Les fallbacks JSON sont-ils détectés et signalés ?
+            "data_consistency",      # Les données sont-elles cohérentes entre tables ?
+            "pending_trade_monitoring", # Les trades PENDING bloqués sont-ils détectés ?
+            "error_rate_monitoring", # Le taux d'erreurs des agents est-il surveillé ?
+            "timeout_management",    # Les timeouts sont-ils bien configurés partout ?
+        ],
+    },
     "auditor": {
         "expertise": "Expert en systèmes d'audit, meta-analyse et assurance qualité pour trading algorithmique",
         "checks": [
@@ -270,6 +283,8 @@ class AgentAuditor(BaseAgent):
                 self._audit_learning_2(report, focus)
             elif target_agent == "ux":
                 self._audit_ux(report, focus)
+            elif target_agent == "infrastructure":
+                self._audit_infrastructure(report, focus)
             elif target_agent == "auditor":
                 self._audit_self(report, focus)
 
@@ -2110,6 +2125,250 @@ class AgentAuditor(BaseAgent):
         tests.append("test_learning_2_significance_testing")
         tests.append("test_learning_2_cache_invalidation")
 
+    def _audit_infrastructure(self, report: dict, focus: str | None):
+        """Audit Agent Infrastructure — DB health, maintenance, fallbacks, timeouts."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        # 1. PG connectivity
+        try:
+            from ..database import is_pg_enabled
+            pg_enabled = is_pg_enabled()
+            if pg_enabled:
+                from ..database import get_conn
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                findings.append({
+                    "area": "pg_connectivity",
+                    "status": "OK",
+                    "detail": "PostgreSQL is configured and reachable",
+                })
+                scores["pg_connectivity"] = 10
+            else:
+                findings.append({
+                    "area": "pg_connectivity",
+                    "status": "WARN",
+                    "detail": "PostgreSQL not configured — using JSON fallback (limited functionality)",
+                })
+                scores["pg_connectivity"] = 4
+                improvements.append({
+                    "priority": "HIGH",
+                    "agent": "infrastructure",
+                    "action": "Configure PostgreSQL for production use",
+                    "rationale": "JSON fallback lacks concurrent access safety, VACUUM, and proper indexing",
+                })
+        except Exception as exc:
+            findings.append({"area": "pg_connectivity", "status": "CRITICAL", "detail": str(exc)})
+            scores["pg_connectivity"] = 1
+
+        # 2. Pool health
+        try:
+            from ..database import _get_pool
+            pool = _get_pool()
+            minconn = getattr(pool, 'minconn', None)
+            maxconn = getattr(pool, 'maxconn', None)
+            findings.append({
+                "area": "pool_health",
+                "status": "OK" if pool else "WARN",
+                "detail": f"Pool configured: min={minconn}, max={maxconn}",
+            })
+            scores["pool_health"] = 8 if pool else 3
+        except Exception as exc:
+            findings.append({"area": "pool_health", "status": "WARN", "detail": str(exc)})
+            scores["pool_health"] = 5
+
+        # 3. Table maintenance — check if VACUUM is scheduled
+        try:
+            from ..database import pg_run_maintenance
+            # Just check the function exists and is importable
+            findings.append({
+                "area": "table_maintenance",
+                "status": "OK",
+                "detail": "pg_run_maintenance() available — VACUUM + pruning (messages 30d, logs 90d, reports 100)",
+            })
+            scores["table_maintenance"] = 8
+
+            # Check if maintenance is wired in scheduler
+            infra_agent = None
+            try:
+                from . import registry
+                infra_agent = registry.get_agent("infrastructure")
+            except Exception:
+                pass
+
+            if infra_agent:
+                maint_runs = infra_agent.get_metrics().get("total_maintenance_runs", 0)
+                if maint_runs == 0:
+                    findings[-1]["detail"] += " — WARNING: 0 maintenance runs recorded"
+                    scores["table_maintenance"] = 6
+                    improvements.append({
+                        "priority": "MEDIUM",
+                        "agent": "infrastructure",
+                        "action": "Verify maintenance scheduler is running daily at 23h",
+                        "rationale": "VACUUM prevents table bloat and maintains query performance",
+                    })
+        except Exception as exc:
+            findings.append({"area": "table_maintenance", "status": "ERROR", "detail": str(exc)})
+            scores["table_maintenance"] = 3
+
+        # 4. Fallback detection
+        try:
+            from ..database import is_pg_enabled
+            if is_pg_enabled():
+                from pathlib import Path
+                import json as _json
+                data_dir = Path(__file__).resolve().parent.parent.parent.parent / "data"
+                divergences = []
+                for jf, pg_table in [("trades.json", "trades"), ("journal.json", "journal_entries")]:
+                    fpath = data_dir / jf
+                    if fpath.exists():
+                        try:
+                            with open(fpath, "r") as f:
+                                data = _json.load(f)
+                            if isinstance(data, list) and len(data) > 5:
+                                from ..database import get_conn
+                                with get_conn() as conn:
+                                    with conn.cursor() as cur:
+                                        cur.execute(f"SELECT COUNT(*) FROM {pg_table}")
+                                        pg_count = cur.fetchone()[0]
+                                if pg_count == 0:
+                                    divergences.append(f"{jf}: {len(data)} entries vs PG {pg_table}: 0")
+                        except Exception:
+                            pass
+
+                if divergences:
+                    findings.append({
+                        "area": "fallback_detection",
+                        "status": "WARN",
+                        "detail": f"Data divergence detected: {'; '.join(divergences)}",
+                    })
+                    scores["fallback_detection"] = 5
+                    improvements.append({
+                        "priority": "HIGH",
+                        "agent": "infrastructure",
+                        "action": "Run JSON→PG migration to sync data",
+                        "rationale": "Divergent data means some queries return incomplete results",
+                    })
+                else:
+                    findings.append({
+                        "area": "fallback_detection",
+                        "status": "OK",
+                        "detail": "No JSON/PG data divergence detected",
+                    })
+                    scores["fallback_detection"] = 9
+            else:
+                findings.append({
+                    "area": "fallback_detection",
+                    "status": "WARN",
+                    "detail": "PG not enabled — all data in JSON fallback",
+                })
+                scores["fallback_detection"] = 4
+        except Exception as exc:
+            findings.append({"area": "fallback_detection", "status": "ERROR", "detail": str(exc)})
+            scores["fallback_detection"] = 5
+
+        # 5. Data consistency
+        try:
+            from ..database import is_pg_enabled, get_conn
+            if is_pg_enabled():
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT COUNT(*) FROM trades
+                            WHERE result != 'PENDING'
+                            AND NOT EXISTS (
+                                SELECT 1 FROM journal_entries j
+                                WHERE j.ticker = trades.ticker
+                                AND j.entry_time = trades.timestamp
+                            )
+                        """)
+                        orphans = cur.fetchone()[0]
+                status = "OK" if orphans <= 5 else "WARN" if orphans <= 20 else "CRITICAL"
+                findings.append({
+                    "area": "data_consistency",
+                    "status": status,
+                    "detail": f"{orphans} closed trades without matching journal entries",
+                })
+                scores["data_consistency"] = 10 if orphans <= 2 else 7 if orphans <= 10 else 4
+            else:
+                scores["data_consistency"] = 5
+                findings.append({"area": "data_consistency", "status": "WARN", "detail": "PG not enabled"})
+        except Exception as exc:
+            findings.append({"area": "data_consistency", "status": "ERROR", "detail": str(exc)})
+            scores["data_consistency"] = 5
+
+        # 6. Pending trade monitoring
+        try:
+            from ..database import is_pg_enabled, get_conn
+            if is_pg_enabled():
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT COUNT(*) FROM trades
+                            WHERE result = 'PENDING'
+                            AND timestamp < NOW() - INTERVAL '2 days'
+                        """)
+                        stuck = cur.fetchone()[0]
+                findings.append({
+                    "area": "pending_trade_monitoring",
+                    "status": "OK" if stuck == 0 else "WARN",
+                    "detail": f"{stuck} trades stuck PENDING for >2 days" if stuck > 0
+                             else "No stuck PENDING trades",
+                })
+                scores["pending_trade_monitoring"] = 10 if stuck == 0 else 5 if stuck <= 3 else 2
+            else:
+                scores["pending_trade_monitoring"] = 5
+                findings.append({"area": "pending_trade_monitoring", "status": "WARN", "detail": "PG not enabled"})
+        except Exception as exc:
+            findings.append({"area": "pending_trade_monitoring", "status": "ERROR", "detail": str(exc)})
+            scores["pending_trade_monitoring"] = 5
+
+        # 7. Error rate monitoring
+        try:
+            agent_logs = self._get_agent_logs("infrastructure", limit=100)
+            errors = [l for l in agent_logs if l.get("level") == "ERROR"]
+            warns = [l for l in agent_logs if l.get("level") == "WARN"]
+            total = len(agent_logs) or 1
+            error_rate = len(errors) / total * 100
+            findings.append({
+                "area": "error_rate_monitoring",
+                "status": "OK" if error_rate < 5 else "WARN" if error_rate < 20 else "CRITICAL",
+                "detail": f"{len(errors)} errors, {len(warns)} warnings in last {total} log entries ({error_rate:.1f}% error rate)",
+            })
+            scores["error_rate_monitoring"] = 10 if error_rate < 2 else 7 if error_rate < 10 else 4
+        except Exception:
+            scores["error_rate_monitoring"] = 6
+            findings.append({"area": "error_rate_monitoring", "status": "WARN", "detail": "No infrastructure logs available yet"})
+
+        # 8. Timeout management
+        try:
+            # Check key timeout configs exist
+            from ..data_apis import REQUEST_TIMEOUT
+            from ..news_collector import RSS_FETCH_TIMEOUT
+            timeouts_ok = REQUEST_TIMEOUT > 0 and RSS_FETCH_TIMEOUT > 0
+            findings.append({
+                "area": "timeout_management",
+                "status": "OK" if timeouts_ok else "WARN",
+                "detail": f"API timeout={REQUEST_TIMEOUT}s, RSS timeout={RSS_FETCH_TIMEOUT}s",
+            })
+            scores["timeout_management"] = 8 if timeouts_ok else 4
+        except Exception as exc:
+            findings.append({"area": "timeout_management", "status": "ERROR", "detail": str(exc)})
+            scores["timeout_management"] = 5
+
+        # Analyze errors from infrastructure agent
+        self._analyze_agent_errors(findings, scores, improvements, "infrastructure")
+
+        # Tests to add
+        tests.append("test_infra_health_check_returns_overall_status")
+        tests.append("test_infra_maintenance_calls_pg_maintenance")
+        tests.append("test_infra_detects_stuck_pending_trades")
+        tests.append("test_infra_detects_json_pg_divergence")
+        tests.append("test_infra_metrics_exposed")
+
     def _audit_self(self, report: dict, focus: str | None):
         """Auto-audit — meta-analysis of the auditor's own capabilities."""
         findings = report["findings"]
@@ -2119,7 +2378,7 @@ class AgentAuditor(BaseAgent):
 
         # 1. Profile coverage — all agents auditable?
         auditable = set(AUDIT_PROFILES.keys()) - {"auditor"}  # exclude self
-        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux"}
+        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux", "infrastructure"}
         missing = expected - auditable
         findings.append({
             "area": "profile_coverage",
@@ -2141,6 +2400,7 @@ class AgentAuditor(BaseAgent):
             "learning": "_audit_learning",
             "learning_2": "_audit_learning_2",
             "ux": "_audit_ux",
+            "infrastructure": "_audit_infrastructure",
         }
         implemented = sum(1 for m in check_methods.values() if hasattr(self, m))
         findings.append({

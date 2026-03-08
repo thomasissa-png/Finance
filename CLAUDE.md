@@ -24,7 +24,7 @@ Le système est organisé en **équipes autonomes**. Chaque équipe a son propre
 
 Le framework est conçu pour ajouter facilement de nouvelles équipes : créer un trio trader/journal/learning, les enregistrer dans le registry, wirer le scheduler, et l'auditeur les couvrira automatiquement via ses profils.
 
-### 11 Agents Autonomes (`backend/app/agents/`)
+### 12 Agents Autonomes (`backend/app/agents/`)
 
 | Agent | Fichier | Équipe | Rôle |
 |-------|---------|--------|------|
@@ -37,7 +37,8 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 | **Trader 2** | `agent_trader_2.py` | Équipe 2 | Trend following commodities, positions longue durée |
 | **Journal 2** | `agent_journal_2.py` | Équipe 2 | Journal des flips, MAE/MFE daily bars |
 | **Learning 2** | `agent_learning_2.py` | Équipe 2 | 4 dimensions learning trend, calibration seuil |
-| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 12 profils |
+| **Infrastructure** | `agent_infrastructure.py` | Partagé | Santé PG, maintenance VACUUM, fallbacks, timeouts |
+| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 13 profils |
 | **UX** | (virtuel) | Partagé | Frontend React |
 
 ### Équipe 1 — Day Trading Intraday
@@ -56,7 +57,14 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 
 ### Infrastructure agents
 - **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
-- **`registry.py`** : 10 singletons (2 équipes), orchestration `News → Scoring → Scoring 2 → Trader 1 + Trader 2`, helpers pour les 2 équipes
+- **`registry.py`** : 12 singletons (2 équipes + infra + audit), orchestration `News → Scoring → Scoring 2 → Trader 1 + Trader 2`, helpers pour les 2 équipes
+- **Agent Infrastructure** (`agent_infrastructure.py`) : surveillance continue de l'infrastructure système
+  - Health check toutes les 15 min : connexion PG, pool, pending trades, fallback JSON
+  - Maintenance quotidienne 23h : VACUUM ANALYZE, pruning agent tables, stats
+  - Rapport hebdomadaire dimanche 21h : tendances taille tables, erreurs récurrentes, recommandations
+  - Détection divergence JSON/PG, trades stuck PENDING, table bloat
+  - API : `GET /api/infrastructure/health`, `POST /api/infrastructure/maintenance`, `GET /api/infrastructure/report`
+  - Audit : profil `infrastructure` — 8 checks
 - **Message Bus** : `agent_messages` (PG) — communication inter-agents async
 - **Logs structurés** : `agent_logs` (PG) — niveaux INFO/WARN/ERROR/DECISION, visibles frontend
 - **Audit Reports** : `audit_reports` (PG) + `data/audit_reports.json` (fallback) — persistés entre sessions
@@ -68,6 +76,7 @@ Journal 1 (ferme trades PENDING)
   → Journal 2 (enrichit flips Trader 2 avec MAE/MFE)
   → Learning 2 (recalcule 4 dimensions trend)
   → Cache scan vidé
+  → Infrastructure maintenance 23h (VACUUM, pruning, stats)
 ```
 
 ### Pipeline scan (4x/jour)
@@ -433,7 +442,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
-- `backend/app/agents/registry.py` : 10 singletons (2 équipes), run_scan_pipeline (News→Scoring→Scoring 2→Trader 1+2 avec Learning), helpers journal_2/learning_2
+- `backend/app/agents/registry.py` : 12 singletons (2 équipes + infra + audit), run_scan_pipeline (News→Scoring→Scoring 2→Trader 1+2 avec Learning), helpers journal_2/learning_2/infrastructure
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
 - `backend/app/agents/agent_scoring_2.py` : Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored
@@ -443,7 +452,8 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
 - `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 12 profils d'expertise (+ scoring_2, journal_2, learning_2), note /10, persistance rapports, trend tracking, log analysis
+- `backend/app/agents/agent_infrastructure.py` : v7.5, health check 15min (PG, pool, pending, fallbacks), maintenance 23h (VACUUM, pruning, stats), rapport hebdomadaire dim 21h, détection divergence JSON/PG
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 13 profils d'expertise (+ scoring_2, journal_2, learning_2, infrastructure), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
 - `backend/app/database.py` : v7.0, 10 tables PG (+ trend_positions, trend_journal_entries), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 9 tables, pg_update_trade_stop (v6.4)

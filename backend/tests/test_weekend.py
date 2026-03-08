@@ -132,8 +132,12 @@ class TestCronTriggerWeekday:
         # All jobs must have a day_of_week restriction (mon-fri or specific day like wed)
         cron_count = source.count("CronTrigger(")
         weekday_count = source.count("day_of_week=")
-        assert cron_count == weekday_count, (
+        # Infrastructure health check runs 24/7 (no day_of_week restriction) — intentional
+        # It's the only job allowed to run without day_of_week
+        infra_always_on_jobs = 1  # infra_health_check
+        assert cron_count == weekday_count + infra_always_on_jobs, (
             f"Found {cron_count} CronTrigger definitions but only "
-            f"{weekday_count} have day_of_week restriction (no weekend scans!)"
+            f"{weekday_count} have day_of_week restriction + {infra_always_on_jobs} infra always-on "
+            f"(all trading jobs must restrict to weekdays!)"
         )
         assert cron_count >= 5, f"Expected at least 5 CronTriggers, found {cron_count}"

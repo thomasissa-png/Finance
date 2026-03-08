@@ -437,6 +437,41 @@ def _run_weekly_source_review() -> None:
     thread.start()
 
 
+def _run_infra_health_check() -> None:
+    """Run infrastructure health check every 15 min."""
+    try:
+        from .agents.registry import run_infra_health_check
+        run_infra_health_check()
+    except Exception as exc:
+        logger.error("Infra health check failed: %s", exc)
+
+
+def _run_infra_maintenance() -> None:
+    """Run infrastructure maintenance at 23h — VACUUM, pruning, stats."""
+    def _worker():
+        try:
+            from .agents.registry import run_infra_maintenance
+            run_infra_maintenance()
+        except Exception as exc:
+            logger.error("Infra maintenance failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="infra-maintenance")
+    thread.start()
+
+
+def _run_infra_report() -> None:
+    """Run weekly infrastructure report — Sunday 21h."""
+    def _worker():
+        try:
+            from .agents.registry import run_infra_report
+            run_infra_report()
+        except Exception as exc:
+            logger.error("Infra report failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="infra-report")
+    thread.start()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _last_scans
@@ -472,6 +507,10 @@ async def lifespan(app: FastAPI):
     # v5.2: Weekly source health review — Sunday 20:00 CET (before Monday trading)
     # misfire_grace_time=3600: safe to run late, pure data analysis
     bg_scheduler.add_job(_run_weekly_source_review, CronTrigger(hour=20, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="weekly_source_review", misfire_grace_time=3600)
+    # v7.5: Infrastructure health check every 15 min, maintenance daily at 23h, report weekly Sun 21h
+    bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_infra_maintenance, CronTrigger(hour=23, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_maintenance", misfire_grace_time=3600)
+    bg_scheduler.add_job(_run_infra_report, CronTrigger(hour=21, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="infra_report", misfire_grace_time=3600)
     bg_scheduler.start()
     logger.info("Scheduler started — scans at 07:50, 11:15, 14:50, 17:00, event check q10min, position monitor q15min, post-EIA Wed 16:45, journal at 22:00 CET (weekdays), source review Sun 20:00")
 
@@ -1103,6 +1142,30 @@ def get_latest_audit(target_agent: str):
     if not report:
         raise HTTPException(404, f"No audit report for agent '{target_agent}'")
     return report
+
+
+# ── Agent Infrastructure API ─────────────────────────────────────
+
+
+@app.get("/api/infrastructure/health")
+def get_infra_health():
+    """Run and return infrastructure health check."""
+    from .agents.registry import run_infra_health_check
+    return run_infra_health_check()
+
+
+@app.post("/api/infrastructure/maintenance")
+def trigger_infra_maintenance():
+    """Trigger infrastructure maintenance (VACUUM, pruning)."""
+    from .agents.registry import run_infra_maintenance
+    return run_infra_maintenance()
+
+
+@app.get("/api/infrastructure/report")
+def get_infra_report():
+    """Get full infrastructure report."""
+    from .agents.registry import run_infra_report
+    return run_infra_report()
 
 
 # ── Agent Trader 2 — Trend Positions API ────────────────────────
