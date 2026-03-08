@@ -10,6 +10,70 @@ export const RESULT_LABELS = {
   PENDING: { label: "...", cls: "pending" },
 };
 
+// ── Ticker readable names ─────────────────────────────────────
+export const TICKER_NAMES = {
+  // Forex
+  "EURUSD=X": "EUR/USD",
+  "GBPUSD=X": "GBP/USD",
+  "USDJPY=X": "USD/JPY",
+  "AUDUSD=X": "AUD/USD",
+  "USDCHF=X": "USD/CHF",
+  "EURJPY=X": "EUR/JPY",
+  "USDCNH=X": "USD/CNH",
+  // Indices
+  "^GSPC": "S&P 500",
+  "^DJI": "Dow Jones",
+  "^IXIC": "Nasdaq",
+  "^RUT": "Russell 2000",
+  "^FCHI": "CAC 40",
+  "^GDAXI": "DAX",
+  "^FTSE": "FTSE 100",
+  "^N225": "Nikkei 225",
+  "^VIX": "VIX",
+  // Metaux
+  "GC=F": "Or (Gold)",
+  "SI=F": "Argent (Silver)",
+  "HG=F": "Cuivre (Copper)",
+  "PL=F": "Platine",
+  "PA=F": "Palladium",
+  // Energie
+  "CL=F": "Petrole WTI",
+  "BZ=F": "Brent",
+  "NG=F": "Gaz naturel",
+  // Agriculture
+  "ZC=F": "Mais (Corn)",
+  "ZW=F": "Ble (Wheat)",
+  "ZS=F": "Soja (Soybeans)",
+  // Soft commodities
+  "KC=F": "Cafe (Coffee)",
+  "CC=F": "Cacao (Cocoa)",
+  "SB=F": "Sucre (Sugar)",
+  "CT=F": "Coton (Cotton)",
+  "OJ=F": "Jus d'orange (OJ)",
+  // Livestock
+  "LE=F": "Betail (Cattle)",
+  "HE=F": "Porc (Hogs)",
+  // Actions Europe
+  "TTE.PA": "TotalEnergies",
+  "MC.PA": "LVMH",
+  "BNP.PA": "BNP Paribas",
+  "RMS.PA": "Hermes",
+  "OR.PA": "L'Oreal",
+  "SAN.PA": "Sanofi",
+  "AI.PA": "Air Liquide",
+  // Actions US
+  "AAPL": "Apple",
+  "MSFT": "Microsoft",
+  "TSLA": "Tesla",
+  "AMZN": "Amazon",
+  // ETFs
+  "URA": "Uranium ETF",
+};
+
+export function tickerName(ticker) {
+  return TICKER_NAMES[ticker] || ticker;
+}
+
 // ── Category colors (O9 — centralized palette) ───────────────
 export const CATEGORY_COLORS = {
   weather: "#4fc3f7",

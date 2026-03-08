@@ -1,45 +1,21 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { getParisHour, getParisDay } from "./utils/format";
-import AgentSidebar from "./components/AgentSidebar";
 import NotificationCenter from "./components/NotificationCenter";
 
-// Lazy-load all pages
+// Lazy-load pages
 const DashboardPage = lazy(() => import("./components/DashboardPage"));
-const TraderPage = lazy(() => import("./components/TraderPage"));
-const ScoringPage = lazy(() => import("./components/ScoringPage"));
-const JournalPage = lazy(() => import("./components/JournalPage"));
+const TeamPage = lazy(() => import("./components/TeamPage"));
 const NewsPage = lazy(() => import("./components/NewsPage"));
-const LearningPage = lazy(() => import("./components/LearningPage"));
+const PerformancePage = lazy(() => import("./components/PerformancePage"));
 const AuditorPage = lazy(() => import("./components/AuditorPage"));
-const Scoring2Page = lazy(() => import("./components/Scoring2Page"));
-const Trader2Page = lazy(() => import("./components/Trader2Page"));
-const Journal2Page = lazy(() => import("./components/Journal2Page"));
-const Learning2Page = lazy(() => import("./components/Learning2Page"));
-const Scoring3Page = lazy(() => import("./components/Scoring3Page"));
-const Trader3Page = lazy(() => import("./components/Trader3Page"));
-const Journal3Page = lazy(() => import("./components/Journal3Page"));
-const Learning3Page = lazy(() => import("./components/Learning3Page"));
-const Scoring4Page = lazy(() => import("./components/Scoring4Page"));
-const Trader4Page = lazy(() => import("./components/Trader4Page"));
-const Journal4Page = lazy(() => import("./components/Journal4Page"));
-const Learning4Page = lazy(() => import("./components/Learning4Page"));
-const TeamMapPage = lazy(() => import("./components/TeamMapPage"));
 
-const PAGES = [
-  "dashboard", "team",
-  "news", "scoring", "scoring2", "scoring3", "scoring4",
-  "trader", "trader2", "trader3", "trader4",
-  "journal", "journal2", "journal3", "journal4",
-  "learning", "learning2", "learning3", "learning4",
-  "auditor",
-];
+const PAGES = ["dashboard", "team1", "team2", "team3", "team4", "news", "performance", "auditor"];
 
 function getPageFromHash() {
   const hash = window.location.hash.replace("#", "");
   return PAGES.includes(hash) ? hash : "dashboard";
 }
 
-// ErrorBoundary
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -48,21 +24,18 @@ class ErrorBoundary extends React.Component {
   static getDerivedStateFromError(error) {
     return { hasError: true, error };
   }
-  componentDidCatch(error, info) {
-    console.error("ErrorBoundary:", error, info);
-  }
   render() {
     if (this.state.hasError) {
       return (
-        <div className="no-trade">
-          <div className="no-trade-icon">!</div>
-          <div className="no-trade-title">Erreur de rendu</div>
-          <div className="no-trade-reason">
+        <div className="error-boundary-container">
+          <div style={{ fontSize: 28, marginBottom: 12, opacity: 0.4 }}>!</div>
+          <div style={{ fontSize: 15, marginBottom: 8 }}>Erreur de rendu</div>
+          <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>
             {this.state.error?.message || "Une erreur inattendue est survenue"}
           </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
             <button className="trigger-btn" onClick={() => this.setState({ hasError: false, error: null })}>
-              Réessayer
+              Reessayer
             </button>
             <button className="trigger-btn export" onClick={() => window.location.reload()}>
               Recharger
@@ -79,17 +52,27 @@ const LoadingFallback = () => (
   <div>
     <div className="skeleton skeleton-card" />
     <div className="skeleton skeleton-card" />
-    <div className="skeleton skeleton-card" style={{ height: 80 }} />
   </div>
 );
 
 function getHeaderStatus() {
   const day = getParisDay();
-  if (day === 0 || day === 6) return { cls: "weekend", text: "Marchés fermés" };
+  if (day === 0 || day === 6) return { cls: "weekend", text: "Ferme" };
   const hour = getParisHour();
-  if (hour >= 7 && hour < 20) return { cls: "online", text: "Marchés ouverts" };
+  if (hour >= 7 && hour < 20) return { cls: "online", text: "Ouvert" };
   return { cls: "offline", text: "Hors session" };
 }
+
+const NAV_ITEMS = [
+  { id: "dashboard", label: "Dashboard" },
+  { id: "team1", label: "Equipe 1" },
+  { id: "team2", label: "Equipe 2" },
+  { id: "team3", label: "Equipe 3" },
+  { id: "team4", label: "Equipe 4" },
+  { id: "news", label: "News" },
+  { id: "performance", label: "Performance" },
+  { id: "auditor", label: "Audit" },
+];
 
 export default function App() {
   const [activePage, setActivePage] = useState(getPageFromHash);
@@ -114,7 +97,7 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchAgents]);
 
-  // Fetch notifications (WARN/ERROR logs from all agents)
+  // Fetch notifications
   const fetchNotifications = useCallback(() => {
     const agentNames = [
       "news", "scoring", "scoring_2", "scoring_3", "scoring_4",
@@ -134,8 +117,7 @@ export default function App() {
         .catch(() => []),
     ]);
     Promise.all(requests).then((results) => {
-      const combined = results.flat()
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      const combined = results.flat().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       const seen = new Set();
       const deduped = combined.filter((n) => {
         const key = `${n.timestamp}-${n.agent}-${n.action}`;
@@ -157,9 +139,7 @@ export default function App() {
     (n) => new Date(n.timestamp).getTime() > lastNotifCheck
   ).length;
 
-  const markAllRead = useCallback(() => {
-    setLastNotifCheck(Date.now());
-  }, []);
+  const markAllRead = useCallback(() => { setLastNotifCheck(Date.now()); }, []);
 
   const navigate = useCallback((pageId) => {
     setActivePage(pageId);
@@ -179,14 +159,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    document.body.classList.remove("light");
-    localStorage.removeItem("theme");
-  }, []);
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [activePage]);
+  useEffect(() => { window.scrollTo({ top: 0, behavior: "smooth" }); }, [activePage]);
 
   useEffect(() => {
     let mounted = true;
@@ -212,77 +185,68 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [navigate, showNotifications]);
 
-  const workingCount = agents.filter((a) => a.status === "working").length;
-  const errorCount = agents.filter((a) => a.status === "error").length;
-
   return (
-    <div className="app app-with-sidebar">
-      <AgentSidebar
-        agents={agents}
-        activePage={activePage}
-        onNavigate={navigate}
-        notificationCount={unreadCount}
-        onToggleNotifications={() => {
-          setShowNotifications(!showNotifications);
-          if (!showNotifications) markAllRead();
-        }}
-      />
+    <div className="app-layout">
+      {/* Top Navbar */}
+      <nav className="top-navbar">
+        <div className="nav-left">
+          <span className="nav-brand">PLATEFORME TRADING</span>
+          <div className="nav-links">
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.id}
+                className={`nav-link ${activePage === item.id ? "active" : ""}`}
+                onClick={() => navigate(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="nav-right">
+          <div className="nav-status">
+            <span className={`status-dot ${status.cls}`} />
+            {status.text}
+          </div>
+          <button
+            className="nav-alert-btn"
+            onClick={() => {
+              setShowNotifications(!showNotifications);
+              if (!showNotifications) markAllRead();
+            }}
+          >
+            {"🔔"}
+            {unreadCount > 0 && (
+              <span className="nav-alert-badge">{unreadCount > 9 ? "9+" : unreadCount}</span>
+            )}
+          </button>
+        </div>
+      </nav>
 
+      {/* Main content */}
       <div className="app-main">
-        <header className="app-header">
-          <div>
-            <div className="app-title">ONESHOT NEWS TRADING</div>
-            <div className="app-subtitle">
-              {agents.length} agents autonomes
-              {workingCount > 0 && (
-                <span className="header-agents-working"> &mdash; {workingCount} en cours</span>
-              )}
-              {errorCount > 0 && (
-                <span className="header-agents-error"> &mdash; {errorCount} erreur{errorCount > 1 ? "s" : ""}</span>
-              )}
-            </div>
-          </div>
-          <div className="header-right">
-            <div className="header-status">
-              <span className={`status-dot ${status.cls}`} />
-              {status.text}
-            </div>
-          </div>
-        </header>
-
         {!backendUp && (
           <div className="disconnect-banner">
             <span className="status-dot offline" />
-            Backend déconnecté — tentative de reconnexion...
+            Backend deconnecte — tentative de reconnexion...
           </div>
         )}
 
         <ErrorBoundary>
           <Suspense fallback={<LoadingFallback />}>
-            {activePage === "dashboard" && <DashboardPage isActive={true} agents={agents} />}
-            {activePage === "team" && <TeamMapPage isActive={true} agents={agents} onNavigate={navigate} />}
-            {activePage === "news" && <NewsPage isActive={true} />}
-            {activePage === "scoring" && <ScoringPage isActive={true} />}
-            {activePage === "scoring2" && <Scoring2Page isActive={true} />}
-            {activePage === "scoring3" && <Scoring3Page isActive={true} />}
-            {activePage === "scoring4" && <Scoring4Page isActive={true} />}
-            {activePage === "trader" && <TraderPage isActive={true} />}
-            {activePage === "trader2" && <Trader2Page isActive={true} />}
-            {activePage === "trader3" && <Trader3Page isActive={true} />}
-            {activePage === "trader4" && <Trader4Page isActive={true} />}
-            {activePage === "journal" && <JournalPage isActive={true} />}
-            {activePage === "journal2" && <Journal2Page isActive={true} />}
-            {activePage === "journal3" && <Journal3Page isActive={true} />}
-            {activePage === "journal4" && <Journal4Page isActive={true} />}
-            {activePage === "learning" && <LearningPage isActive={true} />}
-            {activePage === "learning2" && <Learning2Page isActive={true} />}
-            {activePage === "learning3" && <Learning3Page isActive={true} />}
-            {activePage === "learning4" && <Learning4Page isActive={true} />}
-            {activePage === "auditor" && <AuditorPage isActive={true} />}
+            {activePage === "dashboard" && <DashboardPage isActive agents={agents} />}
+            {activePage === "team1" && <TeamPage teamId="1" isActive agents={agents} />}
+            {activePage === "team2" && <TeamPage teamId="2" isActive agents={agents} />}
+            {activePage === "team3" && <TeamPage teamId="3" isActive agents={agents} />}
+            {activePage === "team4" && <TeamPage teamId="4" isActive agents={agents} />}
+            {activePage === "news" && <NewsPage isActive />}
+            {activePage === "performance" && <PerformancePage isActive agents={agents} />}
+            {activePage === "auditor" && <AuditorPage isActive />}
           </Suspense>
         </ErrorBoundary>
       </div>
 
+      {/* Notification panel */}
       {showNotifications && (
         <NotificationCenter
           notifications={notifications}

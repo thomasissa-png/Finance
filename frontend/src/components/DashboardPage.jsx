@@ -1,9 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { timeAgo, pnlColor } from "../utils/format";
+import { timeAgo, pnlColor, tickerName } from "../utils/format";
 import TradeCard from "./TradeCard";
-import AgentOverview from "./AgentOverview";
 
-// Toast system
 function useToasts() {
   const [toasts, setToasts] = useState([]);
   const idRef = useRef(0);
@@ -43,13 +41,13 @@ function getNextScanInfo() {
 }
 
 const SCAN_DEFS = [
-  { key: "europe", label: "SCAN EUROPE \u2014 07:50 CET", btn: "Europe (07:50)", cls: "europe" },
-  { key: "mid_session", label: "SCAN MID-SESSION \u2014 11:15 CET", btn: "Mid-Session (11:15)", cls: "europe" },
-  { key: "us", label: "SCAN PRE-US \u2014 14:50 CET", btn: "Pre-US (14:50)", cls: "us" },
-  { key: "us_session", label: "SCAN US SESSION \u2014 17:00 CET", btn: "US Session (17:00)", cls: "us" },
+  { key: "europe", label: "SCAN EUROPE — 07:50 CET", btn: "Europe (07:50)", cls: "europe" },
+  { key: "mid_session", label: "SCAN MID-SESSION — 11:15 CET", btn: "Mid-Session (11:15)", cls: "europe" },
+  { key: "us", label: "SCAN PRE-US — 14:50 CET", btn: "Pre-US (14:50)", cls: "us" },
+  { key: "us_session", label: "SCAN US SESSION — 17:00 CET", btn: "US Session (17:00)", cls: "us" },
 ];
 
-const PROGRESS_STEPS = ["Collecte RSS", "Analyse Claude", "S\u00e9lection trade"];
+const PROGRESS_STEPS = ["Collecte RSS", "Analyse Claude", "Selection trade"];
 
 function getApiError(scans) {
   for (const key of Object.keys(scans)) {
@@ -77,7 +75,7 @@ export default function DashboardPage({ isActive, agents }) {
     try {
       const res = await fetch("/api/scan/latest");
       if (res.ok) { setScans(await res.json()); setLastUpdate(new Date()); }
-    } catch { /* backend not started */ }
+    } catch { /* */ }
   }, []);
 
   const fetchPerf = useCallback(async () => {
@@ -88,8 +86,7 @@ export default function DashboardPage({ isActive, agents }) {
   }, []);
 
   useEffect(() => {
-    fetchScans();
-    fetchPerf();
+    fetchScans(); fetchPerf();
     const id = setInterval(fetchScans, 60_000);
     const id2 = setInterval(fetchPerf, 60_000);
     return () => { clearInterval(id); clearInterval(id2); };
@@ -123,27 +120,31 @@ export default function DashboardPage({ isActive, agents }) {
           const recs = result.recommendations || [];
           const count = recs.length || (result.recommendation ? 1 : 0);
           addToast(count > 1
-            ? `${count} trades d\u00e9tect\u00e9s : ${recs.map((r) => r.ticker).join(", ")}`
-            : `Trade d\u00e9tect\u00e9 : ${result.recommendation?.ticker}`, "success");
+            ? `${count} trades detectes : ${recs.map((r) => tickerName(r.ticker)).join(", ")}`
+            : `Trade detecte : ${tickerName(result.recommendation?.ticker)}`, "success");
         } else {
-          addToast(`Scan ${scanType} termin\u00e9 \u2014 pas de trade`, "warning");
+          addToast(`Scan ${scanType} termine — pas de trade`, "warning");
         }
       } else {
         const err = await res.json().catch(() => ({}));
         addToast(err.detail || `Erreur scan ${scanType}`, "error");
       }
     } catch (err) {
-      addToast("Erreur r\u00e9seau", "error");
+      addToast("Erreur reseau", "error");
     } finally {
-      clearTimeout(t1);
-      clearTimeout(t2);
+      clearTimeout(t1); clearTimeout(t2);
       setLoading((prev) => ({ ...prev, [scanType]: false }));
       setProgress((prev) => { const n = { ...prev }; delete n[scanType]; return n; });
     }
   };
 
   return (
-    <div className="dashboard-page">
+    <div>
+      <div className="page-header">
+        <div className="page-title">Dashboard</div>
+        <div className="page-subtitle">Vue consolidee des trades — toutes equipes</div>
+      </div>
+
       {/* KPI Cards */}
       {perf && (
         <div className="kpi-row">
@@ -170,18 +171,15 @@ export default function DashboardPage({ isActive, agents }) {
         </div>
       )}
 
-      {/* Agent Overview */}
-      <AgentOverview agents={agents} onSelectAgent={() => {}} />
-
       {/* API error */}
       {apiErrorScan && (
         <div className="api-error-banner">
           <strong>API Claude hors service</strong>
           <span>
             {apiErrorScan.api_error === "AuthenticationError"
-              ? "Cl\u00e9 API invalide ou cr\u00e9dits \u00e9puis\u00e9s."
+              ? "Cle API invalide ou credits epuises."
               : apiErrorScan.api_error === "RateLimitError"
-                ? "Limite de requ\u00eates atteinte."
+                ? "Limite de requetes atteinte."
                 : `Erreur : ${apiErrorScan.reason_no_trade || apiErrorScan.api_error}`}
           </span>
         </div>
@@ -218,14 +216,14 @@ export default function DashboardPage({ isActive, agents }) {
         ))}
 
       {/* Scan results */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {SCAN_DEFS.map((s) => {
           const scan = scans[s.key];
           const recs = scan?.recommendations || [];
           if (scan?.has_trade && recs.length > 1) {
             return (
-              <div key={s.key} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div className="scan-multi-label">{s.label} \u2014 {recs.length} trades</div>
+              <div key={s.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div className="scan-multi-label">{s.label} — {recs.length} trades</div>
                 {recs.map((rec, i) => (
                   <TradeCard key={`${s.key}-${rec.ticker}-${i}`} scan={{ ...scan, recommendation: rec }} label={`${s.label} #${i + 1}`} />
                 ))}
@@ -239,7 +237,7 @@ export default function DashboardPage({ isActive, agents }) {
       {/* Last update */}
       <div className="last-update-bar">
         {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
-        <button className="refresh-btn" onClick={fetchScans} title="Rafra\u00eechir">{"\u21BB"}</button>
+        <button className="refresh-btn" onClick={fetchScans} title="Rafraichir">↻</button>
       </div>
 
       {/* Toasts */}

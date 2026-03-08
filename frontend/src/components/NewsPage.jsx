@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
+const LEVEL_ICONS = { INFO: "i", WARN: "!", ERROR: "x", DECISION: ">" };
 
 function HealthBar({ rate }) {
   const pct = Math.max(0, Math.min(100, (rate || 0) * 100));
@@ -24,7 +23,7 @@ export default function NewsPage({ isActive }) {
   const fetchData = useCallback(async () => {
     try {
       const [shRes, wrRes, logRes] = await Promise.all([
-        fetch("/api/source-health?days=7").then((r) => { if (!r.ok) throw new Error(`Santé sources: ${r.status}`); return r.json(); }).catch(() => null),
+        fetch("/api/source-health?days=7").then((r) => { if (!r.ok) throw new Error(`Sources: ${r.status}`); return r.json(); }).catch(() => null),
         fetch("/api/source-health/weekly").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch(`/api/agents/news/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
           .then((r) => r.ok ? r.json() : []).catch(() => []),
@@ -46,7 +45,6 @@ export default function NewsPage({ isActive }) {
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
-  // Extract source data from health report
   const sources = [];
   if (sourceHealth) {
     const dayData = sourceHealth.current_day || sourceHealth;
@@ -68,19 +66,19 @@ export default function NewsPage({ isActive }) {
 
   return (
     <div className="agent-page">
-      <div className="agent-page-header">
-        <h2>{"\ud83d\udce1"} Agent News</h2>
-        <span className="agent-page-desc">Collecte, curation, sant\u00e9 des sources, d\u00e9tection d'\u00e9v\u00e9nements</span>
+      <div className="page-header">
+        <div className="page-title">Agent News</div>
+        <div className="page-subtitle">Collecte, curation, sante des sources, detection d'evenements</div>
       </div>
 
-      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des donnees...</div>}
       {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
 
       {/* Source Health */}
       <div className="section-card">
-        <h3>Sant\u00e9 des sources</h3>
+        <h3>Sante des sources</h3>
         {sources.length === 0 ? (
-          <div className="agent-logs-empty">Aucune donn\u00e9e de sant\u00e9 disponible. Les donn\u00e9es apparaissent apr\u00e8s le premier scan.</div>
+          <div className="agent-logs-empty">Aucune donnee de sante disponible. Les donnees apparaissent apres le premier scan.</div>
         ) : (
           <>
           <div className="compact-table desktop-only">
@@ -88,34 +86,22 @@ export default function NewsPage({ isActive }) {
               <thead>
                 <tr>
                   <th>Source</th>
-                  <th>Taux de succ\u00e8s</th>
-                  <th>Sant\u00e9</th>
-                  <th>\u00c9checs</th>
+                  <th>Taux de succes</th>
+                  <th>Sante</th>
+                  <th>Echecs</th>
                   <th>Latence moy.</th>
-                  <th>Derni\u00e8re erreur</th>
+                  <th>Derniere erreur</th>
                 </tr>
               </thead>
               <tbody>
                 {sources.sort((a, b) => (a.success_rate ?? 1) - (b.success_rate ?? 1)).map((s) => (
                   <tr key={s.name}>
                     <td className="ticker-cell">{s.name}</td>
-                    <td>
-                      {s.success_rate != null
-                        ? `${(s.success_rate * 100).toFixed(0)}%`
-                        : "—"}
-                    </td>
-                    <td style={{ width: 120 }}>
-                      <HealthBar rate={s.success_rate} />
-                    </td>
-                    <td style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>
-                      {s.failures}
-                    </td>
-                    <td>
-                      {s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "—"}
-                    </td>
-                    <td className="error-cell">
-                      {s.last_error ? String(s.last_error).slice(0, 60) : "—"}
-                    </td>
+                    <td>{s.success_rate != null ? `${(s.success_rate * 100).toFixed(0)}%` : "—"}</td>
+                    <td style={{ width: 120 }}><HealthBar rate={s.success_rate} /></td>
+                    <td style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</td>
+                    <td>{s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "—"}</td>
+                    <td className="error-cell">{s.last_error ? String(s.last_error).slice(0, 60) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -132,7 +118,7 @@ export default function NewsPage({ isActive }) {
                 </div>
                 <HealthBar rate={s.success_rate} />
                 <div className="mobile-card-body">
-                  <span>\u00c9checs : <strong style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</strong></span>
+                  <span>Echecs : <strong style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</strong></span>
                   <span>Latence : {s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "—"}</span>
                 </div>
                 {s.last_error && <div className="mobile-card-error">{String(s.last_error).slice(0, 80)}</div>}
@@ -160,7 +146,7 @@ export default function NewsPage({ isActive }) {
                   <span className="weekly-stat-value" style={{ color: "var(--red)" }}>
                     {weeklyReview.summary.degraded ?? "—"}
                   </span>
-                  <span className="weekly-stat-label">Sources d\u00e9grad\u00e9es</span>
+                  <span className="weekly-stat-label">Sources degradees</span>
                 </div>
               </div>
             )}
@@ -185,39 +171,37 @@ export default function NewsPage({ isActive }) {
           <div className="log-filter-row">
             {["ALL", "DECISION", "INFO", "WARN", "ERROR"].map((level) => (
               <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-                onClick={() => setLogFilter(level)}>
-                {level}
-              </button>
+                onClick={() => setLogFilter(level)}>{level}</button>
             ))}
           </div>
         </div>
         <div className="agent-logs compact-logs">
           {logs.length === 0 ? (
             <div className="agent-logs-empty">Aucun log</div>
-          ) : (
-            logs.slice(0, 20).map((log, i) => (
-              <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
-                <div className="agent-log-header">
-                  <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "\u2139\ufe0f"}</span>
-                  <span className="agent-log-action" style={{ color: LEVEL_COLORS[log.level] }}>{log.action}</span>
-                  <span className="agent-log-time">
-                    {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-                  </span>
-                  {log.duration_ms != null && <span className="agent-log-duration">{log.duration_ms}ms</span>}
-                </div>
-                {log.details && Object.keys(log.details).length > 0 && (
-                  <div className="agent-log-details">
-                    {Object.entries(log.details).slice(0, 4).map(([k, v]) => (
-                      <span key={k} className="agent-log-detail">
-                        <span className="agent-log-detail-key">{k}:</span>{" "}
-                        {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
-                      </span>
-                    ))}
-                  </div>
-                )}
+          ) : logs.slice(0, 20).map((log, i) => (
+            <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
+              <div className="agent-log-header">
+                <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
+                <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
+                  {log.action}
+                </span>
+                <span className="agent-log-time">
+                  {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
+                </span>
+                {log.duration_ms != null && <span className="agent-log-duration">{log.duration_ms}ms</span>}
               </div>
-            ))
-          )}
+              {log.details && Object.keys(log.details).length > 0 && (
+                <div className="agent-log-details">
+                  {Object.entries(log.details).slice(0, 4).map(([k, v]) => (
+                    <span key={k} className="agent-log-detail">
+                      <span className="agent-log-detail-key">{k}:</span>{" "}
+                      {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>

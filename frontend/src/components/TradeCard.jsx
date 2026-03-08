@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { formatTime, confidenceColor, confidenceLabel } from "../utils/format";
+import { formatTime, confidenceColor, confidenceLabel, tickerName } from "../utils/format";
 
 export default function TradeCard({ scan, label }) {
   const [open, setOpen] = useState(false);
@@ -9,12 +9,12 @@ export default function TradeCard({ scan, label }) {
     const analyzed = scan?.news_analyzed || 0;
     return (
       <div className="no-trade">
-        <div className="no-trade-icon">—</div>
+        <div className="no-trade-icon">--</div>
         <div className="no-trade-title">{label}</div>
         <div className="no-trade-reason">{reason}</div>
         {analyzed > 0 && (
           <div className="no-trade-meta">
-            <span className="no-trade-tag">{analyzed} news analysées</span>
+            <span className="no-trade-tag">{analyzed} news analysees</span>
           </div>
         )}
       </div>
@@ -32,10 +32,9 @@ export default function TradeCard({ scan, label }) {
         <span className="scan-time">{formatTime(t.timestamp)}</span>
       </div>
       <div className="trade-card-body">
-        {/* Summary — always visible */}
         <div className="trade-main-row">
           <div>
-            <div className="trade-asset">{t.asset_name}</div>
+            <div className="trade-asset">{t.asset_name || tickerName(t.ticker)}</div>
             <div className="trade-ticker">
               {t.ticker}
               {t.news_category && t.news_category !== "other" && (
@@ -44,7 +43,7 @@ export default function TradeCard({ scan, label }) {
             </div>
           </div>
           <span className={`direction-badge ${isLong ? "long" : "short"}`}>
-            {isLong ? "LONG" : "SHORT"} {isLong ? "\u2191" : "\u2193"}
+            {isLong ? "LONG" : "SHORT"} {isLong ? "+" : "-"}
           </span>
         </div>
 
@@ -57,10 +56,9 @@ export default function TradeCard({ scan, label }) {
           <div className="trade-warning">{t.binary_event_warning}</div>
         )}
 
-        {/* Price grid — always visible */}
         <div className="trade-grid">
           <div className="trade-metric">
-            <div className="trade-metric-label">Entrée</div>
+            <div className="trade-metric-label">Entree</div>
             <div className="trade-metric-value cyan">{t.entry_price}</div>
           </div>
           <div className="trade-metric">
@@ -77,7 +75,6 @@ export default function TradeCard({ scan, label }) {
           </div>
         </div>
 
-        {/* (N5) Confidence bar with contextual label */}
         <div className="confidence-row">
           <span className="confidence-label">Confiance</span>
           <div className="confidence-bar">
@@ -97,32 +94,29 @@ export default function TradeCard({ scan, label }) {
           </span>
         </div>
 
-        {/* (M6) Accordion toggle for details */}
         <button className="trade-toggle-btn" onClick={() => setOpen(!open)}>
-          {open ? "Masquer détails \u25B2" : "Voir détails \u25BC"}
+          {open ? "Masquer details ^" : "Voir details v"}
         </button>
 
         {open && (
           <div className="trade-details-section">
-            {/* Secondary metrics */}
             <div className="trade-grid">
               <div className="trade-metric">
                 <div className="trade-metric-label">R/R</div>
                 <div className="trade-metric-value cyan">{t.risk_reward}</div>
               </div>
               <div className="trade-metric">
-                <div className="trade-metric-label">Fenêtre</div>
+                <div className="trade-metric-label">Fenetre</div>
                 <div className="trade-metric-value">{t.time_window}</div>
               </div>
               <div className="trade-metric">
                 <div className="trade-metric-label">Source</div>
                 <div className="trade-metric-value" style={{ fontSize: 12 }}>
-                  {t.news_sources?.[0] || "—"}
+                  {t.news_sources?.[0] || "--"}
                 </div>
               </div>
             </div>
 
-            {/* Edge detection info */}
             {t.edge_score != null && (
               <div className="trade-edge-row">
                 <span className={`trade-info-badge ${t.edge_score >= 0.4 ? "edge-high" : t.edge_score >= 0.15 ? "edge-mid" : "edge-low"}`}>
@@ -130,18 +124,17 @@ export default function TradeCard({ scan, label }) {
                 </span>
                 {t.transmission_delay != null && (
                   <span className="trade-info-badge neutral">
-                    Délai pricing: {t.transmission_delay}/100
+                    Delai pricing: {t.transmission_delay}/100
                   </span>
                 )}
                 {t.market_awareness != null && (
                   <span className="trade-info-badge neutral">
-                    Visibilité: {t.market_awareness}/100
+                    Visibilite: {t.market_awareness}/100
                   </span>
                 )}
               </div>
             )}
 
-            {/* Chain reactions */}
             {t.chain_reactions && t.chain_reactions.length > 0 && (
               <div className="chain-reactions">
                 <div className="chain-reactions-title">Effets de second ordre</div>
@@ -150,14 +143,13 @@ export default function TradeCard({ scan, label }) {
                     <span className={`direction-badge sm ${cr.direction === "LONG" ? "long" : "short"}`}>
                       {cr.direction}
                     </span>
-                    <span className="chain-ticker">{cr.ticker}</span>
+                    <span className="chain-ticker">{tickerName(cr.ticker)}</span>
                     <span className="chain-reason">{cr.reason}</span>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* Position size + convergence info */}
             {(t.position_size_pct != null || t.convergence_count > 0) && (
               <div className="trade-info-row">
                 {t.position_size_pct != null && (
@@ -179,12 +171,11 @@ export default function TradeCard({ scan, label }) {
               </div>
             )}
 
-            {/* Volume + Pre-move info row */}
             {(t.volume_confirmed != null || t.pre_move_pct != null) && (
               <div className="trade-info-row">
                 {t.volume_confirmed != null && (
                   <span className={`trade-info-badge ${t.volume_confirmed ? "positive" : "neutral"}`}>
-                    Vol: {t.volume_confirmed ? "confirmé" : "faible"}
+                    Vol: {t.volume_confirmed ? "confirme" : "faible"}
                   </span>
                 )}
                 {t.pre_move_pct != null && (
