@@ -341,8 +341,13 @@ class AgentJournal2(BaseAgent):
             raise
 
     def _process_flip(self, ticker: str, flip: dict, info: dict) -> dict | None:
-        """Process a single flip into a journal entry with MAE/MFE."""
-        entry_time = flip.get("time")
+        """Process a single flip into a journal entry with MAE/MFE.
+
+        P3 fix: compute duration_hours from position entry to flip time
+        P4 fix: use position_entry_time (actual entry) for MAE/MFE date range,
+                store flip time as exit_time (not entry_time)
+        """
+        flip_time = flip.get("time")  # This is the EXIT time (when direction changed)
         entry_price = flip.get("entry_price")
         exit_price = flip.get("exit_price")
         from_dir = flip.get("from_direction", "NEUTRAL")
@@ -350,21 +355,28 @@ class AgentJournal2(BaseAgent):
         if not entry_price or from_dir == "NEUTRAL":
             return None
 
-        # Compute duration
+        # P4: Use position_entry_time (when position was opened) instead of flip time
+        position_entry_time = flip.get("position_entry_time") or flip_time
+
+        # P3: Compute actual duration from position entry to flip
         duration_hours = 0.0
-        # Find the original entry time for this period
-        # The flip "time" is the EXIT time (when direction changed)
-        # We need to estimate the entry time from context
-        # Use a conservative 7-day lookback for MAE/MFE bars
         try:
-            exit_dt = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
-            # Look back up to 90 days for bars
-            start_dt = exit_dt - timedelta(days=90)
-            start_date = start_dt.strftime("%Y-%m-%d")
+            entry_dt = datetime.fromisoformat(position_entry_time.replace("Z", "+00:00"))
+            exit_dt = datetime.fromisoformat(flip_time.replace("Z", "+00:00"))
+            duration_hours = round((exit_dt - entry_dt).total_seconds() / 3600, 1)
+        except (ValueError, AttributeError, TypeError):
+            pass
+
+        # P4: Date range for MAE/MFE = position entry to flip time
+        start_date = ""
+        end_date = ""
+        try:
+            entry_dt = datetime.fromisoformat(position_entry_time.replace("Z", "+00:00"))
+            exit_dt = datetime.fromisoformat(flip_time.replace("Z", "+00:00"))
+            start_date = entry_dt.strftime("%Y-%m-%d")
             end_date = exit_dt.strftime("%Y-%m-%d")
-        except (ValueError, AttributeError):
-            start_date = ""
-            end_date = ""
+        except (ValueError, AttributeError, TypeError):
+            pass
 
         # Fetch daily bars for MAE/MFE
         mae_pct, mfe_pct = 0.0, 0.0
@@ -377,7 +389,6 @@ class AgentJournal2(BaseAgent):
                     ticker, start_date, end_date,
                 )
                 if bars:
-                    # Filter bars to only include those during the position period
                     mae_pct, mfe_pct = _compute_mae_mfe(from_dir, entry_price, bars)
                     bar_count = len(bars)
             except Exception as exc:
@@ -398,11 +409,13 @@ class AgentJournal2(BaseAgent):
             "direction": from_dir,
             "entry_price": entry_price,
             "exit_price": exit_price,
-            "entry_time": entry_time,  # This is actually the flip time
+            "entry_time": position_entry_time,  # P4: actual position entry time
+            "exit_time": flip_time,              # P4: when direction changed (flip)
             "pnl_pct": pnl_pct,
             "mae_pct": mae_pct,
             "mfe_pct": mfe_pct,
             "bar_count": bar_count,
+            "duration_hours": duration_hours,    # P3: actual duration
             "signal_strength": flip.get("signal_strength", 0),
             "reason": flip.get("reason", ""),
             "news_categories": news_categories,

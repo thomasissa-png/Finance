@@ -16,12 +16,12 @@ const AGENT_ICONS = {
 const AGENT_LABELS = {
   news: "News",
   scoring: "Scoring",
-  trader_1: "Trader 1",
-  trader_2: "Trader 2",
+  trader_1: "Trader",
+  trader_2: "Trader",
   journal: "Journal",
-  journal_2: "Journal 2",
+  journal_2: "Journal",
   learning: "Learning",
-  learning_2: "Learning 2",
+  learning_2: "Learning",
   auditor: "Auditeur",
   ux: "UX",
 };
@@ -46,7 +46,53 @@ const STATUS_COLORS = {
   disabled: "var(--text-muted)",
 };
 
+// Grouped agent layout by team
+const SIDEBAR_STRUCTURE = [
+  { type: "section", label: "Partag\u00e9" },
+  { type: "agent", name: "news" },
+  { type: "agent", name: "scoring" },
+  { type: "section", label: "\u00c9quipe 1 \u2014 Intraday" },
+  { type: "agent", name: "trader_1" },
+  { type: "agent", name: "journal" },
+  { type: "agent", name: "learning" },
+  { type: "section", label: "\u00c9quipe 2 \u2014 Tendance" },
+  { type: "agent", name: "trader_2" },
+  { type: "agent", name: "journal_2" },
+  { type: "agent", name: "learning_2" },
+  { type: "divider" },
+  { type: "agent", name: "auditor" },
+];
+
+function AgentButton({ agent, activePage, onNavigate }) {
+  if (!agent) return null;
+  const page = AGENT_TO_PAGE[agent.name];
+  const isActive = activePage === page;
+  const statusColor = STATUS_COLORS[agent.status] || STATUS_COLORS.idle;
+  const isWorking = agent.status === "working";
+
+  return (
+    <button
+      className={`agent-sidebar-item ${isActive ? "selected" : ""} ${isWorking ? "working" : ""}`}
+      onClick={() => onNavigate(page)}
+    >
+      <span className="agent-sidebar-icon">
+        {AGENT_ICONS[agent.name] || "\u2699\ufe0f"}
+      </span>
+      <span className="agent-sidebar-label">
+        {AGENT_LABELS[agent.name] || agent.name}
+      </span>
+      <span
+        className={`agent-status-dot ${agent.status}`}
+        style={{ backgroundColor: statusColor }}
+      />
+    </button>
+  );
+}
+
 export default function AgentSidebar({ agents, activePage, onNavigate, notificationCount, onToggleNotifications }) {
+  const agentMap = {};
+  (agents || []).forEach((a) => { agentMap[a.name] = a; });
+
   return (
     <aside className="agent-sidebar">
       <div className="agent-sidebar-title">ONESHOT</div>
@@ -60,36 +106,30 @@ export default function AgentSidebar({ agents, activePage, onNavigate, notificat
         <span className="agent-sidebar-label">Dashboard</span>
       </button>
 
-      <div className="agent-sidebar-divider" />
-
-      {/* Agent navigation */}
-      {(agents || [])
-        .filter((a) => a.name !== "ux")
-        .map((agent) => {
-          const page = AGENT_TO_PAGE[agent.name];
-          const isActive = activePage === page;
-          const statusColor = STATUS_COLORS[agent.status] || STATUS_COLORS.idle;
-          const isWorking = agent.status === "working";
-
+      {/* Team-grouped agent navigation */}
+      {SIDEBAR_STRUCTURE.map((item, idx) => {
+        if (item.type === "section") {
           return (
-            <button
-              key={agent.name}
-              className={`agent-sidebar-item ${isActive ? "selected" : ""} ${isWorking ? "working" : ""}`}
-              onClick={() => onNavigate(page)}
-            >
-              <span className="agent-sidebar-icon">
-                {AGENT_ICONS[agent.name] || "\u2699\ufe0f"}
-              </span>
-              <span className="agent-sidebar-label">
-                {AGENT_LABELS[agent.name] || agent.name}
-              </span>
-              <span
-                className={`agent-status-dot ${agent.status}`}
-                style={{ backgroundColor: statusColor }}
-              />
-            </button>
+            <div key={idx} className="agent-sidebar-section">
+              {item.label}
+            </div>
           );
-        })}
+        }
+        if (item.type === "divider") {
+          return <div key={idx} className="agent-sidebar-divider" />;
+        }
+        if (item.type === "agent") {
+          return (
+            <AgentButton
+              key={item.name}
+              agent={agentMap[item.name]}
+              activePage={activePage}
+              onNavigate={onNavigate}
+            />
+          );
+        }
+        return null;
+      })}
 
       <div className="agent-sidebar-divider" />
 

@@ -2432,6 +2432,16 @@ a:focus:not(:focus-visible) {
   margin: 8px 0;
 }
 
+.agent-sidebar-section {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 10px 8px 2px;
+  margin-top: 4px;
+}
+
 .agent-sidebar-notif {
   margin-top: auto;
 }

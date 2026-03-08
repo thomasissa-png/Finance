@@ -17,45 +17,115 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 **REGLE ABSOLUE — Commodities :**
 On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity ne marchent pas, le probleme est dans le scoring ou l'analyse — PAS dans la categorie elle-meme. Le learning ne doit JAMAIS penaliser les commodities en tant que classe. Les ajustements se font au niveau ticker+newscat (granulaire), jamais au niveau categorie d'actif pour les commodities.
 
-## Architecture v6.0 — Multi-Agent
+## Architecture v7.0 — Multi-Agent par Équipes
 
-### 8 Agents Autonomes (`backend/app/agents/`)
+### Philosophie "Équipes de Trading"
+Le système est organisé en **équipes autonomes**. Chaque équipe a son propre trader, journal et learning, formant une boucle fermée d'exécution et d'apprentissage. Les agents partagés (News, Scoring, Auditeur) alimentent toutes les équipes.
 
-| Agent | Fichier | Expertise | Rôle |
-|-------|---------|-----------|------|
-| **News** | `agent_news.py` | Data engineering, news sourcing | Collecte, dédup, santé sources, event detection |
-| **Scoring** | `agent_scoring.py` | 15+ ans edge detection, spéculation | Score Claude, formule edge, chain reactions |
-| **Trader 1** | `agent_trader.py` | 15+ ans news trading | Décision trade, position monitoring, risk mgmt |
-| **Trader 2** | `agent_trader_2.py` | 15+ ans spéculation tendance commodities | Trend following sur 4 commodities, positions longue durée |
-| **Journal** | `agent_journal.py` | Business analyse, spéculation | Clôture trades, P&L, MAE/MFE, analyse qualité |
-| **Learning** | `agent_learning.py` | 10+ ans ML, trading quantitatif | 6 dimensions learning, anomalie detection |
-| **Auditeur** | `agent_auditor.py` | Se met dans la peau de chaque agent | Audit profondeur, note /10, améliorations |
-| **UX** | (virtuel) | 15 ans UX, flat design | Frontend React |
+Le framework est conçu pour ajouter facilement de nouvelles équipes : créer un trio trader/journal/learning, les enregistrer dans le registry, wirer le scheduler, et l'auditeur les couvrira automatiquement via ses profils.
+
+### 10 Agents Autonomes (`backend/app/agents/`)
+
+| Agent | Fichier | Équipe | Rôle |
+|-------|---------|--------|------|
+| **News** | `agent_news.py` | Partagé | Collecte, dédup, santé sources, event detection |
+| **Scoring** | `agent_scoring.py` | Partagé | Score Claude, formule edge, chain reactions |
+| **Trader 1** | `agent_trader.py` | Équipe 1 | Day trading intraday, TP/SL, risk mgmt |
+| **Journal 1** | `agent_journal.py` | Équipe 1 | Clôture trades 22h, P&L, MAE/MFE |
+| **Learning 1** | `agent_learning.py` | Équipe 1 | 6 dimensions learning, anomalie detection |
+| **Trader 2** | `agent_trader_2.py` | Équipe 2 | Trend following commodities, positions longue durée |
+| **Journal 2** | `agent_journal_2.py` | Équipe 2 | Journal des flips, MAE/MFE daily bars |
+| **Learning 2** | `agent_learning_2.py` | Équipe 2 | 4 dimensions learning trend, calibration seuil |
+| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 11 profils |
+| **UX** | (virtuel) | Partagé | Frontend React |
+
+### Équipe 1 — Day Trading Intraday
+- **Trader 1** : news trading, 0-1 trade par scan, TP/SL intraday, 41 actifs
+- **Journal 1** : ferme les PENDING à 22h, prix réels 15min/1h bars, MAE/MFE/slippage
+- **Learning 1** : 6 dimensions (ticker×cat, session, newscat+ticker, régime VIX, direction, delay_bias)
+- **Boucle** : Journal 1 → Learning 1 → cache invalidé → Trader 1 utilise au prochain scan
+
+### Équipe 2 — Trend Following Commodities
+- **Trader 2** : positions LONG/SHORT sur 4 commodities (HG=F, CC=F, KC=F, ZW=F), flips sur signal fort
+- **Journal 2** : enrichit chaque flip avec MAE/MFE via daily bars, snapshots quotidiens
+- **Learning 2** : 4 dimensions (per-ticker, per-newscat, per-direction, signal calibration)
+- **Boucle** : Journal 2 → Learning 2 → cache invalidé → Trader 2 utilise au prochain scan
+- **Feedback loop** : Learning 2 ajuste les poids de signal par ticker/newscat/direction + seuil de flip adaptatif (base 20, ×threshold_adj)
 
 ### Infrastructure agents
 - **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
-- **`registry.py`** : singletons, orchestration `News → Scoring → Trader 1 + Trader 2`, helpers
+- **`registry.py`** : singletons, orchestration `News → Scoring → Trader 1 + Trader 2`, helpers pour les 2 équipes
 - **Message Bus** : `agent_messages` (PG) — communication inter-agents async
 - **Logs structurés** : `agent_logs` (PG) — niveaux INFO/WARN/ERROR/DECISION, visibles frontend
 - **Audit Reports** : `audit_reports` (PG) + `data/audit_reports.json` (fallback) — persistés entre sessions
 
-### Architecture multi-trader
-Le framework supporte N traders partageant le bus et les données de scoring/learning.
+### Pipeline quotidien complet (22h CET)
+```
+Journal 1 (ferme trades PENDING)
+  → Learning 1 (recalcule 6 dimensions)
+  → Journal 2 (enrichit flips Trader 2 avec MAE/MFE)
+  → Learning 2 (recalcule 4 dimensions trend)
+  → Cache scan vidé
+```
+
+### Pipeline scan (4x/jour)
+```
+News → Scoring → [Learning 1 cache] → Trader 1
+                → [Learning 2 cache] → Trader 2
+```
+
+### Ajouter une nouvelle équipe (Équipe N)
+1. Créer `agent_trader_N.py` (stratégie spécifique)
+2. Créer `agent_journal_N.py` (adapté à la stratégie)
+3. Créer `agent_learning_N.py` (dimensions pertinentes)
+4. Enregistrer dans `registry.py` (_agents + helpers)
+5. Wirer dans `main.py` (scheduler + API endpoints)
+6. Ajouter profils dans `agent_auditor.py` (AUDIT_PROFILES)
+7. Créer pages frontend (TraderNPage, JournalNPage, LearningNPage)
+8. Mettre à jour sidebar, App.jsx, notifications
 
 #### Agent Trader 2 — Trend Following Commodities
 - **Fichier** : `agent_trader_2.py`
 - **Stratégie** : Trend following sur 4 commodities sélectionnées. Positions longue durée (jours/semaines), contrairement au Trader 1 (intraday).
 - **4 tickers suivis** (`TREND_TICKERS`) : HG=F (cuivre), CC=F (cacao), KC=F (café), ZW=F (blé)
-- **Logique** : Chaque scan accumule un signal net (LONG/SHORT) basé sur les news scorées. Si le signal net dépasse un seuil de confiance et contredit la position actuelle, la position est flippée. Sinon, la position est confirmée.
+- **Logique** : Chaque scan accumule un signal net (LONG/SHORT) basé sur les news scorées, pondéré par Learning 2 (ticker_adj × newscat_adj × direction_adj). Si le signal net dépasse un seuil calibré (20 × threshold_adj) et contredit la position actuelle, la position est flippée.
 - **Catégories filtrées** (`RELEVANT_CATEGORIES`) : commodity, weather, supply_chain, geopolitical, regulatory, sector, other (exclut earnings, macro, m_a, central_bank_subtle)
 - **Score minimum** (`MIN_NEWS_SCORE`) : 15 (plus bas que Trader 1, car les signaux de tendance s'accumulent)
 - **P&L tracking** : Réalisé (cumulé à chaque flip) + Latent (position courante) + Historique des changements
 - **Persistence** : Table PG `trend_positions` (ticker VARCHAR PK, data JSONB, updated_at) + fallback JSON `data/trend_positions.json`
 - **Pipeline** : Exécuté dans `run_scan_pipeline()` après Trader 1, non-bloquant (erreur Trader 2 n'affecte pas Trader 1)
 - **API** : `GET /api/trader2/positions`, `GET /api/trader2/positions/{ticker}/history`
-- **Frontend** : `Trader2Page.jsx` — KPIs, cards positions, historique flips, logs DECISION
-- **Audit** : Profil `trader_2` dans l'auditeur — 8 checks (position_coverage, direction_coherence, flip_frequency, pnl_tracking, news_filtering, confidence_evolution, history_integrity, persistence)
+- **Frontend** : `Trader2Page.jsx` — KPIs, cards positions, historique flips, logs DECISION, Learning 2 context
+- **Audit** : Profil `trader_2` dans l'auditeur — 8 checks
 - **Tests** : 27 tests dans `test_agent_trader_2.py`
+
+#### Agent Journal 2 — Trend Journal
+- **Fichier** : `agent_journal_2.py`
+- **Run quotidien** à 22h après Journal 1 + Learning 1
+- **Fonctionnement** : enrichit chaque flip de Trader 2 avec MAE/MFE via daily bars, prend des snapshots quotidiens de chaque position
+- **Dedup** : par (ticker, entry_time) — évite les doublons lors de triggers manuels
+- **Pruning** : entries > 1 an supprimées automatiquement
+- **Persistence** : Table PG `trend_journal_entries` (id, ticker, entry_time, data JSONB, created_at, UNIQUE ticker+entry_time) + fallback JSON `data/trend_journal.json`
+- **Bus** : publie `journal_2_complete` → Learning 2 consomme
+- **API** : `GET /api/journal2/entries`, `POST /api/journal2/trigger`
+- **Frontend** : `Journal2Page.jsx` — KPIs (flips, WR, P&L, MAE), historique par ticker, logs
+- **Audit** : Profil `journal_2` — 8 checks (flip_coverage, mae_mfe_accuracy, pnl_tracking, dedup_integrity, bar_fetch_reliability, pruning, snapshot_quality, persistence)
+
+#### Agent Learning 2 — Trend Learning
+- **Fichier** : `agent_learning_2.py`
+- **4 dimensions** adaptées au trend following :
+  1. **Per-ticker** (min 4 periods) : quels actifs trend bien vs choppy
+  2. **Per-newscat** (min 3 periods) : quelles catégories produisent de bons flips
+  3. **Per-direction** (min 4 periods) : LONG vs SHORT accuracy
+  4. **Signal calibration** : seuil de flip adaptatif (threshold_adj 0.95-1.05)
+- **Bounds** : ticker/newscat [0.6, 1.4], direction [0.8, 1.2]
+- **Anomaly detection** : churning (trop de flips, WR < 30%), streaks (>= 3 pertes), MAE élevé (< -5%), win rate faible (< 35%)
+- **Cache** : invalidé après Journal 2, recalculé à la demande par Trader 2
+- **Bus** : publie `learning_2_updated`
+- **API** : `GET /api/learning2/adjustments`, `POST /api/learning2/trigger`
+- **Frontend** : `Learning2Page.jsx` — 4 dimensions avec barres, anomalies, calibration seuil, logs
+- **Audit** : Profil `learning_2` — 8 checks (sample_size, ticker_calibration, newscat_calibration, direction_balance, threshold_stability, churning_detection, anomaly_detection, feedback_loop)
+- **Tests** : 35 tests dans `test_journal2_learning2.py`
 
 ### Agent Auditeur — utilisation
 L'auditeur s'appelle manuellement via l'API ou Claude Code :
@@ -69,7 +139,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite
 - **Persistence**: PostgreSQL (primary, via `DATABASE_URL`) avec fallback JSON flat files
-  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive/agent_messages/agent_logs/audit_reports
+  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive/agent_messages/agent_logs/audit_reports/trend_positions/trend_journal_entries
   - Fallback: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` + `data/audit_reports.json` (file locking via `fcntl`)
   - Auto-migration JSON→PG au demarrage si PG est vide mais JSON a des donnees
   - `price_archive`: daily OHLCV par ticker pour backtesting historique (v5.1)
@@ -361,17 +431,19 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
-- `backend/app/agents/registry.py` : 8 singletons, run_scan_pipeline (News→Scoring→Trader 1+2), run_learning_update(), helpers
+- `backend/app/agents/registry.py` : 9 singletons (2 équipes), run_scan_pipeline (News→Scoring→Trader 1+2 avec Learning), helpers journal_2/learning_2
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
 - `backend/app/agents/agent_trader.py` : v6.4, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
-- `backend/app/agents/agent_trader_2.py` : trend following sur 4 commodities (HG=F, CC=F, KC=F, ZW=F), positions longue durée, P&L tracking, flip history, persistence PG/JSON
-- `backend/app/agents/agent_journal.py` : clôture trades, P&L, MAE/MFE, startup recovery
-- `backend/app/agents/agent_learning.py` : 6 dims ML, anomaly detection, cache learning, performance summary
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 9 profils d'expertise (+ UX v6.1, + self-audit v6.2, + trader_2), note /10, persistance rapports, trend tracking, log analysis
+- `backend/app/agents/agent_trader_2.py` : v7.0, trend following 4 commodities, consomme Learning 2 (ticker_adj, newscat_adj, direction_adj, threshold_adj), flip history, persistence PG/JSON
+- `backend/app/agents/agent_journal.py` : Équipe 1, clôture trades, P&L, MAE/MFE, startup recovery
+- `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
+- `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
+- `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 11 profils d'expertise (+ journal_2, learning_2), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
-- `backend/app/database.py` : v6.4, 9 tables PG (+ trend_positions), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 8 tables, 9 scoring columns on trades (v6.3), pg_update_trade_stop (v6.4)
+- `backend/app/database.py` : v7.0, 10 tables PG (+ trend_positions, trend_journal_entries), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 9 tables, pg_update_trade_stop (v6.4)
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/journal.py` : v6.4, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours, direct field access (no getattr)
 - `backend/app/learning.py` : v6.4, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback, update_trade_stop for trailing persistence, direct field access (no getattr)
@@ -410,6 +482,7 @@ Fichiers proteges :
 - `data/audit_reports.json` — rapports d'audit de l'Agent Auditeur (persistés entre sessions)
 - `data/source_health.json` — données santé sources (Agent News)
 - `data/trend_positions.json` — positions tendance Agent Trader 2 (persistées entre sessions)
+- `data/trend_journal.json` — journal des flips Agent Journal 2 (completed periods pour Learning 2)
 
 Regles :
 1. **Ne JAMAIS `git add data/`** ou `git add -A` sans verifier

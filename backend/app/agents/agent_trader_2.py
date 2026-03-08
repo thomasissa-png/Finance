@@ -373,6 +373,7 @@ class AgentTrader2(BaseAgent):
         learning = getattr(self, "_current_learning", {})
         ticker_adj = learning.get("ticker_adj", {})
         newscat_adj = learning.get("newscat_adj", {})
+        newscat_ticker_adj = learning.get("newscat_ticker_adj", {})  # P7: cross-dimension
         direction_adj = learning.get("direction_adj", {})
         signal_cal = learning.get("signal_calibration", {})
 
@@ -389,8 +390,12 @@ class AgentTrader2(BaseAgent):
             # Apply learning 2 adjustments to weight
             # Per-ticker
             weight *= ticker_adj.get(ticker, 1.0)
-            # Per-newscat
-            weight *= newscat_adj.get(sn.news_category, 1.0)
+            # P7: Per-newscat — prefer cross-dimension ticker×newscat, fallback broad
+            cross_key = f"{sn.news_category}+{ticker}"
+            if cross_key in newscat_ticker_adj:
+                weight *= newscat_ticker_adj[cross_key]
+            else:
+                weight *= newscat_adj.get(sn.news_category, 1.0)
 
             # Check direct impact
             direct = ticker in sn.impacted_tickers
@@ -513,6 +518,8 @@ class AgentTrader2(BaseAgent):
             "pnl_pct": close_pnl,
             "signal_strength": round(strength, 1),
             "key_news": key_news[:5],
+            # Store position entry_time for Journal 2 MAE/MFE (P4 audit fix)
+            "position_entry_time": position.get("entry_time"),
         }
 
         history = position.get("history", [])
