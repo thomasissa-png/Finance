@@ -582,6 +582,20 @@ def init_db() -> None:
                 )
             """)
 
+            # v8.0: Performance snapshots & reports persistence
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS performance_data (
+                    id SERIAL PRIMARY KEY,
+                    data_type VARCHAR(20) NOT NULL,
+                    data JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_performance_data_type_ts
+                ON performance_data(data_type, created_at)
+            """)
+
             # v6.3: Add missing trade columns for learning feedback (safe for existing DBs)
             for col_name, col_type in [
                 ("surprise", "INTEGER"),
@@ -1137,6 +1151,72 @@ def pg_prune_audit_reports(max_reports: int = 100) -> int:
     return _pg_retry(_prune)
 
 
+# ── v8.0: Performance data persistence ────────────────────────────────
+
+
+def pg_save_performance_data(data_type: str, data: dict) -> bool:
+    """Save a performance snapshot or report to PG."""
+    if not is_pg_enabled():
+        return False
+
+    def _save():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO performance_data (data_type, data) VALUES (%s, %s)",
+                    (data_type, json.dumps(data, default=str)),
+                )
+        return True
+    return _pg_retry(_save)
+
+
+def pg_load_performance_data(data_type: str, limit: int = 168) -> list[dict]:
+    """Load recent performance data of given type from PG."""
+    if not is_pg_enabled():
+        return []
+
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT data FROM performance_data WHERE data_type = %s ORDER BY created_at DESC LIMIT %s",
+                    (data_type, limit),
+                )
+                rows = cur.fetchall()
+                return [r["data"] for r in reversed(rows)]
+    return _pg_retry(_load)
+
+
+def pg_prune_performance_data(max_snapshots: int = 168, max_reports: int = 30) -> int:
+    """Prune old performance snapshots and reports."""
+    if not is_pg_enabled():
+        return 0
+
+    def _prune():
+        total = 0
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for dtype, max_count in [("snapshot", max_snapshots), ("daily_report", max_reports)]:
+                    cur.execute("SELECT COUNT(*) FROM performance_data WHERE data_type = %s", (dtype,))
+                    count = cur.fetchone()[0]
+                    if count > max_count:
+                        to_delete = count - max_count
+                        cur.execute("""
+                            DELETE FROM performance_data
+                            WHERE id IN (
+                                SELECT id FROM performance_data
+                                WHERE data_type = %s
+                                ORDER BY created_at ASC
+                                LIMIT %s
+                            )
+                        """, (dtype, to_delete))
+                        total += cur.rowcount
+        if total > 0:
+            logger.info("Pruned %d old performance records", total)
+        return total
+    return _pg_retry(_prune)
+
+
 # ── M4: Maintenance ──────────────────────────────────────────────────
 
 
@@ -1156,10 +1236,16 @@ def pg_run_maintenance() -> dict:
     except Exception as exc:
         logger.warning("Agent table pruning failed: %s", exc)
 
+    # Prune performance data
+    try:
+        pg_prune_performance_data(max_snapshots=168, max_reports=30)
+    except Exception as exc:
+        logger.warning("Performance data pruning failed: %s", exc)
+
     results = {}
     tables = ["trades", "journal_entries", "scan_history", "last_scans",
               "agent_messages", "agent_logs", "audit_reports", "trend_positions",
-              "trend_journal_entries"]
+              "trend_journal_entries", "performance_data"]
     for table in tables:
         try:
             pool = _get_pool()

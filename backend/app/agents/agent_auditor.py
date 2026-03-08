@@ -275,33 +275,25 @@ class AgentAuditor(BaseAgent):
         }
 
         try:
-            # Run the audit checks
-            if target_agent == "news":
-                self._audit_news(report, focus)
-            elif target_agent == "scoring":
-                self._audit_scoring(report, focus)
-            elif target_agent == "trader_1":
-                self._audit_trader(report, focus)
-            elif target_agent == "trader_2":
-                self._audit_trader_2(report, focus)
-            elif target_agent == "journal":
-                self._audit_journal(report, focus)
-            elif target_agent == "learning":
-                self._audit_learning(report, focus)
-            elif target_agent == "scoring_2":
-                self._audit_scoring_2(report, focus)
-            elif target_agent == "journal_2":
-                self._audit_journal_2(report, focus)
-            elif target_agent == "learning_2":
-                self._audit_learning_2(report, focus)
-            elif target_agent == "ux":
-                self._audit_ux(report, focus)
-            elif target_agent == "infrastructure":
-                self._audit_infrastructure(report, focus)
-            elif target_agent == "performance":
-                self._audit_performance(report, focus)
-            elif target_agent == "auditor":
-                self._audit_self(report, focus)
+            # Run the audit checks — dict dispatch (replaces if-elif chain)
+            audit_dispatch = {
+                "news": self._audit_news,
+                "scoring": self._audit_scoring,
+                "trader_1": self._audit_trader,
+                "trader_2": self._audit_trader_2,
+                "journal": self._audit_journal,
+                "learning": self._audit_learning,
+                "scoring_2": self._audit_scoring_2,
+                "journal_2": self._audit_journal_2,
+                "learning_2": self._audit_learning_2,
+                "ux": self._audit_ux,
+                "infrastructure": self._audit_infrastructure,
+                "performance": self._audit_performance,
+                "auditor": self._audit_self,
+            }
+            audit_fn = audit_dispatch.get(target_agent)
+            if audit_fn:
+                audit_fn(report, focus)
 
             # Calculate final score (average of breakdown)
             if report["score_breakdown"]:
@@ -920,10 +912,6 @@ class AgentAuditor(BaseAgent):
             })
             scores["drawdown"] = max(2, 10 - max_loss_streak)
 
-        except Exception as exc:
-            findings.append({"area": "trader", "status": "ERROR", "detail": str(exc)})
-            scores["overall"] = 3
-
             # 6. Position sizing — VIX regime check
             try:
                 vix_trades = [t for t in closed if getattr(t, 'vix_at_trade', None) is not None]
@@ -944,8 +932,6 @@ class AgentAuditor(BaseAgent):
             # 7. Correlation check — verify no duplicate group trades
             try:
                 from ..config import CORRELATION_GROUPS
-                from collections import Counter
-                # Check if trades on same day are in same correlation group
                 by_date: dict[str, list] = {}
                 for t in closed:
                     d = t.timestamp.strftime("%Y-%m-%d") if hasattr(t.timestamp, 'strftime') else str(t.timestamp)[:10]
@@ -981,6 +967,10 @@ class AgentAuditor(BaseAgent):
             except Exception:
                 scores["calendar_blocking"] = 5
                 findings.append({"area": "calendar_blocking", "status": "WARN", "detail": "Cannot verify calendar"})
+
+        except Exception as exc:
+            findings.append({"area": "trader", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
 
         # Log analysis for trader agent
         self._analyze_agent_errors(findings, scores, improvements, "trader_1")
@@ -1649,15 +1639,17 @@ class AgentAuditor(BaseAgent):
             from pathlib import Path
             frontend_dir = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "src"
 
-            # 1. Component coverage — check all key components exist
+            # 1. Component coverage — check all key components exist (v7.0 naming)
             required_components = [
-                "components/Dashboard.jsx",
-                "components/Journal.jsx",
-                "components/History.jsx",
-                "components/Performance.jsx",
+                "components/DashboardPage.jsx",
+                "components/TraderPage.jsx",
+                "components/ScoringPage.jsx",
+                "components/NewsPage.jsx",
+                "components/JournalPage.jsx",
+                "components/LearningPage.jsx",
+                "components/AuditorPage.jsx",
                 "components/AgentSidebar.jsx",
                 "components/AgentOverview.jsx",
-                "components/AgentDetail.jsx",
             ]
             existing = [c for c in required_components if (frontend_dir / c).exists()]
             missing = [c for c in required_components if c not in existing]
@@ -1704,7 +1696,6 @@ class AgentAuditor(BaseAgent):
             scores["polling_efficiency"] = 9 if (has_interval_cleanup and has_suspense) else 6
 
             # 5. Agent visibility — check all 7 agents are represented
-            agent_detail = frontend_dir / "components" / "AgentDetail.jsx"
             agent_overview = frontend_dir / "components" / "AgentOverview.jsx"
             overview_content = agent_overview.read_text() if agent_overview.exists() else ""
             agents_in_config = []
@@ -1721,10 +1712,12 @@ class AgentAuditor(BaseAgent):
             })
             scores["agent_visibility"] = 10 if not missing_agents else max(5, 10 - len(missing_agents))
 
-            # 6. Data display — check AgentDetail exists and has log filtering
-            detail_content = agent_detail.read_text() if agent_detail.exists() else ""
-            has_log_filter = "level" in detail_content.lower() and "filter" in detail_content.lower()
-            has_metrics = "metrics" in detail_content.lower()
+            # 6. Data display — check pages have log filtering and metrics
+            # In v7.0, log filtering is in individual page components (TraderPage, AuditorPage, etc.)
+            trader_page = frontend_dir / "components" / "TraderPage.jsx"
+            trader_content = trader_page.read_text() if trader_page.exists() else ""
+            has_log_filter = "log-filter" in trader_content or "logFilter" in trader_content
+            has_metrics = "metrics" in trader_content.lower() or "kpi" in trader_content.lower()
             findings.append({
                 "area": "data_display",
                 "status": "OK" if has_log_filter and has_metrics else "WARN",
@@ -2396,9 +2389,10 @@ class AgentAuditor(BaseAgent):
         perf_agent = get_agent("performance")
 
         # 1. KPI coverage — does the agent measure all other agents?
-        expected_agents = {"trader_1", "trader_2", "scoring", "news", "journal_1", "journal_2", "learning_1", "learning_2", "infrastructure"}
+        # Report uses top-level keys: trader_1, trader_2, scoring, news, journal, learning, infrastructure
+        expected_agents = {"trader_1", "trader_2", "scoring", "news", "journal", "learning", "infrastructure"}
         if perf_agent and perf_agent._last_report:
-            measured = set(perf_agent._last_report.get("agent_kpis", {}).keys())
+            measured = {k for k in expected_agents if k in perf_agent._last_report and perf_agent._last_report[k]}
             missing = expected_agents - measured
             findings.append({
                 "area": "kpi_coverage",
@@ -2430,10 +2424,10 @@ class AgentAuditor(BaseAgent):
             trades = load_trades()
             closed = [t for t in trades if t.result and t.result.value not in ("PENDING",)]
             if closed:
-                wins = sum(1 for t in closed if t.pnl_percent and t.pnl_percent > 0)
+                wins = sum(1 for t in closed if t.pnl_pct is not None and t.pnl_pct > 0)
                 real_wr = wins / len(closed) * 100
                 if perf_agent and perf_agent._last_report:
-                    reported_wr = perf_agent._last_report.get("agent_kpis", {}).get("trader_1", {}).get("win_rate")
+                    reported_wr = perf_agent._last_report.get("trader_1", {}).get("win_rate")
                     if reported_wr is not None:
                         delta = abs(reported_wr - real_wr)
                         findings.append({
@@ -2507,13 +2501,7 @@ class AgentAuditor(BaseAgent):
         scores["cross_agent_consistency"] = 10 if agents_with_metrics == len(all_agents) else 7
 
         # Error analysis
-        errors = self._analyze_agent_errors("performance")
-        if errors:
-            findings.append({
-                "area": "error_analysis",
-                "status": "WARN" if errors else "OK",
-                "detail": f"Recent errors: {len(errors)}",
-            })
+        self._analyze_agent_errors(findings, scores, improvements, "performance")
 
         report["summary"] = (
             f"Agent Performance audit: {len(findings)} checks. "

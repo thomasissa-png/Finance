@@ -23,14 +23,11 @@ Schedule :
 - Tendances hebdomadaires dimanche 21h30 (évolution des KPIs)
 """
 
-import logging
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from .base import BaseAgent, AgentStatus
-
-logger = logging.getLogger(__name__)
 
 
 class AgentPerformance(BaseAgent):
@@ -45,6 +42,7 @@ class AgentPerformance(BaseAgent):
         self._total_snapshots: int = 0
         self._total_reports: int = 0
         self._last_duration_ms: int = 0
+        self._load_persisted_data()
 
     def run(self, action: str = "snapshot", **kwargs) -> dict:
         """Run performance action.
@@ -101,6 +99,7 @@ class AgentPerformance(BaseAgent):
                 self._snapshots = self._snapshots[-168:]
 
             self._total_snapshots += 1
+            self._persist_snapshot(snapshot)
             duration_ms = int((time.monotonic() - start) * 1000)
             self._last_duration_ms = duration_ms
 
@@ -191,6 +190,7 @@ class AgentPerformance(BaseAgent):
                 self._daily_reports = self._daily_reports[-30:]
             self._last_report = report
             self._total_reports += 1
+            self._persist_report(report)
 
             duration_ms = int((time.monotonic() - start) * 1000)
             self._last_duration_ms = duration_ms
@@ -373,7 +373,7 @@ class AgentPerformance(BaseAgent):
             kpis["by_category"] = by_cat
 
         except Exception as exc:
-            logger.debug("Trader 1 KPI computation error: %s", exc)
+            self.log("Trader 1 KPI computation error", {"error": str(exc)}, level="WARN")
 
         return kpis
 
@@ -453,7 +453,7 @@ class AgentPerformance(BaseAgent):
                     kpis["by_ticker"] = by_ticker
 
         except Exception as exc:
-            logger.debug("Trader 2 KPI computation error: %s", exc)
+            self.log("Trader 2 KPI computation error", {"error": str(exc)}, level="WARN")
 
         return kpis
 
@@ -498,7 +498,7 @@ class AgentPerformance(BaseAgent):
                 pass
 
         except Exception as exc:
-            logger.debug("Scoring KPI computation error: %s", exc)
+            self.log("Scoring KPI computation error", {"error": str(exc)}, level="WARN")
 
         return kpis
 
@@ -543,7 +543,7 @@ class AgentPerformance(BaseAgent):
                 pass
 
         except Exception as exc:
-            logger.debug("News KPI computation error: %s", exc)
+            self.log("News KPI computation error", {"error": str(exc)}, level="WARN")
 
         return kpis
 
@@ -589,7 +589,7 @@ class AgentPerformance(BaseAgent):
                 pass
 
         except Exception as exc:
-            logger.debug("Journal KPI computation error: %s", exc)
+            self.log("Journal KPI computation error", {"error": str(exc)}, level="WARN")
 
         return kpis
 
@@ -621,7 +621,7 @@ class AgentPerformance(BaseAgent):
                 kpis["learning_2_anomalies"] = len(m2.get("anomalies", []))
 
         except Exception as exc:
-            logger.debug("Learning KPI computation error: %s", exc)
+            self.log("Learning KPI computation error", {"error": str(exc)}, level="WARN")
 
         return kpis
 
@@ -642,7 +642,7 @@ class AgentPerformance(BaseAgent):
                 kpis["pg_failures"] = metrics.get("consecutive_pg_failures", 0)
                 kpis["maintenance_runs"] = metrics.get("total_maintenance_runs", 0)
         except Exception as exc:
-            logger.debug("Infra KPI computation error: %s", exc)
+            self.log("Infra KPI computation error", {"error": str(exc)}, level="WARN")
 
         return kpis
 
@@ -825,3 +825,39 @@ class AgentPerformance(BaseAgent):
     def get_snapshots(self, limit: int = 24) -> list[dict]:
         """Get recent KPI snapshots."""
         return self._snapshots[-limit:]
+
+    # ── Persistence ───────────────────────────────────────────────────
+
+    def _load_persisted_data(self) -> None:
+        """Load persisted snapshots and reports from PG on startup."""
+        try:
+            from ..database import pg_load_performance_data, is_pg_enabled
+            if not is_pg_enabled():
+                return
+            snapshots = pg_load_performance_data("snapshot", limit=168)
+            if snapshots:
+                self._snapshots = snapshots
+                self._total_snapshots = len(snapshots)
+            reports = pg_load_performance_data("daily_report", limit=30)
+            if reports:
+                self._daily_reports = reports
+                self._total_reports = len(reports)
+                self._last_report = reports[-1]
+        except Exception:
+            pass  # Graceful: persistence is best-effort
+
+    def _persist_snapshot(self, snapshot: dict) -> None:
+        """Save snapshot to PG (best-effort)."""
+        try:
+            from ..database import pg_save_performance_data
+            pg_save_performance_data("snapshot", snapshot)
+        except Exception:
+            pass
+
+    def _persist_report(self, report: dict) -> None:
+        """Save daily report to PG (best-effort)."""
+        try:
+            from ..database import pg_save_performance_data
+            pg_save_performance_data("daily_report", report)
+        except Exception:
+            pass
