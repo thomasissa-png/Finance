@@ -1148,11 +1148,16 @@ def get_trend_journal_entries():
 
 @app.post("/api/journal2/trigger")
 def trigger_journal_2():
-    """Manually trigger Journal 2 run."""
+    """Manually trigger Journal 2 run.
+
+    P5 fix: run in background thread to avoid HTTP timeout.
+    """
     agent = get_agent("journal_2")
     if not agent:
         raise HTTPException(500, "Journal 2 agent not available")
-    return agent.run()
+    import threading
+    threading.Thread(target=agent.run, daemon=True).start()
+    return {"status": "triggered", "message": "Journal 2 run started in background"}
 
 
 # ── Agent Learning 2 — Trend Learning API ───────────────────────

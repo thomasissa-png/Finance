@@ -56,16 +56,18 @@ class TestAgentJournal2:
         assert mfe == 8.0
 
     def test_compute_mae_mfe_empty_bars(self):
+        """L3 fix: empty bars → None instead of 0.0."""
         from backend.app.agents.agent_journal_2 import _compute_mae_mfe
         mae, mfe = _compute_mae_mfe("LONG", 100.0, [])
-        assert mae == 0.0
-        assert mfe == 0.0
+        assert mae is None
+        assert mfe is None
 
     def test_compute_mae_mfe_no_entry_price(self):
+        """L3 fix: no entry_price → None instead of 0.0."""
         from backend.app.agents.agent_journal_2 import _compute_mae_mfe
         mae, mfe = _compute_mae_mfe("LONG", 0, [{"high": 10, "low": 5}])
-        assert mae == 0.0
-        assert mfe == 0.0
+        assert mae is None
+        assert mfe is None
 
     def test_snapshot(self):
         from backend.app.agents.agent_journal_2 import AgentJournal2

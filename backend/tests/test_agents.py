@@ -809,3 +809,159 @@ class TestScoringAuditFromTraderV65:
         assert "market_context" in result
         assert len(result["scored"]) == 1
         assert result["market_context"] == mock_ctx
+
+
+# ── v7.1 Audit fixes tests ────────────────────────────────────────────
+
+
+class TestAuditDispatchEquipe2:
+    """P1: Verify audit dispatch routes to journal_2, learning_2, scoring_2."""
+
+    def test_auditor_has_audit_journal_2_method(self):
+        from backend.app.agents.agent_auditor import AgentAuditor
+        assert hasattr(AgentAuditor, "_audit_journal_2")
+
+    def test_auditor_has_audit_learning_2_method(self):
+        from backend.app.agents.agent_auditor import AgentAuditor
+        assert hasattr(AgentAuditor, "_audit_learning_2")
+
+    def test_auditor_has_audit_scoring_2_method(self):
+        from backend.app.agents.agent_auditor import AgentAuditor
+        assert hasattr(AgentAuditor, "_audit_scoring_2")
+
+    def test_self_audit_expected_includes_equipe2(self):
+        """Self-audit expected set includes journal_2 and learning_2."""
+        import inspect
+        from backend.app.agents.agent_auditor import AgentAuditor
+        src = inspect.getsource(AgentAuditor._audit_self)
+        assert "journal_2" in src
+        assert "learning_2" in src
+
+    def test_check_methods_includes_equipe2(self):
+        """Self-audit check_methods includes journal_2, learning_2, scoring_2."""
+        import inspect
+        from backend.app.agents.agent_auditor import AgentAuditor
+        src = inspect.getsource(AgentAuditor._audit_self)
+        assert "_audit_journal_2" in src
+        assert "_audit_learning_2" in src
+        assert "_audit_scoring_2" in src
+
+
+class TestJournal2AuditFixes:
+    """Tests for P2-P8, L1-L8 fixes in agent_journal_2.py."""
+
+    def test_mae_mfe_none_when_no_bars(self):
+        """L3: MAE/MFE returns None when bars are missing."""
+        from backend.app.agents.agent_journal_2 import _compute_mae_mfe
+        mae, mfe = _compute_mae_mfe("LONG", 100.0, [])
+        assert mae is None
+        assert mfe is None
+
+    def test_process_flip_has_duration_days(self):
+        """L6: process_flip includes duration_days."""
+        from backend.app.agents.agent_journal_2 import AgentJournal2
+        agent = AgentJournal2()
+        flip = {
+            "time": "2024-06-15T10:00:00+00:00",
+            "entry_price": 100.0,
+            "exit_price": 105.0,
+            "from_direction": "LONG",
+            "pnl_pct": 5.0,
+            "position_entry_time": "2024-06-10T10:00:00+00:00",
+            "key_news": [{"category": "weather", "title": "Test"}],
+        }
+        entry = agent._process_flip("HG=F", flip, {"name": "Cuivre", "category": "commodities_industrial"})
+        assert entry is not None
+        assert "duration_days" in entry
+        assert entry["duration_days"] == pytest.approx(5.0, abs=0.1)
+
+    def test_process_flip_has_bar_interval(self):
+        """L4: process_flip includes bar_interval."""
+        from backend.app.agents.agent_journal_2 import AgentJournal2
+        agent = AgentJournal2()
+        flip = {
+            "time": "2024-06-15T10:00:00+00:00",
+            "entry_price": 100.0,
+            "exit_price": 105.0,
+            "from_direction": "LONG",
+            "pnl_pct": 5.0,
+            "key_news": [],
+        }
+        entry = agent._process_flip("HG=F", flip, {"name": "Cuivre", "category": "commodities_industrial"})
+        assert entry is not None
+        assert entry["bar_interval"] == "daily"
+
+    def test_news_categories_sorted_by_frequency(self):
+        """L7: news_categories sorted by frequency, not random set."""
+        from backend.app.agents.agent_journal_2 import AgentJournal2
+        agent = AgentJournal2()
+        flip = {
+            "time": "2024-06-15T10:00:00+00:00",
+            "entry_price": 100.0,
+            "exit_price": 105.0,
+            "from_direction": "LONG",
+            "pnl_pct": 5.0,
+            "key_news": [
+                {"category": "commodity"},
+                {"category": "weather"},
+                {"category": "commodity"},
+                {"category": "commodity"},
+                {"category": "weather"},
+            ],
+        }
+        entry = agent._process_flip("HG=F", flip, {"name": "Cuivre", "category": "commodities_industrial"})
+        assert entry is not None
+        # commodity appears 3 times, weather 2 — commodity should be first
+        assert entry["news_categories"][0] == "commodity"
+        assert entry["news_categories"][1] == "weather"
+
+    def test_key_news_count_before_truncation(self):
+        """L1: key_news_count reflects total news, not truncated."""
+        from backend.app.agents.agent_journal_2 import AgentJournal2
+        agent = AgentJournal2()
+        # Create 8 news items (Trader 2 truncates to 5 in history)
+        flip = {
+            "time": "2024-06-15T10:00:00+00:00",
+            "entry_price": 100.0,
+            "exit_price": 105.0,
+            "from_direction": "LONG",
+            "pnl_pct": 5.0,
+            "key_news": [{"category": "weather"} for _ in range(8)],
+        }
+        entry = agent._process_flip("HG=F", flip, {"name": "Cuivre", "category": "commodities_industrial"})
+        assert entry is not None
+        assert entry["key_news_count"] == 8
+
+    def test_total_entries_loaded_from_persistence(self):
+        """P8: _total_entries loads from persistence."""
+        from backend.app.agents.agent_journal_2 import AgentJournal2
+        agent = AgentJournal2()
+        assert agent._total_entries_loaded is False
+        agent._ensure_total_entries()
+        assert agent._total_entries_loaded is True
+
+    def test_snapshot_has_entry_time_for_dedup(self):
+        """P2: Snapshots have entry_time for PG dedup."""
+        from backend.app.agents.agent_journal_2 import AgentJournal2
+        agent = AgentJournal2()
+        snapshot = agent._take_snapshot("HG=F", {
+            "direction": "LONG",
+            "entry_price": 100.0,
+            "current_price": 105.0,
+            "unrealized_pnl_pct": 5.0,
+        })
+        assert "entry_time" in snapshot
+        assert snapshot["entry_time"].startswith("snapshot_HG=F_")
+
+    def test_get_entries_excludes_snapshots(self):
+        """P2: get_entries() filters out snapshot entries."""
+        from backend.app.agents.agent_journal_2 import AgentJournal2
+        agent = AgentJournal2()
+        with patch("backend.app.agents.agent_journal_2._load_journal_entries",
+                    return_value=[
+                        {"ticker": "HG=F", "entry_type": "snapshot", "entry_time": "s1"},
+                        {"ticker": "HG=F", "pnl_pct": 5.0, "entry_time": "e1"},
+                    ]):
+            entries = agent.get_entries()
+            assert len(entries) == 1
+            assert entries[0]["pnl_pct"] == 5.0

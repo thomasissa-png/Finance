@@ -147,8 +147,11 @@ def compute_trend_learning(entries: list[dict]) -> dict:
     losses = [e for e in valid if (e.get("pnl_pct") or 0) <= 0]
     win_rate = len(wins) / len(valid) * 100 if valid else 0
     avg_pnl = total_pnl / len(valid) if valid else 0
-    avg_mae = sum(e.get("mae_pct", 0) for e in valid) / len(valid) if valid else 0
-    avg_mfe = sum(e.get("mfe_pct", 0) for e in valid) / len(valid) if valid else 0
+    # L3: Filter None MAE/MFE — only average entries with actual bar data
+    mae_values = [e.get("mae_pct") for e in valid if e.get("mae_pct") is not None]
+    mfe_values = [e.get("mfe_pct") for e in valid if e.get("mfe_pct") is not None]
+    avg_mae = sum(mae_values) / len(mae_values) if mae_values else 0
+    avg_mfe = sum(mfe_values) / len(mfe_values) if mfe_values else 0
 
     result["stats"] = {
         "total_periods": len(valid),

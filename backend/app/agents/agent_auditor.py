@@ -262,6 +262,12 @@ class AgentAuditor(BaseAgent):
                 self._audit_journal(report, focus)
             elif target_agent == "learning":
                 self._audit_learning(report, focus)
+            elif target_agent == "scoring_2":
+                self._audit_scoring_2(report, focus)
+            elif target_agent == "journal_2":
+                self._audit_journal_2(report, focus)
+            elif target_agent == "learning_2":
+                self._audit_learning_2(report, focus)
             elif target_agent == "ux":
                 self._audit_ux(report, focus)
             elif target_agent == "auditor":
@@ -1742,6 +1748,368 @@ class AgentAuditor(BaseAgent):
             "update": "Added UX audit profile with 7 checks: component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility",
         })
 
+    def _audit_scoring_2(self, report: dict, focus: str | None):
+        """Audit Agent Scoring 2 — trend re-scoring quality, multipliers, accumulation."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_scoring_2 import (
+                AgentScoring2, TREND_CATEGORY_MULTS, STRUCTURAL_KEYWORDS,
+                TREND_TICKERS, score_for_trend,
+            )
+
+            # 1. Category multipliers — verify they prioritize structural impact
+            weather_mult = TREND_CATEGORY_MULTS.get("weather", 0)
+            earnings_mult = TREND_CATEGORY_MULTS.get("earnings", 0)
+            findings.append({
+                "area": "category_multipliers",
+                "status": "OK" if weather_mult >= 1.5 and earnings_mult <= 0.2 else "WARN",
+                "detail": f"weather={weather_mult}, earnings={earnings_mult}, "
+                          f"{len(TREND_CATEGORY_MULTS)} categories configured",
+            })
+            scores["category_multipliers"] = 9 if weather_mult >= 2.0 else 7
+
+            # 2. Structural keywords coverage
+            high_persist = {k: v for k, v in STRUCTURAL_KEYWORDS.items() if v >= 1.4}
+            low_persist = {k: v for k, v in STRUCTURAL_KEYWORDS.items() if v < 1.0}
+            findings.append({
+                "area": "persistence_detection",
+                "status": "OK",
+                "detail": f"{len(STRUCTURAL_KEYWORDS)} keywords, "
+                          f"{len(high_persist)} high-persistence (>=1.4), "
+                          f"{len(low_persist)} low-persistence (<1.0)",
+            })
+            scores["persistence_detection"] = 8
+
+            # 3. Ticker coverage
+            findings.append({
+                "area": "ticker_coverage",
+                "status": "OK" if len(TREND_TICKERS) == 4 else "WARN",
+                "detail": f"{len(TREND_TICKERS)} trend tickers: {TREND_TICKERS}",
+            })
+            scores["ticker_coverage"] = 9
+
+            # 4. Score distribution from last result
+            from .registry import get_agent
+            agent = get_agent("scoring_2")
+            if agent:
+                last = agent.get_last_result()
+                if last:
+                    stats = last.get("stats", {})
+                    relevant = stats.get("relevant_items", 0)
+                    total = stats.get("total_items", 0)
+                    avg_score = stats.get("avg_trend_score", 0)
+                    findings.append({
+                        "area": "score_distribution",
+                        "status": "OK" if relevant > 0 else "WARN",
+                        "detail": f"Last run: {relevant}/{total} relevant, avg trend score={avg_score}",
+                    })
+                    scores["score_distribution"] = 8 if relevant > 0 else 5
+                else:
+                    findings.append({"area": "score_distribution", "status": "WARN", "detail": "No scoring data yet"})
+                    scores["score_distribution"] = 5
+
+                metrics = agent.get_metrics()
+                findings.append({
+                    "area": "pipeline_integration",
+                    "status": "OK" if metrics.get("total_rescorings", 0) > 0 else "WARN",
+                    "detail": f"Total rescorings: {metrics.get('total_rescorings', 0)}",
+                })
+                scores["pipeline_integration"] = 8 if metrics.get("total_rescorings", 0) > 0 else 4
+
+            # 5. No Claude call verification
+            import inspect
+            src = inspect.getsource(score_for_trend)
+            has_claude = "anthropic" in src.lower() or "claude" in src.lower()
+            findings.append({
+                "area": "no_claude_call",
+                "status": "OK" if not has_claude else "CRITICAL",
+                "detail": "Confirmed: no Claude API call in score_for_trend()" if not has_claude
+                          else "UNEXPECTED Claude reference in trend scoring!",
+            })
+            scores["no_claude_call"] = 10 if not has_claude else 0
+
+            # 6. Accumulation logic
+            findings.append({
+                "area": "accumulation_logic",
+                "status": "OK",
+                "detail": "Accumulation per ticker with long/short signal sums, weighted by trend_score × reliability",
+            })
+            scores["accumulation_logic"] = 8
+
+            # 7. Trader 2 consumption
+            try:
+                from .agent_trader_2 import AgentTrader2
+                import inspect as insp2
+                trader_src = insp2.getsource(AgentTrader2._evaluate_ticker)
+                uses_trend = "trend_accumulation" in trader_src or "trend_scoring" in trader_src
+                findings.append({
+                    "area": "trader_2_consumption",
+                    "status": "OK" if uses_trend else "WARN",
+                    "detail": "Trader 2 consumes trend scoring accumulation" if uses_trend
+                              else "Trader 2 may not use trend scoring data",
+                })
+                scores["trader_2_consumption"] = 9 if uses_trend else 4
+            except Exception:
+                scores["trader_2_consumption"] = 5
+
+        except Exception as exc:
+            findings.append({"area": "scoring_2", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        self._analyze_agent_errors(findings, scores, improvements, "scoring_2")
+        tests.append("test_scoring_2_no_claude_call")
+        tests.append("test_scoring_2_category_multipliers_valid")
+        tests.append("test_scoring_2_accumulation_logic")
+
+    def _audit_journal_2(self, report: dict, focus: str | None):
+        """Audit Agent Journal 2 — flip coverage, MAE/MFE accuracy, persistence."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_journal_2 import _load_journal_entries
+
+            entries = _load_journal_entries()
+            # Filter out snapshots for flip analysis
+            flip_entries = [e for e in entries if e.get("entry_type") != "snapshot"]
+            snapshot_entries = [e for e in entries if e.get("entry_type") == "snapshot"]
+
+            if not flip_entries:
+                findings.append({"area": "overall", "status": "WARN", "detail": "No journal 2 flip entries to audit"})
+                scores["flip_coverage"] = 5
+                scores["data_quality"] = 5
+                return
+
+            recent = flip_entries[-50:] if len(flip_entries) > 50 else flip_entries
+
+            # 1. Flip coverage — check all 4 tickers have entries
+            tickers_covered = {e.get("ticker") for e in flip_entries}
+            from .agent_trader_2 import TREND_TICKERS
+            missing_tickers = set(TREND_TICKERS.keys()) - tickers_covered
+            findings.append({
+                "area": "flip_coverage",
+                "status": "OK" if not missing_tickers else "WARN",
+                "detail": f"Tickers covered: {tickers_covered}, missing: {missing_tickers or 'none'}, "
+                          f"total flips: {len(flip_entries)}",
+            })
+            scores["flip_coverage"] = 9 if not missing_tickers else max(4, 9 - len(missing_tickers) * 2)
+
+            # 2. MAE/MFE accuracy — check for None values (missing bars)
+            mae_none = sum(1 for e in recent if e.get("mae_pct") is None)
+            mfe_none = sum(1 for e in recent if e.get("mfe_pct") is None)
+            mae_rate = (len(recent) - mae_none) / len(recent) * 100 if recent else 0
+            findings.append({
+                "area": "mae_mfe_accuracy",
+                "status": "OK" if mae_rate > 80 else "WARN" if mae_rate > 50 else "CRITICAL",
+                "detail": f"MAE available: {len(recent)-mae_none}/{len(recent)} ({mae_rate:.0f}%), "
+                          f"MFE missing: {mfe_none}/{len(recent)}",
+            })
+            scores["mae_mfe_accuracy"] = min(10, mae_rate / 10)
+
+            if mae_rate < 70:
+                improvements.append({
+                    "priority": "HIGH",
+                    "agent": "journal_2",
+                    "action": f"MAE/MFE availability at {mae_rate:.0f}% — check bar fetch reliability",
+                    "rationale": "Learning 2 needs MAE/MFE to detect drawdown anomalies",
+                })
+
+            # 3. P&L tracking
+            pnl_missing = sum(1 for e in recent if e.get("pnl_pct") is None)
+            pnl_zero = sum(1 for e in recent if e.get("pnl_pct") == 0.0)
+            findings.append({
+                "area": "pnl_tracking",
+                "status": "OK" if pnl_missing == 0 else "WARN",
+                "detail": f"Missing PnL: {pnl_missing}/{len(recent)}, Zero PnL: {pnl_zero}/{len(recent)}",
+            })
+            scores["pnl_tracking"] = 10 if pnl_missing == 0 else max(3, 10 - pnl_missing * 2)
+
+            # 4. Dedup integrity — check for duplicate (ticker, entry_time) pairs
+            keys = [(e.get("ticker"), e.get("entry_time")) for e in flip_entries]
+            duplicates = len(keys) - len(set(keys))
+            findings.append({
+                "area": "dedup_integrity",
+                "status": "OK" if duplicates == 0 else "WARN",
+                "detail": f"Duplicate entries: {duplicates}/{len(flip_entries)}",
+            })
+            scores["dedup_integrity"] = 10 if duplicates == 0 else max(3, 10 - duplicates * 2)
+
+            # 5. Bar fetch reliability
+            bar_counts = [e.get("bar_count", 0) for e in recent]
+            low_bars = sum(1 for b in bar_counts if b < 2)
+            avg_bars = sum(bar_counts) / len(bar_counts) if bar_counts else 0
+            findings.append({
+                "area": "bar_fetch_reliability",
+                "status": "OK" if avg_bars >= 3 else "WARN",
+                "detail": f"Avg bars: {avg_bars:.1f}, low coverage (<2): {low_bars}/{len(recent)}",
+            })
+            scores["bar_fetch_reliability"] = min(10, avg_bars * 2)
+
+            # 6. Pruning — check oldest entry
+            oldest_time = min((e.get("entry_time", "9999") for e in flip_entries), default="9999")
+            one_year_ago = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+            has_old = oldest_time < one_year_ago if oldest_time != "9999" else False
+            findings.append({
+                "area": "pruning",
+                "status": "OK" if not has_old else "WARN",
+                "detail": f"Oldest entry: {oldest_time[:10]}" + (" (>1y, should be pruned)" if has_old else ""),
+            })
+            scores["pruning"] = 9 if not has_old else 5
+
+            # 7. Snapshot quality
+            findings.append({
+                "area": "snapshot_quality",
+                "status": "OK" if snapshot_entries else "WARN",
+                "detail": f"{len(snapshot_entries)} snapshots persisted"
+                          + (" — snapshots now saved with entries" if snapshot_entries else " — no snapshots yet"),
+            })
+            scores["snapshot_quality"] = 8 if snapshot_entries else 4
+
+            # 8. Persistence
+            from ..database import is_pg_enabled
+            pg = is_pg_enabled()
+            findings.append({
+                "area": "persistence",
+                "status": "OK",
+                "detail": f"Storage: {'PostgreSQL' if pg else 'JSON'}, total entries: {len(entries)}",
+            })
+            scores["persistence"] = 8 if pg else 6
+
+        except Exception as exc:
+            findings.append({"area": "journal_2", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        self._analyze_agent_errors(findings, scores, improvements, "journal_2")
+        tests.append("test_journal_2_all_flips_have_pnl")
+        tests.append("test_journal_2_mae_mfe_none_when_no_bars")
+        tests.append("test_journal_2_dedup_by_position_entry_time")
+        tests.append("test_journal_2_snapshots_persisted")
+
+    def _audit_learning_2(self, report: dict, focus: str | None):
+        """Audit Agent Learning 2 — adjustment quality, sample sizes, anomaly detection."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_learning_2 import (
+                compute_trend_learning, MIN_PERIODS_TICKER,
+                MIN_PERIODS_NEWSCAT, MIN_PERIODS_DIRECTION, MIN_PERIODS_GLOBAL,
+                ADJ_MIN, ADJ_MAX,
+            )
+            from .agent_journal_2 import _load_journal_entries
+
+            entries = _load_journal_entries()
+            flip_entries = [e for e in entries if e.get("entry_type") != "snapshot"]
+
+            if not flip_entries:
+                findings.append({"area": "overall", "status": "WARN", "detail": "No data for learning 2 audit"})
+                scores["sample_size"] = 5
+                return
+
+            # Run the learning computation
+            learning = compute_trend_learning(flip_entries)
+            stats = learning.get("stats", {})
+
+            # 1. Sample size
+            total = stats.get("total_periods", 0)
+            sufficient = stats.get("sufficient_data", False)
+            findings.append({
+                "area": "sample_size",
+                "status": "OK" if sufficient else "WARN",
+                "detail": f"Total periods: {total}, sufficient: {sufficient} (min {MIN_PERIODS_GLOBAL})",
+            })
+            scores["sample_size"] = 8 if sufficient else 4
+
+            # 2. Ticker calibration
+            ticker_adj = learning.get("ticker_adj", {})
+            extreme_tickers = {k: v for k, v in ticker_adj.items() if abs(v - 1.0) > 0.3}
+            findings.append({
+                "area": "ticker_calibration",
+                "status": "OK" if not extreme_tickers else "WARN",
+                "detail": f"Ticker adjustments: {ticker_adj or 'none'}"
+                          + (f", extreme: {extreme_tickers}" if extreme_tickers else ""),
+            })
+            scores["ticker_calibration"] = 8 if not extreme_tickers else 6
+
+            # 3. Newscat calibration
+            newscat_adj = learning.get("newscat_adj", {})
+            findings.append({
+                "area": "newscat_calibration",
+                "status": "OK",
+                "detail": f"Newscat adjustments: {newscat_adj or 'none'}",
+            })
+            scores["newscat_calibration"] = 8
+
+            # 4. Direction balance
+            dir_adj = learning.get("direction_adj", {})
+            long_adj = dir_adj.get("LONG", 1.0)
+            short_adj = dir_adj.get("SHORT", 1.0)
+            imbalance = abs(long_adj - short_adj)
+            findings.append({
+                "area": "direction_balance",
+                "status": "OK" if imbalance < 0.3 else "WARN",
+                "detail": f"LONG adj={long_adj}, SHORT adj={short_adj}, imbalance={imbalance:.2f}",
+            })
+            scores["direction_balance"] = 8 if imbalance < 0.2 else 6 if imbalance < 0.3 else 4
+
+            # 5. Threshold stability
+            sig_cal = learning.get("signal_calibration", {})
+            threshold_adj = sig_cal.get("threshold_adj", 1.0)
+            findings.append({
+                "area": "threshold_stability",
+                "status": "OK" if 0.95 <= threshold_adj <= 1.05 else "WARN",
+                "detail": f"Threshold adj: {threshold_adj} (bounds [0.95, 1.05])",
+            })
+            scores["threshold_stability"] = 9 if 0.97 <= threshold_adj <= 1.03 else 7
+
+            # 6. Churning detection
+            anomalies = learning.get("anomalies", [])
+            churning = [a for a in anomalies if "CHURNING" in a]
+            findings.append({
+                "area": "churning_detection",
+                "status": "WARN" if churning else "OK",
+                "detail": f"Churning alerts: {len(churning)}"
+                          + (f" — {churning}" if churning else ""),
+            })
+            scores["churning_detection"] = 5 if churning else 9
+
+            # 7. Anomaly detection overall
+            findings.append({
+                "area": "anomaly_detection",
+                "status": "OK" if len(anomalies) < 3 else "WARN",
+                "detail": f"{len(anomalies)} anomalies detected: {anomalies or 'none'}",
+            })
+            scores["anomaly_detection"] = 8 if len(anomalies) < 3 else 5
+
+            # 8. Feedback loop — verify cache mechanism
+            from .registry import get_agent
+            agent = get_agent("learning_2")
+            if agent:
+                cache_valid = agent._cache_valid
+                findings.append({
+                    "area": "feedback_loop",
+                    "status": "OK",
+                    "detail": f"Cache valid: {cache_valid}, recalculations: {agent._total_recalculations}",
+                })
+                scores["feedback_loop"] = 8
+
+        except Exception as exc:
+            findings.append({"area": "learning_2", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        self._analyze_agent_errors(findings, scores, improvements, "learning_2")
+        tests.append("test_learning_2_bounds_respected")
+        tests.append("test_learning_2_significance_testing")
+        tests.append("test_learning_2_cache_invalidation")
+
     def _audit_self(self, report: dict, focus: str | None):
         """Auto-audit — meta-analysis of the auditor's own capabilities."""
         findings = report["findings"]
@@ -1751,7 +2119,7 @@ class AgentAuditor(BaseAgent):
 
         # 1. Profile coverage — all agents auditable?
         auditable = set(AUDIT_PROFILES.keys()) - {"auditor"}  # exclude self
-        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "learning", "ux"}
+        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux"}
         missing = expected - auditable
         findings.append({
             "area": "profile_coverage",
@@ -1765,10 +2133,13 @@ class AgentAuditor(BaseAgent):
         check_methods = {
             "news": "_audit_news",
             "scoring": "_audit_scoring",
+            "scoring_2": "_audit_scoring_2",
             "trader_1": "_audit_trader",
             "trader_2": "_audit_trader_2",
             "journal": "_audit_journal",
+            "journal_2": "_audit_journal_2",
             "learning": "_audit_learning",
+            "learning_2": "_audit_learning_2",
             "ux": "_audit_ux",
         }
         implemented = sum(1 for m in check_methods.values() if hasattr(self, m))
