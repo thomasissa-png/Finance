@@ -317,12 +317,14 @@ class TestIntegration:
         assert hasattr(registry, "get_learning_2_adjustments")
 
     def test_all_agents_count(self):
-        """Registry initializes 12 agents (not counting UX virtual)."""
+        """Registry initializes 20 agents (not counting UX virtual)."""
         from backend.app.agents.registry import get_all_agents
         agents = get_all_agents()
-        assert len(agents) == 12
-        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2",
-                    "journal", "journal_2", "learning", "learning_2",
+        assert len(agents) == 20
+        expected = {"news", "scoring", "scoring_2", "scoring_3", "scoring_4",
+                    "trader_1", "trader_2", "trader_3", "trader_4",
+                    "journal", "journal_2", "journal_3", "journal_4",
+                    "learning", "learning_2", "learning_3", "learning_4",
                     "infrastructure", "performance", "auditor"}
         assert set(agents.keys()) == expected
 

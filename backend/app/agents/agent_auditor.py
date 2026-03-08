@@ -203,6 +203,96 @@ AUDIT_PROFILES = {
             "cross_agent_consistency", # Les KPIs sont-ils cohérents entre agents ?
         ],
     },
+    "scoring_3": {
+        "expertise": "Expert indicateurs techniques multi-timeframe, 15+ ans d'analyse technique quantitative",
+        "checks": [
+            "indicator_accuracy",    # RSI/MACD/Bollinger/etc. calculés correctement ?
+            "strategy_coverage",     # Les 5 stratégies produisent-elles des setups ?
+            "ticker_coverage",       # Les 20 tickers sont-ils tous scannés ?
+            "score_distribution",    # Les scores techniques sont-ils bien distribués ?
+            "ohlcv_reliability",     # Les données OHLCV sont-elles fiables ?
+            "multi_timeframe",       # Les signaux multi-timeframe convergent-ils ?
+            "no_claude_call",        # Pas d'appel Claude (pur computationnel) ?
+        ],
+    },
+    "trader_3": {
+        "expertise": "Expert trading technique multi-stratégie, gestion de positions à durée variable (heures à 3 jours)",
+        "checks": [
+            "position_management",   # Les positions actives sont-elles bien gérées ?
+            "strategy_selection",    # La sélection de stratégie est-elle pertinente ?
+            "risk_management",       # TP/SL/trailing stop bien calibrés ?
+            "learning_integration",  # Les ajustements learning sont-ils appliqués ?
+            "holding_period",        # Les durées de holding respectent-elles les limites ?
+            "ab_testing",            # L'A/B testing stratégies fonctionne-t-il ?
+            "persistence",           # Les positions sont-elles persistées (PG/JSON) ?
+        ],
+    },
+    "journal_3": {
+        "expertise": "Expert en journalisation de trades techniques et analyse de performance par stratégie",
+        "checks": [
+            "entry_coverage",        # Toutes les positions fermées sont-elles journalisées ?
+            "mae_mfe_accuracy",      # MAE/MFE calculés correctement ?
+            "strategy_analysis",     # L'analyse A/B par stratégie est-elle pertinente ?
+            "dedup_integrity",       # Pas de doublons ?
+            "pnl_tracking",          # P&L correctement calculé ?
+            "persistence",           # Données persistées (PG/JSON) ?
+        ],
+    },
+    "learning_3": {
+        "expertise": "Expert ML pour trading technique, optimisation de stratégies et sélection de modèles",
+        "checks": [
+            "strategy_ranking",      # Le classement des stratégies est-il pertinent ?
+            "ticker_calibration",    # Les ajustements par ticker sont-ils cohérents ?
+            "sample_size",           # Assez de données pour des ajustements significatifs ?
+            "overfitting_risk",      # Risque de sur-apprentissage ?
+            "anomaly_detection",     # Les stratégies sous-performantes sont-elles détectées ?
+            "feedback_loop",         # Les ajustements sont-ils consommés par Trader 3 ?
+        ],
+    },
+    "scoring_4": {
+        "expertise": "Expert en meta-scoring multi-signal et détection de confluence entre équipes indépendantes",
+        "checks": [
+            "weight_calibration",    # Les poids news/trend/tech sont-ils bien calibrés ?
+            "confluence_detection",  # La confluence 2/3 et 3/3 est-elle correctement détectée ?
+            "source_availability",   # Les 3 sources upstream sont-elles disponibles ?
+            "score_distribution",    # Les meta-scores sont-ils bien distribués ?
+            "direction_consensus",   # Le consensus directionnel est-il fiable ?
+            "no_claude_call",        # Pas d'appel Claude (pure agrégation) ?
+        ],
+    },
+    "trader_4": {
+        "expertise": "Expert trading ensemble/confluence, combinaison de signaux multi-stratégies indépendants",
+        "checks": [
+            "confluence_quality",    # La qualité de confluence est-elle suffisante ?
+            "position_management",   # Les positions sont-elles bien gérées ?
+            "upstream_dependency",   # La dépendance aux équipes upstream est-elle gérée ?
+            "sizing_by_confluence",  # Le sizing adapté au niveau de confluence ?
+            "holding_expiry",        # Les positions expirées sont-elles fermées à temps ?
+            "persistence",           # Les positions sont-elles persistées (PG/JSON) ?
+        ],
+    },
+    "journal_4": {
+        "expertise": "Expert en journalisation de trades meta/ensemble et analyse de performance par confluence",
+        "checks": [
+            "entry_coverage",        # Toutes les positions fermées sont-elles journalisées ?
+            "confluence_analysis",   # L'analyse par niveau de confluence est-elle pertinente ?
+            "source_combo_tracking", # Les combinaisons de sources sont-elles suivies ?
+            "pnl_tracking",          # P&L correctement calculé ?
+            "dedup_integrity",       # Pas de doublons ?
+            "persistence",           # Données persistées (PG/JSON) ?
+        ],
+    },
+    "learning_4": {
+        "expertise": "Expert ML pour trading ensemble, optimisation de poids multi-signal et détection d'anomalies",
+        "checks": [
+            "weight_optimization",   # L'optimisation des poids est-elle pertinente ?
+            "combination_analysis",  # L'analyse par combinaison est-elle utile ?
+            "sample_size",           # Assez de données pour des ajustements significatifs ?
+            "anomaly_detection",     # Les anomalies sont-elles détectées ?
+            "ticker_calibration",    # Les ajustements par ticker sont-ils cohérents ?
+            "feedback_loop",         # Les ajustements sont-ils consommés par Trader 4 ?
+        ],
+    },
     "auditor": {
         "expertise": "Expert en systèmes d'audit, meta-analyse et assurance qualité pour trading algorithmique",
         "checks": [
@@ -287,6 +377,14 @@ class AgentAuditor(BaseAgent):
                 "scoring_2": self._audit_scoring_2,
                 "journal_2": self._audit_journal_2,
                 "learning_2": self._audit_learning_2,
+                "scoring_3": self._audit_generic_agent,
+                "trader_3": self._audit_generic_agent,
+                "journal_3": self._audit_generic_agent,
+                "learning_3": self._audit_generic_agent,
+                "scoring_4": self._audit_generic_agent,
+                "trader_4": self._audit_generic_agent,
+                "journal_4": self._audit_generic_agent,
+                "learning_4": self._audit_generic_agent,
                 "ux": self._audit_ux,
                 "infrastructure": self._audit_infrastructure,
                 "performance": self._audit_performance,
@@ -1629,6 +1727,81 @@ class AgentAuditor(BaseAgent):
             "update": "Add audit trail: last audit date + score for learning system",
         })
 
+    def _audit_generic_agent(self, report: dict, focus: str | None):
+        """Generic audit for Teams 3/4 agents — checks metrics, logs, and basic health."""
+        target = report["target_agent"]
+        findings = report["findings"]
+        improvements = report["improvements"]
+        scores = report["score_breakdown"]
+
+        try:
+            from . import registry
+            agent = registry.get_agent(target)
+            if not agent:
+                findings.append({"area": "existence", "status": "CRITICAL", "detail": f"Agent {target} not found in registry"})
+                scores["existence"] = 0
+                return
+
+            # Check agent has metrics
+            metrics = agent.get_metrics()
+            findings.append({
+                "area": "metrics",
+                "status": "OK" if metrics else "WARN",
+                "detail": f"Metrics keys: {list(metrics.keys()) if metrics else 'none'}",
+            })
+            scores["metrics"] = 8 if metrics else 3
+
+            # Check logs
+            agent_logs = agent.logger.get_logs(limit=20)
+            findings.append({
+                "area": "logging",
+                "status": "OK" if agent_logs else "INFO",
+                "detail": f"{len(agent_logs)} log entries",
+            })
+            scores["logging"] = 8 if agent_logs else 5
+
+            # Check version
+            version = getattr(agent, "version", None)
+            findings.append({
+                "area": "versioning",
+                "status": "OK" if version else "WARN",
+                "detail": f"Version: {version or 'not set'}",
+            })
+            scores["versioning"] = 9 if version else 4
+
+            # Analyze error logs
+            error_logs = [l for l in agent_logs if l.get("level") in ("ERROR", "WARN")]
+            if error_logs:
+                findings.append({
+                    "area": "errors",
+                    "status": "WARN" if len(error_logs) < 5 else "CRITICAL",
+                    "detail": f"{len(error_logs)} errors/warnings in recent logs",
+                })
+                scores["errors"] = max(3, 10 - len(error_logs))
+            else:
+                scores["errors"] = 10
+
+            # Profile checks from AUDIT_PROFILES
+            profile = AUDIT_PROFILES.get(target, {})
+            checks = profile.get("checks", [])
+            findings.append({
+                "area": "profile",
+                "status": "OK",
+                "detail": f"Audit profile: {len(checks)} checks declared",
+            })
+            scores["profile"] = 7
+
+            if not improvements:
+                improvements.append({
+                    "priority": "P3",
+                    "description": f"Implement deep audit checks for {target} (currently using generic audit)",
+                    "effort": "medium",
+                })
+
+        except Exception as exc:
+            findings.append({"area": "audit_error", "status": "ERROR", "detail": str(exc)})
+            scores["audit_error"] = 2
+
     def _audit_ux(self, report: dict, focus: str | None):
         """Audit Agent UX — frontend components, API integration, polling, accessibility."""
         findings = report["findings"]
@@ -2538,7 +2711,7 @@ class AgentAuditor(BaseAgent):
 
         # 1. Profile coverage — all agents auditable?
         auditable = set(AUDIT_PROFILES.keys()) - {"auditor"}  # exclude self
-        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux", "infrastructure", "performance"}
+        expected = {"news", "scoring", "scoring_2", "scoring_3", "scoring_4", "trader_1", "trader_2", "trader_3", "trader_4", "journal", "journal_2", "journal_3", "journal_4", "learning", "learning_2", "learning_3", "learning_4", "ux", "infrastructure", "performance"}
         missing = expected - auditable
         findings.append({
             "area": "profile_coverage",
@@ -2553,12 +2726,20 @@ class AgentAuditor(BaseAgent):
             "news": "_audit_news",
             "scoring": "_audit_scoring",
             "scoring_2": "_audit_scoring_2",
+            "scoring_3": "_audit_generic_agent",
+            "scoring_4": "_audit_generic_agent",
             "trader_1": "_audit_trader",
             "trader_2": "_audit_trader_2",
+            "trader_3": "_audit_generic_agent",
+            "trader_4": "_audit_generic_agent",
             "journal": "_audit_journal",
             "journal_2": "_audit_journal_2",
+            "journal_3": "_audit_generic_agent",
+            "journal_4": "_audit_generic_agent",
             "learning": "_audit_learning",
             "learning_2": "_audit_learning_2",
+            "learning_3": "_audit_generic_agent",
+            "learning_4": "_audit_generic_agent",
             "ux": "_audit_ux",
             "infrastructure": "_audit_infrastructure",
             "performance": "_audit_performance",

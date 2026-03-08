@@ -1,48 +1,30 @@
 import React from "react";
 
 const AGENT_ICONS = {
-  news: "\ud83d\udce1",
-  scoring: "\ud83c\udfaf",
-  scoring_2: "\ud83d\udccf",
-  trader_1: "\ud83d\udcb9",
-  trader_2: "\ud83d\udcc8",
-  journal: "\ud83d\udcd3",
-  journal_2: "\ud83d\udcd4",
-  learning: "\ud83e\udde0",
-  learning_2: "\ud83d\udca1",
-  auditor: "\ud83d\udd0d",
-  infrastructure: "\ud83d\udee0\ufe0f",
-  performance: "\ud83d\udcca",
-  ux: "\ud83c\udfa8",
+  news: "\ud83d\udce1", scoring: "\ud83c\udfaf",
+  scoring_2: "\ud83d\udccf", scoring_3: "\ud83d\udcc9", scoring_4: "\ud83e\udde9",
+  trader_1: "\ud83d\udcb9", trader_2: "\ud83d\udcc8", trader_3: "\ud83d\udcc0", trader_4: "\ud83c\udfb0",
+  journal: "\ud83d\udcd3", journal_2: "\ud83d\udcd4", journal_3: "\ud83d\udcd2", journal_4: "\ud83d\udcd5",
+  learning: "\ud83e\udde0", learning_2: "\ud83d\udca1", learning_3: "\ud83e\uddea", learning_4: "\ud83e\uddf2",
+  auditor: "\ud83d\udd0d", infrastructure: "\ud83d\udee0\ufe0f", performance: "\ud83d\udcca", ux: "\ud83c\udfa8",
 };
 
 const AGENT_LABELS = {
-  news: "News",
-  scoring: "Scoring",
-  scoring_2: "Scoring",
-  trader_1: "Trader",
-  trader_2: "Trader",
-  journal: "Journal",
-  journal_2: "Journal",
-  learning: "Learning",
-  learning_2: "Learning",
-  auditor: "Auditeur",
-  infrastructure: "Infra",
-  performance: "Performance",
-  ux: "UX",
+  news: "News", scoring: "Scoring",
+  scoring_2: "Scoring", scoring_3: "Scoring", scoring_4: "Scoring",
+  trader_1: "Trader", trader_2: "Trader", trader_3: "Trader", trader_4: "Trader",
+  journal: "Journal", journal_2: "Journal", journal_3: "Journal", journal_4: "Journal",
+  learning: "Learning", learning_2: "Learning", learning_3: "Learning", learning_4: "Learning",
+  auditor: "Auditeur", infrastructure: "Infra", performance: "Performance", ux: "UX",
 };
 
 // Map agent names to page routes
 const AGENT_TO_PAGE = {
-  news: "news",
-  scoring: "scoring",
-  scoring_2: "scoring2",
-  trader_1: "trader",
-  trader_2: "trader2",
-  journal: "journal",
-  journal_2: "journal2",
-  learning: "learning",
-  learning_2: "learning2",
+  news: "news", scoring: "scoring",
+  scoring_2: "scoring2", scoring_3: "scoring3", scoring_4: "scoring4",
+  trader_1: "trader", trader_2: "trader2", trader_3: "trader3", trader_4: "trader4",
+  journal: "journal", journal_2: "journal2", journal_3: "journal3", journal_4: "journal4",
+  learning: "learning", learning_2: "learning2", learning_3: "learning3", learning_4: "learning4",
   auditor: "auditor",
 };
 
@@ -58,15 +40,25 @@ const SIDEBAR_STRUCTURE = [
   { type: "section", label: "Partag\u00e9" },
   { type: "agent", name: "news" },
   { type: "agent", name: "scoring" },
-  { type: "section", label: "\u00c9quipe 1 \u2014 Intraday" },
+  { type: "section", label: "\u00c9q. 1 \u2014 Intraday" },
   { type: "agent", name: "trader_1" },
   { type: "agent", name: "journal" },
   { type: "agent", name: "learning" },
-  { type: "section", label: "\u00c9quipe 2 \u2014 Tendance" },
+  { type: "section", label: "\u00c9q. 2 \u2014 Tendance" },
   { type: "agent", name: "scoring_2" },
   { type: "agent", name: "trader_2" },
   { type: "agent", name: "journal_2" },
   { type: "agent", name: "learning_2" },
+  { type: "section", label: "\u00c9q. 3 \u2014 Technique" },
+  { type: "agent", name: "scoring_3" },
+  { type: "agent", name: "trader_3" },
+  { type: "agent", name: "journal_3" },
+  { type: "agent", name: "learning_3" },
+  { type: "section", label: "\u00c9q. 4 \u2014 Meta" },
+  { type: "agent", name: "scoring_4" },
+  { type: "agent", name: "trader_4" },
+  { type: "agent", name: "journal_4" },
+  { type: "agent", name: "learning_4" },
   { type: "divider" },
   { type: "agent", name: "auditor" },
 ];
@@ -74,7 +66,7 @@ const SIDEBAR_STRUCTURE = [
 function AgentButton({ agent, activePage, onNavigate }) {
   if (!agent) return null;
   const page = AGENT_TO_PAGE[agent.name];
-  if (!page) return null; // Skip agents without pages (infra, perf, ux)
+  if (!page) return null;
   const isActive = activePage === page;
   const statusColor = STATUS_COLORS[agent.status] || STATUS_COLORS.idle;
   const isWorking = agent.status === "working";
@@ -109,7 +101,6 @@ export default function AgentSidebar({ agents, activePage, onNavigate, notificat
     <aside className="agent-sidebar">
       <div className="agent-sidebar-title">ONESHOT</div>
 
-      {/* Dashboard nav */}
       <button
         className={`agent-sidebar-item ${activePage === "dashboard" ? "selected" : ""}`}
         onClick={() => onNavigate("dashboard")}
@@ -118,7 +109,6 @@ export default function AgentSidebar({ agents, activePage, onNavigate, notificat
         <span className="agent-sidebar-label">Dashboard</span>
       </button>
 
-      {/* Team map */}
       <button
         className={`agent-sidebar-item ${activePage === "team" ? "selected" : ""}`}
         onClick={() => onNavigate("team")}
@@ -127,7 +117,6 @@ export default function AgentSidebar({ agents, activePage, onNavigate, notificat
         <span className="agent-sidebar-label">Vue d'ensemble</span>
       </button>
 
-      {/* Team-grouped agent navigation */}
       {SIDEBAR_STRUCTURE.map((item, idx) => {
         if (item.type === "section") {
           return (
@@ -154,7 +143,6 @@ export default function AgentSidebar({ agents, activePage, onNavigate, notificat
 
       <div className="agent-sidebar-divider" />
 
-      {/* Notifications */}
       <button
         className="agent-sidebar-item agent-sidebar-notif"
         onClick={onToggleNotifications}

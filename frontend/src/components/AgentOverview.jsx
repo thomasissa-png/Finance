@@ -100,6 +100,92 @@ const AGENT_CONFIG = {
       { label: "Anomalies", value: (m.anomalies || []).length, warn: (m.anomalies || []).length > 0 },
     ],
   },
+  scoring_3: {
+    icon: "\ud83d\udcc9",
+    label: "Agent Scoring 3",
+    desc: "Indicateurs techniques",
+    team: "team3",
+    metricsDisplay: (m) => [
+      { label: "Setups", value: m.last_setups_count || 0 },
+      { label: "Score moyen", value: m.last_avg_score ? m.last_avg_score.toFixed(1) : "\u2014" },
+      { label: "Tickers", value: m.tickers_tracked || 0 },
+    ],
+  },
+  trader_3: {
+    icon: "\ud83d\udcc0",
+    label: "Agent Trader 3",
+    desc: "Trading technique multi-stratégie",
+    team: "team3",
+    metricsDisplay: (m) => [
+      { label: "Actives", value: m.active_positions || 0 },
+      { label: "P&L réalisé", value: m.total_realized_pnl != null ? `${m.total_realized_pnl > 0 ? "+" : ""}${m.total_realized_pnl.toFixed(2)}%` : "\u2014", positive: (m.total_realized_pnl || 0) > 0 },
+      { label: "Évals", value: m.evaluations_today || 0 },
+    ],
+  },
+  journal_3: {
+    icon: "\ud83d\udcd2",
+    label: "Agent Journal 3",
+    desc: "Journal positions techniques",
+    team: "team3",
+    metricsDisplay: (m) => [
+      { label: "Entries", value: m.total_entries || 0 },
+      { label: "Dernières", value: m.last_entries_processed || 0 },
+    ],
+  },
+  learning_3: {
+    icon: "\ud83e\uddea",
+    label: "Agent Learning 3",
+    desc: "3 dimensions technique",
+    team: "team3",
+    metricsDisplay: (m) => [
+      { label: "Ajustements", value: m.last_adjustment_count || 0 },
+      { label: "Anomalies", value: (m.anomalies || []).length, warn: (m.anomalies || []).length > 0 },
+      { label: "Recalculs", value: m.total_recalculations || 0 },
+    ],
+  },
+  scoring_4: {
+    icon: "\ud83e\udde9",
+    label: "Agent Scoring 4",
+    desc: "Meta-scoring confluence",
+    team: "team4",
+    metricsDisplay: (m) => [
+      { label: "Tickers", value: m.last_ticker_count || 0 },
+      { label: "Confluence max", value: `${m.last_max_confluence || 0}/3` },
+      { label: "Sources", value: m.last_sources_active || 0 },
+    ],
+  },
+  trader_4: {
+    icon: "\ud83c\udfb0",
+    label: "Agent Trader 4",
+    desc: "Ensemble confluence-driven",
+    team: "team4",
+    metricsDisplay: (m) => [
+      { label: "Positions", value: m.open_positions || 0 },
+      { label: "P&L réalisé", value: m.total_realized_pnl != null ? `${m.total_realized_pnl > 0 ? "+" : ""}${m.total_realized_pnl.toFixed(2)}%` : "\u2014", positive: (m.total_realized_pnl || 0) > 0 },
+      { label: "Upstream", value: m.upstream_ready ? "OK" : "Attente", warn: !m.upstream_ready },
+    ],
+  },
+  journal_4: {
+    icon: "\ud83d\udcd5",
+    label: "Agent Journal 4",
+    desc: "Journal positions meta",
+    team: "team4",
+    metricsDisplay: (m) => [
+      { label: "Entries", value: m.total_entries || 0 },
+      { label: "Dernières", value: m.last_entries_processed || 0 },
+    ],
+  },
+  learning_4: {
+    icon: "\ud83e\uddf2",
+    label: "Agent Learning 4",
+    desc: "Weight optimization meta",
+    team: "team4",
+    metricsDisplay: (m) => [
+      { label: "Ajustements", value: m.last_adjustment_count || 0 },
+      { label: "Anomalies", value: (m.anomalies || []).length, warn: (m.anomalies || []).length > 0 },
+      { label: "Recalculs", value: m.total_recalculations || 0 },
+    ],
+  },
   infrastructure: {
     icon: "\ud83d\udee0\ufe0f",
     label: "Agent Infrastructure",

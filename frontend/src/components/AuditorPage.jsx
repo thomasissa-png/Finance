@@ -5,20 +5,30 @@ const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c
 const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
 
 const AUDIT_TARGETS = [
-  "news", "scoring", "scoring_2", "trader_1", "trader_2",
-  "journal", "journal_2", "learning", "learning_2",
+  "news", "scoring", "scoring_2", "scoring_3", "scoring_4",
+  "trader_1", "trader_2", "trader_3", "trader_4",
+  "journal", "journal_2", "journal_3", "journal_4",
+  "learning", "learning_2", "learning_3", "learning_4",
   "infrastructure", "performance", "auditor",
 ];
 const TARGET_LABELS = {
   news: "\ud83d\udce1 News",
   scoring: "\ud83c\udfaf Scoring",
   scoring_2: "\ud83d\udccf Scoring 2",
+  scoring_3: "\ud83d\udcc9 Scoring 3",
+  scoring_4: "\ud83e\udde9 Scoring 4",
   trader_1: "\ud83d\udcb9 Trader 1",
   trader_2: "\ud83d\udcc8 Trader 2",
+  trader_3: "\ud83d\udcc0 Trader 3",
+  trader_4: "\ud83c\udfb0 Trader 4",
   journal: "\ud83d\udcd3 Journal 1",
   journal_2: "\ud83d\udcd4 Journal 2",
+  journal_3: "\ud83d\udcd2 Journal 3",
+  journal_4: "\ud83d\udcd5 Journal 4",
   learning: "\ud83e\udde0 Learning 1",
   learning_2: "\ud83d\udca1 Learning 2",
+  learning_3: "\ud83e\uddea Learning 3",
+  learning_4: "\ud83e\uddf2 Learning 4",
   infrastructure: "\ud83d\udee0\ufe0f Infra",
   performance: "\ud83d\udcca Performance",
   auditor: "\ud83d\udd0d Auditeur",

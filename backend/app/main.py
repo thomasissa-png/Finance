@@ -415,6 +415,36 @@ def _run_daily_journal() -> None:
                 run_learning_2_update()
             except Exception as exc:
                 logger.warning("Journal 2 / Learning 2 update failed: %s", exc)
+            # Run Journal 3 (technical) + Learning 3 update
+            try:
+                from .agents.registry import (run_daily_journal_3,
+                                              invalidate_learning_3_cache,
+                                              run_learning_3_update)
+                run_daily_journal_3()
+                invalidate_learning_3_cache()
+                run_learning_3_update()
+            except Exception as exc:
+                logger.warning("Journal 3 / Learning 3 update failed: %s", exc)
+            # Run Journal 4 (meta) + Learning 4 update
+            try:
+                from .agents.registry import (run_daily_journal_4,
+                                              invalidate_learning_4_cache,
+                                              run_learning_4_update)
+                run_daily_journal_4()
+                invalidate_learning_4_cache()
+                run_learning_4_update()
+            except Exception as exc:
+                logger.warning("Journal 4 / Learning 4 update failed: %s", exc)
+            # Reset Trader 3 & 4 daily counters
+            try:
+                trader_3 = get_agent("trader_3")
+                if trader_3 and hasattr(trader_3, "reset_daily_counters"):
+                    trader_3.reset_daily_counters()
+                trader_4 = get_agent("trader_4")
+                if trader_4 and hasattr(trader_4, "reset_daily_counters"):
+                    trader_4.reset_daily_counters()
+            except Exception:
+                pass
             # Clear scan cache after journal
             with _scans_lock:
                 _last_scans = {}
@@ -1340,6 +1370,142 @@ def trigger_learning_2():
     agent = get_agent("learning_2")
     if not agent:
         raise HTTPException(500, "Learning 2 agent not available")
+    return agent.run()
+
+
+# ── Équipe 3 — Technical Indicators API ─────────────────────────
+
+
+@app.get("/api/scoring3/result")
+def get_tech_scoring_result():
+    """Get last technical scoring result."""
+    agent = get_agent("scoring_3")
+    if not agent:
+        return {}
+    return agent.get_last_result() or {}
+
+
+@app.get("/api/trader3/positions")
+def get_tech_positions():
+    """Get current technical positions for Trader 3."""
+    agent = get_agent("trader_3")
+    if not agent:
+        return []
+    return agent.get_positions()
+
+
+@app.get("/api/trader3/strategies")
+def get_tech_strategies():
+    """Get strategy A/B test results for Trader 3."""
+    agent = get_agent("trader_3")
+    if not agent:
+        return {}
+    return agent.get_strategy_stats()
+
+
+@app.get("/api/journal3/entries")
+def get_tech_journal_entries():
+    """Get technical journal entries."""
+    agent = get_agent("journal_3")
+    if not agent:
+        return []
+    return agent.get_entries()
+
+
+@app.post("/api/journal3/trigger")
+def trigger_journal_3():
+    """Manually trigger Journal 3 run."""
+    agent = get_agent("journal_3")
+    if not agent:
+        raise HTTPException(500, "Journal 3 agent not available")
+    import threading
+    threading.Thread(target=agent.run, daemon=True).start()
+    return {"status": "triggered", "message": "Journal 3 run started in background"}
+
+
+@app.get("/api/learning3/adjustments")
+def get_tech_learning_adjustments():
+    """Get technical learning adjustments for Trader 3."""
+    agent = get_agent("learning_3")
+    if not agent:
+        return {}
+    return agent.get_adjustments()
+
+
+@app.post("/api/learning3/trigger")
+def trigger_learning_3():
+    """Manually trigger Learning 3 recalculation."""
+    agent = get_agent("learning_3")
+    if not agent:
+        raise HTTPException(500, "Learning 3 agent not available")
+    return agent.run()
+
+
+# ── Équipe 4 — Meta/Ensemble API ────────────────────────────────
+
+
+@app.get("/api/scoring4/result")
+def get_meta_scoring_result():
+    """Get last meta scoring result."""
+    agent = get_agent("scoring_4")
+    if not agent:
+        return {}
+    return agent.get_last_result() or {}
+
+
+@app.get("/api/trader4/positions")
+def get_meta_positions():
+    """Get current meta positions for Trader 4."""
+    agent = get_agent("trader_4")
+    if not agent:
+        return []
+    return agent.get_positions()
+
+
+@app.get("/api/trader4/history")
+def get_meta_trade_history():
+    """Get meta trade history."""
+    agent = get_agent("trader_4")
+    if not agent:
+        return []
+    return agent.get_trade_history()
+
+
+@app.get("/api/journal4/entries")
+def get_meta_journal_entries():
+    """Get meta journal entries."""
+    agent = get_agent("journal_4")
+    if not agent:
+        return []
+    return agent.get_entries()
+
+
+@app.post("/api/journal4/trigger")
+def trigger_journal_4():
+    """Manually trigger Journal 4 run."""
+    agent = get_agent("journal_4")
+    if not agent:
+        raise HTTPException(500, "Journal 4 agent not available")
+    import threading
+    threading.Thread(target=agent.run, daemon=True).start()
+    return {"status": "triggered", "message": "Journal 4 run started in background"}
+
+
+@app.get("/api/learning4/adjustments")
+def get_meta_learning_adjustments():
+    """Get meta learning adjustments for Trader 4."""
+    agent = get_agent("learning_4")
+    if not agent:
+        return {}
+    return agent.get_adjustments()
+
+
+@app.post("/api/learning4/trigger")
+def trigger_learning_4():
+    """Manually trigger Learning 4 recalculation."""
+    agent = get_agent("learning_4")
+    if not agent:
+        raise HTTPException(500, "Learning 4 agent not available")
     return agent.run()
 
 

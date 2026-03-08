@@ -7,6 +7,8 @@ const TEAM_DEFS = [
   { id: "shared", label: "Agents Partagés", desc: "Alimentent toutes les équipes" },
   { id: "team1", label: "Équipe 1 — Intraday", desc: "Day trading event-driven, 0-1 trade par scan" },
   { id: "team2", label: "Équipe 2 — Tendance", desc: "Trend following commodities, positions longue durée" },
+  { id: "team3", label: "Équipe 3 — Technique", desc: "Trading sur indicateurs techniques, heures à 3 jours" },
+  { id: "team4", label: "Équipe 4 — Meta", desc: "Ensemble multi-signal, confluence teams 1-3" },
   { id: "infra", label: "Infrastructure & Suivi", desc: "Monitoring, audit, performance" },
 ];
 
@@ -20,6 +22,14 @@ const AGENT_DEFS = {
   journal_2:      { team: "team2",  icon: "\ud83d\udcd4", label: "Journal 2",     role: "Journal des flips Trader 2, MAE/MFE daily bars", schedule: "22h (après J1)", tokens: false },
   learning:       { team: "team1",  icon: "\ud83e\udde0", label: "Learning 1",    role: "6 dimensions ML, anomaly detection, feedback Claude", schedule: "Post-journal 22h", tokens: false },
   learning_2:     { team: "team2",  icon: "\ud83d\udca1", label: "Learning 2",    role: "4 dimensions trend, calibration seuil, churning detection", schedule: "Post-journal 2", tokens: false },
+  scoring_3:      { team: "team3",  icon: "\ud83d\udcc9", label: "Scoring 3",     role: "Indicateurs techniques (RSI, MACD, Bollinger, ADX), 20 tickers", schedule: "4 scans/jour", tokens: false },
+  scoring_4:      { team: "team4",  icon: "\ud83e\udde9", label: "Scoring 4",     role: "Meta-scoring, combinaison news+trend+tech, confluence", schedule: "4 scans/jour", tokens: false },
+  trader_3:       { team: "team3",  icon: "\ud83d\udcc0", label: "Trader 3",      role: "Multi-position technique, A/B testing, heures à 3 jours", schedule: "4 scans/jour", tokens: false },
+  trader_4:       { team: "team4",  icon: "\ud83c\udfb0", label: "Trader 4",      role: "Ensemble confluence-driven, positions quand 2+/3 teams s'accordent", schedule: "4 scans/jour", tokens: false },
+  journal_3:      { team: "team3",  icon: "\ud83d\udcd2", label: "Journal 3",     role: "Journal positions techniques, MAE/MFE, A/B par stratégie", schedule: "22h (après J2)", tokens: false },
+  journal_4:      { team: "team4",  icon: "\ud83d\udcd5", label: "Journal 4",     role: "Journal positions meta, analyse confluence accuracy", schedule: "22h (après J3)", tokens: false },
+  learning_3:     { team: "team3",  icon: "\ud83e\uddea", label: "Learning 3",    role: "3 dimensions (strategy, ticker, timeframe), A/B ranking", schedule: "Post-journal 3", tokens: false },
+  learning_4:     { team: "team4",  icon: "\ud83e\uddf2", label: "Learning 4",    role: "3 dimensions + weight optimization, confluence quality", schedule: "Post-journal 4", tokens: false },
   infrastructure: { team: "infra",  icon: "\ud83d\udee0\ufe0f", label: "Infrastructure", role: "Santé PG, VACUUM, pruning, divergence JSON/PG", schedule: "q15min + 23h + dim 21h", tokens: false },
   performance:    { team: "infra",  icon: "\ud83d\udcca", label: "Performance",   role: "KPIs tous agents, tendances, ranking, alertes", schedule: "Horaire + 22h30 + dim 21h30", tokens: false },
   auditor:        { team: "infra",  icon: "\ud83d\udd0d", label: "Auditeur",      role: "Audit profondeur, note /10, 14 profils", schedule: "Manuel", tokens: false },
@@ -36,6 +46,15 @@ const PIPELINE_FLOWS = [
   { from: "learning_2", to: "trader_2", label: "adjustments" },
   { from: "journal", to: "learning", label: "trade_results" },
   { from: "journal_2", to: "learning_2", label: "flip_results" },
+  { from: "scoring_3", to: "trader_3", label: "tech_setups" },
+  { from: "scoring", to: "scoring_4", label: "scored_news" },
+  { from: "scoring_2", to: "scoring_4", label: "trend_scored" },
+  { from: "scoring_3", to: "scoring_4", label: "tech_scored" },
+  { from: "scoring_4", to: "trader_4", label: "meta_scored" },
+  { from: "learning_3", to: "trader_3", label: "adjustments" },
+  { from: "learning_4", to: "trader_4", label: "adjustments" },
+  { from: "journal_3", to: "learning_3", label: "trade_results" },
+  { from: "journal_4", to: "learning_4", label: "meta_results" },
   { from: "performance", to: "ux", label: "kpis" },
   { from: "auditor", to: "ux", label: "reports" },
 ];
@@ -111,9 +130,13 @@ function TeamSection({ team, agents, agentMap, onNavigate }) {
               // Navigate to agent page
               const pageMap = {
                 news: "news", scoring: "scoring", scoring_2: "scoring2",
+                scoring_3: "scoring3", scoring_4: "scoring4",
                 trader_1: "trader", trader_2: "trader2",
+                trader_3: "trader3", trader_4: "trader4",
                 journal: "journal", journal_2: "journal2",
+                journal_3: "journal3", journal_4: "journal4",
                 learning: "learning", learning_2: "learning2",
+                learning_3: "learning3", learning_4: "learning4",
                 auditor: "auditor",
               };
               const page = pageMap[name];
@@ -171,6 +194,40 @@ function PipelineDiagram() {
               <span>Trader 2</span>
             </div>
           </div>
+          <div className="pipeline-branch-arm team3">
+            <span className="pipeline-arrow">{"\u2192"}</span>
+            <div className="pipeline-step team3">
+              <span className="pipeline-icon">{"\ud83d\udcc9"}</span>
+              <span>Scoring 3</span>
+            </div>
+            <span className="pipeline-arrow">{"\u2192"}</span>
+            <div className="pipeline-step team3">
+              <span className="pipeline-icon">{"\ud83e\uddea"}</span>
+              <span>Learning 3</span>
+            </div>
+            <span className="pipeline-arrow">{"\u2192"}</span>
+            <div className="pipeline-step team3">
+              <span className="pipeline-icon">{"\ud83d\udcc0"}</span>
+              <span>Trader 3</span>
+            </div>
+          </div>
+          <div className="pipeline-branch-arm team4">
+            <span className="pipeline-arrow">{"\u2192"}</span>
+            <div className="pipeline-step team4">
+              <span className="pipeline-icon">{"\ud83e\udde9"}</span>
+              <span>Scoring 4</span>
+            </div>
+            <span className="pipeline-arrow">{"\u2192"}</span>
+            <div className="pipeline-step team4">
+              <span className="pipeline-icon">{"\ud83e\uddf2"}</span>
+              <span>Learning 4</span>
+            </div>
+            <span className="pipeline-arrow">{"\u2192"}</span>
+            <div className="pipeline-step team4">
+              <span className="pipeline-icon">{"\ud83c\udfb0"}</span>
+              <span>Trader 4</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -194,6 +251,26 @@ function PipelineDiagram() {
         <div className="pipeline-step team2">
           <span className="pipeline-icon">{"\ud83d\udca1"}</span>
           <span>Learning 2</span>
+        </div>
+        <span className="pipeline-arrow">{"\u2192"}</span>
+        <div className="pipeline-step team3">
+          <span className="pipeline-icon">{"\ud83d\udcd2"}</span>
+          <span>Journal 3</span>
+        </div>
+        <span className="pipeline-arrow">{"\u2192"}</span>
+        <div className="pipeline-step team3">
+          <span className="pipeline-icon">{"\ud83e\uddea"}</span>
+          <span>Learning 3</span>
+        </div>
+        <span className="pipeline-arrow">{"\u2192"}</span>
+        <div className="pipeline-step team4">
+          <span className="pipeline-icon">{"\ud83d\udcd5"}</span>
+          <span>Journal 4</span>
+        </div>
+        <span className="pipeline-arrow">{"\u2192"}</span>
+        <div className="pipeline-step team4">
+          <span className="pipeline-icon">{"\ud83e\uddf2"}</span>
+          <span>Learning 4</span>
         </div>
         <span className="pipeline-arrow">{"\u2192"}</span>
         <div className="pipeline-step infra">
@@ -285,6 +362,8 @@ function ScheduleTimeline() {
     { time: "Horaire", label: "KPI Snapshot", team: "infra", subtle: true },
     { time: "22:00", label: "Journal 1 + Learning 1", team: "team1" },
     { time: "22:00", label: "Journal 2 + Learning 2", team: "team2" },
+    { time: "22:00", label: "Journal 3 + Learning 3", team: "team3" },
+    { time: "22:00", label: "Journal 4 + Learning 4", team: "team4" },
     { time: "22:30", label: "Performance Daily", team: "infra" },
     { time: "23:00", label: "Maintenance", team: "infra" },
     { time: "dim 20:00", label: "Source Review", team: "shared" },

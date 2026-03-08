@@ -181,6 +181,18 @@ class AgentPerformance(BaseAgent):
                 self._compute_infra_kpis,
             )
 
+            # Trader 3 KPIs (technical)
+            report["trader_3"] = self.execute(
+                "Computing Trader 3 KPIs",
+                self._compute_trader_3_kpis,
+            )
+
+            # Trader 4 KPIs (meta/ensemble)
+            report["trader_4"] = self.execute(
+                "Computing Trader 4 KPIs",
+                self._compute_trader_4_kpis,
+            )
+
             # Ranking & alerts
             self._rank_agents(report)
             self._detect_alerts(report)
@@ -258,6 +270,16 @@ class AgentPerformance(BaseAgent):
             t2_fwr = [r["trader_2"].get("flip_win_rate") for r in reports if r.get("trader_2", {}).get("flip_win_rate") is not None]
             if t2_fwr:
                 trends["trader_2_flip_win_rate"] = self._compute_trend(t2_fwr)
+
+            # Trader 3 trends
+            t3_pnls = [r["trader_3"].get("total_realized_pnl") for r in reports if r.get("trader_3", {}).get("total_realized_pnl") is not None]
+            if t3_pnls:
+                trends["trader_3_realized_pnl"] = self._compute_trend(t3_pnls)
+
+            # Trader 4 trends
+            t4_pnls = [r["trader_4"].get("total_realized_pnl") for r in reports if r.get("trader_4", {}).get("total_realized_pnl") is not None]
+            if t4_pnls:
+                trends["trader_4_realized_pnl"] = self._compute_trend(t4_pnls)
 
             # Scoring trends
             score_avgs = [r["scoring"].get("avg_score") for r in reports if r.get("scoring", {}).get("avg_score") is not None]
@@ -647,6 +669,52 @@ class AgentPerformance(BaseAgent):
 
         return kpis
 
+    def _compute_trader_3_kpis(self) -> dict:
+        """Compute Trader 3 (technical) KPIs from positions."""
+        kpis: dict[str, Any] = {
+            "active_positions": 0,
+            "total_realized_pnl": None,
+            "evaluations_today": 0,
+            "strategies_active": 0,
+        }
+        try:
+            from . import registry
+            t3 = registry.get_agent("trader_3")
+            if t3:
+                metrics = t3.get_metrics()
+                kpis["active_positions"] = metrics.get("active_positions", 0)
+                kpis["total_realized_pnl"] = metrics.get("total_realized_pnl")
+                kpis["evaluations_today"] = metrics.get("evaluations_today", 0)
+                # Strategy performance if available
+                if hasattr(t3, "get_strategy_performance"):
+                    sp = t3.get_strategy_performance()
+                    kpis["strategies_active"] = len([s for s in sp.values() if s.get("count", 0) > 0])
+                    kpis["strategy_performance"] = sp
+        except Exception as exc:
+            self.log("Trader 3 KPI error", {"error": str(exc)}, level="WARN")
+        return kpis
+
+    def _compute_trader_4_kpis(self) -> dict:
+        """Compute Trader 4 (meta/ensemble) KPIs from positions."""
+        kpis: dict[str, Any] = {
+            "open_positions": 0,
+            "total_realized_pnl": None,
+            "upstream_ready": False,
+            "max_confluence": 0,
+        }
+        try:
+            from . import registry
+            t4 = registry.get_agent("trader_4")
+            if t4:
+                metrics = t4.get_metrics()
+                kpis["open_positions"] = metrics.get("open_positions", 0)
+                kpis["total_realized_pnl"] = metrics.get("total_realized_pnl")
+                kpis["upstream_ready"] = metrics.get("upstream_ready", False)
+                kpis["max_confluence"] = metrics.get("max_confluence_seen", 0)
+        except Exception as exc:
+            self.log("Trader 4 KPI error", {"error": str(exc)}, level="WARN")
+        return kpis
+
     # ── Private: Ranking & Alerts ────────────────────────────────────
 
     def _rank_agents(self, report: dict) -> None:
@@ -690,6 +758,24 @@ class AgentPerformance(BaseAgent):
             scores.append(("news", 80, "0 erreurs source"))
         elif n.get("source_errors", 0) > 3:
             scores.append(("news", -50, f"{n['source_errors']} erreurs source"))
+
+        # Trader 3 scoring — technical: by realized P&L
+        t3 = report.get("trader_3", {})
+        if t3.get("total_realized_pnl") is not None:
+            pnl = t3["total_realized_pnl"]
+            if pnl > 2:
+                scores.append(("trader_3", pnl, f"P&L réalisé +{pnl:.1f}%"))
+            elif pnl < -5:
+                scores.append(("trader_3", pnl - 100, f"P&L réalisé {pnl:.1f}%"))
+
+        # Trader 4 scoring — meta: by confluence quality
+        t4 = report.get("trader_4", {})
+        if t4.get("total_realized_pnl") is not None:
+            pnl = t4["total_realized_pnl"]
+            if pnl > 2:
+                scores.append(("trader_4", pnl, f"P&L réalisé +{pnl:.1f}%"))
+            elif pnl < -5:
+                scores.append(("trader_4", pnl - 100, f"P&L réalisé {pnl:.1f}%"))
 
         # Infrastructure
         infra = report.get("infrastructure", {})
@@ -751,6 +837,30 @@ class AgentPerformance(BaseAgent):
                 "severity": "WARN",
                 "agent": "learning",
                 "message": f"{l['anomaly_count']} anomalies détectées — vérifier calibration",
+            })
+
+        # Trader 3 alerts — technical
+        t3 = report.get("trader_3", {})
+        if t3.get("total_realized_pnl") is not None and t3["total_realized_pnl"] < -10:
+            alerts.append({
+                "severity": "CRITICAL",
+                "agent": "trader_3",
+                "message": f"P&L réalisé critique: {t3['total_realized_pnl']:.1f}% — revoir stratégies techniques",
+            })
+
+        # Trader 4 alerts — meta/ensemble
+        t4 = report.get("trader_4", {})
+        if t4.get("total_realized_pnl") is not None and t4["total_realized_pnl"] < -10:
+            alerts.append({
+                "severity": "CRITICAL",
+                "agent": "trader_4",
+                "message": f"P&L réalisé critique: {t4['total_realized_pnl']:.1f}% — revoir meta-scoring",
+            })
+        if not t4.get("upstream_ready", True):
+            alerts.append({
+                "severity": "WARN",
+                "agent": "trader_4",
+                "message": "Upstream teams pas prêts — Trader 4 en attente",
             })
 
         # Infrastructure alerts

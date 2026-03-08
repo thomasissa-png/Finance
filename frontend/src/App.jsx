@@ -15,10 +15,23 @@ const Scoring2Page = lazy(() => import("./components/Scoring2Page"));
 const Trader2Page = lazy(() => import("./components/Trader2Page"));
 const Journal2Page = lazy(() => import("./components/Journal2Page"));
 const Learning2Page = lazy(() => import("./components/Learning2Page"));
+const Scoring3Page = lazy(() => import("./components/Scoring3Page"));
+const Trader3Page = lazy(() => import("./components/Trader3Page"));
+const Journal3Page = lazy(() => import("./components/Journal3Page"));
+const Learning3Page = lazy(() => import("./components/Learning3Page"));
+const Scoring4Page = lazy(() => import("./components/Scoring4Page"));
+const Trader4Page = lazy(() => import("./components/Trader4Page"));
+const Journal4Page = lazy(() => import("./components/Journal4Page"));
+const Learning4Page = lazy(() => import("./components/Learning4Page"));
 const TeamMapPage = lazy(() => import("./components/TeamMapPage"));
 
 const PAGES = [
-  "dashboard", "team", "news", "scoring", "scoring2", "trader", "trader2", "journal", "journal2", "learning", "learning2", "auditor",
+  "dashboard", "team",
+  "news", "scoring", "scoring2", "scoring3", "scoring4",
+  "trader", "trader2", "trader3", "trader4",
+  "journal", "journal2", "journal3", "journal4",
+  "learning", "learning2", "learning3", "learning4",
+  "auditor",
 ];
 
 function getPageFromHash() {
@@ -101,9 +114,15 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchAgents]);
 
-  // Fetch notifications (WARN/ERROR logs from all agents) — single flat Promise.all
+  // Fetch notifications (WARN/ERROR logs from all agents)
   const fetchNotifications = useCallback(() => {
-    const agentNames = ["news", "scoring", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "auditor"];
+    const agentNames = [
+      "news", "scoring", "scoring_2", "scoring_3", "scoring_4",
+      "trader_1", "trader_2", "trader_3", "trader_4",
+      "journal", "journal_2", "journal_3", "journal_4",
+      "learning", "learning_2", "learning_3", "learning_4",
+      "auditor",
+    ];
     const requests = agentNames.flatMap((name) => [
       fetch(`/api/agents/${name}/logs?limit=20&level=WARN`)
         .then((r) => r.json())
@@ -134,7 +153,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchNotifications]);
 
-  // Count unread notifications
   const unreadCount = notifications.filter(
     (n) => new Date(n.timestamp).getTime() > lastNotifCheck
   ).length;
@@ -143,14 +161,12 @@ export default function App() {
     setLastNotifCheck(Date.now());
   }, []);
 
-  // Navigate
   const navigate = useCallback((pageId) => {
     setActivePage(pageId);
     setShowNotifications(false);
     window.location.hash = pageId;
   }, []);
 
-  // Hash change listener
   useEffect(() => {
     const onHash = () => setActivePage(getPageFromHash());
     window.addEventListener("hashchange", onHash);
@@ -158,24 +174,20 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Header status update
   useEffect(() => {
     const interval = setInterval(() => setStatus(getHeaderStatus()), 60_000);
     return () => clearInterval(interval);
   }, []);
 
-  // Force dark theme
   useEffect(() => {
     document.body.classList.remove("light");
     localStorage.removeItem("theme");
   }, []);
 
-  // Scroll to top on page change
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [activePage]);
 
-  // Backend health check
   useEffect(() => {
     let mounted = true;
     const check = () => {
@@ -188,7 +200,6 @@ export default function App() {
     return () => { mounted = false; clearInterval(id); };
   }, []);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e) => {
       if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) return;
@@ -253,12 +264,20 @@ export default function App() {
             {activePage === "news" && <NewsPage isActive={true} />}
             {activePage === "scoring" && <ScoringPage isActive={true} />}
             {activePage === "scoring2" && <Scoring2Page isActive={true} />}
+            {activePage === "scoring3" && <Scoring3Page isActive={true} />}
+            {activePage === "scoring4" && <Scoring4Page isActive={true} />}
             {activePage === "trader" && <TraderPage isActive={true} />}
             {activePage === "trader2" && <Trader2Page isActive={true} />}
+            {activePage === "trader3" && <Trader3Page isActive={true} />}
+            {activePage === "trader4" && <Trader4Page isActive={true} />}
             {activePage === "journal" && <JournalPage isActive={true} />}
             {activePage === "journal2" && <Journal2Page isActive={true} />}
+            {activePage === "journal3" && <Journal3Page isActive={true} />}
+            {activePage === "journal4" && <Journal4Page isActive={true} />}
             {activePage === "learning" && <LearningPage isActive={true} />}
             {activePage === "learning2" && <Learning2Page isActive={true} />}
+            {activePage === "learning3" && <Learning3Page isActive={true} />}
+            {activePage === "learning4" && <Learning4Page isActive={true} />}
             {activePage === "auditor" && <AuditorPage isActive={true} />}
           </Suspense>
         </ErrorBoundary>

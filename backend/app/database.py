@@ -649,6 +649,63 @@ def init_db() -> None:
                     END $$;
                 """)
 
+            # v8.0: Tech positions for Agent Trader 3 (Équipe 3)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tech_positions (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(30) NOT NULL,
+                    strategy VARCHAR(60) NOT NULL,
+                    data JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tech_positions_ticker
+                ON tech_positions(ticker)
+            """)
+
+            # v8.0: Tech journal entries for Agent Journal 3 (Équipe 3)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS tech_journal_entries (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(30) NOT NULL,
+                    strategy VARCHAR(60) NOT NULL,
+                    entry_time VARCHAR(60) NOT NULL,
+                    data JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (ticker, strategy, entry_time)
+                )
+            """)
+
+            # v8.0: Meta positions for Agent Trader 4 (Équipe 4)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS meta_positions (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(30) NOT NULL,
+                    data JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_meta_positions_ticker
+                ON meta_positions(ticker)
+            """)
+
+            # v8.0: Meta journal entries for Agent Journal 4 (Équipe 4)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS meta_journal_entries (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(30) NOT NULL,
+                    entry_time VARCHAR(60) NOT NULL,
+                    confluence_level INTEGER DEFAULT 0,
+                    data JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (ticker, entry_time)
+                )
+            """)
+
     logger.info("PostgreSQL tables initialized successfully")
 
 
@@ -1248,7 +1305,9 @@ def pg_run_maintenance() -> dict:
     results = {}
     tables = ["trades", "journal_entries", "scan_history", "last_scans",
               "agent_messages", "agent_logs", "audit_reports", "trend_positions",
-              "trend_journal_entries", "performance_data"]
+              "trend_journal_entries", "performance_data",
+              "tech_positions", "tech_journal_entries",
+              "meta_positions", "meta_journal_entries"]
     for table in tables:
         try:
             pool = _get_pool()
