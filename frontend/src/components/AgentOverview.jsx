@@ -113,7 +113,12 @@ export default function AgentOverview({ agents, onSelectAgent }) {
               <div className="agent-card-header">
                 <span className="agent-card-icon">{config.icon}</span>
                 <div className="agent-card-title">
-                  <span className="agent-card-name">{config.label}</span>
+                  <span className="agent-card-name">
+                    {config.label}
+                    {agent.version && (
+                      <span className="agent-card-version">v{agent.version}</span>
+                    )}
+                  </span>
                   <span className="agent-card-desc">{config.desc}</span>
                 </div>
                 <span className={`agent-status-badge ${agent.status}`}>

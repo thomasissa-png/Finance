@@ -322,6 +322,7 @@ class AgentLearning2(BaseAgent):
 
     name = "learning_2"
     description = "Learning & optimisation — trend commodities"
+    version = "7.1"  # v7.1: 4 dims trend, churning detection, threshold calibration
 
     def __init__(self):
         super().__init__()

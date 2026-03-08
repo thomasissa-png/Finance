@@ -84,6 +84,9 @@ function AgentButton({ agent, activePage, onNavigate }) {
       </span>
       <span className="agent-sidebar-label">
         {AGENT_LABELS[agent.name] || agent.name}
+        {agent.version && (
+          <span className="agent-version-badge">v{agent.version}</span>
+        )}
       </span>
       <span
         className={`agent-status-dot ${agent.status}`}

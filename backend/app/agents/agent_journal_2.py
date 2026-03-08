@@ -227,6 +227,7 @@ class AgentJournal2(BaseAgent):
 
     name = "journal_2"
     description = "Journal & analyse des positions de tendance"
+    version = "7.1"  # v7.1: 17 fixes, MAE/MFE daily bars, snapshots, dedup, pruning
 
     def __init__(self):
         super().__init__()

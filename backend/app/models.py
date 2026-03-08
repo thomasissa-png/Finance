@@ -201,6 +201,8 @@ class TradeRecommendation(BaseModel):
     price_at_publication: float | None = None        # Ticker price when news was published
     price_at_scan: float | None = None               # Ticker price when scan ran
     publication_move_pct: float | None = None        # Move from publication to scan
+    # ── v8.2: Agent version tracking — stamped at trade creation
+    agent_versions: dict | None = None  # {"scorer": "7.4", "trader": "6.5", "news": "7.5", ...}
 
     # v5.0 O11: Validate news_category
     @field_validator("news_category")

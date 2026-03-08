@@ -25,6 +25,7 @@ from .base import BaseAgent, AgentStatus
 class AgentJournal(BaseAgent):
     name = "journal"
     description = "Documentation & analyse de chaque trade"
+    version = "4.1"  # v4.1: MAE/MFE, slippage, 15min bars, pruning, global timeout
 
     def __init__(self):
         super().__init__()

@@ -200,6 +200,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
+    version = "7.2"  # v7.2: 16 fixes, flip history, persistence PG/JSON, Learning 2 integration
 
     def __init__(self):
         super().__init__()

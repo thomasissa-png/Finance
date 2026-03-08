@@ -607,6 +607,7 @@ def init_db() -> None:
                 ("convergence_boost", "DOUBLE PRECISION"),
                 ("news_url", "TEXT DEFAULT ''"),
                 ("news_description", "TEXT DEFAULT ''"),
+                ("agent_versions", "JSONB"),
             ]:
                 cur.execute(f"""
                     DO $$ BEGIN
@@ -699,9 +700,11 @@ _TRADE_COLUMNS = [
     "surprise", "directional_clarity", "signal_reliability", "expected_magnitude",
     "position_size_pct", "convergence_count", "convergence_boost",
     "news_url", "news_description",
+    # v8.2: Agent version tracking
+    "agent_versions",
 ]
 
-_TRADE_JSONB_COLS = {"news_sources", "chain_reactions"}
+_TRADE_JSONB_COLS = {"news_sources", "chain_reactions", "agent_versions"}
 
 
 def _wrap_jsonb(col: str, val, jsonb_cols: set) -> object:

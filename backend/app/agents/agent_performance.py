@@ -33,6 +33,7 @@ from .base import BaseAgent, AgentStatus
 class AgentPerformance(BaseAgent):
     name = "performance"
     description = "Mesure & suivi des KPIs de tous les agents"
+    version = "8.1"  # v8.1: PG persistence, self.log(), version-aware filtering
 
     def __init__(self):
         super().__init__()
@@ -311,9 +312,9 @@ class AgentPerformance(BaseAgent):
         }
 
         try:
-            from ..learning import _load_trades
+            from ..learning import load_trades, _filter_by_current_versions
             from ..models import TradeResult
-            trades = _load_trades()
+            trades = _filter_by_current_versions(load_trades())
             closed = [t for t in trades
                       if t.result != TradeResult.PENDING
                       and t.pnl_pct is not None

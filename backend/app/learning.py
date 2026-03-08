@@ -308,6 +308,45 @@ def _write_trades(trades: list[TradeRecommendation]) -> None:
     )
 
 
+def _filter_by_current_versions(trades: list[TradeRecommendation]) -> list[TradeRecommendation]:
+    """v8.2: Keep only trades produced by the current scoring+trader agent versions.
+
+    Trades without agent_versions (pre-v8.2) are kept for backward compatibility
+    but down-weighted by the time-based decay already in place.
+    """
+    try:
+        from .agents.registry import get_agent
+        scorer = get_agent("scoring")
+        trader = get_agent("trader_1")
+        if not scorer or not trader:
+            return trades  # Registry not initialized yet
+
+        current_scorer_v = scorer.version
+        current_trader_v = trader.version
+
+        filtered = []
+        skipped = 0
+        for t in trades:
+            av = getattr(t, "agent_versions", None)
+            if av is None:
+                # Pre-v8.2 trade — keep (time decay will naturally down-weight)
+                filtered.append(t)
+                continue
+            # Only keep if scorer AND trader versions match current
+            if av.get("scoring") == current_scorer_v and av.get("trader_1") == current_trader_v:
+                filtered.append(t)
+            else:
+                skipped += 1
+
+        if skipped > 0:
+            logger.info("v8.2: Version filter removed %d trades from older agent versions "
+                        "(keeping %d from scorer=%s, trader=%s)",
+                        skipped, len(filtered), current_scorer_v, current_trader_v)
+        return filtered
+    except Exception:
+        return trades  # Graceful: if versions unavailable, use all trades
+
+
 def _get_decay_half_life(n_closed: int) -> float:
     """Get adaptive decay half-life (#30).
 
@@ -535,6 +574,10 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         logger.info("v5.1: Filtered %d invalid/anomalous trades from learning (%d → %d)",
                     len(closed) - len(valid_closed), len(closed), len(valid_closed))
     closed = valid_closed
+
+    # v8.2: Version-aware learning — only learn from trades made by the current agent versions.
+    # Trades from older scoring/trader versions used different logic; mixing them contaminates learning.
+    closed = _filter_by_current_versions(closed)
 
     # C3: Initial generous lookback filter (180 days), then compute half_life from filtered set
     initial_cutoff = datetime.now(timezone.utc) - timedelta(days=180)
@@ -888,6 +931,9 @@ def build_performance_summary(max_recent: int = 15,
     except Exception as exc:
         logger.warning("build_performance_summary: failed to load trades: %s", exc)
         return ""
+
+    # v8.2: Version-aware — only report performance of current agent versions
+    trades = _filter_by_current_versions(trades)
 
     # D3: Detect partial PG migration — warn if both sources have data
     if is_pg_enabled():

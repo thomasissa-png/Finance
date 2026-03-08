@@ -305,6 +305,7 @@ class BaseAgent:
 
     name: str = "base"
     description: str = "Base agent"
+    version: str = "0.0"  # Override in each agent — increment on logic changes
 
     def __init__(self):
         self._status = AgentStatus.IDLE
@@ -324,6 +325,7 @@ class BaseAgent:
             return {
                 "name": self.name,
                 "description": self.description,
+                "version": self.version,
                 "status": self._status.value,
                 "last_action": self._last_action,
                 "last_action_time": self._last_action_time,

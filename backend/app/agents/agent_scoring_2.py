@@ -324,6 +324,7 @@ class AgentScoring2(BaseAgent):
 
     name = "scoring_2"
     description = "Scoring tendance — re-pondération pour commodities"
+    version = "7.3"  # v7.3: 13 fixes, category mults, structural keywords, accumulation
 
     def __init__(self):
         super().__init__()

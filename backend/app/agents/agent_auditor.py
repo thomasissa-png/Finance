@@ -220,6 +220,7 @@ AUDIT_PROFILES = {
 class AgentAuditor(BaseAgent):
     name = "auditor"
     description = "Audit en profondeur de chaque agent"
+    version = "8.1"  # v8.1: dict dispatch, fixed indentation, 14 profiles, version tracking
 
     def __init__(self):
         super().__init__()

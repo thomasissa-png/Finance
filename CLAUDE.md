@@ -17,6 +17,44 @@ Le systeme est concu pour detecter les **dislocations non encore pricees** par l
 **REGLE ABSOLUE — Commodities :**
 On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity ne marchent pas, le probleme est dans le scoring ou l'analyse — PAS dans la categorie elle-meme. Le learning ne doit JAMAIS penaliser les commodities en tant que classe. Les ajustements se font au niveau ticker+newscat (granulaire), jamais au niveau categorie d'actif pour les commodities.
 
+## Philosophie de versioning des agents (CRUCIAL — v8.2)
+
+**Chaque agent a une version** (`version` class attribute) qui DOIT être incrémentée à chaque changement de logique métier.
+
+### Principe fondamental
+**Ce qui compte, c'est la performance de chaque VERSION de l'agent, pas la performance historique globale.**
+- Un trade produit par Scorer v7.3 + Trader v6.5 n'a rien à voir avec un trade produit par des versions antérieures
+- Mélanger les données de versions différentes contamine le learning et empêche de mesurer le progrès réel
+- Chaque version DOIT être évaluée indépendamment pour savoir si les changements ont amélioré ou dégradé la performance
+
+### Règles de versioning
+1. **Versioner** : À chaque changement de logique (scoring, sélection, calibration, learning, etc.), incrémenter la `version` de l'agent concerné
+2. **Stamper** : Chaque trade est stamped avec `agent_versions` — un dict des versions de tous les agents actifs au moment de la création
+3. **Filtrer** : Le Learning ne considère QUE les trades produits par les versions ACTUELLES du scorer et du trader. Les trades pré-v8.2 (sans `agent_versions`) sont gardés par compatibilité mais naturellement down-weightés par le decay temporel
+4. **Mesurer** : L'Agent Performance segmente ses KPIs par version courante
+5. **Nouveaux agents** : tout nouvel agent DOIT déclarer une `version` et suivre ces règles
+
+### Impact sur le learning
+- `_filter_by_current_versions()` dans `learning.py` filtre les trades par version scorer+trader
+- `build_performance_summary()` (feedback Claude) ne montre que la performance de la version courante
+- L'Agent Performance (`_compute_trader_1_kpis`) filtre aussi par version
+
+### Versions actuelles
+| Agent | Version | Dernier changement |
+|-------|---------|-------------------|
+| News | 7.5 | 10 news pipeline fixes |
+| Scoring | 7.4 | 9 fixes, token tracking |
+| Scoring 2 | 7.3 | 13 fixes, category mults |
+| Trader 1 | 6.5 | Timeout audit, trailing stop |
+| Trader 2 | 7.2 | 16 fixes, flip history |
+| Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
+| Journal 2 | 7.1 | 17 fixes, daily bars |
+| Learning 1 | 5.2 | 6 dims, granular commodities |
+| Learning 2 | 7.1 | 4 dims trend, churning |
+| Infrastructure | 7.5 | Health check, VACUUM 9 tables |
+| Performance | 8.1 | PG persistence, version-aware |
+| Auditor | 8.1 | Dict dispatch, 14 profiles |
+
 ## Architecture v7.0 — Multi-Agent par Équipes
 
 ### Philosophie "Équipes de Trading"

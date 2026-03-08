@@ -30,6 +30,7 @@ from .base import BaseAgent, AgentStatus
 class AgentTrader(BaseAgent):
     name = "trader_1"
     description = "Décision d'investissement — news trading expert"
+    version = "6.5"  # v6.5: timeout audit, trailing stop persistence, spread filter sync
 
     def __init__(self):
         super().__init__()

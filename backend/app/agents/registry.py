@@ -81,6 +81,7 @@ def get_all_status() -> list[dict]:
     result.append({
         "name": "ux",
         "description": "Frontend & expérience utilisateur",
+        "version": "7.0",
         "status": "idle",
         "last_action": None,
         "last_action_time": None,

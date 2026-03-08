@@ -466,6 +466,16 @@ def _build_scored_news_log(scored_news: list[ScoredNews]) -> list[dict]:
     return log
 
 
+def _get_agent_versions() -> dict:
+    """Collect current agent versions for trade stamping."""
+    try:
+        from .agents.registry import get_all_agents
+        agents = get_all_agents()
+        return {name: agent.version for name, agent in agents.items()}
+    except Exception:
+        return {}
+
+
 def select_trade(
     scored_news: list[ScoredNews],
     scan_type: ScanType,
@@ -1050,6 +1060,8 @@ def select_trades(
             price_at_publication=price_at_pub,
             price_at_scan=round(price, 4),
             publication_move_pct=pub_move_pct,
+            # v8.2: Agent version tracking
+            agent_versions=_get_agent_versions(),
         )
 
         selected_trades.append(recommendation)

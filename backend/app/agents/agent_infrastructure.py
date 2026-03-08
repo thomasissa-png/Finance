@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 class AgentInfrastructure(BaseAgent):
     name = "infrastructure"
     description = "Surveillance & maintenance infrastructure système"
+    version = "7.5"  # v7.5: health check 15min, VACUUM 9 tables, divergence detection
 
     def __init__(self):
         super().__init__()
