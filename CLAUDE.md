@@ -45,15 +45,23 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | News | 7.5 | 10 news pipeline fixes |
 | Scoring | 7.4 | 9 fixes, token tracking |
 | Scoring 2 | 7.3 | 13 fixes, category mults |
+| Scoring 3 | 1.0 | Initial — technical indicators (RSI, MACD, Bollinger, etc.) |
+| Scoring 4 | 1.0 | Initial — meta-scorer combining Teams 1/2/3 signals |
 | Trader 1 | 6.5 | Timeout audit, trailing stop |
 | Trader 2 | 7.2 | 16 fixes, flip history |
+| Trader 3 | 1.0 | Initial — multi-strategy technical trading |
+| Trader 4 | 1.0 | Initial — confluence-driven ensemble trading |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
 | Journal 2 | 7.1 | 17 fixes, daily bars |
+| Journal 3 | 1.0 | Initial — technical positions journal |
+| Journal 4 | 1.0 | Initial — meta positions journal |
 | Learning 1 | 5.2 | 6 dims, granular commodities |
 | Learning 2 | 7.1 | 4 dims trend, churning |
+| Learning 3 | 1.0 | Initial — 3 dims (strategy, ticker, timeframe) |
+| Learning 4 | 1.0 | Initial — weight optimization, combination analysis |
 | Infrastructure | 7.5 | Health check, VACUUM 9 tables |
-| Performance | 8.1 | PG persistence, version-aware |
-| Auditor | 8.1 | Dict dispatch, 14 profiles |
+| Performance | 8.1 | PG persistence, version-aware, Teams 3/4 KPIs |
+| Auditor | 8.1 | Dict dispatch, 22 profiles (Teams 3/4 added) |
 
 ## Architecture v7.0 — Multi-Agent par Équipes
 
@@ -62,22 +70,30 @@ Le système est organisé en **équipes autonomes**. Chaque équipe a son propre
 
 Le framework est conçu pour ajouter facilement de nouvelles équipes : créer un trio trader/journal/learning, les enregistrer dans le registry, wirer le scheduler, et l'auditeur les couvrira automatiquement via ses profils.
 
-### 13 Agents Autonomes (`backend/app/agents/`)
+### 21 Agents Autonomes (`backend/app/agents/`)
 
 | Agent | Fichier | Équipe | Rôle |
 |-------|---------|--------|------|
 | **News** | `agent_news.py` | Partagé | Collecte, dédup, santé sources, event detection |
 | **Scoring** | `agent_scoring.py` | Partagé | Score Claude, formule edge, chain reactions |
 | **Scoring 2** | `agent_scoring_2.py` | Équipe 2 | Re-pondération trend, multiplicateurs structurels, accumulation |
+| **Scoring 3** | `agent_scoring_3.py` | Équipe 3 | Indicateurs techniques (RSI, MACD, Bollinger, etc.) sur 20 tickers |
+| **Scoring 4** | `agent_scoring_4.py` | Équipe 4 | Meta-scoring confluence Teams 1+2+3 |
 | **Trader 1** | `agent_trader.py` | Équipe 1 | Day trading intraday, TP/SL, risk mgmt |
-| **Journal 1** | `agent_journal.py` | Équipe 1 | Clôture trades 22h, P&L, MAE/MFE |
-| **Learning 1** | `agent_learning.py` | Équipe 1 | 6 dimensions learning, anomalie detection |
 | **Trader 2** | `agent_trader_2.py` | Équipe 2 | Trend following commodities, positions longue durée |
+| **Trader 3** | `agent_trader_3.py` | Équipe 3 | Trading technique multi-stratégie, positions heures à 3 jours |
+| **Trader 4** | `agent_trader_4.py` | Équipe 4 | Ensemble confluence-driven, sizing par niveau de confluence |
+| **Journal 1** | `agent_journal.py` | Équipe 1 | Clôture trades 22h, P&L, MAE/MFE |
 | **Journal 2** | `agent_journal_2.py` | Équipe 2 | Journal des flips, MAE/MFE daily bars |
+| **Journal 3** | `agent_journal_3.py` | Équipe 3 | Journal positions techniques, analyse A/B par stratégie |
+| **Journal 4** | `agent_journal_4.py` | Équipe 4 | Journal positions meta, analyse par combinaison de sources |
+| **Learning 1** | `agent_learning.py` | Équipe 1 | 6 dimensions learning, anomalie detection |
 | **Learning 2** | `agent_learning_2.py` | Équipe 2 | 4 dimensions learning trend, calibration seuil |
+| **Learning 3** | `agent_learning_3.py` | Équipe 3 | 3 dimensions (stratégie, ticker, timeframe), ranking stratégies |
+| **Learning 4** | `agent_learning_4.py` | Équipe 4 | Optimisation poids, combinaison d'équipes, confluence |
 | **Infrastructure** | `agent_infrastructure.py` | Partagé | Santé PG, maintenance VACUUM, fallbacks, timeouts |
-| **Performance** | `agent_performance.py` | Partagé | KPIs tous agents, tendances, ranking, alertes |
-| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 14 profils |
+| **Performance** | `agent_performance.py` | Partagé | KPIs tous agents (incl. Teams 3/4), tendances, ranking, alertes |
+| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 22 profils |
 | **UX** | (virtuel) | Partagé | Frontend React |
 
 ### Équipe 1 — Day Trading Intraday
@@ -94,9 +110,27 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 - **Boucle** : Journal 2 → Learning 2 → cache invalidé → Trader 2 utilise au prochain scan
 - **Feedback loop** : Learning 2 ajuste les poids de signal par ticker/newscat/direction + seuil de flip adaptatif (base 20, ×threshold_adj)
 
+### Équipe 3 — Technical Indicators Trading
+- **Scoring 3** : indicateurs techniques purs (RSI 14/21, MACD 12/26/9, Bollinger 20/2, SMA/EMA 20/50/200, Stochastic 14/3, ADX 14) sur 20 tickers liquides. NE rappelle PAS Claude — pur calcul. Utilise market_data.py (Twelve Data + yfinance fallback). 5 stratégies : rsi_reversal, macd_crossover, bollinger_squeeze, ma_trend, momentum_divergence.
+- **Trader 3** : positions multiples (max 10), holding 1-3 jours, TP/SL/trailing stop, A/B testing des stratégies. Consomme Learning 3 (strategy_adj, ticker_adj, timeframe_adj).
+- **Journal 3** : journalise les positions fermées, MAE/MFE, analyse par stratégie (win_rate, avg_pnl, tp/sl/expired). Dedup par (ticker, strategy, entry_time). Persistence PG (tech_journal_entries) + JSON.
+- **Learning 3** : 3 dimensions (per-strategy, per-ticker, per-timeframe), ranking stratégies par weighted avg PnL, anomaly detection (underperformance, consecutive losses, low WR). Bounds [0.5, 1.5], decay 30j.
+- **Boucle** : Journal 3 → Learning 3 → cache invalidé → Trader 3 utilise au prochain scan
+- **20 tickers** : EURUSD=X, GBPUSD=X, USDJPY=X, AUDUSD=X, ^GSPC, ^FCHI, ^GDAXI, GC=F, CL=F, BZ=F, HG=F, SI=F, ZC=F, ZW=F, AAPL, MSFT, TSLA, AMZN, BNP.PA, TTE.PA
+- **Persistence** : Tables PG `tech_positions` + `tech_journal_entries` + fallback JSON
+
+### Équipe 4 — Meta/Ensemble Trading
+- **Scoring 4** : combine les signaux des Teams 1 (news), 2 (trend), 3 (technique) en meta-scores unifiés par ticker. Poids configurables (news=0.35, trend=0.25, tech=0.40). Confluence detection : 2/3 teams agree → 1.2x boost, 3/3 → 1.5x boost. Seuil minimum 3 items/source. NE rappelle PAS Claude — pure agrégation.
+- **Trader 4** : positions confluence-driven (min confluence level 2), sizing adapté (3/3=100%, 2/3=50%), max 6 positions, expiry 48h sans renouvellement signal. Consomme Learning 4 (combination_adj, ticker_adj, confluence_adj, weight optimization).
+- **Journal 4** : journalise les positions fermées, tracking par combinaison de sources (ex: "news+trend+tech"), analyse par niveau de confluence. Dedup par (ticker, entry_time). Persistence PG (meta_journal_entries) + JSON.
+- **Learning 4** : optimisation des poids (news/trend/tech), ajustements par combinaison d'équipes, par ticker, par niveau de confluence. Bounds [0.6, 1.4], decay 45j. Anomaly detection.
+- **Boucle** : Journal 4 → Learning 4 → poids optimisés → Scoring 4/Trader 4 utilisent au prochain scan
+- **Dépendance upstream** : démarre uniquement quand suffisamment de données des Teams 1/2/3 sont disponibles (graceful degradation)
+- **Persistence** : Tables PG `meta_positions` + `meta_journal_entries` + fallback JSON
+
 ### Infrastructure agents
 - **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
-- **`registry.py`** : 13 singletons (2 équipes + infra + perf + audit), orchestration `News → Scoring → Scoring 2 → Trader 1 + Trader 2`, helpers pour les 2 équipes
+- **`registry.py`** : 21 singletons (4 équipes + infra + perf + audit), orchestration News → Scoring → per-team branches, helpers pour les 4 équipes
 - **Agent Infrastructure** (`agent_infrastructure.py`) : surveillance continue de l'infrastructure système
   - Health check toutes les 15 min : connexion PG, pool, pending trades, fallback JSON
   - Maintenance quotidienne 23h : VACUUM ANALYZE, pruning agent tables, stats
@@ -114,6 +148,10 @@ Journal 1 (ferme trades PENDING)
   → Learning 1 (recalcule 6 dimensions)
   → Journal 2 (enrichit flips Trader 2 avec MAE/MFE)
   → Learning 2 (recalcule 4 dimensions trend)
+  → Journal 3 (journalise positions techniques fermées)
+  → Learning 3 (recalcule 3 dimensions technique)
+  → Journal 4 (journalise positions meta fermées)
+  → Learning 4 (optimise poids, recalcule ajustements)
   → Cache scan vidé
   → Infrastructure maintenance 23h (VACUUM, pruning, stats)
 ```
@@ -122,6 +160,8 @@ Journal 1 (ferme trades PENDING)
 ```
 News → Scoring → [Learning 1 cache] → Trader 1
               → Scoring 2 → [Learning 2 cache] → Trader 2
+     Scoring 3 (technique, indépendant des news) → [Learning 3 cache] → Trader 3
+     Scoring 4 (combine Scoring 1+2+3) → [Learning 4 cache] → Trader 4
 ```
 
 ### Ajouter une nouvelle équipe (Équipe N)
@@ -213,7 +253,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **Backend**: FastAPI + APScheduler (Python)
 - **Frontend**: React + Vite
 - **Persistence**: PostgreSQL (primary, via `DATABASE_URL`) avec fallback JSON flat files
-  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive/agent_messages/agent_logs/audit_reports/trend_positions/trend_journal_entries
+  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive/agent_messages/agent_logs/audit_reports/trend_positions/trend_journal_entries/tech_positions/tech_journal_entries/meta_positions/meta_journal_entries
   - Fallback: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` + `data/audit_reports.json` (file locking via `fcntl`)
   - Auto-migration JSON→PG au demarrage si PG est vide mais JSON a des donnees
   - `price_archive`: daily OHLCV par ticker pour backtesting historique (v5.1)
@@ -505,7 +545,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
-- `backend/app/agents/registry.py` : 13 singletons (2 équipes + infra + perf + audit), run_scan_pipeline (News→Scoring→Scoring 2→Trader 1+2 avec Learning), helpers journal_2/learning_2/infrastructure
+- `backend/app/agents/registry.py` : 21 singletons (4 équipes + infra + perf + audit), run_scan_pipeline (News→Scoring→per-team branches), helpers pour toutes les équipes
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
 - `backend/app/agents/agent_scoring_2.py` : Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored
@@ -515,12 +555,20 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
 - `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
+- `backend/app/agents/agent_scoring_3.py` : Équipe 3, indicateurs techniques (RSI, MACD, Bollinger, SMA/EMA, Stochastic, ADX) sur 20 tickers, 5 stratégies, market_data.py pour OHLCV
+- `backend/app/agents/agent_trader_3.py` : Équipe 3, multi-position (max 10), holding 1-3j, A/B testing stratégies, persistence PG (tech_positions) + JSON
+- `backend/app/agents/agent_journal_3.py` : Équipe 3, journal positions techniques, analyse par stratégie, MAE/MFE, persistence PG (tech_journal_entries) + JSON
+- `backend/app/agents/agent_learning_3.py` : Équipe 3, 3 dims (strategy, ticker, timeframe), ranking stratégies, anomaly detection
+- `backend/app/agents/agent_scoring_4.py` : Équipe 4, meta-scorer combinant Teams 1+2+3, poids configurables, confluence detection (boost 1.2x-1.5x)
+- `backend/app/agents/agent_trader_4.py` : Équipe 4, confluence-driven (min level 2), sizing par confluence, max 6 positions, expiry 48h, persistence PG (meta_positions) + JSON
+- `backend/app/agents/agent_journal_4.py` : Équipe 4, journal meta positions, tracking par combinaison de sources, persistence PG (meta_journal_entries) + JSON
+- `backend/app/agents/agent_learning_4.py` : Équipe 4, optimisation poids (news/trend/tech), ajustements par combinaison/ticker/confluence, bounds [0.6, 1.4]
 - `backend/app/agents/agent_infrastructure.py` : v7.5, health check 15min (PG, pool, pending, fallbacks), maintenance 23h (VACUUM, pruning, stats), rapport hebdomadaire dim 21h, détection divergence JSON/PG
-- `backend/app/agents/agent_performance.py` : KPIs tous agents, 3 actions (snapshot horaire, daily report 22h30, weekly trends dim 21h30), ranking, alertes, tendances, rétention 168 snapshots + 30 reports
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 14 profils d'expertise (+ scoring_2, journal_2, learning_2, infrastructure, performance), note /10, persistance rapports, trend tracking, log analysis
+- `backend/app/agents/agent_performance.py` : KPIs tous agents (incl. Teams 3/4), 3 actions (snapshot horaire, daily report 22h30, weekly trends dim 21h30), ranking, alertes, tendances
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 22 profils d'expertise (incl. Teams 3/4), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
-- `backend/app/database.py` : v7.0, 10 tables PG (+ trend_positions, trend_journal_entries), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 9 tables, pg_update_trade_stop (v6.4)
+- `backend/app/database.py` : v7.0, 14 tables PG (+ trend_positions, trend_journal_entries, tech_positions, tech_journal_entries, meta_positions, meta_journal_entries), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 9+ tables, pg_update_trade_stop (v6.4)
 - `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
 - `backend/app/journal.py` : v6.4, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours, direct field access (no getattr)
 - `backend/app/learning.py` : v6.4, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback, update_trade_stop for trailing persistence, direct field access (no getattr)
@@ -541,7 +589,15 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `frontend/src/components/Journal.jsx` : composant journal inchangé (763 lignes, filtres, pagination, expandable entries, export CSV)
 - `frontend/src/components/NewsPage.jsx` : v7.0, santé sources (tableau taux succès/échecs/latence/erreurs, health bars), revue hebdomadaire, logs agent
 - `frontend/src/components/LearningPage.jsx` : v7.0, 6 dimensions learning (per-ticker, session, newscat, régime VIX, direction, delay bias), KPIs (boosts/pénalités), descriptions, logs agent
-- `frontend/src/components/AuditorPage.jsx` : v7.0, trigger audit par agent, rapports (note /10, tendances improving/declining, constats, améliorations, détail checks), logs agent
+- `frontend/src/components/AuditorPage.jsx` : v7.0, trigger audit par agent (22 targets incl. Teams 3/4), rapports, logs agent
+- `frontend/src/components/Scoring3Page.jsx` : Équipe 3, KPIs technique, setups par stratégie, distribution par ticker, logs
+- `frontend/src/components/Trader3Page.jsx` : Équipe 3, KPIs trader, positions actives, A/B stratégies, historique, logs
+- `frontend/src/components/Journal3Page.jsx` : Équipe 3, KPIs journal, analyse par stratégie, historique entries, logs
+- `frontend/src/components/Learning3Page.jsx` : Équipe 3, 3 dimensions (strategy, ticker, timeframe), anomalies, logs
+- `frontend/src/components/Scoring4Page.jsx` : Équipe 4, KPIs meta-scoring, confluence summary, signaux top, logs
+- `frontend/src/components/Trader4Page.jsx` : Équipe 4, KPIs trader, positions ouvertes, upstream status, historique, logs
+- `frontend/src/components/Journal4Page.jsx` : Équipe 4, KPIs journal, performance par combinaison, historique, logs
+- `frontend/src/components/Learning4Page.jsx` : Équipe 4, optimisation poids, ajustements combinaison/ticker/confluence, matrice performance, logs
 - `frontend/src/components/NotificationCenter.jsx` : v7.0, panneau latéral slide-in, alertes WARN/ERROR de tous les agents, filtres agent/niveau, navigation vers page agent
 
 ## REGLE ABSOLUE — Protection des donnees de production
