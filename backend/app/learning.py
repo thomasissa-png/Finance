@@ -327,7 +327,7 @@ def _filter_by_current_versions(trades: list[TradeRecommendation]) -> list[Trade
         filtered = []
         skipped = 0
         for t in trades:
-            av = getattr(t, "agent_versions", None)
+            av = t.agent_versions
             if av is None:
                 # Pre-v8.2 trade — keep (time decay will naturally down-weight)
                 filtered.append(t)
@@ -343,8 +343,9 @@ def _filter_by_current_versions(trades: list[TradeRecommendation]) -> list[Trade
                         "(keeping %d from scorer=%s, trader=%s)",
                         skipped, len(filtered), current_scorer_v, current_trader_v)
         return filtered
-    except Exception:
-        return trades  # Graceful: if versions unavailable, use all trades
+    except Exception as exc:
+        logger.error("Version filter failed: %s — using all trades", exc)
+        return trades
 
 
 def _get_decay_half_life(n_closed: int) -> float:

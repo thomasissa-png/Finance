@@ -472,7 +472,8 @@ def _get_agent_versions() -> dict:
         from .agents.registry import get_all_agents
         agents = get_all_agents()
         return {name: agent.version for name, agent in agents.items()}
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to collect agent versions: %s", exc)
         return {}
 
 

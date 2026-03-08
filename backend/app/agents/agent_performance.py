@@ -575,8 +575,8 @@ class AgentPerformance(BaseAgent):
                 from ..journal import _load_journal
                 entries = _load_journal()
                 recent = entries[-50:] if len(entries) > 50 else entries
-                maes = [e.mae for e in recent if hasattr(e, 'mae') and e.mae is not None]
-                mfes = [e.mfe for e in recent if hasattr(e, 'mfe') and e.mfe is not None]
+                maes = [e.mae for e in recent if e.mae is not None]
+                mfes = [e.mfe for e in recent if e.mfe is not None]
                 if maes:
                     kpis["avg_mae"] = round(sum(maes) / len(maes), 3)
                 if mfes:

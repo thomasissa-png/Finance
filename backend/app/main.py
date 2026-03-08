@@ -396,8 +396,8 @@ def _run_daily_journal() -> None:
                 trader_2 = get_agent("trader_2")
                 if trader_2:
                     trader_2.reset_daily_counters()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to reset daily counters: %s", exc)
             # Invalidate learning cache and run full learning update
             invalidate_learning_cache()
             try:
@@ -439,11 +439,15 @@ def _run_weekly_source_review() -> None:
 
 def _run_performance_snapshot() -> None:
     """Run hourly performance snapshot — lightweight KPI collection."""
-    try:
-        from .agents.registry import run_performance_snapshot
-        run_performance_snapshot()
-    except Exception as exc:
-        logger.error("Performance snapshot failed: %s", exc)
+    def _worker():
+        try:
+            from .agents.registry import run_performance_snapshot
+            run_performance_snapshot()
+        except Exception as exc:
+            logger.error("Performance snapshot failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="performance-snapshot")
+    thread.start()
 
 
 def _run_performance_daily() -> None:
@@ -473,12 +477,16 @@ def _run_performance_weekly() -> None:
 
 
 def _run_infra_health_check() -> None:
-    """Run infrastructure health check every 15 min."""
-    try:
-        from .agents.registry import run_infra_health_check
-        run_infra_health_check()
-    except Exception as exc:
-        logger.error("Infra health check failed: %s", exc)
+    """Run infrastructure health check every 15 min (weekdays only)."""
+    def _worker():
+        try:
+            from .agents.registry import run_infra_health_check
+            run_infra_health_check()
+        except Exception as exc:
+            logger.error("Infra health check failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="infra-health-check")
+    thread.start()
 
 
 def _run_infra_maintenance() -> None:
@@ -543,11 +551,11 @@ async def lifespan(app: FastAPI):
     # misfire_grace_time=3600: safe to run late, pure data analysis
     bg_scheduler.add_job(_run_weekly_source_review, CronTrigger(hour=20, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="weekly_source_review", misfire_grace_time=3600)
     # v7.5: Infrastructure health check every 15 min, maintenance daily at 23h, report weekly Sun 21h
-    bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
     bg_scheduler.add_job(_run_infra_maintenance, CronTrigger(hour=23, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_maintenance", misfire_grace_time=3600)
     bg_scheduler.add_job(_run_infra_report, CronTrigger(hour=21, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="infra_report", misfire_grace_time=3600)
     # v8.0: Performance agent — hourly snapshot, daily report 22h30, weekly trends Sun 21h30
-    bg_scheduler.add_job(_run_performance_snapshot, CronTrigger(minute=0, hour="7-22", day_of_week="mon-fri", timezone="Europe/Paris"), id="performance_snapshot", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_performance_snapshot, CronTrigger(minute=0, hour="7-22", day_of_week="mon-fri", timezone="Europe/Paris"), id="performance_snapshot", misfire_grace_time=300)
     bg_scheduler.add_job(_run_performance_daily, CronTrigger(hour=22, minute=30, day_of_week="mon-fri", timezone="Europe/Paris"), id="performance_daily", misfire_grace_time=3600)
     bg_scheduler.add_job(_run_performance_weekly, CronTrigger(hour=21, minute=30, day_of_week="sun", timezone="Europe/Paris"), id="performance_weekly", misfire_grace_time=3600)
     bg_scheduler.start()
