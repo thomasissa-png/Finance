@@ -36,29 +36,6 @@ const AGENT_DEFS = {
   ux:             { team: "infra",  icon: "\ud83c\udfa8", label: "UX",            role: "Frontend React, navigation, notifications", schedule: "Continu", tokens: false },
 };
 
-// Data flow connections between agents
-const PIPELINE_FLOWS = [
-  { from: "news", to: "scoring", label: "news_items" },
-  { from: "scoring", to: "trader_1", label: "scored_news" },
-  { from: "scoring", to: "scoring_2", label: "scored_news" },
-  { from: "scoring_2", to: "trader_2", label: "trend_scored" },
-  { from: "learning", to: "trader_1", label: "adjustments" },
-  { from: "learning_2", to: "trader_2", label: "adjustments" },
-  { from: "journal", to: "learning", label: "trade_results" },
-  { from: "journal_2", to: "learning_2", label: "flip_results" },
-  { from: "scoring_3", to: "trader_3", label: "tech_setups" },
-  { from: "scoring", to: "scoring_4", label: "scored_news" },
-  { from: "scoring_2", to: "scoring_4", label: "trend_scored" },
-  { from: "scoring_3", to: "scoring_4", label: "tech_scored" },
-  { from: "scoring_4", to: "trader_4", label: "meta_scored" },
-  { from: "learning_3", to: "trader_3", label: "adjustments" },
-  { from: "learning_4", to: "trader_4", label: "adjustments" },
-  { from: "journal_3", to: "learning_3", label: "trade_results" },
-  { from: "journal_4", to: "learning_4", label: "meta_results" },
-  { from: "performance", to: "ux", label: "kpis" },
-  { from: "auditor", to: "ux", label: "reports" },
-];
-
 // ── Status helpers ────────────────────────────────────────────────────
 
 const STATUS_MAP = {

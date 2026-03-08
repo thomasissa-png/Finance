@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { pnlColor } from "../utils/format";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 const TEAMS = [
   {
@@ -9,7 +10,6 @@ const TEAMS = [
     desc: "News trading event-driven, 0-1 trade par scan, TP/SL intraday",
     agents: ["scoring", "trader_1", "journal", "learning"],
     perfKey: "trader_1",
-    apiPerf: "/api/performance",
   },
   {
     id: "2",
@@ -18,7 +18,6 @@ const TEAMS = [
     desc: "Trend following sur 4 commodities, positions longue durée",
     agents: ["scoring_2", "trader_2", "journal_2", "learning_2"],
     perfKey: "trader_2",
-    apiPerf: "/api/performance",
   },
   {
     id: "3",
@@ -27,7 +26,6 @@ const TEAMS = [
     desc: "RSI, MACD, Bollinger, positions heures à 3 jours",
     agents: ["scoring_3", "trader_3", "journal_3", "learning_3"],
     perfKey: "trader_3",
-    apiPerf: "/api/performance",
   },
   {
     id: "4",
@@ -36,7 +34,6 @@ const TEAMS = [
     desc: "Confluence-driven, combine les signaux des 3 équipes",
     agents: ["scoring_4", "trader_4", "journal_4", "learning_4"],
     perfKey: "trader_4",
-    apiPerf: "/api/performance",
   },
 ];
 
@@ -58,15 +55,49 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
 
   useEffect(() => { if (isActive) fetchReport(); }, [isActive, fetchReport]);
 
-  const agentMap = {};
-  (agents || []).forEach((a) => { agentMap[a.name] = a; });
+  const agentMap = useMemo(() => {
+    const m = {};
+    (agents || []).forEach((a) => { m[a.name] = a; });
+    return m;
+  }, [agents]);
+
+  // P2.4: Team comparison chart data
+  const compareData = useMemo(() => {
+    if (!report) return [];
+    return TEAMS.map((team) => {
+      const d = report[team.perfKey] || {};
+      return {
+        name: team.name.replace("Équipe ", "Éq. "),
+        "Win Rate": team.id === "2" ? (d.flip_win_rate ?? 0) : (d.win_rate ?? 0),
+        "P&L": team.id === "2" ? (d.realized_pnl ?? 0) : (d.pnl_total ?? 0),
+      };
+    });
+  }, [report]);
 
   return (
-    <div className="agent-page">
+    <div className="agent-page page-fade-in">
       <div className="page-header">
         <div className="page-title">Équipes de Trading</div>
         <div className="page-subtitle">Vue d'ensemble des 4 équipes et de leur performance</div>
       </div>
+
+      {/* P2.4: Team comparison chart */}
+      {compareData.some((d) => d["Win Rate"] > 0 || d["P&L"] !== 0) && (
+        <div className="section-card" style={{ padding: 20 }}>
+          <h3>Comparaison des équipes</h3>
+          <div style={{ width: "100%", height: 180, marginTop: 12 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={compareData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#8B9DC3" }} tickLine={false} axisLine={{ stroke: "#1E2D4A" }} />
+                <YAxis tick={{ fontSize: 10, fill: "#8B9DC3" }} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ background: "#131D33", border: "1px solid #1E2D4A", borderRadius: 6, fontSize: 12, color: "#E8ECF4" }} />
+                <Bar dataKey="Win Rate" fill="#3B82F6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="P&L" fill="#10B981" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       <div className="teams-grid">
         {TEAMS.map((team) => {
@@ -75,7 +106,6 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
           const pnl = team.id === "2" ? perfData.realized_pnl : perfData.pnl_total;
           const trades = team.id === "2" ? (perfData.total_flips || 0) : (perfData.total_trades || 0);
 
-          // Count active / error agents in this team
           const teamAgents = team.agents.map((n) => agentMap[n]).filter(Boolean);
           const working = teamAgents.filter((a) => a.status === "working").length;
           const errors = teamAgents.filter((a) => a.status === "error").length;
@@ -85,6 +115,9 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
               key={team.id}
               className="team-overview-card"
               onClick={() => onNavigate(`team${team.id}`)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNavigate(`team${team.id}`); } }}
             >
               <div className="team-overview-header">
                 <div>

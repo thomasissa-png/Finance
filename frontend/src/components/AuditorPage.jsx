@@ -34,26 +34,26 @@ const TARGET_LABELS = {
 };
 
 const TARGET_TEAMS = {
-  news: "Partage",
-  scoring: "Equipe 1",
-  scoring_2: "Equipe 2",
-  scoring_3: "Equipe 3",
-  scoring_4: "Equipe 4",
-  trader_1: "Equipe 1",
-  trader_2: "Equipe 2",
-  trader_3: "Equipe 3",
-  trader_4: "Equipe 4",
-  journal: "Equipe 1",
-  journal_2: "Equipe 2",
-  journal_3: "Equipe 3",
-  journal_4: "Equipe 4",
-  learning: "Equipe 1",
-  learning_2: "Equipe 2",
-  learning_3: "Equipe 3",
-  learning_4: "Equipe 4",
-  infrastructure: "Partage",
-  performance: "Partage",
-  auditor: "Partage",
+  news: "Partagé",
+  scoring: "Équipe 1",
+  scoring_2: "Équipe 2",
+  scoring_3: "Équipe 3",
+  scoring_4: "Équipe 4",
+  trader_1: "Équipe 1",
+  trader_2: "Équipe 2",
+  trader_3: "Équipe 3",
+  trader_4: "Équipe 4",
+  journal: "Équipe 1",
+  journal_2: "Équipe 2",
+  journal_3: "Équipe 3",
+  journal_4: "Équipe 4",
+  learning: "Équipe 1",
+  learning_2: "Équipe 2",
+  learning_3: "Équipe 3",
+  learning_4: "Équipe 4",
+  infrastructure: "Partagé",
+  performance: "Partagé",
+  auditor: "Partagé",
 };
 
 function ScoreCircle({ score }) {
@@ -66,7 +66,12 @@ function ScoreCircle({ score }) {
   );
 }
 
-export default function AuditorPage({ isActive }) {
+export default function AuditorPage({ isActive, agents }) {
+  const agentMap = React.useMemo(() => {
+    const m = {};
+    (agents || []).forEach((a) => { m[a.name] = a; });
+    return m;
+  }, [agents]);
   const [reports, setReports] = useState([]);
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
@@ -106,14 +111,14 @@ export default function AuditorPage({ isActive }) {
     try {
       const res = await fetch(`/api/agents/auditor/audit/${target}`, { method: "POST" });
       if (res.ok) {
-        setAuditFeedback({ type: "success", message: `Audit ${TARGET_LABELS[target] || target} lance avec succes` });
+        setAuditFeedback({ type: "success", message: `Audit ${TARGET_LABELS[target] || target} lancé avec succès` });
         setTimeout(fetchData, 1500);
       } else {
         const err = await res.json().catch(() => ({}));
         setAuditFeedback({ type: "error", message: err.detail || `Erreur lors de l'audit ${target}` });
       }
     } catch (err) {
-      setAuditFeedback({ type: "error", message: `Erreur reseau : ${err.message}` });
+      setAuditFeedback({ type: "error", message: `Erreur réseau : ${err.message}` });
     } finally {
       setAuditLoading((prev) => ({ ...prev, [target]: false }));
       setTimeout(() => setAuditFeedback(null), 5000);
@@ -128,10 +133,10 @@ export default function AuditorPage({ isActive }) {
     <div className="agent-page">
       <div className="page-header">
         <div className="page-title">Audit</div>
-        <div className="page-subtitle">Audit en profondeur de chaque agent, note /10, ameliorations, tendances</div>
+        <div className="page-subtitle">Audit en profondeur de chaque agent, note /10, améliorations, tendances</div>
       </div>
 
-      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des donnees...</div>}
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
       {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
       {auditFeedback && (
         <div className={`agent-${auditFeedback.type === "success" ? "success" : "error"}-banner`}>
@@ -144,7 +149,7 @@ export default function AuditorPage({ isActive }) {
         <div className="section-header">
           <h3>Lancer un audit</h3>
           <div className="log-filter-row">
-            {["all", "Equipe 1", "Equipe 2", "Equipe 3", "Equipe 4", "Partage"].map((f) => (
+            {["all", "Équipe 1", "Équipe 2", "Équipe 3", "Équipe 4", "Partagé"].map((f) => (
               <button key={f} className={`log-filter-btn ${teamFilter === f ? "active" : ""}`}
                 onClick={() => setTeamFilter(f)}>
                 {f === "all" ? "Tous" : f}
@@ -164,6 +169,10 @@ export default function AuditorPage({ isActive }) {
                 <><span className="spinner spinner-inline" /> Audit...</>
               ) : (
                 <>
+                  {agentMap[target] && (
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", display: "inline-block", marginRight: 4,
+                      background: agentMap[target].status === "working" ? "var(--accent)" : agentMap[target].status === "error" ? "var(--red)" : "var(--text-muted)" }} />
+                  )}
                   {TARGET_LABELS[target]}
                   <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 4 }}>
                     {TARGET_TEAMS[target]}
@@ -223,7 +232,7 @@ export default function AuditorPage({ isActive }) {
 
                       {report.improvements && report.improvements.length > 0 && (
                         <div className="audit-section">
-                          <h4>Ameliorations proposees</h4>
+                          <h4>Améliorations proposées</h4>
                           <ul>
                             {report.improvements.map((imp, i) => (
                               <li key={i}>{typeof imp === "string" ? imp : JSON.stringify(imp)}</li>
@@ -234,7 +243,7 @@ export default function AuditorPage({ isActive }) {
 
                       {report.checks && Object.keys(report.checks).length > 0 && (
                         <div className="audit-section">
-                          <h4>Detail des checks</h4>
+                          <h4>Détail des checks</h4>
                           <div className="audit-checks-grid">
                             {Object.entries(report.checks).map(([check, result]) => (
                               <div key={check} className="audit-check">

@@ -68,17 +68,17 @@ export default function NewsPage({ isActive }) {
     <div className="agent-page">
       <div className="page-header">
         <div className="page-title">Agent News</div>
-        <div className="page-subtitle">Collecte, curation, sante des sources, detection d'evenements</div>
+        <div className="page-subtitle">Collecte, curation, santé des sources, détection d'événements</div>
       </div>
 
-      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des donnees...</div>}
+      {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
       {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
 
       {/* Source Health */}
       <div className="section-card">
-        <h3>Sante des sources</h3>
+        <h3>Santé des sources</h3>
         {sources.length === 0 ? (
-          <div className="agent-logs-empty">Aucune donnee de sante disponible. Les donnees apparaissent apres le premier scan.</div>
+          <div className="agent-logs-empty">Aucune donnée de santé disponible. Les données apparaissent après le premier scan.</div>
         ) : (
           <>
           <div className="compact-table desktop-only">
@@ -86,11 +86,11 @@ export default function NewsPage({ isActive }) {
               <thead>
                 <tr>
                   <th>Source</th>
-                  <th>Taux de succes</th>
+                  <th>Taux de succès</th>
                   <th>Sante</th>
-                  <th>Echecs</th>
+                  <th>Échecs</th>
                   <th>Latence moy.</th>
-                  <th>Derniere erreur</th>
+                  <th>Dernière erreur</th>
                 </tr>
               </thead>
               <tbody>
@@ -118,7 +118,7 @@ export default function NewsPage({ isActive }) {
                 </div>
                 <HealthBar rate={s.success_rate} />
                 <div className="mobile-card-body">
-                  <span>Echecs : <strong style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</strong></span>
+                  <span>Échecs : <strong style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</strong></span>
                   <span>Latence : {s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "—"}</span>
                 </div>
                 {s.last_error && <div className="mobile-card-error">{String(s.last_error).slice(0, 80)}</div>}
@@ -146,7 +146,7 @@ export default function NewsPage({ isActive }) {
                   <span className="weekly-stat-value" style={{ color: "var(--red)" }}>
                     {weeklyReview.summary.degraded ?? "—"}
                   </span>
-                  <span className="weekly-stat-label">Sources degradees</span>
+                  <span className="weekly-stat-label">Sources dégradées</span>
                 </div>
               </div>
             )}

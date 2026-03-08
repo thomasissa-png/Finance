@@ -37,28 +37,28 @@ export const TICKER_NAMES = {
   "PL=F": "Platine",
   "PA=F": "Palladium",
   // Energie
-  "CL=F": "Petrole WTI",
+  "CL=F": "Pétrole WTI",
   "BZ=F": "Brent",
   "NG=F": "Gaz naturel",
   // Agriculture
-  "ZC=F": "Mais (Corn)",
-  "ZW=F": "Ble (Wheat)",
+  "ZC=F": "Maïs (Corn)",
+  "ZW=F": "Blé (Wheat)",
   "ZS=F": "Soja (Soybeans)",
   // Soft commodities
-  "KC=F": "Cafe (Coffee)",
+  "KC=F": "Café (Coffee)",
   "CC=F": "Cacao (Cocoa)",
   "SB=F": "Sucre (Sugar)",
   "CT=F": "Coton (Cotton)",
   "OJ=F": "Jus d'orange (OJ)",
   // Livestock
-  "LE=F": "Betail (Cattle)",
+  "LE=F": "Bétail (Cattle)",
   "HE=F": "Porc (Hogs)",
   // Actions Europe
   "TTE.PA": "TotalEnergies",
   "MC.PA": "LVMH",
   "BNP.PA": "BNP Paribas",
-  "RMS.PA": "Hermes",
-  "OR.PA": "L'Oreal",
+  "RMS.PA": "Hermès",
+  "OR.PA": "L'Oréal",
   "SAN.PA": "Sanofi",
   "AI.PA": "Air Liquide",
   // Actions US

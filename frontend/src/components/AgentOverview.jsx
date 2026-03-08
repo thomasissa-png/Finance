@@ -268,6 +268,8 @@ export default function AgentOverview({ agents, onSelectAgent }) {
               onClick={() => onSelectAgent(agent.name)}
               role="button"
               tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectAgent(agent.name); } }}
+              aria-label={`${config.label} — ${STATUS_LABELS[agent.status] || agent.status}`}
             >
               <div className="agent-card-header">
                 <span className="agent-card-icon">{config.icon}</span>

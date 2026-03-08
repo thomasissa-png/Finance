@@ -37,6 +37,7 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring_3", trader: "trader_3", journal: "journal_3", learning: "learning_3" },
     api: {
       trades: "/api/agents/trader_3/metrics",
+      tradesKey: "positions",
       perf: "/api/performance/report",
       learning: "/api/learning3/weekly-config",
       scoring: null,
@@ -51,10 +52,11 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring_4", trader: "trader_4", journal: "journal_4", learning: "learning_4" },
     api: {
       trades: "/api/agents/trader_4/metrics",
+      tradesKey: "positions",
       perf: "/api/performance/report",
       learning: "/api/learning4/weekly-config",
       scoring: null,
-      journal: null,
+      journal: "/api/journal4/entries",
     },
     perfKey: "trader_4",
   },
@@ -98,10 +100,14 @@ function AgentStatusCard({ agent }) {
 
 function LogSection({ agentName, logFilter, setLogFilter }) {
   const [logs, setLogs] = useState([]);
+  const [logError, setLogError] = useState(null);
 
   useEffect(() => {
     const url = `/api/agents/${agentName}/logs?limit=30${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`;
-    fetch(url).then((r) => r.ok ? r.json() : []).then((data) => setLogs(Array.isArray(data) ? data : [])).catch(() => {});
+    fetch(url)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then((data) => { setLogs(Array.isArray(data) ? data : []); setLogError(null); })
+      .catch((err) => { setLogs([]); setLogError(err.message); });
   }, [agentName, logFilter]);
 
   return (
@@ -115,8 +121,9 @@ function LogSection({ agentName, logFilter, setLogFilter }) {
           ))}
         </div>
       </div>
+      {logError && <div className="agent-error-banner" style={{ margin: "8px 0", fontSize: 12 }}>Erreur chargement logs : {logError}</div>}
       <div className="agent-logs compact-logs">
-        {logs.length === 0 ? (
+        {logs.length === 0 && !logError ? (
           <div className="agent-logs-empty">Aucun log</div>
         ) : logs.slice(0, 15).map((log, i) => (
           <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
@@ -286,6 +293,34 @@ function ScoringSection({ teamId }) {
   );
 }
 
+function MobileTradeCard({ t, res }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="trade-mobile-card" onClick={() => setExpanded(!expanded)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }} aria-expanded={expanded}>
+      <div className="trade-mobile-header">
+        <span className="ticker-cell">{tickerName(t.ticker)}</span>
+        <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
+        <span className={`result-badge ${res.cls}`}>{res.label}</span>
+      </div>
+      <div className="trade-mobile-body">
+        <span>{formatDate(t.timestamp || t.entry_time)}</span>
+        <span>R/R: {t.risk_reward?.toFixed(2)}</span>
+        <span style={{ color: pnlColor(t.pnl_pct), fontWeight: 600 }}>
+          {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%` : ""}
+        </span>
+      </div>
+      {expanded && (
+        <div className="trade-mobile-details" style={{ marginTop: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+          {t.headline && <div style={{ marginBottom: 4 }}>{t.headline}</div>}
+          {t.news_category && <span className="cat-badge" style={{ backgroundColor: CATEGORY_COLORS[t.news_category] || "#5A6F94", marginRight: 6 }}>{t.news_category}</span>}
+          {t.entry_price != null && <span>Entrée: {t.entry_price.toFixed(2)} | </span>}
+          {t.raw_claude_score != null && <span>Score: {t.raw_claude_score.toFixed(0)}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Trader section with correct per-team API ──
 function TraderSection({ teamId }) {
   const [trades, setTrades] = useState([]);
@@ -301,8 +336,14 @@ function TraderSection({ teamId }) {
     if (config?.api.trades) {
       fetch(config.api.trades)
         .then((r) => r.ok ? r.json() : [])
-        .then((d) => setTrades(Array.isArray(d) ? d : []))
-        .catch(() => {});
+        .then((d) => {
+          if (Array.isArray(d)) setTrades(d);
+          else if (config.api.tradesKey && Array.isArray(d?.[config.api.tradesKey])) setTrades(d[config.api.tradesKey]);
+          else if (Array.isArray(d?.trades)) setTrades(d.trades);
+          else if (Array.isArray(d?.history)) setTrades(d.history);
+          else setTrades([]);
+        })
+        .catch(() => setTrades([]));
     }
     // Fetch team-specific performance from report
     fetch("/api/performance/report")
@@ -455,26 +496,7 @@ function TraderSection({ teamId }) {
             {paged.map((t, i) => {
               const res = RESULT_LABELS[t.result] || { label: t.result, cls: "" };
               return (
-                <div key={`m-${t.timestamp}-${i}`} className="trade-mobile-card" onClick={() => {}}>
-                  <div className="trade-mobile-header">
-                    <span className="ticker-cell">{tickerName(t.ticker)}</span>
-                    <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
-                    <span className={`result-badge ${res.cls}`}>{res.label}</span>
-                  </div>
-                  <div className="trade-mobile-body">
-                    <span>{formatDate(t.timestamp || t.entry_time)}</span>
-                    <span>R/R: {t.risk_reward?.toFixed(2)}</span>
-                    <span style={{ color: pnlColor(t.pnl_pct), fontWeight: 600 }}>
-                      {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%` : ""}
-                    </span>
-                  </div>
-                  {/* Mobile expandable details */}
-                  {t.headline && (
-                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.4 }}>
-                      {t.headline}
-                    </div>
-                  )}
-                </div>
+                <MobileTradeCard key={`m-${t.timestamp}-${i}`} t={t} res={res} />
               );
             })}
           </div>
@@ -842,7 +864,7 @@ export default function TeamPage({ teamId, isActive, agents, onNavigateBack }) {
       </div>
 
       {/* Tabs */}
-      <div className="team-tabs">
+      <div className="team-tabs" style={{ position: "sticky", top: 48, zIndex: 10, background: "var(--bg-primary)", paddingBottom: 4 }}>
         {TABS.map((tab) => (
           <button
             key={tab.id}

@@ -89,7 +89,9 @@ export default function App() {
   const [agents, setAgents] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
-  const [lastNotifCheck, setLastNotifCheck] = useState(Date.now());
+  const [lastNotifCheck, setLastNotifCheck] = useState(() => {
+    try { return parseInt(localStorage.getItem("lastNotifCheck"), 10) || Date.now(); } catch { return Date.now(); }
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Fetch agents status
@@ -106,25 +108,16 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchAgents]);
 
-  // Fetch notifications
+  // Fetch notifications — consolidated (1 request per known agent instead of 2×18)
   const fetchNotifications = useCallback(() => {
-    const agentNames = [
-      "news", "scoring", "scoring_2", "scoring_3", "scoring_4",
-      "trader_1", "trader_2", "trader_3", "trader_4",
-      "journal", "journal_2", "journal_3", "journal_4",
-      "learning", "learning_2", "learning_3", "learning_4",
-      "auditor",
-    ];
-    const requests = agentNames.flatMap((name) => [
-      fetch(`/api/agents/${name}/logs?limit=20&level=WARN`)
-        .then((r) => r.json())
+    const knownAgents = (agents || []).map((a) => a.name).filter(Boolean);
+    if (knownAgents.length === 0) return;
+    const requests = knownAgents.map((name) =>
+      fetch(`/api/agents/${name}/logs?limit=15&level=WARN,ERROR`)
+        .then((r) => r.ok ? r.json() : [])
         .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
-        .catch(() => []),
-      fetch(`/api/agents/${name}/logs?limit=10&level=ERROR`)
-        .then((r) => r.json())
-        .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
-        .catch(() => []),
-    ]);
+        .catch(() => [])
+    );
     Promise.all(requests).then((results) => {
       const combined = results.flat().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       const seen = new Set();
@@ -136,7 +129,7 @@ export default function App() {
       }).slice(0, 50);
       setNotifications(deduped);
     });
-  }, []);
+  }, [agents]);
 
   useEffect(() => {
     fetchNotifications();
@@ -148,7 +141,11 @@ export default function App() {
     (n) => new Date(n.timestamp).getTime() > lastNotifCheck
   ).length;
 
-  const markAllRead = useCallback(() => { setLastNotifCheck(Date.now()); }, []);
+  const markAllRead = useCallback(() => {
+    const now = Date.now();
+    setLastNotifCheck(now);
+    try { localStorage.setItem("lastNotifCheck", String(now)); } catch { /* */ }
+  }, []);
 
   const navigate = useCallback((pageId) => {
     setActivePage(pageId);
@@ -275,7 +272,7 @@ export default function App() {
             {isTeamPage && <TeamPage teamId={activePage.replace("team", "")} isActive agents={agents} onNavigateBack={() => navigate("equipes")} />}
             {activePage === "news" && <NewsPage isActive />}
             {activePage === "performance" && <PerformancePage isActive agents={agents} />}
-            {activePage === "auditor" && <AuditorPage isActive />}
+            {activePage === "auditor" && <AuditorPage isActive agents={agents} />}
             {activePage === "admin" && <AdminPage isActive />}
           </Suspense>
         </ErrorBoundary>

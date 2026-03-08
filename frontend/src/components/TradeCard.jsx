@@ -94,7 +94,7 @@ export default function TradeCard({ scan, label }) {
           </span>
         </div>
 
-        <button className="trade-toggle-btn" onClick={() => setOpen(!open)}>
+        <button className="trade-toggle-btn" onClick={() => setOpen(!open)} aria-expanded={open}>
           {open ? "Masquer détails ^" : "Voir détails v"}
         </button>
 

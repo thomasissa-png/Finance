@@ -1339,3 +1339,104 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
   .perf-card { padding: 10px; }
   .perf-card-value { font-size: 16px; }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   PAGE TRANSITIONS & ANIMATIONS (P3.2, P3.6)
+   ══════════════════════════════════════════════════════════════ */
+
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.page-fade-in {
+  animation: pageFadeIn 0.3s ease-out;
+}
+
+/* KPI flash animations for value changes */
+@keyframes flashGreen {
+  0% { background: transparent; }
+  15% { background: rgba(16, 185, 129, 0.25); }
+  100% { background: transparent; }
+}
+@keyframes flashRed {
+  0% { background: transparent; }
+  15% { background: rgba(239, 68, 68, 0.25); }
+  100% { background: transparent; }
+}
+
+.flash-green { animation: flashGreen 1.2s ease-out; }
+.flash-red { animation: flashRed 1.2s ease-out; }
+
+/* ══════════════════════════════════════════════════════════════
+   IMPROVED SPACING (P3.1)
+   ══════════════════════════════════════════════════════════════ */
+
+.page-header {
+  margin-bottom: 28px;
+}
+
+.section-card + .section-card {
+  margin-top: 4px;
+}
+
+.kpi-row {
+  margin-bottom: 28px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   CARD HOVER EFFECTS (P3.4)
+   ══════════════════════════════════════════════════════════════ */
+
+.team-overview-card,
+.agent-card,
+.kpi-card,
+.perf-card {
+  transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition);
+}
+
+.team-overview-card:hover,
+.agent-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-light);
+}
+
+.kpi-card:hover,
+.perf-card:hover {
+  border-color: var(--border-light);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   BETTER LOADING SKELETONS (P3.5)
+   ══════════════════════════════════════════════════════════════ */
+
+.skeleton-kpi {
+  height: 72px;
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+}
+
+.skeleton-table {
+  height: 200px;
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+}
+
+.skeleton-chart {
+  height: 180px;
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+}
+
+.skeleton-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.skeleton-row .skeleton-kpi {
+  margin-bottom: 0;
+}
