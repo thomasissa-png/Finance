@@ -452,10 +452,12 @@ class TestAgentJournalSystem:
                  patch("backend.app.journal.JOURNAL_FILE", jf), \
                  patch("backend.app.journal.is_pg_enabled", return_value=False), \
                  patch("backend.app.learning.is_pg_enabled", return_value=False), \
-                 patch("backend.app.journal._fetch_bars_for_date", return_value=[
-                     (datetime.now(timezone.utc), 72.0, 69.5, 70.0, 71.5),
-                     (datetime.now(timezone.utc) + timedelta(hours=1), 73.0, 71.0, 71.5, 72.5),
-                 ]):
+                 patch("backend.app.journal._fetch_intraday_prices", return_value=(
+                     73.0, 69.5, 71.5, [
+                         (datetime.now(timezone.utc), 72.0, 69.5, 70.0, 71.5),
+                         (datetime.now(timezone.utc) + timedelta(hours=1), 73.0, 71.0, 71.5, 72.5),
+                     ]
+                 )):
                 result = run_daily_journal()
 
             assert isinstance(result, (list, dict))
@@ -738,15 +740,15 @@ class TestAgentInfrastructure:
         from backend.app.agents.base import MessageBus
         bus = MessageBus()
         bus.publish("agent_a", "msg_for_b", {"data": 1}, to_agent="agent_b")
-        consumed = bus.consume("agent_b")
-        assert any(m["action"] == "msg_for_b" for m in consumed)
+        consumed = bus.consume("agent_b", ["msg_for_b"])
+        assert any(m["msg_type"] == "msg_for_b" for m in consumed)
 
     def test_agent_logger(self):
         """AgentLogger enregistre les logs avec le bon format."""
         from backend.app.agents.base import AgentLogger
         logger = AgentLogger("test_agent")
         logger.log("test_action", {"detail": "value"})
-        logs = logger.get_logs("test_agent", limit=5)
+        logs = logger.get_logs(limit=5)
         assert len(logs) >= 1
         assert logs[0]["action"] == "test_action"
 
