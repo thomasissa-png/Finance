@@ -1024,6 +1024,8 @@ def run_daily_journal() -> list[dict]:
             bar_coverage=n_bars,
             bar_interval=bar_interval,
             realized_rr=realized_rr,
+            # P2.5: Agent version tracking from trade
+            agent_versions=trade.agent_versions,
             # v3: Scan-level decision trace (from cached scan results)
             **_extract_scan_trace(scan_data, trade.scan_type.value, trade.ticker),
         )

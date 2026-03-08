@@ -363,6 +363,7 @@ class AgentLearning2(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        self._last_run_time = None  # P3.13: stale cache monitoring
 
     def run(self, **kwargs) -> dict:
         """Recalculate trend learning dimensions and publish adjustments.
@@ -396,6 +397,7 @@ class AgentLearning2(BaseAgent):
             self._cached_adjustments = learning_data
             self._cache_valid = True
             self._total_recalculations += 1
+            self._last_run_time = datetime.now(timezone.utc)  # P3.13
 
             # Step 3: Process results
             ticker_adj = learning_data.get("ticker_adj", {})

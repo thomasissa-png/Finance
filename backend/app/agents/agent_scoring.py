@@ -46,6 +46,7 @@ class AgentScoring(BaseAgent):
         self._total_tokens_used: int = 0
         self._cache_hits: int = 0
         self._last_duration_ms: int = 0
+        self._last_result: dict | None = None  # P2.7: Store last result for API
 
     def run(self, news_items, scan_type, **kwargs) -> dict:
         """Score a batch of news items.
@@ -167,6 +168,28 @@ class AgentScoring(BaseAgent):
             })
 
             self._set_status(AgentStatus.IDLE, f"Scored {len(scored)} items")
+            # P2.7: Store result for API endpoint
+            self._last_result = {
+                "scored_count": len(scored),
+                "zero_edge_filtered": result["zero_edge_filtered"],
+                "cache_hits": result["cache_hits"],
+                "tokens_used": result["tokens_used"],
+                "duration_ms": duration_ms,
+                "top_scored": [
+                    {
+                        "score": round(s.total_score, 1),
+                        "direction": s.direction.value,
+                        "category": s.news_category,
+                        "ticker": s.impacted_tickers[0] if s.impacted_tickers else "?",
+                        "headline": s.news.title[:120],
+                        "delay": s.transmission_delay,
+                        "awareness": s.market_awareness,
+                        "reliability": s.signal_reliability,
+                    }
+                    for s in sorted(scored, key=lambda s: s.total_score, reverse=True)[:10]
+                ],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
             return result
 
         except Exception as exc:
@@ -179,6 +202,10 @@ class AgentScoring(BaseAgent):
     def _score_batch(self, news_items, scan_type):
         from ..news_scorer import score_news_batch
         return score_news_batch(news_items, scan_type)
+
+    def get_last_result(self) -> dict | None:
+        """P2.7: Get the last scoring result (for API/frontend)."""
+        return self._last_result
 
     def get_metrics(self) -> dict:
         return {

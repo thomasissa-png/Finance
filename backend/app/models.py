@@ -327,6 +327,9 @@ class JournalEntry(BaseModel):
     volume_ratio: float | None = None             # Today's volume / 20d avg
     position_size_pct: float | None = None        # % of capital allocated
 
+    # P2.5: Agent version tracking — stamped from trade's agent_versions
+    agent_versions: dict | None = None  # {"scorer": "7.4", "trader": "6.5", ...}
+
     # v5.0 O11: Validate news_category
     @field_validator("news_category")
     @classmethod

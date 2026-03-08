@@ -470,6 +470,33 @@ def get_weekly_config_4() -> dict | None:
     return _agents["learning_4"].get_weekly_config()
 
 
+# ── P3.9: Centralized learning cache invalidation ─────────────────────
+
+
+def invalidate_all_learning_caches():
+    """P3.9: Invalidate ALL learning caches in one call.
+
+    Called after all journal runs complete. Publishes a bus message
+    so any future consumer can react to the event.
+    """
+    _ensure_agents()
+    for key in ("learning", "learning_2", "learning_3", "learning_4"):
+        try:
+            _agents[key].invalidate_cache()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to invalidate %s cache: %s", key, exc)
+    # Publish bus message for any downstream consumers
+    try:
+        _agents["learning"].publish("journal_all_complete", {
+            "timestamp": __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat(),
+        })
+    except Exception:
+        pass
+
+
 # ── Infrastructure helpers ─────────────────────────────────────────────
 
 def run_infra_health_check() -> dict:

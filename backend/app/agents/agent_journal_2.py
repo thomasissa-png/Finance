@@ -141,17 +141,42 @@ def _pg_save_entries(entries: list[dict]):
         _save_entries_json(entries)
 
 
-def _fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> list[dict]:
-    """Fetch daily OHLCV bars for MAE/MFE computation.
+def _fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> tuple[list[dict], str]:
+    """Fetch OHLCV bars for MAE/MFE computation.
 
+    P3.10: Tries 1h bars first (finer resolution like Journal 1), falls back to daily.
     P6 fix: log errors instead of silent pass.
+
+    Returns (bars, interval) where interval is "1h" or "1day".
     """
+    # P3.10: Try 1h bars first for finer MAE/MFE resolution
+    try:
+        from ..market_data import fetch_intraday
+        bars_1h = fetch_intraday(ticker, interval="1h", outputsize=500)
+        if bars_1h:
+            # Filter to date range
+            result = []
+            for bar in bars_1h:
+                bar_date = bar.get("date", "")
+                if isinstance(bar_date, datetime):
+                    bar_date = bar_date.strftime("%Y-%m-%d")
+                elif isinstance(bar_date, str) and len(bar_date) > 10:
+                    bar_date = bar_date[:10]
+                if start_date <= bar_date <= end_date:
+                    result.append(bar)
+            if result:
+                logger.info("P3.10: Using 1h bars for %s (%d bars)", ticker, len(result))
+                return result, "1h"
+    except Exception as exc:
+        logger.debug("1h bars fetch failed for %s: %s — trying daily", ticker, exc)
+
+    # Fallback: daily bars
     try:
         from ..market_data import fetch_history
         bars = fetch_history(ticker, period="3mo")
         if not bars:
             logger.warning("fetch_history returned empty for %s (%s→%s)", ticker, start_date, end_date)
-            return []
+            return [], "1day"
         # Filter to date range
         result = []
         for bar in bars:
@@ -160,7 +185,7 @@ def _fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> list[dict]
                 bar_date = bar_date.strftime("%Y-%m-%d")
             if start_date <= bar_date <= end_date:
                 result.append(bar)
-        return result
+        return result, "1day"
     except Exception as exc:
         logger.warning("Twelve Data fetch failed for %s: %s — trying yfinance", ticker, exc)
     # Fallback yfinance
@@ -170,15 +195,15 @@ def _fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> list[dict]
         h = t.history(start=start_date, end=end_date)
         if h.empty:
             logger.warning("yfinance returned empty for %s (%s→%s)", ticker, start_date, end_date)
-            return []
+            return [], "1day"
         return [
             {"date": idx.strftime("%Y-%m-%d"), "high": row["High"],
              "low": row["Low"], "open": row["Open"], "close": row["Close"]}
             for idx, row in h.iterrows()
-        ]
+        ], "1day"
     except Exception as exc:
         logger.warning("yfinance fetch also failed for %s: %s", ticker, exc)
-        return []
+        return [], "1day"
 
 
 def _compute_mae_mfe(direction: str, entry_price: float,
@@ -471,18 +496,23 @@ class AgentJournal2(BaseAgent):
         except (ValueError, AttributeError, TypeError):
             pass
 
-        # Fetch daily bars for MAE/MFE (L3: None when unavailable)
+        # Fetch bars for MAE/MFE — P3.10: 1h bars preferred, daily fallback
         mae_pct = None
         mfe_pct = None
         bar_count = 0
-        bar_interval = "daily"  # L4: track bar resolution
+        bar_interval = "1day"  # L4: track bar resolution
         if start_date and end_date:
             try:
-                bars = self.execute(
+                fetch_result = self.execute(
                     f"Fetching bars {ticker}",
                     _fetch_daily_bars,
                     ticker, start_date, end_date,
                 )
+                # P3.10: _fetch_daily_bars now returns (bars, interval)
+                if isinstance(fetch_result, tuple):
+                    bars, bar_interval = fetch_result
+                else:
+                    bars = fetch_result  # backward compat
                 if bars:
                     mae_pct, mfe_pct = _compute_mae_mfe(from_dir, entry_price, bars)
                     bar_count = len(bars)
@@ -556,6 +586,7 @@ class AgentJournal2(BaseAgent):
             "reason": flip.get("reason", ""),
             "news_categories": news_categories,  # L7: sorted by frequency
             "key_news_count": full_key_news_count,  # L1: count before truncation
+            "agent_versions": self._get_agent_versions(),  # P2.6: version tracking
         }
 
         # L8: Add Scoring 2 data if available
@@ -563,6 +594,15 @@ class AgentJournal2(BaseAgent):
             entry["scoring_2"] = scoring_2_info
 
         return entry
+
+    def _get_agent_versions(self) -> dict:
+        """P2.6: Get current agent versions for entry stamping."""
+        try:
+            from .registry import get_all_agents
+            agents = get_all_agents()
+            return {name: getattr(a, "version", "?") for name, a in agents.items()}
+        except Exception:
+            return {}
 
     def _take_snapshot(self, ticker: str, pos: dict) -> dict:
         """Take a daily snapshot of position state.

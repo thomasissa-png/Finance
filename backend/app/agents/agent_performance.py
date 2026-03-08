@@ -972,6 +972,24 @@ class AgentPerformance(BaseAgent):
                 "message": f"{infra['pg_failures']} échecs PG consécutifs",
             })
 
+        # P3.13: Stale learning cache alert — check if any learning agent hasn't updated in 24h+
+        try:
+            from .registry import get_agent as _get_agent
+            from datetime import timedelta
+            now_utc = datetime.now(timezone.utc)
+            for learning_name in ("learning", "learning_2", "learning_3", "learning_4"):
+                agent = _get_agent(learning_name)
+                if agent and hasattr(agent, "_last_run_time") and agent._last_run_time:
+                    age = now_utc - agent._last_run_time
+                    if age > timedelta(hours=24):
+                        alerts.append({
+                            "severity": "WARN",
+                            "agent": learning_name,
+                            "message": f"Cache learning stale depuis {age.total_seconds() / 3600:.0f}h — pas mis à jour depuis > 24h",
+                        })
+        except Exception:
+            pass
+
     # ── Private: Trend computation ───────────────────────────────────
 
     def _compute_trend(self, values: list) -> dict:

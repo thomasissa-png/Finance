@@ -931,7 +931,7 @@ class TestJournal2AuditFixes:
         }
         entry = agent._process_flip("HG=F", flip, {"name": "Cuivre", "category": "commodities_industrial"})
         assert entry is not None
-        assert entry["bar_interval"] == "daily"
+        assert entry["bar_interval"] in ("daily", "1day", "1h")  # P3.10: now returns interval from fetch
 
     def test_news_categories_sorted_by_frequency(self):
         """L7: news_categories sorted by frequency, not random set."""

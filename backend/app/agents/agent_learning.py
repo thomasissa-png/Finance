@@ -40,6 +40,7 @@ class AgentLearning(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        self._last_run_time: datetime | None = None  # P3.13: stale cache monitoring
 
     def run(self, **kwargs) -> dict:
         """Recalculate all learning dimensions and publish adjustments.
@@ -69,6 +70,7 @@ class AgentLearning(BaseAgent):
             self._cached_adjustments = learning_data
             self._cache_valid = True
             self._total_recalculations += 1
+            self._last_run_time = datetime.now(timezone.utc)  # P3.13
 
             # Step 2: Log each dimension
             if isinstance(learning_data, dict):

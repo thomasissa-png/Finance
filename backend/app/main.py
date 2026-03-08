@@ -484,6 +484,12 @@ def _run_daily_journal() -> None:
                 run_learning_4_update()
             except Exception as exc:
                 logger.warning("Journal 4 / Learning 4 update failed: %s", exc)
+            # P3.9: Centralized cache invalidation — ensures all caches are fresh
+            try:
+                from .agents.registry import invalidate_all_learning_caches
+                invalidate_all_learning_caches()
+            except Exception as exc:
+                logger.warning("Centralized learning cache invalidation failed: %s", exc)
             # Reset Trader 3 & 4 daily counters
             try:
                 trader_3 = get_agent("trader_3")
@@ -669,8 +675,9 @@ async def lifespan(app: FastAPI):
     # Position monitor: every 15 min during trading hours — trailing stop + time stop
     bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,22,37,52", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
     # V1: Position monitors for Teams 3 and 4 (TP/SL/trailing between scans)
-    bg_scheduler.add_job(_run_position_monitor_3, CronTrigger(minute="12,27,42,57", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3", misfire_grace_time=60)
-    bg_scheduler.add_job(_run_position_monitor_4, CronTrigger(minute="12,27,42,57", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_4", misfire_grace_time=60)
+    # P3.11: Staggered to avoid resource contention — Team 3 at :10, Team 4 at :13
+    bg_scheduler.add_job(_run_position_monitor_3, CronTrigger(minute="10,25,40,55", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_position_monitor_4, CronTrigger(minute="13,28,43,58", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_4", misfire_grace_time=60)
     # Conditional post-EIA scan: Wednesday 16:45 CET (EIA petroleum report at 16:30)
     bg_scheduler.add_job(_run_post_eia_scan, CronTrigger(hour=16, minute=45, day_of_week="wed", timezone="Europe/Paris"), id="post_eia_scan", misfire_grace_time=60)
     # v5.2: Weekly source health review — Sunday 20:00 CET (before Monday trading)
@@ -961,6 +968,14 @@ def trigger_journal():
     Returns immediately with diagnostic info about pending trades.
     Poll GET /api/journal for results.
     """
+    # P1.1: Weekend guard — markets closed, no trades to close
+    now_paris = datetime.now(PARIS_TZ)
+    if now_paris.weekday() >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Marchés fermés le week-end. Journal disponible du lundi au vendredi.",
+        )
+
     # Pre-check: how many trades exist and how many are PENDING
     from .models import TradeResult
     all_trades = load_trades()
@@ -1410,6 +1425,18 @@ def get_trend_position_history(ticker: str):
     return agent.get_position_history(ticker)
 
 
+# ── Agent Scoring 1 — Scoring API ────────────────────────────────
+
+
+@app.get("/api/scoring/result")
+def get_scoring_result():
+    """P2.7: Get last scoring result (parity with Teams 2/3/4)."""
+    agent = get_agent("scoring")
+    if not agent:
+        return {}
+    return agent.get_last_result() or {}
+
+
 # ── Agent Scoring 2 — Trend Scoring API ──────────────────────────
 
 
@@ -1440,6 +1467,14 @@ def trigger_journal_2():
 
     P5 fix: run in background thread to avoid HTTP timeout.
     """
+    # P1.1: Weekend guard
+    now_paris = datetime.now(PARIS_TZ)
+    if now_paris.weekday() >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Marchés fermés le week-end. Journal 2 disponible du lundi au vendredi.",
+        )
+
     agent = get_agent("journal_2")
     if not agent:
         raise HTTPException(500, "Journal 2 agent not available")
@@ -1511,6 +1546,14 @@ def get_tech_journal_entries():
 @app.post("/api/journal3/trigger")
 def trigger_journal_3():
     """Manually trigger Journal 3 run."""
+    # P1.1: Weekend guard
+    now_paris = datetime.now(PARIS_TZ)
+    if now_paris.weekday() >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Marchés fermés le week-end. Journal 3 disponible du lundi au vendredi.",
+        )
+
     agent = get_agent("journal_3")
     if not agent:
         raise HTTPException(500, "Journal 3 agent not available")
@@ -1606,6 +1649,14 @@ def get_meta_journal_entries():
 @app.post("/api/journal4/trigger")
 def trigger_journal_4():
     """Manually trigger Journal 4 run."""
+    # P1.1: Weekend guard
+    now_paris = datetime.now(PARIS_TZ)
+    if now_paris.weekday() >= 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Marchés fermés le week-end. Journal 4 disponible du lundi au vendredi.",
+        )
+
     agent = get_agent("journal_4")
     if not agent:
         raise HTTPException(500, "Journal 4 agent not available")

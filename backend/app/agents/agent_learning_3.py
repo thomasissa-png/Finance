@@ -442,6 +442,7 @@ class AgentLearning3(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        self._last_run_time = None  # P3.13: stale cache monitoring
         self._weekly_config: dict | None = None  # C3: weekly strategy config
         self._config_history: list[dict] = []  # L2: track config changes
 
@@ -477,6 +478,7 @@ class AgentLearning3(BaseAgent):
 
             self._cached_adjustments = learning_data
             self._cache_valid = True
+            self._last_run_time = datetime.now(timezone.utc)  # P3.13
             self._total_recalculations += 1
 
             # Step 3: Process results

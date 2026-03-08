@@ -8,8 +8,9 @@ const TeamPage = lazy(() => import("./components/TeamPage"));
 const NewsPage = lazy(() => import("./components/NewsPage"));
 const PerformancePage = lazy(() => import("./components/PerformancePage"));
 const AuditorPage = lazy(() => import("./components/AuditorPage"));
+const AdminPage = lazy(() => import("./components/AdminPage"));
 
-const PAGES = ["dashboard", "team1", "team2", "team3", "team4", "news", "performance", "auditor"];
+const PAGES = ["dashboard", "team1", "team2", "team3", "team4", "news", "performance", "auditor", "admin"];
 
 function getPageFromHash() {
   const hash = window.location.hash.replace("#", "");
@@ -72,6 +73,7 @@ const NAV_ITEMS = [
   { id: "news", label: "News" },
   { id: "performance", label: "Performance" },
   { id: "auditor", label: "Audit" },
+  { id: "admin", label: "Admin" },
 ];
 
 export default function App() {
@@ -242,6 +244,7 @@ export default function App() {
             {activePage === "news" && <NewsPage isActive />}
             {activePage === "performance" && <PerformancePage isActive agents={agents} />}
             {activePage === "auditor" && <AuditorPage isActive />}
+            {activePage === "admin" && <AdminPage isActive />}
           </Suspense>
         </ErrorBoundary>
       </div>

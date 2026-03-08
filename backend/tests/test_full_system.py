@@ -1034,10 +1034,11 @@ class TestFrontendIntegrity:
         assert Path("/home/user/Finance/frontend/src/components/NotificationCenter.jsx").exists()
 
     def test_app_jsx_references_all_pages(self):
-        """App.jsx importe et route vers les 7 pages."""
+        """App.jsx importe et route vers toutes les pages."""
         app_content = Path("/home/user/Finance/frontend/src/App.jsx").read_text()
-        for page in ["DashboardPage", "TraderPage", "ScoringPage", "JournalPage",
-                      "NewsPage", "LearningPage", "AuditorPage"]:
+        # v8.2: App uses TeamPage for teams + dedicated pages for shared agents
+        for page in ["DashboardPage", "TeamPage", "NewsPage",
+                      "PerformancePage", "AuditorPage", "AdminPage"]:
             assert page in app_content, f"App.jsx missing reference to {page}"
 
 

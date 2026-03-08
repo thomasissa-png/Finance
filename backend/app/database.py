@@ -581,6 +581,15 @@ def init_db() -> None:
                     UNIQUE (ticker, entry_time)
                 )
             """)
+            # P1.2: Indexes for faster queries on trend journal
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trend_journal_ticker
+                ON trend_journal_entries(ticker)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_trend_journal_entry_time
+                ON trend_journal_entries(entry_time)
+            """)
 
             # v8.0: Performance snapshots & reports persistence
             cur.execute("""
@@ -641,6 +650,8 @@ def init_db() -> None:
                 ("volume_confirmed", "BOOLEAN"),
                 ("volume_ratio", "DOUBLE PRECISION"),
                 ("position_size_pct", "DOUBLE PRECISION"),
+                # P2.5: Agent version tracking
+                ("agent_versions", "JSONB"),
             ]:
                 cur.execute(f"""
                     DO $$ BEGIN
@@ -677,6 +688,11 @@ def init_db() -> None:
                     UNIQUE (ticker, strategy, entry_time)
                 )
             """)
+            # P1.2: Index for faster queries on tech journal
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tech_journal_entry_time
+                ON tech_journal_entries(entry_time)
+            """)
 
             # v8.0: Meta positions for Agent Trader 4 (Équipe 4)
             cur.execute("""
@@ -700,10 +716,27 @@ def init_db() -> None:
                     ticker VARCHAR(30) NOT NULL,
                     entry_time VARCHAR(60) NOT NULL,
                     confluence_level INTEGER DEFAULT 0,
+                    close_type VARCHAR(30) DEFAULT '',
                     data JSONB NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     UNIQUE (ticker, entry_time)
                 )
+            """)
+            # P1.2 + P2.8: Indexes for faster queries on meta journal
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_meta_journal_entry_time
+                ON meta_journal_entries(entry_time)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_meta_journal_confluence
+                ON meta_journal_entries(confluence_level)
+            """)
+            # P2.8: Add close_type column if missing (safe for existing DBs)
+            cur.execute("""
+                DO $$ BEGIN
+                    ALTER TABLE meta_journal_entries ADD COLUMN close_type VARCHAR(30) DEFAULT '';
+                EXCEPTION WHEN duplicate_column THEN NULL;
+                END $$;
             """)
 
     logger.info("PostgreSQL tables initialized successfully")
@@ -1277,6 +1310,25 @@ def pg_prune_performance_data(max_snapshots: int = 168, max_reports: int = 30) -
     return _pg_retry(_prune)
 
 
+def pg_prune_price_archive(max_age_days: int = 1095) -> int:
+    """P1.4: Prune old price archive entries — keep max 3 years."""
+    if not is_pg_enabled():
+        return 0
+
+    def _prune():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM price_archive
+                    WHERE date < CURRENT_DATE - INTERVAL '%s days'
+                """, (max_age_days,))
+                deleted = cur.rowcount
+        if deleted > 0:
+            logger.info("Pruned %d old price_archive entries (> %d days)", deleted, max_age_days)
+        return deleted
+    return _pg_retry(_prune)
+
+
 # ── M4: Maintenance ──────────────────────────────────────────────────
 
 
@@ -1302,12 +1354,20 @@ def pg_run_maintenance() -> dict:
     except Exception as exc:
         logger.warning("Performance data pruning failed: %s", exc)
 
+    # P1.4: Prune price_archive — keep max 3 years (1095 days)
+    try:
+        pg_prune_price_archive(max_age_days=1095)
+    except Exception as exc:
+        logger.warning("Price archive pruning failed: %s", exc)
+
     results = {}
+    # P1.3: Added price_archive and source_health to VACUUM
     tables = ["trades", "journal_entries", "scan_history", "last_scans",
               "agent_messages", "agent_logs", "audit_reports", "trend_positions",
               "trend_journal_entries", "performance_data",
               "tech_positions", "tech_journal_entries",
-              "meta_positions", "meta_journal_entries"]
+              "meta_positions", "meta_journal_entries",
+              "price_archive", "source_health"]
     for table in tables:
         try:
             pool = _get_pool()
