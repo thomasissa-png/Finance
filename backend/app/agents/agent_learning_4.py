@@ -150,6 +150,38 @@ def _compute_sharpe(pnls: list[float]) -> float | None:
     return round(mean / std * math.sqrt(250), 2)
 
 
+def _filter_by_current_versions(entries: list[dict]) -> list[dict]:
+    """V1: Keep only entries produced by current scorer_4+trader_4 versions.
+
+    Entries without agent_versions (pre-versioning) are kept — time decay
+    will naturally down-weight them.
+    """
+    try:
+        from .registry import get_agent
+        scorer4 = get_agent("scoring_4")
+        trader4 = get_agent("trader_4")
+        if not scorer4 or not trader4:
+            return entries
+        cur_scorer = scorer4.version
+        cur_trader = trader4.version
+        filtered = []
+        skipped = 0
+        for e in entries:
+            av = e.get("agent_versions")
+            if av is None:
+                filtered.append(e)
+                continue
+            if av.get("scoring_4") == cur_scorer and av.get("trader_4") == cur_trader:
+                filtered.append(e)
+            else:
+                skipped += 1
+        if skipped:
+            logger.info("V1: Version filter removed %d meta entries (keeping %d)", skipped, len(filtered))
+        return filtered
+    except Exception:
+        return entries
+
+
 def compute_meta_learning(entries: list[dict]) -> dict:
     """Compute learning adjustments from completed meta/ensemble trades.
 
@@ -430,10 +462,10 @@ class AgentLearning4(BaseAgent):
         }
 
         try:
-            # Step 1: Load journal 4 entries
+            # Step 1: Load journal 4 entries + version filter
             self.log("Loading meta journal entries for learning")
             from .agent_journal_4 import _load_journal_entries
-            entries = _load_journal_entries()
+            entries = _filter_by_current_versions(_load_journal_entries())
 
             # Step 2: Compute adjustments
             learning_data = self.execute(
@@ -700,7 +732,7 @@ class AgentLearning4(BaseAgent):
         """
         if not self._cache_valid or self._cached_adjustments is None:
             from .agent_journal_4 import _load_journal_entries
-            entries = _load_journal_entries()
+            entries = _filter_by_current_versions(_load_journal_entries())
             self._cached_adjustments = compute_meta_learning(entries)
             self._cache_valid = True
         return self._cached_adjustments

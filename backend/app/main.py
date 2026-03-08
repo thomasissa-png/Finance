@@ -33,6 +33,8 @@ from .agents.registry import (
     run_daily_journal_2 as agents_run_journal_2,
     run_event_check as agents_run_event_check,
     run_position_monitor as agents_run_position_monitor,
+    run_position_monitor_3 as agents_run_position_monitor_3,
+    run_position_monitor_4 as agents_run_position_monitor_4,
     run_scan_pipeline,
     run_weekly_review as agents_run_weekly_review,
 )
@@ -226,6 +228,25 @@ def _recover_pending_trades_on_startup() -> None:
     thread = threading.Thread(target=_worker, daemon=True, name="startup-recovery")
     thread.start()
 
+    # V1: Also recover Teams 3/4 positions (check expired/stopped-out positions)
+    def _worker_3_4():
+        try:
+            t3 = get_agent("trader_3")
+            if t3 and hasattr(t3, "run_position_monitor"):
+                result = t3.run_position_monitor()
+                if result and result.get("closed", 0) > 0:
+                    logger.info("Startup recovery Team 3: closed %d position(s)", result["closed"])
+            t4 = get_agent("trader_4")
+            if t4 and hasattr(t4, "run_position_monitor"):
+                result = t4.run_position_monitor()
+                if result and result.get("closed", 0) > 0:
+                    logger.info("Startup recovery Team 4: closed %d position(s)", result["closed"])
+        except Exception as exc:
+            logger.error("Startup recovery Teams 3/4 failed: %s", exc)
+
+    thread2 = threading.Thread(target=_worker_3_4, daemon=True, name="startup-recovery-3-4")
+    thread2.start()
+
 
 # ── Self-ping keepalive ──────────────────────────────────────
 # Replit autoscale kills apps with no inbound traffic.
@@ -368,6 +389,34 @@ def _run_position_monitor() -> None:
             logger.error("Position monitor failed: %s", exc)
 
     thread = threading.Thread(target=_monitor_worker, daemon=True, name="position-monitor")
+    thread.start()
+
+
+def _run_position_monitor_3() -> None:
+    """V1: Monitor Team 3 positions (TP/SL/trailing) between scans."""
+    def _worker():
+        try:
+            result = agents_run_position_monitor_3()
+            if result and result.get("closed", 0) > 0:
+                logger.info("Team 3 position monitor closed %d position(s)", result["closed"])
+        except Exception as exc:
+            logger.error("Team 3 position monitor failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="position-monitor-3")
+    thread.start()
+
+
+def _run_position_monitor_4() -> None:
+    """V1: Monitor Team 4 positions (TP/SL/trailing) between scans."""
+    def _worker():
+        try:
+            result = agents_run_position_monitor_4()
+            if result and result.get("closed", 0) > 0:
+                logger.info("Team 4 position monitor closed %d position(s)", result["closed"])
+        except Exception as exc:
+            logger.error("Team 4 position monitor failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="position-monitor-4")
     thread.start()
 
 
@@ -619,6 +668,9 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_event_check, CronTrigger(minute="*/10", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="event_check", misfire_grace_time=60)
     # Position monitor: every 15 min during trading hours — trailing stop + time stop
     bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,22,37,52", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
+    # V1: Position monitors for Teams 3 and 4 (TP/SL/trailing between scans)
+    bg_scheduler.add_job(_run_position_monitor_3, CronTrigger(minute="12,27,42,57", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_position_monitor_4, CronTrigger(minute="12,27,42,57", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_4", misfire_grace_time=60)
     # Conditional post-EIA scan: Wednesday 16:45 CET (EIA petroleum report at 16:30)
     bg_scheduler.add_job(_run_post_eia_scan, CronTrigger(hour=16, minute=45, day_of_week="wed", timezone="Europe/Paris"), id="post_eia_scan", misfire_grace_time=60)
     # v5.2: Weekly source health review — Sunday 20:00 CET (before Monday trading)

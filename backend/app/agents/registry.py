@@ -333,9 +333,21 @@ def run_weekly_review() -> dict | None:
 
 
 def run_position_monitor() -> dict:
-    """Monitor positions via Agent Trader."""
+    """Monitor positions via Agent Trader 1."""
     _ensure_agents()
     return _agents["trader_1"].run_position_monitor()
+
+
+def run_position_monitor_3() -> dict:
+    """V1: Monitor positions via Agent Trader 3 (TP/SL/trailing)."""
+    _ensure_agents()
+    return _agents["trader_3"].run_position_monitor()
+
+
+def run_position_monitor_4() -> dict:
+    """V1: Monitor positions via Agent Trader 4 (TP/SL/trailing)."""
+    _ensure_agents()
+    return _agents["trader_4"].run_position_monitor()
 
 
 def run_learning_update() -> dict:

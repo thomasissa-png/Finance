@@ -91,6 +91,38 @@ def _is_significant(pnls: list[float], min_effect_size: float = 0.1) -> bool:
     return t_stat > 1.5
 
 
+def _filter_by_current_versions(entries: list[dict]) -> list[dict]:
+    """V1: Keep only entries produced by current scorer_2+trader_2 versions.
+
+    Entries without agent_versions (pre-versioning) are kept — time decay
+    will naturally down-weight them.
+    """
+    try:
+        from .registry import get_agent
+        scorer2 = get_agent("scoring_2")
+        trader2 = get_agent("trader_2")
+        if not scorer2 or not trader2:
+            return entries
+        cur_scorer = scorer2.version
+        cur_trader = trader2.version
+        filtered = []
+        skipped = 0
+        for e in entries:
+            av = e.get("agent_versions")
+            if av is None:
+                filtered.append(e)
+                continue
+            if av.get("scoring_2") == cur_scorer and av.get("trader_2") == cur_trader:
+                filtered.append(e)
+            else:
+                skipped += 1
+        if skipped:
+            logger.info("V1: Version filter removed %d trend entries (keeping %d)", skipped, len(filtered))
+        return filtered
+    except Exception:
+        return entries
+
+
 def compute_trend_learning(entries: list[dict]) -> dict:
     """Compute learning adjustments from completed trend periods.
 
@@ -349,10 +381,10 @@ class AgentLearning2(BaseAgent):
         }
 
         try:
-            # Step 1: Load journal 2 entries
+            # Step 1: Load journal 2 entries + version filter
             self.log("Loading trend journal entries for learning")
             from .agent_journal_2 import _load_journal_entries
-            entries = _load_journal_entries()
+            entries = _filter_by_current_versions(_load_journal_entries())
 
             # Step 2: Compute adjustments
             learning_data = self.execute(
@@ -446,7 +478,7 @@ class AgentLearning2(BaseAgent):
         """
         if not self._cache_valid or self._cached_adjustments is None:
             from .agent_journal_2 import _load_journal_entries
-            entries = _load_journal_entries()
+            entries = _filter_by_current_versions(_load_journal_entries())
             self._cached_adjustments = compute_trend_learning(entries)
             self._cache_valid = True
         return self._cached_adjustments

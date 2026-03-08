@@ -33,7 +33,7 @@ from .base import BaseAgent, AgentStatus
 class AgentPerformance(BaseAgent):
     name = "performance"
     description = "Mesure & suivi des KPIs de tous les agents"
-    version = "8.1"  # v8.1: PG persistence, self.log(), version-aware filtering
+    version = "8.2"  # v8.2: Version-aware filtering for all 4 teams
 
     def __init__(self):
         super().__init__()
@@ -400,12 +400,42 @@ class AgentPerformance(BaseAgent):
 
         return kpis
 
+    def _filter_entries_by_version(self, entries: list[dict],
+                                    scorer_key: str, trader_key: str) -> list[dict]:
+        """V1: Filter journal entries to keep only current agent version.
+
+        Same pattern as Learning 1's _filter_by_current_versions but for
+        dict entries (not Pydantic objects). Pre-versioning entries (no
+        agent_versions key) are kept — time decay handles them.
+        """
+        try:
+            from . import registry
+            scorer = registry.get_agent(scorer_key)
+            trader = registry.get_agent(trader_key)
+            if not scorer or not trader:
+                return entries
+            cur_scorer_v = scorer.version
+            cur_trader_v = trader.version
+            filtered = []
+            for e in entries:
+                av = e.get("agent_versions")
+                if av is None:
+                    filtered.append(e)
+                    continue
+                if (av.get(scorer_key) == cur_scorer_v
+                        and av.get(trader_key) == cur_trader_v):
+                    filtered.append(e)
+            return filtered
+        except Exception:
+            return entries
+
     def _compute_trader_2_kpis(self) -> dict:
         """Compute Trader 2 (trend) KPIs from positions and Journal 2 flip data.
 
         Trader 2 = trend following. Positions are held for days/weeks.
         A position is only closed on a FLIP (direction change).
         Win rate = percentage of flips that were profitable.
+        V1: Filters by current scoring_2+trader_2 version.
         """
         kpis: dict[str, Any] = {
             "total_realized_pnl": None,
@@ -428,10 +458,11 @@ class AgentPerformance(BaseAgent):
                                               + metrics.get("positions_short", 0))
                 kpis["flip_count"] = metrics.get("position_changes_total", 0)
 
-            # Flip accuracy from Journal 2 entries
+            # Flip accuracy from Journal 2 entries (V1: version-filtered)
             journal2 = registry.get_agent("journal_2")
             if journal2:
-                entries = journal2.get_entries()
+                entries = self._filter_entries_by_version(
+                    journal2.get_entries(), "scoring_2", "trader_2")
                 flips = [e for e in entries if e.get("entry_type") != "snapshot"]
 
                 if flips:

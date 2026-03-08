@@ -85,6 +85,38 @@ def _is_significant(pnls: list[float], min_effect_size: float = 0.1) -> bool:
     return t_stat > 1.5
 
 
+def _filter_by_current_versions(entries: list[dict]) -> list[dict]:
+    """V1: Keep only entries produced by current scorer_3+trader_3 versions.
+
+    Entries without agent_versions (pre-versioning) are kept — time decay
+    will naturally down-weight them.
+    """
+    try:
+        from .registry import get_agent
+        scorer3 = get_agent("scoring_3")
+        trader3 = get_agent("trader_3")
+        if not scorer3 or not trader3:
+            return entries
+        cur_scorer = scorer3.version
+        cur_trader = trader3.version
+        filtered = []
+        skipped = 0
+        for e in entries:
+            av = e.get("agent_versions")
+            if av is None:
+                filtered.append(e)
+                continue
+            if av.get("scoring_3") == cur_scorer and av.get("trader_3") == cur_trader:
+                filtered.append(e)
+            else:
+                skipped += 1
+        if skipped:
+            logger.info("V1: Version filter removed %d tech entries (keeping %d)", skipped, len(filtered))
+        return filtered
+    except Exception:
+        return entries
+
+
 def compute_tech_learning(entries: list[dict]) -> dict:
     """Compute learning adjustments from closed technical trades.
 
@@ -431,10 +463,10 @@ class AgentLearning3(BaseAgent):
         }
 
         try:
-            # Step 1: Load journal 3 entries
+            # Step 1: Load journal 3 entries + version filter
             self.log("Loading tech journal entries for learning")
             from .agent_journal_3 import _load_journal_entries
-            entries = _load_journal_entries()
+            entries = _filter_by_current_versions(_load_journal_entries())
 
             # Step 2: Compute adjustments
             learning_data = self.execute(
@@ -544,7 +576,7 @@ class AgentLearning3(BaseAgent):
         """
         if not self._cache_valid or self._cached_adjustments is None:
             from .agent_journal_3 import _load_journal_entries
-            entries = _load_journal_entries()
+            entries = _filter_by_current_versions(_load_journal_entries())
             self._cached_adjustments = compute_tech_learning(entries)
             self._cache_valid = True
         return self._cached_adjustments

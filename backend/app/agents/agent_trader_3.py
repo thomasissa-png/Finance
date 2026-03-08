@@ -321,6 +321,36 @@ class AgentTrader3(BaseAgent):
             self._set_status(AgentStatus.ERROR, str(exc))
             raise
 
+    def run_position_monitor(self) -> dict:
+        """V1: Standalone position monitor — check TP/SL/trailing/expiry between scans.
+
+        Called by scheduler every 15 min. Only monitors existing positions,
+        does NOT evaluate new setups (no Scoring 3 data needed).
+        """
+        state = _load_positions()
+        active = state.get("active", [])
+        if not active:
+            return {"active": 0, "closed": 0}
+
+        still_active, newly_closed = self._monitor_positions(active)
+
+        if newly_closed:
+            closed_history = state.get("closed", [])
+            closed_history.extend(newly_closed)
+            self._trades_closed_total += len(newly_closed)
+            state = {"active": still_active, "closed": closed_history}
+            _save_positions(state)
+
+            for pos in newly_closed:
+                self.log_decision("POSITION CLOSED (monitor)", {
+                    "ticker": pos["ticker"],
+                    "strategy": pos["strategy"],
+                    "result": pos.get("result"),
+                    "pnl_pct": pos.get("pnl_pct"),
+                })
+
+        return {"active": len(still_active), "closed": len(newly_closed)}
+
     def _monitor_positions(self, active: list[dict]) -> tuple[list[dict], list[dict]]:
         """Monitor active positions: check TP, SL, expiry, trailing stop.
 

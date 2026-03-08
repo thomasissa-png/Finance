@@ -459,6 +459,62 @@ class AgentTrader4(BaseAgent):
             self._set_status(AgentStatus.ERROR, str(exc))
             raise
 
+    def run_position_monitor(self) -> dict:
+        """V1: Standalone position monitor — check TP/SL/trailing between scans.
+
+        Called by scheduler every 15 min. Only checks existing positions,
+        does NOT evaluate new signals (no Scoring 4 data needed).
+        """
+        positions = _load_positions()
+        open_positions = {
+            t: p for t, p in positions.items() if p.get("status") == "OPEN"
+        }
+        if not open_positions:
+            return {"active": 0, "closed": 0}
+
+        # Fetch prices in parallel
+        tickers = list(open_positions.keys())
+        prices: dict[str, float | None] = {}
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=min(len(tickers), 5)) as executor:
+                futures = {
+                    executor.submit(_fetch_current_price, t): t
+                    for t in tickers
+                }
+                for future in as_completed(futures, timeout=30):
+                    ticker = futures[future]
+                    try:
+                        prices[ticker] = future.result(timeout=15)
+                    except Exception:
+                        prices[ticker] = None
+        except Exception:
+            for t in tickers:
+                if t not in prices:
+                    prices[t] = _fetch_current_price(t)
+
+        changes = []
+        for ticker, pos in open_positions.items():
+            price = prices.get(ticker)
+            if price:
+                pos["current_price"] = price
+            change = self._check_tp_sl_trailing(ticker, pos, positions)
+            if change:
+                changes.append(change)
+                positions[ticker] = change["new_position"]
+                self._position_closes_total += 1
+
+        if changes:
+            _save_positions(positions)
+            for c in changes:
+                self.log_decision("POSITION CLOSED (monitor)", {
+                    "ticker": c.get("ticker"),
+                    "close_type": c.get("close_type"),
+                    "pnl_pct": c.get("pnl_pct"),
+                })
+
+        return {"active": len(open_positions) - len(changes), "closed": len(changes)}
+
     def _check_upstream_readiness(self, meta_scored: dict | None) -> bool:
         """Check if upstream teams have enough data to make decisions."""
         if not meta_scored:

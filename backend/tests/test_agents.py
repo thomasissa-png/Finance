@@ -1674,3 +1674,132 @@ class TestTeam4V2Learning4:
         assert "has_weekly_config" in metrics
         assert "config_version" in metrics
         assert "target_win_rate" in metrics
+
+
+class TestVersioningAudit:
+    """Tests for versioning system consistency across all 4 teams."""
+
+    def test_trader_2_stamps_agent_versions(self):
+        """V1: Trader 2 _make_change should include agent_versions in new_position."""
+        from backend.app.agents.agent_trader_2 import AgentTrader2
+        t2 = AgentTrader2()
+        assert hasattr(t2, "_get_agent_versions")
+        versions = t2._get_agent_versions()
+        assert "trader_2" in versions
+
+    def test_trader_2_has_get_agent_versions(self):
+        """V1: Trader 2 should have _get_agent_versions method."""
+        from backend.app.agents.agent_trader_2 import AgentTrader2
+        import inspect
+        assert "_get_agent_versions" in [m[0] for m in inspect.getmembers(AgentTrader2)]
+
+    def test_learning_2_has_version_filter(self):
+        """V1: Learning 2 should filter entries by version."""
+        from backend.app.agents.agent_learning_2 import _filter_by_current_versions
+        # Empty entries should return empty
+        assert _filter_by_current_versions([]) == []
+
+    def test_learning_3_has_version_filter(self):
+        """V1: Learning 3 should filter entries by version."""
+        from backend.app.agents.agent_learning_3 import _filter_by_current_versions
+        assert _filter_by_current_versions([]) == []
+
+    def test_learning_4_has_version_filter(self):
+        """V1: Learning 4 should filter entries by version."""
+        from backend.app.agents.agent_learning_4 import _filter_by_current_versions
+        assert _filter_by_current_versions([]) == []
+
+    def test_version_filter_keeps_unversioned_entries(self):
+        """V1: Entries without agent_versions should be kept (backward compat)."""
+        from backend.app.agents.agent_learning_2 import _filter_by_current_versions
+        entries = [
+            {"ticker": "HG=F", "pnl_pct": 2.0},  # No agent_versions
+            {"ticker": "CC=F", "pnl_pct": -1.0, "agent_versions": None},
+        ]
+        filtered = _filter_by_current_versions(entries)
+        assert len(filtered) == 2
+
+    def test_version_filter_removes_old_versions(self):
+        """V1: Entries with old versions should be filtered out."""
+        from backend.app.agents.agent_learning_3 import _filter_by_current_versions
+        from backend.app.agents.agent_scoring_3 import AgentScoring3
+        from backend.app.agents.agent_trader_3 import AgentTrader3
+        entries = [
+            {"ticker": "GC=F", "pnl_pct": 2.0, "agent_versions": {
+                "scoring_3": AgentScoring3.version,
+                "trader_3": AgentTrader3.version,
+            }},
+            {"ticker": "CL=F", "pnl_pct": -1.0, "agent_versions": {
+                "scoring_3": "0.1",  # Old version
+                "trader_3": "0.1",
+            }},
+        ]
+        filtered = _filter_by_current_versions(entries)
+        # Current version entry kept, old version entry removed
+        assert len(filtered) == 1
+        assert filtered[0]["ticker"] == "GC=F"
+
+    def test_performance_version_bumped(self):
+        """Performance agent version should be 8.2."""
+        from backend.app.agents.agent_performance import AgentPerformance
+        assert AgentPerformance.version == "8.2"
+
+    def test_performance_has_filter_method(self):
+        """V1: Performance should have _filter_entries_by_version method."""
+        from backend.app.agents.agent_performance import AgentPerformance
+        perf = AgentPerformance()
+        assert hasattr(perf, "_filter_entries_by_version")
+
+    def test_performance_filter_keeps_unversioned(self):
+        """V1: Performance filter should keep pre-versioning entries."""
+        from backend.app.agents.agent_performance import AgentPerformance
+        perf = AgentPerformance()
+        entries = [{"ticker": "GC=F"}, {"ticker": "CL=F"}]  # No agent_versions
+        filtered = perf._filter_entries_by_version(entries, "scoring", "trader_1")
+        assert len(filtered) == 2
+
+
+class TestPositionMonitoring:
+    """Tests for position monitoring in Teams 3 and 4."""
+
+    def test_trader_3_has_position_monitor(self):
+        """V1: Trader 3 should have run_position_monitor method."""
+        from backend.app.agents.agent_trader_3 import AgentTrader3
+        t3 = AgentTrader3()
+        assert hasattr(t3, "run_position_monitor")
+
+    def test_trader_4_has_position_monitor(self):
+        """V1: Trader 4 should have run_position_monitor method."""
+        from backend.app.agents.agent_trader_4 import AgentTrader4
+        t4 = AgentTrader4()
+        assert hasattr(t4, "run_position_monitor")
+
+    def test_registry_has_position_monitor_3(self):
+        """V1: Registry should have run_position_monitor_3."""
+        from backend.app.agents.registry import run_position_monitor_3
+        assert callable(run_position_monitor_3)
+
+    def test_registry_has_position_monitor_4(self):
+        """V1: Registry should have run_position_monitor_4."""
+        from backend.app.agents.registry import run_position_monitor_4
+        assert callable(run_position_monitor_4)
+
+    def test_trader_3_monitor_empty_state(self):
+        """V1: Position monitor with no active positions should return 0."""
+        from backend.app.agents.agent_trader_3 import AgentTrader3
+        with patch("backend.app.agents.agent_trader_3._load_positions",
+                    return_value={"active": [], "closed": []}):
+            t3 = AgentTrader3()
+            result = t3.run_position_monitor()
+            assert result["active"] == 0
+            assert result["closed"] == 0
+
+    def test_trader_4_monitor_empty_state(self):
+        """V1: Position monitor with no open positions should return 0."""
+        from backend.app.agents.agent_trader_4 import AgentTrader4
+        with patch("backend.app.agents.agent_trader_4._load_positions",
+                    return_value={}):
+            t4 = AgentTrader4()
+            result = t4.run_position_monitor()
+            assert result["active"] == 0
+            assert result["closed"] == 0

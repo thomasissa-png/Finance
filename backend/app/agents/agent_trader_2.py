@@ -669,6 +669,8 @@ class AgentTrader2(BaseAgent):
         # J2: Include trend scoring snapshot if available
         if trend_scoring_snapshot:
             history_entry["trend_scoring"] = trend_scoring_snapshot
+        # V1: Stamp flip with agent versions
+        history_entry["agent_versions"] = self._get_agent_versions()
 
         # P9: Temporal pruning — keep entries from last HISTORY_MAX_AGE_DAYS
         history = position.get("history", [])
@@ -702,6 +704,8 @@ class AgentTrader2(BaseAgent):
             # J7: Reset watermarks for new position
             "high_watermark": current_price,
             "low_watermark": current_price,
+            # V1: Stamp with agent versions for version-aware learning/performance
+            "agent_versions": self._get_agent_versions(),
         }
 
         return {
@@ -713,6 +717,15 @@ class AgentTrader2(BaseAgent):
             "key_news": key_news[:3],
             "new_position": new_position,
         }
+
+    def _get_agent_versions(self) -> dict:
+        """V1: Get current agent versions for position stamping."""
+        try:
+            from .registry import get_all_agents
+            agents = get_all_agents()
+            return {name: getattr(a, "version", "?") for name, a in agents.items()}
+        except Exception:
+            return {"trader_2": self.version}
 
     def get_metrics(self) -> dict:
         """Metrics for frontend overview."""
