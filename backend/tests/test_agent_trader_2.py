@@ -14,7 +14,7 @@ Tests:
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -568,3 +568,221 @@ class TestDatabaseTable:
         import backend.app.database as db
         source = open(db.__file__).read()
         assert '"trend_positions"' in source or "'trend_positions'" in source
+
+
+class TestAuditFixesV72:
+    """Tests for audit fixes v7.2 (Auditeur + Journal 2 perspectives)."""
+
+    def test_p1_no_getattr_on_current_learning(self):
+        """P1: _current_learning accessed directly, not via getattr."""
+        import inspect
+        from backend.app.agents.agent_trader_2 import AgentTrader2
+        source = inspect.getsource(AgentTrader2._evaluate_ticker)
+        assert 'getattr(self, "_current_learning"' not in source
+        assert 'getattr(self, "_current_trend_scoring"' not in source
+
+    def test_p2_global_timeout_constant(self):
+        """P2: GLOBAL_TIMEOUT_S constant exists."""
+        from backend.app.agents.agent_trader_2 import GLOBAL_TIMEOUT_S
+        assert GLOBAL_TIMEOUT_S > 0
+        assert GLOBAL_TIMEOUT_S <= 300  # Should be reasonable
+
+    def test_p3_parallel_price_fetch_method(self):
+        """P3: _update_prices_parallel method exists on AgentTrader2."""
+        from backend.app.agents.agent_trader_2 import AgentTrader2
+        assert hasattr(AgentTrader2, "_update_prices_parallel")
+
+    def test_p4_fetch_price_logs_errors(self):
+        """P4: _fetch_current_price logs warnings, no silent pass."""
+        import inspect
+        from backend.app.agents.agent_trader_2 import _fetch_current_price
+        source = inspect.getsource(_fetch_current_price)
+        assert "logger.warning" in source
+        # No bare pass in error paths
+        lines = source.split("\n")
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped == "pass":
+                # "pass" should not appear after "except" in this function
+                assert False, f"Silent 'pass' found at line {i}: {line}"
+
+    def test_p5_reset_daily_counters_trader_2_in_scheduler(self):
+        """P5: main.py resets trader_2 daily counters in _run_daily_journal."""
+        import inspect
+        from backend.app.main import _run_daily_journal
+        source = inspect.getsource(_run_daily_journal)
+        assert "trader_2" in source, "trader_2 reset missing from _run_daily_journal"
+        assert "reset_daily_counters" in source
+
+    def test_p8_make_change_zero_entry_price(self, agent):
+        """P8: _make_change handles entry_price=0 without ZeroDivisionError."""
+        position = {
+            "direction": "LONG",
+            "entry_price": 0,  # Zero — should not cause ZeroDivisionError
+            "current_price": 100.0,
+            "entry_time": datetime.now(timezone.utc).isoformat(),
+            "total_switches": 0,
+            "realized_pnl_pct": 0.0,
+            "history": [],
+            "name": "Test", "category": "test", "ticker": "HG=F",
+            "confidence": 50, "key_catalysts": [], "reasoning": "test",
+        }
+        # Should not raise ZeroDivisionError
+        change = agent._make_change("HG=F", position, "SHORT", "Test", [], 25.0)
+        assert change["close_pnl"] == 0.0  # No P&L computed
+
+    def test_p8_make_change_none_entry_price(self, agent):
+        """P8: _make_change handles entry_price=None."""
+        position = {
+            "direction": "SHORT",
+            "entry_price": None,
+            "current_price": 50.0,
+            "entry_time": datetime.now(timezone.utc).isoformat(),
+            "total_switches": 0,
+            "realized_pnl_pct": 0.0,
+            "history": [],
+            "name": "Test", "category": "test", "ticker": "HG=F",
+            "confidence": 50, "key_catalysts": [], "reasoning": "test",
+        }
+        change = agent._make_change("HG=F", position, "LONG", "Test", [], 25.0)
+        assert change["close_pnl"] == 0.0
+
+    def test_p9_history_temporal_pruning(self, agent):
+        """P9: History uses temporal pruning (1 year), not hard cap 50."""
+        from backend.app.agents.agent_trader_2 import HISTORY_MAX_AGE_DAYS
+        assert HISTORY_MAX_AGE_DAYS == 365
+        # Build a position with 60 recent history entries (would be cut to 50 with old cap)
+        now = datetime.now(timezone.utc)
+        history = []
+        for i in range(60):
+            history.append({
+                "time": (now - timedelta(days=i)).isoformat(),
+                "from_direction": "LONG",
+                "to_direction": "SHORT",
+                "pnl_pct": 1.0,
+                "signal_strength": 20,
+                "key_news": [],
+                "entry_price": 100, "exit_price": 101, "reason": "test",
+            })
+        position = {
+            "direction": "LONG",
+            "entry_price": 100.0,
+            "current_price": 105.0,
+            "entry_time": now.isoformat(),
+            "total_switches": 60,
+            "realized_pnl_pct": 60.0,
+            "history": history,
+            "name": "Test", "category": "test", "ticker": "HG=F",
+            "confidence": 50, "key_catalysts": [], "reasoning": "test",
+        }
+        change = agent._make_change("HG=F", position, "SHORT", "Test", [], 25.0)
+        # All 60 recent entries + 1 new = 61 (all within 1 year)
+        assert len(change["new_position"]["history"]) == 61
+
+    def test_j2_trend_scoring_snapshot_in_flip(self, agent):
+        """J2: Flip history includes trend_scoring snapshot when available."""
+        agent._current_trend_scoring = {
+            "accumulation": {"HG=F": {"long": 42.5, "short": 10.0}},
+        }
+        position = {
+            "direction": "LONG", "entry_price": 100.0, "current_price": 105.0,
+            "entry_time": datetime.now(timezone.utc).isoformat(),
+            "total_switches": 0, "realized_pnl_pct": 0.0, "history": [],
+            "name": "Test", "category": "test", "ticker": "HG=F",
+            "confidence": 50, "key_catalysts": [], "reasoning": "test",
+        }
+        change = agent._make_change("HG=F", position, "SHORT", "Test", [], 25.0)
+        h = change["new_position"]["history"][0]
+        assert "trend_scoring" in h
+        assert h["trend_scoring"]["long"] == 42.5
+        assert h["trend_scoring"]["short"] == 10.0
+        assert h["trend_scoring"]["net"] == 32.5
+
+    def test_j2_no_trend_scoring_when_empty(self, agent):
+        """J2: No trend_scoring key when scoring data is empty."""
+        agent._current_trend_scoring = {}
+        position = {
+            "direction": "LONG", "entry_price": 100.0, "current_price": 105.0,
+            "entry_time": datetime.now(timezone.utc).isoformat(),
+            "total_switches": 0, "realized_pnl_pct": 0.0, "history": [],
+            "name": "Test", "category": "test", "ticker": "HG=F",
+            "confidence": 50, "key_catalysts": [], "reasoning": "test",
+        }
+        change = agent._make_change("HG=F", position, "SHORT", "Test", [], 25.0)
+        h = change["new_position"]["history"][0]
+        assert "trend_scoring" not in h
+
+    def test_j3_unrealized_pnl_zero_entry_guard(self, agent, tmp_path):
+        """J3: unrealized P&L skips calculation when entry_price is 0 or None."""
+        pos_file = tmp_path / "pos.json"
+        pos_file.write_text(json.dumps({
+            "HG=F": {
+                "ticker": "HG=F", "name": "Cuivre", "category": "commodities_industrial",
+                "direction": "LONG", "entry_price": 0, "current_price": 50.0,
+                "unrealized_pnl_pct": 0.0, "entry_time": datetime.now(timezone.utc).isoformat(),
+                "last_evaluation": None, "last_price_update": datetime.now(timezone.utc).isoformat(),
+                "reasoning": "test", "key_catalysts": [], "confidence": 50,
+                "history": [], "total_switches": 0, "realized_pnl_pct": 0.0,
+            },
+        }))
+        with patch("backend.app.database.is_pg_enabled", return_value=False), \
+             patch("backend.app.agents.agent_trader_2.POSITIONS_FILE", pos_file), \
+             patch("backend.app.agents.agent_trader_2._fetch_current_price", return_value=100.0):
+            # Should NOT raise ZeroDivisionError
+            result = agent.run(scored_news=[], scan_type=ScanType.EUROPE)
+        # entry_price=0 means no P&L update (guard protects)
+        pos = result["positions"]["HG=F"]
+        # The price was updated, but P&L was NOT (entry=0, guard skips)
+        assert pos["current_price"] == 100.0
+
+    def test_j6_key_news_includes_published(self, agent):
+        """J6: key_news in flip history includes published timestamp."""
+        position = {
+            "direction": "NEUTRAL", "confidence": 0,
+            "entry_price": 100.0, "current_price": 100.0,
+            "unrealized_pnl_pct": 0.0,
+            "entry_time": datetime.now(timezone.utc).isoformat(),
+            "total_switches": 0, "realized_pnl_pct": 0.0,
+            "history": [], "key_catalysts": [], "reasoning": "",
+            "name": "Test", "category": "test", "ticker": "HG=F",
+        }
+        news = [_make_scored_news("HG=F", "LONG", score_surprise=80)]
+        change = agent._evaluate_ticker("HG=F", news, position)
+        assert change is not None
+        h = change["new_position"]["history"][0]
+        assert "key_news" in h
+        for kn in h["key_news"]:
+            assert "published" in kn, "key_news missing 'published' field"
+
+    def test_j7_watermarks_set_on_new_position(self, agent):
+        """J7: New position has high_watermark and low_watermark set."""
+        position = {
+            "direction": "LONG", "entry_price": 100.0, "current_price": 105.0,
+            "entry_time": datetime.now(timezone.utc).isoformat(),
+            "total_switches": 0, "realized_pnl_pct": 0.0, "history": [],
+            "name": "Test", "category": "test", "ticker": "HG=F",
+            "confidence": 50, "key_catalysts": [], "reasoning": "test",
+        }
+        change = agent._make_change("HG=F", position, "SHORT", "Test", [], 25.0)
+        new_pos = change["new_position"]
+        assert "high_watermark" in new_pos
+        assert "low_watermark" in new_pos
+        # Both should equal current_price on new position
+        assert new_pos["high_watermark"] == new_pos["current_price"]
+        assert new_pos["low_watermark"] == new_pos["current_price"]
+
+    def test_j7_watermarks_updated_on_price_fetch(self, agent, tmp_path):
+        """J7: Watermarks updated in _update_prices_parallel."""
+        positions = {
+            "HG=F": {
+                "ticker": "HG=F", "direction": "LONG",
+                "entry_price": 100.0, "current_price": 105.0,
+                "high_watermark": 106.0, "low_watermark": 99.0,
+            },
+        }
+        with patch("backend.app.agents.agent_trader_2._fetch_current_price", return_value=108.0):
+            agent._update_prices_parallel(positions)
+        # New high should be 108 (above old 106)
+        assert positions["HG=F"]["high_watermark"] == 108.0
+        # Low unchanged (108 > 99)
+        assert positions["HG=F"]["low_watermark"] == 99.0

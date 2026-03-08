@@ -18,6 +18,18 @@ Architecture :
 Différences avec Trader 1 :
 - Trader 1 : day trading, entry/exit intraday, TP/SL
 - Trader 2 : trend following, position indéfinie, changement de direction
+
+Audit fixes v7.2 (Auditeur + Journal 2 perspectives):
+- P1: getattr → direct access on _current_learning/_current_trend_scoring
+- P2: Global timeout 120s on run(), per-fetch timeout 15s
+- P3: Parallel price fetch via ThreadPoolExecutor
+- P4: Log errors in _fetch_current_price (no more silent pass)
+- P7: Clarified use_trend_scoring flow (direct var init in key_news)
+- P8/J3: Guard entry_price > 0 in _make_change and unrealized P&L
+- P9: History pruning temporal (1 year) instead of hard cap 50
+- J2: Store trend_scoring snapshot in flip history_entry
+- J6: Add news published timestamp in key_news
+- J7: Track high/low watermarks per position for MAE/MFE fallback
 """
 
 import json
@@ -25,7 +37,8 @@ import logging
 import os
 import time
 import fcntl
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
@@ -50,6 +63,13 @@ RELEVANT_CATEGORIES = {
 
 # Seuil minimum de score pour considérer une news
 MIN_NEWS_SCORE = 15.0
+
+# P2: Timeout constants
+GLOBAL_TIMEOUT_S = 120
+PER_FETCH_TIMEOUT_S = 15
+
+# P9: History pruning — keep 1 year instead of hard cap 50
+HISTORY_MAX_AGE_DAYS = 365
 
 # Persistence file (JSON fallback)
 POSITIONS_FILE = Path(os.getenv("DATA_DIR", "data")) / "trend_positions.json"
@@ -146,19 +166,28 @@ def _pg_save_positions(positions: dict):
 
 
 def _fetch_current_price(ticker: str) -> float | None:
-    """Fetch the latest price for a ticker."""
+    """Fetch the latest price for a ticker.
+
+    P4 fix: log errors instead of silent pass.
+    Returns (price, source) tuple is internal — callers get price only.
+    """
     try:
         from ..market_data import fetch_price
-        return fetch_price(ticker)
-    except Exception:
-        try:
-            import yfinance as yf
-            t = yf.Ticker(ticker)
-            h = t.history(period="1d")
-            if not h.empty:
-                return float(h["Close"].iloc[-1])
-        except Exception:
-            pass
+        price = fetch_price(ticker)
+        if price is not None:
+            return price
+        logger.warning("fetch_price returned None for %s — trying yfinance", ticker)
+    except Exception as exc:
+        logger.warning("Twelve Data fetch failed for %s: %s — trying yfinance", ticker, exc)
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        h = t.history(period="1d")
+        if not h.empty:
+            return float(h["Close"].iloc[-1])
+        logger.warning("yfinance returned empty for %s", ticker)
+    except Exception as exc:
+        logger.warning("yfinance fetch also failed for %s: %s", ticker, exc)
     return None
 
 
@@ -178,6 +207,9 @@ class AgentTrader2(BaseAgent):
         self._last_change_ticker: str | None = None
         self._last_change_direction: str | None = None
         self._evaluations_today: int = 0
+        # P1: Initialize in __init__ so direct access never fails
+        self._current_learning: dict = {}
+        self._current_trend_scoring: dict = {}
 
     def run(self, scored_news=None, scan_type=None, learning_data=None,
             trend_scoring=None, **kwargs) -> dict:
@@ -187,10 +219,17 @@ class AgentTrader2(BaseAgent):
         Il maintient une vue de position (LONG/SHORT) sur chaque actif
         et change de direction quand les news de fond le justifient.
 
+        Audit fixes v7.2:
+        - P2: Global timeout 120s
+        - P3: Parallel price fetch via ThreadPoolExecutor
+        - J3: Guard entry_price > 0 before P&L calculation
+        - J7: Track high/low watermarks per position
+
         Args:
             scored_news: list[ScoredNews] from Agent Scoring
             scan_type: ScanType enum
             learning_data: dict from Agent Learning 2 (optional)
+            trend_scoring: dict from Agent Scoring 2 (optional)
 
         Returns: dict with positions state and any changes made
         """
@@ -215,6 +254,13 @@ class AgentTrader2(BaseAgent):
 
             changes = []
             for ticker in TREND_TICKERS:
+                # P2: Check global timeout
+                elapsed = time.monotonic() - start
+                if elapsed > GLOBAL_TIMEOUT_S:
+                    self.log("Global timeout reached during evaluation",
+                             {"elapsed_s": round(elapsed, 1)}, level="WARN")
+                    break
+
                 ticker_news = relevant_news.get(ticker, [])
                 if not ticker_news:
                     continue
@@ -232,22 +278,8 @@ class AgentTrader2(BaseAgent):
                     self._last_change_ticker = ticker
                     self._last_change_direction = change["new_direction"]
 
-            # Update prices for performance tracking
-            for ticker in TREND_TICKERS:
-                price = _fetch_current_price(ticker)
-                if price:
-                    positions[ticker]["current_price"] = price
-                    positions[ticker]["last_price_update"] = datetime.now(timezone.utc).isoformat()
-                    # Update P&L
-                    entry = positions[ticker].get("entry_price")
-                    direction = positions[ticker].get("direction")
-                    if entry and direction:
-                        if direction == "LONG":
-                            positions[ticker]["unrealized_pnl_pct"] = round(
-                                (price - entry) / entry * 100, 2)
-                        else:
-                            positions[ticker]["unrealized_pnl_pct"] = round(
-                                (entry - price) / entry * 100, 2)
+            # P3: Update prices in parallel for performance tracking
+            self._update_prices_parallel(positions)
 
             # Save
             _save_positions(positions)
@@ -293,6 +325,59 @@ class AgentTrader2(BaseAgent):
             self.log("Trend evaluation failed", {"error": str(exc)}, level="ERROR")
             self._set_status(AgentStatus.ERROR, str(exc))
             raise
+
+    def _update_prices_parallel(self, positions: dict) -> None:
+        """P3: Fetch current prices for all 4 tickers in parallel.
+
+        J3: Guard entry_price > 0 before P&L calculation.
+        J7: Track high/low watermarks for MAE/MFE fallback.
+        """
+        tickers = list(TREND_TICKERS.keys())
+        prices: dict[str, float | None] = {}
+
+        try:
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {
+                    executor.submit(_fetch_current_price, t): t
+                    for t in tickers
+                }
+                for future in as_completed(futures, timeout=PER_FETCH_TIMEOUT_S * 2):
+                    ticker = futures[future]
+                    try:
+                        prices[ticker] = future.result(timeout=PER_FETCH_TIMEOUT_S)
+                    except Exception as exc:
+                        logger.warning("Price fetch timeout/error for %s: %s", ticker, exc)
+                        prices[ticker] = None
+        except Exception as exc:
+            logger.warning("Parallel price fetch failed: %s — trying sequential", exc)
+            for t in tickers:
+                if t not in prices:
+                    prices[t] = _fetch_current_price(t)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for ticker, price in prices.items():
+            if not price or ticker not in positions:
+                continue
+            pos = positions[ticker]
+            pos["current_price"] = price
+            pos["last_price_update"] = now_iso
+
+            # J7: Update high/low watermarks for MAE/MFE fallback
+            high_wm = pos.get("high_watermark")
+            low_wm = pos.get("low_watermark")
+            pos["high_watermark"] = max(price, high_wm) if high_wm is not None else price
+            pos["low_watermark"] = min(price, low_wm) if low_wm is not None else price
+
+            # J3: Guard entry_price > 0 before P&L calculation
+            entry = pos.get("entry_price")
+            direction = pos.get("direction")
+            if entry and entry > 0 and direction in ("LONG", "SHORT"):
+                if direction == "LONG":
+                    pos["unrealized_pnl_pct"] = round(
+                        (price - entry) / entry * 100, 2)
+                else:
+                    pos["unrealized_pnl_pct"] = round(
+                        (entry - price) / entry * 100, 2)
 
     def get_positions(self) -> dict:
         """Get current trend positions (for API/frontend)."""
@@ -371,16 +456,16 @@ class AgentTrader2(BaseAgent):
         """
         current_dir = current_position.get("direction", "NEUTRAL")
 
-        # Load learning adjustments
-        learning = getattr(self, "_current_learning", {})
+        # P1: Direct access (set in run() before _evaluate_ticker is called)
+        learning = self._current_learning
         ticker_adj = learning.get("ticker_adj", {})
         newscat_adj = learning.get("newscat_adj", {})
-        newscat_ticker_adj = learning.get("newscat_ticker_adj", {})  # P7: cross-dimension
+        newscat_ticker_adj = learning.get("newscat_ticker_adj", {})
         direction_adj = learning.get("direction_adj", {})
         signal_cal = learning.get("signal_calibration", {})
 
-        # Use Scoring 2 accumulation if available (pre-computed trend scores)
-        trend_scoring = getattr(self, "_current_trend_scoring", {})
+        # P1: Direct access — Scoring 2 accumulation
+        trend_scoring = self._current_trend_scoring
         trend_accumulation = trend_scoring.get("accumulation", {}).get(ticker, {})
         use_trend_scoring = bool(trend_accumulation and
                                   (trend_accumulation.get("long", 0) > 0 or
@@ -402,6 +487,13 @@ class AgentTrader2(BaseAgent):
             short_score *= ticker_mult
 
         for sn in news_list:
+            # P7: Determine direct impact once, used by both paths
+            is_direct = ticker in sn.impacted_tickers
+            chain_dir = None
+            for cr in (sn.chain_reactions or []):
+                if cr.ticker == ticker:
+                    chain_dir = cr.direction.value
+
             if not use_trend_scoring:
                 # Fallback: compute signal from Scoring 1 raw scores
                 score = sn.total_score
@@ -415,14 +507,7 @@ class AgentTrader2(BaseAgent):
                 else:
                     weight *= newscat_adj.get(sn.news_category, 1.0)
 
-                # Check direct impact
-                direct = ticker in sn.impacted_tickers
-                chain_dir = None
-                for cr in (sn.chain_reactions or []):
-                    if cr.ticker == ticker:
-                        chain_dir = cr.direction.value
-
-                if direct:
+                if is_direct:
                     if sn.direction.value == "LONG":
                         long_score += weight
                     elif sn.direction.value == "SHORT":
@@ -432,17 +517,24 @@ class AgentTrader2(BaseAgent):
                         long_score += weight * 0.7
                     elif chain_dir == "SHORT":
                         short_score += weight * 0.7
-            else:
-                direct = ticker in sn.impacted_tickers
 
             # Always collect key_news for logging
+            # J6: Include news published timestamp for freshness analysis
+            published_iso = None
+            if sn.news.published:
+                try:
+                    published_iso = sn.news.published.isoformat()
+                except (AttributeError, TypeError):
+                    pass
+
             key_news.append({
                 "title": sn.news.title[:120],
                 "score": round(sn.total_score, 1),
                 "direction": sn.direction.value,
                 "category": sn.news_category,
                 "reliability": sn.signal_reliability,
-                "direct": direct if not use_trend_scoring or ticker in sn.impacted_tickers else False,
+                "direct": is_direct,
+                "published": published_iso,
             })
 
         # Apply direction adjustment to scores
@@ -514,18 +606,37 @@ class AgentTrader2(BaseAgent):
 
     def _make_change(self, ticker: str, position: dict, new_dir: str,
                      reason: str, key_news: list, strength: float) -> dict:
-        """Create a position change record and update position state."""
+        """Create a position change record and update position state.
+
+        Audit fixes v7.2:
+        - P8: Guard entry_price > 0 before P&L calculation
+        - P9: Temporal pruning (1 year) instead of hard cap 50
+        - J2: Store trend_scoring snapshot in flip history_entry
+        - J7: Reset high/low watermarks on new position
+        """
         old_dir = position.get("direction", "NEUTRAL")
         old_entry = position.get("entry_price")
         current_price = position.get("current_price") or _fetch_current_price(ticker)
 
-        # Calculate realized P&L of closing position
+        # P8: Calculate realized P&L with entry_price > 0 guard
         close_pnl = 0.0
-        if old_dir != "NEUTRAL" and old_entry and current_price:
+        if old_dir != "NEUTRAL" and old_entry and old_entry > 0 and current_price:
             if old_dir == "LONG":
                 close_pnl = round((current_price - old_entry) / old_entry * 100, 2)
             else:
                 close_pnl = round((old_entry - current_price) / old_entry * 100, 2)
+
+        # J2: Capture trend scoring snapshot at flip time (not after)
+        trend_scoring_snapshot = None
+        trend_scoring = self._current_trend_scoring
+        if trend_scoring:
+            ticker_acc = trend_scoring.get("accumulation", {}).get(ticker, {})
+            if ticker_acc:
+                trend_scoring_snapshot = {
+                    "long": round(ticker_acc.get("long", 0), 1),
+                    "short": round(ticker_acc.get("short", 0), 1),
+                    "net": round(ticker_acc.get("long", 0) - ticker_acc.get("short", 0), 1),
+                }
 
         # Record in history
         history_entry = {
@@ -538,14 +649,22 @@ class AgentTrader2(BaseAgent):
             "pnl_pct": close_pnl,
             "signal_strength": round(strength, 1),
             "key_news": key_news[:5],
-            # Store position entry_time for Journal 2 MAE/MFE (P4 audit fix)
+            # Store position entry_time for Journal 2 MAE/MFE
             "position_entry_time": position.get("entry_time"),
         }
+        # J2: Include trend scoring snapshot if available
+        if trend_scoring_snapshot:
+            history_entry["trend_scoring"] = trend_scoring_snapshot
 
+        # P9: Temporal pruning — keep entries from last HISTORY_MAX_AGE_DAYS
         history = position.get("history", [])
         history.insert(0, history_entry)
-        # Keep last 50 changes
-        history = history[:50]
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=HISTORY_MAX_AGE_DAYS)).isoformat()
+        history = [h for h in history if (h.get("time", "") > cutoff or h.get("time", "") == "")]
+        # Safety cap at 100 (should never be reached with 1-year pruning)
+        history = history[:100]
+
+        now_iso = datetime.now(timezone.utc).isoformat()
 
         # Build new position
         new_position = {
@@ -556,9 +675,9 @@ class AgentTrader2(BaseAgent):
             "entry_price": current_price,
             "current_price": current_price,
             "unrealized_pnl_pct": 0.0,
-            "entry_time": datetime.now(timezone.utc).isoformat(),
-            "last_evaluation": datetime.now(timezone.utc).isoformat(),
-            "last_price_update": datetime.now(timezone.utc).isoformat(),
+            "entry_time": now_iso,
+            "last_evaluation": now_iso,
+            "last_price_update": now_iso,
             "reasoning": reason,
             "key_catalysts": key_news[:5],
             "confidence": min(100, int(strength * 2)),
@@ -566,6 +685,9 @@ class AgentTrader2(BaseAgent):
             "total_switches": position.get("total_switches", 0) + 1,
             "realized_pnl_pct": round(
                 position.get("realized_pnl_pct", 0.0) + close_pnl, 2),
+            # J7: Reset watermarks for new position
+            "high_watermark": current_price,
+            "low_watermark": current_price,
         }
 
         return {

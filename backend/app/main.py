@@ -392,6 +392,10 @@ def _run_daily_journal() -> None:
                 trader = get_agent("trader_1")
                 if trader:
                     trader.reset_daily_counters()
+                # P5: Also reset Trader 2 daily counters
+                trader_2 = get_agent("trader_2")
+                if trader_2:
+                    trader_2.reset_daily_counters()
             except Exception:
                 pass
             # Invalidate learning cache and run full learning update
