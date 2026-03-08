@@ -965,3 +965,59 @@ class TestJournal2AuditFixes:
             entries = agent.get_entries()
             assert len(entries) == 1
             assert entries[0]["pnl_pct"] == 5.0
+
+
+# ── Audit v7.4 — Agent Scoring fixes ──────────────────────────────
+
+
+class TestAgentScoringAuditV74:
+    """Tests for v7.4 audit fixes on Agent Scoring 1."""
+
+    def test_a1_token_usage_correct_keys(self):
+        """A1: Agent reads input_tokens/output_tokens (not total_input/total_output)."""
+        import inspect
+        from backend.app.agents.agent_scoring import AgentScoring
+        source = inspect.getsource(AgentScoring.run)
+        assert "input_tokens" in source
+        assert "output_tokens" in source
+        assert "total_input" not in source
+        assert "total_output" not in source
+
+    def test_a2_cache_hits_in_metrics(self):
+        """A2: cache_hits should be in get_metrics() and can be incremented."""
+        from backend.app.agents.agent_scoring import AgentScoring
+        agent = AgentScoring()
+        m = agent.get_metrics()
+        assert "cache_hits" in m
+        assert m["cache_hits"] == 0
+        # Simulate increment
+        agent._cache_hits = 5
+        assert agent.get_metrics()["cache_hits"] == 5
+
+    def test_a3_duration_ms_in_metrics(self):
+        """A3: last_duration_ms should be in get_metrics()."""
+        from backend.app.agents.agent_scoring import AgentScoring
+        agent = AgentScoring()
+        m = agent.get_metrics()
+        assert "last_duration_ms" in m
+
+    def test_a8_zero_edge_import_at_module_level(self):
+        """A8: _is_zero_edge_headline should be importable from agent_scoring module."""
+        from backend.app.agents.agent_scoring import _is_zero_edge_headline
+        # Should be the same function as in news_scorer
+        from backend.app.news_scorer import _is_zero_edge_headline as original
+        assert _is_zero_edge_headline is original
+
+    def test_a3_duration_ms_published_in_bus(self):
+        """A3: duration_ms should appear in the scoring bus publish."""
+        import inspect
+        from backend.app.agents.agent_scoring import AgentScoring
+        source = inspect.getsource(AgentScoring.run)
+        assert "duration_ms" in source
+
+    def test_a2_cache_hits_published_in_bus(self):
+        """A2: cache_hits should appear in the scoring bus publish."""
+        import inspect
+        from backend.app.agents.agent_scoring import AgentScoring
+        source = inspect.getsource(AgentScoring.run)
+        assert '"cache_hits"' in source

@@ -8,16 +8,29 @@ Responsabilités :
 - Détecte les chain reactions (effets de second ordre)
 - Publie les news scorées sur le bus → Agent Trader les consomme
 
+Audit fixes v7.4:
+- A1: Token usage keys fixed (input_tokens/output_tokens, not total_input/total_output)
+- A2: _cache_hits incremented from score_news_batch cache stats
+- A3: duration_ms published in bus message and stored in metrics
+- A7: Import failure for token usage logged (not silently swallowed)
+- A8: _is_zero_edge_headline imported at module level (not per-call)
+
 Expertise incarnée :
 - Identification des dislocations non pricées (rapport NOAA, gel Brésil, OSINT)
 - Discrimination entre edge réel et bruit (earnings = 0 edge, météo locale = max edge)
 - Évaluation du transmission_delay (combien de temps avant que le marché price)
 """
 
+import logging
 import time
 from datetime import datetime, timezone
 
 from .base import BaseAgent, AgentStatus
+
+# A8: Import at module level (not per-call in run())
+from ..news_scorer import _is_zero_edge_headline
+
+logger = logging.getLogger(__name__)
 
 
 class AgentScoring(BaseAgent):
@@ -31,6 +44,7 @@ class AgentScoring(BaseAgent):
         self._total_scored: int = 0
         self._total_tokens_used: int = 0
         self._cache_hits: int = 0
+        self._last_duration_ms: int = 0
 
     def run(self, news_items, scan_type, **kwargs) -> dict:
         """Score a batch of news items.
@@ -73,11 +87,32 @@ class AgentScoring(BaseAgent):
             self._total_scored += len(scored)
 
             # Step 2: Get token usage stats
+            # A1: Fixed keys — get_token_usage() returns input_tokens/output_tokens
+            # A2: Read cache hit count from scorer
+            # A7: Log import failure instead of silently swallowing
             try:
                 from ..news_scorer import get_token_usage
                 usage = get_token_usage()
-                result["tokens_used"] = usage.get("total_input", 0) + usage.get("total_output", 0)
+                result["tokens_used"] = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
                 self._total_tokens_used = result["tokens_used"]
+            except Exception as exc:
+                logger.warning("Failed to get token usage stats: %s", exc)
+
+            # A2: Count cache hits — items that were in scored but not sent to Claude
+            # Cache hits = total scored - items actually sent to Claude
+            # The scorer logs "F2: N headlines served from cache" — we count from the result
+            try:
+                from ..news_scorer import _score_cache
+                # Approximate: cache hits this scan = items that matched cache
+                # We count how many input items had a cache entry
+                from ..news_scorer import _get_cache_key, _get_cached_score
+                cache_hit_count = 0
+                for item in news_items:
+                    key = _get_cache_key(item.title, item.description)
+                    if _get_cached_score(key) is not None:
+                        cache_hit_count += 1
+                result["cache_hits"] = cache_hit_count
+                self._cache_hits += cache_hit_count
             except Exception:
                 pass
 
@@ -101,18 +136,23 @@ class AgentScoring(BaseAgent):
                     ],
                 })
 
-                # Count zero-edge filtered
-                from ..news_scorer import _is_zero_edge_headline
+                # Count zero-edge filtered (A8: uses module-level import)
                 ze_count = sum(1 for item in news_items if _is_zero_edge_headline(item.title))
                 result["zero_edge_filtered"] = ze_count
                 self._last_zero_edge_filtered = ze_count
                 if ze_count:
                     self.log("Zero-edge headlines filtered", {"count": ze_count})
 
-            # Step 4: Publish scored news to bus
+            # A3: Compute duration before publishing
+            duration_ms = int((time.monotonic() - start) * 1000)
+            self._last_duration_ms = duration_ms
+
+            # Step 4: Publish scored news to bus (A3: include duration_ms)
             self.publish("news_scored", {
                 "scan_type": scan_type.value if scan_type else None,
                 "count": len(scored),
+                "cache_hits": result["cache_hits"],
+                "duration_ms": duration_ms,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "top_score": round(scored[0].total_score, 1) if scored else 0,
             })
@@ -120,10 +160,11 @@ class AgentScoring(BaseAgent):
             self.log_decision("Scoring complete", {
                 "scored": len(scored),
                 "zero_edge_filtered": result["zero_edge_filtered"],
+                "cache_hits": result["cache_hits"],
+                "duration_ms": duration_ms,
                 "top_score": round(scored[0].total_score, 1) if scored else 0,
             })
 
-            duration_ms = int((time.monotonic() - start) * 1000)
             self._set_status(AgentStatus.IDLE, f"Scored {len(scored)} items")
             return result
 
@@ -145,4 +186,5 @@ class AgentScoring(BaseAgent):
             "total_scored": self._total_scored,
             "total_tokens_used": self._total_tokens_used,
             "cache_hits": self._cache_hits,
+            "last_duration_ms": self._last_duration_ms,
         }

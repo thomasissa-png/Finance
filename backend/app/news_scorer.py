@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 # Physical signals (weather, supply_chain) that persist across days should
 # accumulate rather than be deduped. A drought worsening over 3 days = stronger signal.
 _signal_accumulator: dict[str, dict] = {}  # key: (category, ticker_set_key) -> {count, first_seen, last_seen}
+_signal_accumulator_lock = threading.Lock()  # A4: Thread safety for concurrent scans
 ACCUMULATION_CATEGORIES = {"weather", "supply_chain", "commodity"}
 ACCUMULATION_BOOST_PER_DAY = 0.1  # +10% per additional day the signal persists
 ACCUMULATION_MAX_BOOST = 1.5      # Cap at 50% boost
@@ -60,6 +61,8 @@ def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[st
     """Check if this signal has been seen on previous days and compute boost.
 
     Returns a multiplier >= 1.0 (1.0 = no boost, up to ACCUMULATION_MAX_BOOST).
+    A4: Thread-safe — event scanner can trigger concurrent scoring.
+    A5: Pruning always runs (not just on new keys).
     """
     if news_category not in ACCUMULATION_CATEGORIES:
         return 1.0
@@ -69,24 +72,26 @@ def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[st
     key = f"{news_category}:{','.join(sorted(impacted_tickers[:3]))}"
     now = datetime.now(timezone.utc)
 
-    if key in _signal_accumulator:
-        entry = _signal_accumulator[key]
-        days_active = (now - entry["first_seen"]).total_seconds() / 86400
-        entry["count"] += 1
-        entry["last_seen"] = now
-        boost = min(ACCUMULATION_MAX_BOOST, 1.0 + days_active * ACCUMULATION_BOOST_PER_DAY)
-        if boost > 1.0:
-            logger.info("Signal accumulation: %s active for %.1f days → %.2fx boost",
-                        key, days_active, boost)
-        return boost
-    else:
-        _signal_accumulator[key] = {"count": 1, "first_seen": now, "last_seen": now}
-        # Prune old entries (> 7 days)
+    with _signal_accumulator_lock:
+        # A5: Always prune stale entries (> 7 days) — not just on new key insertion
         cutoff = now - timedelta(days=7)
         stale = [k for k, v in _signal_accumulator.items() if v["last_seen"] < cutoff]
         for k in stale:
             del _signal_accumulator[k]
-        return 1.0
+
+        if key in _signal_accumulator:
+            entry = _signal_accumulator[key]
+            days_active = (now - entry["first_seen"]).total_seconds() / 86400
+            entry["count"] += 1
+            entry["last_seen"] = now
+            boost = min(ACCUMULATION_MAX_BOOST, 1.0 + days_active * ACCUMULATION_BOOST_PER_DAY)
+            if boost > 1.0:
+                logger.info("Signal accumulation: %s active for %.1f days → %.2fx boost",
+                            key, days_active, boost)
+            return boost
+        else:
+            _signal_accumulator[key] = {"count": 1, "first_seen": now, "last_seen": now}
+            return 1.0
 
 
 # ── v4.3 A3: Singleton Anthropic client ──────────────────────────
@@ -585,8 +590,11 @@ Headlines :
             )
 
             # Detect truncation — if max_tokens was hit, scores are likely incomplete
+            # A9: Increase max_tokens by 50% on retry to avoid repeating the same truncation
             if response.stop_reason == "max_tokens":
-                logger.warning("Claude response truncated (max_tokens hit, attempt %d) — retrying", attempt + 1)
+                dynamic_max_tokens = min(16384, int(dynamic_max_tokens * 1.5))
+                logger.warning("Claude response truncated (max_tokens hit, attempt %d, raising to %d) — retrying",
+                               attempt + 1, dynamic_max_tokens)
                 if attempt < max_retries:
                     time.sleep(2 ** attempt)
                     continue
@@ -611,13 +619,18 @@ Headlines :
                                        attempt + 1, response.stop_reason)
                     return scores
 
-            # Fallback: try text-based JSON parsing if tool_use somehow not used
+            # S5: Fallback — try text-based JSON parsing if tool_use somehow not used
             for block in response.content:
-                if hasattr(block, "text"):
+                if hasattr(block, "text") and block.text:
                     raw_text = block.text.strip()
-                    start = raw_text.index("[")
-                    end = raw_text.rindex("]") + 1
-                    return json.loads(raw_text[start:end])
+                    try:
+                        arr_start = raw_text.index("[")
+                        arr_end = raw_text.rindex("]") + 1
+                        return json.loads(raw_text[arr_start:arr_end])
+                    except (ValueError, json.JSONDecodeError):
+                        logger.warning("Fallback JSON parse failed for text block: %s...",
+                                       raw_text[:100])
+                        continue
 
             logger.error("Claude response had no tool_use or parseable JSON (attempt %d)", attempt + 1)
             if attempt < max_retries:

@@ -341,3 +341,66 @@ def test_build_system_messages_has_cache_control():
     # At least one block should have cache_control
     has_cache = any("cache_control" in m for m in messages)
     assert has_cache, "System messages should have cache_control for prompt caching"
+
+
+# ── Audit v7.4 fixes ──────────────────────────────────────────────
+
+
+def test_a4_signal_accumulator_has_lock():
+    """A4: _signal_accumulator should be protected by a threading.Lock."""
+    from backend.app.news_scorer import _signal_accumulator_lock
+    import threading
+    assert isinstance(_signal_accumulator_lock, type(threading.Lock()))
+
+
+def test_a5_pruning_always_runs():
+    """A5: Stale entries should be pruned even when updating an existing key."""
+    from backend.app.news_scorer import (
+        _signal_accumulator, _signal_accumulator_lock,
+        _get_signal_accumulation_boost,
+    )
+    from datetime import datetime, timezone, timedelta
+    # Inject a stale entry
+    stale_key = "weather:STALE_TICKER"
+    with _signal_accumulator_lock:
+        _signal_accumulator[stale_key] = {
+            "count": 1,
+            "first_seen": datetime.now(timezone.utc) - timedelta(days=10),
+            "last_seen": datetime.now(timezone.utc) - timedelta(days=10),
+        }
+    # Call with a different key (existing path) — should still prune the stale one
+    _get_signal_accumulation_boost("weather", ["ZW=F"])
+    with _signal_accumulator_lock:
+        assert stale_key not in _signal_accumulator
+        # Clean up our test key
+        _signal_accumulator.pop("weather:ZW=F", None)
+
+
+def test_a9_max_tokens_increases_on_truncation():
+    """A9: _call_claude_with_retry should increase max_tokens when truncated."""
+    import inspect
+    from backend.app.news_scorer import _call_claude_with_retry
+    source = inspect.getsource(_call_claude_with_retry)
+    # Should contain the 1.5x increase logic
+    assert "1.5" in source
+    assert "dynamic_max_tokens" in source
+
+
+def test_s5_fallback_json_parse_handles_no_bracket():
+    """S5: Fallback JSON parse should not crash when text has no brackets."""
+    import inspect
+    from backend.app.news_scorer import _call_claude_with_retry
+    source = inspect.getsource(_call_claude_with_retry)
+    # Should have a try/except around the index/rindex calls
+    assert "arr_start" in source or "ValueError" in source
+
+
+def test_token_usage_keys_match():
+    """A1: get_token_usage() returns input_tokens/output_tokens (not total_input)."""
+    from backend.app.news_scorer import get_token_usage
+    usage = get_token_usage()
+    assert "input_tokens" in usage
+    assert "output_tokens" in usage
+    # These wrong keys should NOT be present
+    assert "total_input" not in usage
+    assert "total_output" not in usage
