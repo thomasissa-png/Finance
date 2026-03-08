@@ -3748,3 +3748,270 @@ a:focus:not(:focus-visible) {
   color: var(--text-muted);
   padding: 2px 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   TEAM MAP PAGE
+   ═══════════════════════════════════════════════════════════════ */
+
+.team-map-page { max-width: 1200px; }
+
+/* Global KPIs row */
+.team-global-kpis {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+.team-kpi {
+  flex: 1 1 120px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  text-align: center;
+  min-width: 100px;
+}
+.team-kpi-value {
+  font-size: 1.6em;
+  font-weight: 700;
+  font-family: "JetBrains Mono", monospace;
+  color: var(--text-primary);
+}
+.team-kpi-label {
+  font-size: 0.78em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Pipeline diagrams */
+.team-pipeline {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+.team-pipeline-title {
+  font-size: 0.95em;
+  color: var(--text-secondary);
+  margin: 0 0 14px 0;
+  font-weight: 600;
+}
+.team-pipeline-flow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pipeline-step {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.82em;
+  font-weight: 500;
+  white-space: nowrap;
+  position: relative;
+}
+.pipeline-step.shared { background: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.25); color: var(--cyan); }
+.pipeline-step.team1  { background: rgba(34, 197, 94, 0.10); border: 1px solid rgba(34, 197, 94, 0.22); color: var(--green); }
+.pipeline-step.team2  { background: rgba(168, 85, 247, 0.10); border: 1px solid rgba(168, 85, 247, 0.22); color: #a855f7; }
+.pipeline-step.infra  { background: rgba(234, 179, 8, 0.10); border: 1px solid rgba(234, 179, 8, 0.22); color: var(--yellow); }
+.pipeline-icon { font-size: 1em; }
+.pipeline-arrow { color: var(--text-muted); font-size: 1.2em; margin: 0 2px; }
+.pipeline-time {
+  font-size: 0.7em;
+  color: var(--text-muted);
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.pipeline-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pipeline-branch-arm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Team sections */
+.team-section {
+  margin-bottom: 24px;
+}
+.team-section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.team-section-title {
+  font-size: 1.05em;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+.team-section-desc {
+  font-size: 0.82em;
+  color: var(--text-muted);
+}
+
+/* Agent node cards (inside team sections) */
+.team-agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.team-agent-node {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.team-agent-node:hover { border-color: var(--cyan); transform: translateY(-1px); }
+.team-agent-node.working { border-color: var(--cyan); }
+.team-agent-node.error { border-color: var(--red); }
+
+.team-agent-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.team-agent-icon { font-size: 1.4em; flex-shrink: 0; }
+.team-agent-info { flex: 1; min-width: 0; }
+.team-agent-name {
+  font-weight: 600;
+  font-size: 0.92em;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.team-agent-version {
+  font-size: 0.72em;
+  color: var(--text-muted);
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: "JetBrains Mono", monospace;
+}
+.team-agent-role {
+  display: block;
+  font-size: 0.78em;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.3;
+}
+.team-agent-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.team-agent-status-dot.idle { background: var(--text-muted); }
+.team-agent-status-dot.working { background: var(--cyan); animation: pulse 1.5s infinite; }
+.team-agent-status-dot.error { background: var(--red); }
+
+.team-agent-schedule,
+.team-agent-tokens {
+  font-size: 0.75em;
+  color: var(--text-muted);
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.team-agent-schedule-icon,
+.team-agent-tokens-icon { font-size: 0.9em; }
+
+.team-agent-last-action,
+.team-agent-working-action {
+  font-size: 0.73em;
+  color: var(--text-muted);
+  margin-top: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-agent-working-action {
+  color: var(--cyan);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.spinner-xs {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Schedule timeline */
+.team-schedule {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 24px;
+}
+.team-schedule-title {
+  font-size: 0.95em;
+  color: var(--text-secondary);
+  margin: 0 0 14px 0;
+  font-weight: 600;
+}
+.team-schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px;
+}
+.team-schedule-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.82em;
+}
+.team-schedule-item.shared { background: rgba(6, 182, 212, 0.06); }
+.team-schedule-item.team1  { background: rgba(34, 197, 94, 0.06); }
+.team-schedule-item.team2  { background: rgba(168, 85, 247, 0.06); }
+.team-schedule-item.infra  { background: rgba(234, 179, 8, 0.06); }
+.team-schedule-item.subtle { opacity: 0.7; }
+.team-schedule-time {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 70px;
+}
+.team-schedule-label {
+  color: var(--text-primary);
+}
+
+/* Audit trigger row - wrap for 12 buttons */
+.audit-trigger-row {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 700px) {
+  .team-global-kpis { gap: 8px; }
+  .team-kpi { flex: 1 1 80px; padding: 10px 8px; }
+  .team-kpi-value { font-size: 1.2em; }
+  .team-agents-grid { grid-template-columns: 1fr; }
+  .team-pipeline-flow { flex-direction: column; align-items: flex-start; }
+  .pipeline-branch { flex-direction: column; }
+  .team-schedule-grid { grid-template-columns: 1fr; }
+}

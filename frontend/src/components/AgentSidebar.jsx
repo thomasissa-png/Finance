@@ -11,6 +11,8 @@ const AGENT_ICONS = {
   learning: "\ud83e\udde0",
   learning_2: "\ud83d\udca1",
   auditor: "\ud83d\udd0d",
+  infrastructure: "\ud83d\udee0\ufe0f",
+  performance: "\ud83d\udcca",
   ux: "\ud83c\udfa8",
 };
 
@@ -25,6 +27,8 @@ const AGENT_LABELS = {
   learning: "Learning",
   learning_2: "Learning",
   auditor: "Auditeur",
+  infrastructure: "Infra",
+  performance: "Performance",
   ux: "UX",
 };
 
@@ -49,7 +53,7 @@ const STATUS_COLORS = {
   disabled: "var(--text-muted)",
 };
 
-// Grouped agent layout by team
+// Grouped agent layout by team — extensible for N teams
 const SIDEBAR_STRUCTURE = [
   { type: "section", label: "Partag\u00e9" },
   { type: "agent", name: "news" },
@@ -70,6 +74,7 @@ const SIDEBAR_STRUCTURE = [
 function AgentButton({ agent, activePage, onNavigate }) {
   if (!agent) return null;
   const page = AGENT_TO_PAGE[agent.name];
+  if (!page) return null; // Skip agents without pages (infra, perf, ux)
   const isActive = activePage === page;
   const statusColor = STATUS_COLORS[agent.status] || STATUS_COLORS.idle;
   const isWorking = agent.status === "working";
@@ -109,8 +114,17 @@ export default function AgentSidebar({ agents, activePage, onNavigate, notificat
         className={`agent-sidebar-item ${activePage === "dashboard" ? "selected" : ""}`}
         onClick={() => onNavigate("dashboard")}
       >
-        <span className="agent-sidebar-icon">{"\ud83d\udcca"}</span>
+        <span className="agent-sidebar-icon">{"\ud83c\udfe0"}</span>
         <span className="agent-sidebar-label">Dashboard</span>
+      </button>
+
+      {/* Team map */}
+      <button
+        className={`agent-sidebar-item ${activePage === "team" ? "selected" : ""}`}
+        onClick={() => onNavigate("team")}
+      >
+        <span className="agent-sidebar-icon">{"\ud83d\udcda"}</span>
+        <span className="agent-sidebar-label">Vue d'ensemble</span>
       </button>
 
       {/* Team-grouped agent navigation */}

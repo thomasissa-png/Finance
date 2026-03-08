@@ -4,13 +4,23 @@ import { formatDate, formatTime } from "../utils/format";
 const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
 const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
 
-const AUDIT_TARGETS = ["news", "scoring", "trader_1", "journal", "learning", "auditor"];
+const AUDIT_TARGETS = [
+  "news", "scoring", "scoring_2", "trader_1", "trader_2",
+  "journal", "journal_2", "learning", "learning_2",
+  "infrastructure", "performance", "auditor",
+];
 const TARGET_LABELS = {
   news: "\ud83d\udce1 News",
   scoring: "\ud83c\udfaf Scoring",
-  trader_1: "\ud83d\udcb9 Trader",
-  journal: "\ud83d\udcd3 Journal",
-  learning: "\ud83e\udde0 Learning",
+  scoring_2: "\ud83d\udccf Scoring 2",
+  trader_1: "\ud83d\udcb9 Trader 1",
+  trader_2: "\ud83d\udcc8 Trader 2",
+  journal: "\ud83d\udcd3 Journal 1",
+  journal_2: "\ud83d\udcd4 Journal 2",
+  learning: "\ud83e\udde0 Learning 1",
+  learning_2: "\ud83d\udca1 Learning 2",
+  infrastructure: "\ud83d\udee0\ufe0f Infra",
+  performance: "\ud83d\udcca Performance",
   auditor: "\ud83d\udd0d Auditeur",
 };
 

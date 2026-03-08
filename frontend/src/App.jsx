@@ -15,9 +15,10 @@ const Scoring2Page = lazy(() => import("./components/Scoring2Page"));
 const Trader2Page = lazy(() => import("./components/Trader2Page"));
 const Journal2Page = lazy(() => import("./components/Journal2Page"));
 const Learning2Page = lazy(() => import("./components/Learning2Page"));
+const TeamMapPage = lazy(() => import("./components/TeamMapPage"));
 
 const PAGES = [
-  "dashboard", "news", "scoring", "scoring2", "trader", "trader2", "journal", "journal2", "learning", "learning2", "auditor",
+  "dashboard", "team", "news", "scoring", "scoring2", "trader", "trader2", "journal", "journal2", "learning", "learning2", "auditor",
 ];
 
 function getPageFromHash() {
@@ -221,7 +222,7 @@ export default function App() {
           <div>
             <div className="app-title">ONESHOT NEWS TRADING</div>
             <div className="app-subtitle">
-              10 agents autonomes
+              {agents.length} agents autonomes
               {workingCount > 0 && (
                 <span className="header-agents-working"> &mdash; {workingCount} en cours</span>
               )}
@@ -248,6 +249,7 @@ export default function App() {
         <ErrorBoundary>
           <Suspense fallback={<LoadingFallback />}>
             {activePage === "dashboard" && <DashboardPage isActive={true} agents={agents} />}
+            {activePage === "team" && <TeamMapPage isActive={true} agents={agents} onNavigate={navigate} />}
             {activePage === "news" && <NewsPage isActive={true} />}
             {activePage === "scoring" && <ScoringPage isActive={true} />}
             {activePage === "scoring2" && <Scoring2Page isActive={true} />}
