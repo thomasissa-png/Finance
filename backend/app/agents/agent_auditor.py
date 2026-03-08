@@ -138,6 +138,19 @@ AUDIT_PROFILES = {
             "agent_visibility",      # Chaque agent est-il visible et ses métriques accessibles ?
         ],
     },
+    "scoring_2": {
+        "expertise": "Expert scoring tendanciel commodities, re-pondération structurelle vs edge intraday",
+        "checks": [
+            "category_multipliers",  # Les multiplicateurs trend sont-ils bien calibrés ?
+            "persistence_detection", # Les mots-clés structurels sont-ils détectés ?
+            "accumulation_logic",    # L'accumulation directionnelle est-elle cohérente ?
+            "ticker_coverage",       # Les 4 tickers trend sont-ils couverts ?
+            "score_distribution",    # Les trend scores ont-ils une distribution raisonnable ?
+            "pipeline_integration",  # Le scoring 2 est-il bien intégré dans le pipeline ?
+            "trader_2_consumption",  # Trader 2 consomme-t-il bien les trend scores ?
+            "no_claude_call",        # Vérifie qu'aucun appel Claude supplémentaire n'est fait
+        ],
+    },
     "journal_2": {
         "expertise": "Expert en analyse de positions de tendance et suivi de performance multi-semaines",
         "checks": [
@@ -1738,7 +1751,7 @@ class AgentAuditor(BaseAgent):
 
         # 1. Profile coverage — all agents auditable?
         auditable = set(AUDIT_PROFILES.keys()) - {"auditor"}  # exclude self
-        expected = {"news", "scoring", "trader_1", "trader_2", "journal", "learning", "ux"}
+        expected = {"news", "scoring", "scoring_2", "trader_1", "trader_2", "journal", "learning", "ux"}
         missing = expected - auditable
         findings.append({
             "area": "profile_coverage",

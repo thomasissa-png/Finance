@@ -14,6 +14,7 @@ from typing import Any
 from .agent_auditor import AgentAuditor
 from .agent_news import AgentNews
 from .agent_scoring import AgentScoring
+from .agent_scoring_2 import AgentScoring2
 from .agent_trader import AgentTrader
 from .agent_trader_2 import AgentTrader2
 from .agent_journal import AgentJournal
@@ -40,6 +41,7 @@ def _ensure_agents():
         _agents = {
             "news": AgentNews(),
             "scoring": AgentScoring(),
+            "scoring_2": AgentScoring2(),
             "trader_1": AgentTrader(),
             "trader_2": AgentTrader2(),
             "journal": AgentJournal(),
@@ -165,18 +167,26 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
         market_context=market_ctx,
     )
 
-    # Step 5: Agent Trader 2 — Trend evaluation (parallel, non-blocking)
-    # Feed Learning 2 adjustments to Trader 2 for signal weighting
+    # Step 5: Équipe 2 — Scoring 2 + Trader 2 (non-blocking)
     try:
+        agent_scoring2 = _agents.get("scoring_2")
         agent_trader2 = _agents.get("trader_2")
         agent_learning2 = _agents.get("learning_2")
         if agent_trader2 and scored:
+            # Step 5a: Scoring 2 — re-weight scored news for trend relevance
+            trend_scoring = None
+            if agent_scoring2:
+                trend_scoring = agent_scoring2.run(
+                    scored_news=scored, scan_type=scan_type)
+
+            # Step 5b: Trader 2 — trend evaluation with learning adjustments
             learning2_data = (agent_learning2.get_adjustments()
                               if agent_learning2 else {})
             agent_trader2.run(scored_news=scored, scan_type=scan_type,
-                              learning_data=learning2_data)
+                              learning_data=learning2_data,
+                              trend_scoring=trend_scoring)
     except Exception as exc:
-        logger.warning("Trader 2 trend evaluation failed: %s", exc)
+        logger.warning("Équipe 2 trend evaluation failed: %s", exc)
 
     # Attach source health
     source_health = news_result.get("source_health")

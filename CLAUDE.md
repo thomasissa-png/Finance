@@ -24,19 +24,20 @@ Le système est organisé en **équipes autonomes**. Chaque équipe a son propre
 
 Le framework est conçu pour ajouter facilement de nouvelles équipes : créer un trio trader/journal/learning, les enregistrer dans le registry, wirer le scheduler, et l'auditeur les couvrira automatiquement via ses profils.
 
-### 10 Agents Autonomes (`backend/app/agents/`)
+### 11 Agents Autonomes (`backend/app/agents/`)
 
 | Agent | Fichier | Équipe | Rôle |
 |-------|---------|--------|------|
 | **News** | `agent_news.py` | Partagé | Collecte, dédup, santé sources, event detection |
 | **Scoring** | `agent_scoring.py` | Partagé | Score Claude, formule edge, chain reactions |
+| **Scoring 2** | `agent_scoring_2.py` | Équipe 2 | Re-pondération trend, multiplicateurs structurels, accumulation |
 | **Trader 1** | `agent_trader.py` | Équipe 1 | Day trading intraday, TP/SL, risk mgmt |
 | **Journal 1** | `agent_journal.py` | Équipe 1 | Clôture trades 22h, P&L, MAE/MFE |
 | **Learning 1** | `agent_learning.py` | Équipe 1 | 6 dimensions learning, anomalie detection |
 | **Trader 2** | `agent_trader_2.py` | Équipe 2 | Trend following commodities, positions longue durée |
 | **Journal 2** | `agent_journal_2.py` | Équipe 2 | Journal des flips, MAE/MFE daily bars |
 | **Learning 2** | `agent_learning_2.py` | Équipe 2 | 4 dimensions learning trend, calibration seuil |
-| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 11 profils |
+| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 12 profils |
 | **UX** | (virtuel) | Partagé | Frontend React |
 
 ### Équipe 1 — Day Trading Intraday
@@ -46,7 +47,8 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 - **Boucle** : Journal 1 → Learning 1 → cache invalidé → Trader 1 utilise au prochain scan
 
 ### Équipe 2 — Trend Following Commodities
-- **Trader 2** : positions LONG/SHORT sur 4 commodities (HG=F, CC=F, KC=F, ZW=F), flips sur signal fort
+- **Scoring 2** : re-pondération des news scorées par Scoring 1 avec multiplicateurs trend-spécifiques (catégories weather/supply_chain boostées, persistence structurelle, magnitude privilegiée). NE rappelle PAS Claude — pur re-weighting. Publie accumulation directionnelle par ticker.
+- **Trader 2** : positions LONG/SHORT sur 4 commodities (HG=F, CC=F, KC=F, ZW=F), consomme l'accumulation de Scoring 2 (évite double-counting), flips sur signal fort
 - **Journal 2** : enrichit chaque flip avec MAE/MFE via daily bars, snapshots quotidiens
 - **Learning 2** : 4 dimensions (per-ticker, per-newscat, per-direction, signal calibration)
 - **Boucle** : Journal 2 → Learning 2 → cache invalidé → Trader 2 utilise au prochain scan
@@ -54,7 +56,7 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 
 ### Infrastructure agents
 - **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
-- **`registry.py`** : singletons, orchestration `News → Scoring → Trader 1 + Trader 2`, helpers pour les 2 équipes
+- **`registry.py`** : 10 singletons (2 équipes), orchestration `News → Scoring → Scoring 2 → Trader 1 + Trader 2`, helpers pour les 2 équipes
 - **Message Bus** : `agent_messages` (PG) — communication inter-agents async
 - **Logs structurés** : `agent_logs` (PG) — niveaux INFO/WARN/ERROR/DECISION, visibles frontend
 - **Audit Reports** : `audit_reports` (PG) + `data/audit_reports.json` (fallback) — persistés entre sessions
@@ -71,7 +73,7 @@ Journal 1 (ferme trades PENDING)
 ### Pipeline scan (4x/jour)
 ```
 News → Scoring → [Learning 1 cache] → Trader 1
-                → [Learning 2 cache] → Trader 2
+              → Scoring 2 → [Learning 2 cache] → Trader 2
 ```
 
 ### Ajouter une nouvelle équipe (Équipe N)
@@ -416,9 +418,9 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 #### 23. Frontend UX Redesign v7.0 — Navigation centrée agents
 - **Navigation** : suppression des 4 onglets, remplacement par sidebar-driven routing
-  - Hash routing : `#dashboard`, `#news`, `#scoring`, `#trader`, `#journal`, `#learning`, `#auditor`
-  - Sidebar : Dashboard + 6 agents + bouton Alertes avec badge notifications
-  - 7 pages lazy-loadées via `React.lazy` + `Suspense`
+  - Hash routing : `#dashboard`, `#news`, `#scoring`, `#scoring2`, `#trader`, `#journal`, `#learning`, `#auditor`
+  - Sidebar : Dashboard + 7 agents + bouton Alertes avec badge notifications
+  - 8 pages lazy-loadées via `React.lazy` + `Suspense`
 - **DashboardPage** : KPIs globaux (trades, win rate, P&L, pending) + agent overview cards + scan triggers + progress + toasts
 - **TraderPage** : KPIs, positions PENDING, historique trades (filtres résultat/direction/catégorie, pagination, expandable), ajustements learning per-ticker avec décomposition, dimensions session/direction/delay_bias, logs DECISION
 - **ScoringPage** : historique scans avec news scorées (expandable, 6 barres dimensions scoring), rejets, ajustements newscat learning, logs agent
@@ -431,16 +433,17 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
-- `backend/app/agents/registry.py` : 9 singletons (2 équipes), run_scan_pipeline (News→Scoring→Trader 1+2 avec Learning), helpers journal_2/learning_2
+- `backend/app/agents/registry.py` : 10 singletons (2 équipes), run_scan_pipeline (News→Scoring→Scoring 2→Trader 1+2 avec Learning), helpers journal_2/learning_2
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
+- `backend/app/agents/agent_scoring_2.py` : Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored
 - `backend/app/agents/agent_trader.py` : v6.4, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
 - `backend/app/agents/agent_trader_2.py` : v7.0, trend following 4 commodities, consomme Learning 2 (ticker_adj, newscat_adj, direction_adj, threshold_adj), flip history, persistence PG/JSON
 - `backend/app/agents/agent_journal.py` : Équipe 1, clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
 - `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
-- `backend/app/agents/agent_auditor.py` : audit profondeur, 11 profils d'expertise (+ journal_2, learning_2), note /10, persistance rapports, trend tracking, log analysis
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 12 profils d'expertise (+ scoring_2, journal_2, learning_2), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
 - `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
 - `backend/app/database.py` : v7.0, 10 tables PG (+ trend_positions, trend_journal_entries), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 9 tables, pg_update_trade_stop (v6.4)
@@ -453,12 +456,13 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES
 - `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr)
 - `backend/app/scan_history.py` : PG support, pruning 365j
-- `frontend/src/App.jsx` : v7.0, navigation centrée agents (sidebar-driven), hash routing (#dashboard, #news, #scoring, #trader, #journal, #learning, #auditor), lazy-load pages, notification polling, health check
+- `frontend/src/App.jsx` : v7.0, navigation centrée agents (sidebar-driven), hash routing (#dashboard, #news, #scoring, #scoring2, #trader, #journal, #learning, #auditor), lazy-load pages, notification polling, health check
 - `frontend/src/components/AgentSidebar.jsx` : v7.0, navigation principale (Dashboard + 6 agents + Alertes), status dots, notification badge
 - `frontend/src/components/AgentOverview.jsx` : 7 cards métriques live sur dashboard
 - `frontend/src/components/DashboardPage.jsx` : v7.0, KPIs globaux (trades, win rate, P&L, pending), agent overview cards, scan triggers, progress, toasts
 - `frontend/src/components/TraderPage.jsx` : v7.0, KPIs trader, positions en cours, historique trades (filtres résultat/direction/catégorie, pagination), ajustements learning (per-ticker, session, direction, delay bias), logs DECISION
 - `frontend/src/components/ScoringPage.jsx` : v7.0, historique scans (news scorées, dimensions barres, rejets), ajustements newscat learning, logs agent
+- `frontend/src/components/Scoring2Page.jsx` : v7.0, KPIs trend scoring, accumulation directionnelle par ticker (barres LONG/SHORT), news re-pondérées, logs agent scoring_2
 - `frontend/src/components/JournalPage.jsx` : v7.0, wrapper Journal existant + contexte learning injecté + logs agent journal
 - `frontend/src/components/Journal.jsx` : composant journal inchangé (763 lignes, filtres, pagination, expandable entries, export CSV)
 - `frontend/src/components/NewsPage.jsx` : v7.0, santé sources (tableau taux succès/échecs/latence/erreurs, health bars), revue hebdomadaire, logs agent

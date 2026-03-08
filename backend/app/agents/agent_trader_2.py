@@ -179,7 +179,8 @@ class AgentTrader2(BaseAgent):
         self._last_change_direction: str | None = None
         self._evaluations_today: int = 0
 
-    def run(self, scored_news=None, scan_type=None, learning_data=None, **kwargs) -> dict:
+    def run(self, scored_news=None, scan_type=None, learning_data=None,
+            trend_scoring=None, **kwargs) -> dict:
         """Évalue les news scorées et met à jour les positions de tendance.
 
         Contrairement à Trader 1, cet agent ne passe pas d'ordres.
@@ -198,6 +199,7 @@ class AgentTrader2(BaseAgent):
 
         start = time.monotonic()
         self._current_learning = learning_data or {}
+        self._current_trend_scoring = trend_scoring or {}
 
         try:
             # Load current positions
@@ -377,52 +379,70 @@ class AgentTrader2(BaseAgent):
         direction_adj = learning.get("direction_adj", {})
         signal_cal = learning.get("signal_calibration", {})
 
+        # Use Scoring 2 accumulation if available (pre-computed trend scores)
+        trend_scoring = getattr(self, "_current_trend_scoring", {})
+        trend_accumulation = trend_scoring.get("accumulation", {}).get(ticker, {})
+        use_trend_scoring = bool(trend_accumulation and
+                                  (trend_accumulation.get("long", 0) > 0 or
+                                   trend_accumulation.get("short", 0) > 0))
+
         # Aggregate directional signal from news
         long_score = 0.0
         short_score = 0.0
         key_news = []
 
+        if use_trend_scoring:
+            # Scoring 2 already computed trend-weighted accumulation
+            # Apply learning adjustments on top
+            long_score = trend_accumulation["long"]
+            short_score = trend_accumulation["short"]
+            # Apply per-ticker learning
+            ticker_mult = ticker_adj.get(ticker, 1.0)
+            long_score *= ticker_mult
+            short_score *= ticker_mult
+
         for sn in news_list:
-            score = sn.total_score
-            # Weight by signal reliability and directional clarity
-            weight = score * (sn.signal_reliability / 100) * (sn.directional_clarity / 100)
+            if not use_trend_scoring:
+                # Fallback: compute signal from Scoring 1 raw scores
+                score = sn.total_score
+                weight = score * (sn.signal_reliability / 100) * (sn.directional_clarity / 100)
 
-            # Apply learning 2 adjustments to weight
-            # Per-ticker
-            weight *= ticker_adj.get(ticker, 1.0)
-            # P7: Per-newscat — prefer cross-dimension ticker×newscat, fallback broad
-            cross_key = f"{sn.news_category}+{ticker}"
-            if cross_key in newscat_ticker_adj:
-                weight *= newscat_ticker_adj[cross_key]
+                # Apply learning 2 adjustments
+                weight *= ticker_adj.get(ticker, 1.0)
+                cross_key = f"{sn.news_category}+{ticker}"
+                if cross_key in newscat_ticker_adj:
+                    weight *= newscat_ticker_adj[cross_key]
+                else:
+                    weight *= newscat_adj.get(sn.news_category, 1.0)
+
+                # Check direct impact
+                direct = ticker in sn.impacted_tickers
+                chain_dir = None
+                for cr in (sn.chain_reactions or []):
+                    if cr.ticker == ticker:
+                        chain_dir = cr.direction.value
+
+                if direct:
+                    if sn.direction.value == "LONG":
+                        long_score += weight
+                    elif sn.direction.value == "SHORT":
+                        short_score += weight
+                elif chain_dir:
+                    if chain_dir == "LONG":
+                        long_score += weight * 0.7
+                    elif chain_dir == "SHORT":
+                        short_score += weight * 0.7
             else:
-                weight *= newscat_adj.get(sn.news_category, 1.0)
+                direct = ticker in sn.impacted_tickers
 
-            # Check direct impact
-            direct = ticker in sn.impacted_tickers
-            # Chain reaction impact may be inverted
-            chain_dir = None
-            for cr in (sn.chain_reactions or []):
-                if cr.ticker == ticker:
-                    chain_dir = cr.direction.value
-
-            if direct:
-                if sn.direction.value == "LONG":
-                    long_score += weight
-                elif sn.direction.value == "SHORT":
-                    short_score += weight
-            elif chain_dir:
-                if chain_dir == "LONG":
-                    long_score += weight * 0.7  # Chain reactions weighted less
-                elif chain_dir == "SHORT":
-                    short_score += weight * 0.7
-
+            # Always collect key_news for logging
             key_news.append({
                 "title": sn.news.title[:120],
                 "score": round(sn.total_score, 1),
                 "direction": sn.direction.value,
                 "category": sn.news_category,
                 "reliability": sn.signal_reliability,
-                "direct": direct,
+                "direct": direct if not use_trend_scoring or ticker in sn.impacted_tickers else False,
             })
 
         # Apply direction adjustment to scores

@@ -3,6 +3,7 @@ import React from "react";
 const AGENT_ICONS = {
   news: "\ud83d\udce1",
   scoring: "\ud83c\udfaf",
+  scoring_2: "\ud83d\udccf",
   trader_1: "\ud83d\udcb9",
   trader_2: "\ud83d\udcc8",
   journal: "\ud83d\udcd3",
@@ -16,6 +17,7 @@ const AGENT_ICONS = {
 const AGENT_LABELS = {
   news: "News",
   scoring: "Scoring",
+  scoring_2: "Scoring",
   trader_1: "Trader",
   trader_2: "Trader",
   journal: "Journal",
@@ -30,6 +32,7 @@ const AGENT_LABELS = {
 const AGENT_TO_PAGE = {
   news: "news",
   scoring: "scoring",
+  scoring_2: "scoring2",
   trader_1: "trader",
   trader_2: "trader2",
   journal: "journal",
@@ -56,6 +59,7 @@ const SIDEBAR_STRUCTURE = [
   { type: "agent", name: "journal" },
   { type: "agent", name: "learning" },
   { type: "section", label: "\u00c9quipe 2 \u2014 Tendance" },
+  { type: "agent", name: "scoring_2" },
   { type: "agent", name: "trader_2" },
   { type: "agent", name: "journal_2" },
   { type: "agent", name: "learning_2" },

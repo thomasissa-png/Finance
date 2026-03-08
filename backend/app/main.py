@@ -1122,6 +1122,18 @@ def get_trend_position_history(ticker: str):
     return agent.get_position_history(ticker)
 
 
+# ── Agent Scoring 2 — Trend Scoring API ──────────────────────────
+
+
+@app.get("/api/scoring2/result")
+def get_trend_scoring_result():
+    """Get last trend scoring result (re-weighted news for Trader 2)."""
+    agent = get_agent("scoring_2")
+    if not agent:
+        return {}
+    return agent.get_last_result() or {}
+
+
 # ── Agent Journal 2 — Trend Journal API ─────────────────────────
 
 
