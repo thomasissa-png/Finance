@@ -1388,6 +1388,46 @@ def pg_run_maintenance() -> dict:
     return results
 
 
+def pg_full_reset() -> dict:
+    """Reset ALL trading data tables for a fresh start.
+
+    Truncates all 16 tables (trades, journals, positions, logs, messages, etc.).
+    Returns dict with per-table results.
+
+    WARNING: This is destructive and irreversible. Only call when you want
+    to start with a completely clean database.
+    """
+    if not is_pg_enabled():
+        return {"status": "skipped", "reason": "PG not enabled"}
+
+    tables = [
+        "trades", "journal_entries", "scan_history", "last_scans",
+        "agent_messages", "agent_logs", "audit_reports",
+        "trend_positions", "trend_journal_entries",
+        "tech_positions", "tech_journal_entries",
+        "meta_positions", "meta_journal_entries",
+        "performance_data", "price_archive", "source_health",
+    ]
+    results = {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for table in tables:
+                    try:
+                        cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+                        results[table] = "truncated"
+                    except Exception as exc:
+                        results[table] = f"error: {exc}"
+                        logger.warning("TRUNCATE %s failed: %s", table, exc)
+            conn.commit()
+    except Exception as exc:
+        logger.error("pg_full_reset failed: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+    logger.info("pg_full_reset complete: %s", results)
+    return {"status": "ok", "tables": results}
+
+
 # ── M7: Monitoring ───────────────────────────────────────────────────
 
 

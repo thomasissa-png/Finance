@@ -1360,6 +1360,46 @@ def get_infra_report():
     return run_infra_report()
 
 
+@app.post("/api/infrastructure/reset")
+def reset_all_data():
+    """Reset ALL trading data for a fresh start.
+
+    Truncates all PG tables and resets JSON fallback files.
+    Call this before testing the full multi-team architecture from scratch.
+    """
+    from .database import pg_full_reset, is_pg_enabled
+    import json
+    from pathlib import Path
+
+    results = {"pg": {}, "json": {}}
+
+    # 1. Reset PostgreSQL tables
+    if is_pg_enabled():
+        results["pg"] = pg_full_reset()
+
+    # 2. Reset JSON fallback files
+    json_files = [
+        "data/trades.json", "data/journal.json",
+        "data/scan_history.json", "data/last_scans.json",
+        "data/audit_reports.json", "data/source_health.json",
+        "data/trend_positions.json", "data/trend_journal.json",
+        "data/tech_positions.json", "data/tech_journal_entries.json",
+        "data/meta_positions.json", "data/meta_journal_entries.json",
+    ]
+    for fpath in json_files:
+        try:
+            p = Path(fpath)
+            if p.exists():
+                p.write_text("[]")
+                results["json"][fpath] = "reset"
+            else:
+                results["json"][fpath] = "not_found"
+        except Exception as exc:
+            results["json"][fpath] = f"error: {exc}"
+
+    return {"status": "ok", "results": results}
+
+
 # ── Agent Performance API ────────────────────────────────────────
 
 
