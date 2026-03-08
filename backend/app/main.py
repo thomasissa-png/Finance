@@ -26,8 +26,11 @@ from .agents.registry import (
     get_all_status as get_agents_status,
     get_agent,
     invalidate_learning_cache,
+    invalidate_learning_2_cache,
     run_learning_update,
+    run_learning_2_update,
     run_daily_journal as agents_run_journal,
+    run_daily_journal_2 as agents_run_journal_2,
     run_event_check as agents_run_event_check,
     run_position_monitor as agents_run_position_monitor,
     run_scan_pipeline,
@@ -397,6 +400,13 @@ def _run_daily_journal() -> None:
                 run_learning_update()
             except Exception as exc:
                 logger.warning("Learning update after journal failed: %s", exc)
+            # Run Journal 2 (trend positions) + Learning 2 update
+            try:
+                agents_run_journal_2()
+                invalidate_learning_2_cache()
+                run_learning_2_update()
+            except Exception as exc:
+                logger.warning("Journal 2 / Learning 2 update failed: %s", exc)
             # Clear scan cache after journal
             with _scans_lock:
                 _last_scans = {}
@@ -1110,6 +1120,48 @@ def get_trend_position_history(ticker: str):
     if not agent:
         return []
     return agent.get_position_history(ticker)
+
+
+# ── Agent Journal 2 — Trend Journal API ─────────────────────────
+
+
+@app.get("/api/journal2/entries")
+def get_trend_journal_entries():
+    """Get trend journal entries (completed position periods)."""
+    agent = get_agent("journal_2")
+    if not agent:
+        return []
+    return agent.get_entries()
+
+
+@app.post("/api/journal2/trigger")
+def trigger_journal_2():
+    """Manually trigger Journal 2 run."""
+    agent = get_agent("journal_2")
+    if not agent:
+        raise HTTPException(500, "Journal 2 agent not available")
+    return agent.run()
+
+
+# ── Agent Learning 2 — Trend Learning API ───────────────────────
+
+
+@app.get("/api/learning2/adjustments")
+def get_trend_learning_adjustments():
+    """Get trend learning adjustments for Trader 2."""
+    agent = get_agent("learning_2")
+    if not agent:
+        return {}
+    return agent.get_adjustments()
+
+
+@app.post("/api/learning2/trigger")
+def trigger_learning_2():
+    """Manually trigger Learning 2 recalculation."""
+    agent = get_agent("learning_2")
+    if not agent:
+        raise HTTPException(500, "Learning 2 agent not available")
+    return agent.run()
 
 
 # ── (#41) Enhanced health check ──────────────────────────────────

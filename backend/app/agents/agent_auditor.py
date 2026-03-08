@@ -138,6 +138,32 @@ AUDIT_PROFILES = {
             "agent_visibility",      # Chaque agent est-il visible et ses métriques accessibles ?
         ],
     },
+    "journal_2": {
+        "expertise": "Expert en analyse de positions de tendance et suivi de performance multi-semaines",
+        "checks": [
+            "flip_coverage",         # Tous les flips sont-ils bien journalisés ?
+            "mae_mfe_accuracy",      # MAE/MFE calculés correctement sur daily bars ?
+            "pnl_tracking",          # P&L réalisé et latent cohérents ?
+            "dedup_integrity",       # Pas de doublons dans les entries ?
+            "bar_fetch_reliability", # Taux de succès des fetch daily bars ?
+            "pruning",              # Les vieilles entrées sont-elles prunées (> 1 an) ?
+            "snapshot_quality",      # Les snapshots quotidiens capturent-ils toutes les positions ?
+            "persistence",           # Les données sont-elles bien persistées (PG/JSON) ?
+        ],
+    },
+    "learning_2": {
+        "expertise": "Expert ML spécialisé trend following, calibration de seuils adaptatifs sur petits échantillons",
+        "checks": [
+            "sample_size",           # Assez de données pour des ajustements significatifs ?
+            "ticker_calibration",    # Les ajustements per-ticker sont-ils cohérents ?
+            "newscat_calibration",   # Les ajustements per-newscat sont-ils utiles ?
+            "direction_balance",     # LONG vs SHORT sont-ils équilibrés ?
+            "threshold_stability",   # Le seuil de flip est-il stable (pas trop volatile) ?
+            "churning_detection",    # Le churning est-il détecté et pénalisé ?
+            "anomaly_detection",     # Les anomalies sont-elles détectées (streaks, drawdowns) ?
+            "feedback_loop",         # Les ajustements sont-ils bien consommés par Trader 2 ?
+        ],
+    },
     "auditor": {
         "expertise": "Expert en systèmes d'audit, meta-analyse et assurance qualité pour trading algorithmique",
         "checks": [

@@ -12,9 +12,11 @@ const NewsPage = lazy(() => import("./components/NewsPage"));
 const LearningPage = lazy(() => import("./components/LearningPage"));
 const AuditorPage = lazy(() => import("./components/AuditorPage"));
 const Trader2Page = lazy(() => import("./components/Trader2Page"));
+const Journal2Page = lazy(() => import("./components/Journal2Page"));
+const Learning2Page = lazy(() => import("./components/Learning2Page"));
 
 const PAGES = [
-  "dashboard", "news", "scoring", "trader", "trader2", "journal", "learning", "auditor",
+  "dashboard", "news", "scoring", "trader", "trader2", "journal", "journal2", "learning", "learning2", "auditor",
 ];
 
 function getPageFromHash() {
@@ -99,7 +101,7 @@ export default function App() {
 
   // Fetch notifications (WARN/ERROR logs from all agents) — single flat Promise.all
   const fetchNotifications = useCallback(() => {
-    const agentNames = ["news", "scoring", "trader_1", "journal", "learning", "auditor"];
+    const agentNames = ["news", "scoring", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "auditor"];
     const requests = agentNames.flatMap((name) => [
       fetch(`/api/agents/${name}/logs?limit=20&level=WARN`)
         .then((r) => r.json())
@@ -218,7 +220,7 @@ export default function App() {
           <div>
             <div className="app-title">ONESHOT NEWS TRADING</div>
             <div className="app-subtitle">
-              7 agents autonomes
+              9 agents autonomes
               {workingCount > 0 && (
                 <span className="header-agents-working"> &mdash; {workingCount} en cours</span>
               )}
@@ -250,7 +252,9 @@ export default function App() {
             {activePage === "trader" && <TraderPage isActive={true} />}
             {activePage === "trader2" && <Trader2Page isActive={true} />}
             {activePage === "journal" && <JournalPage isActive={true} />}
+            {activePage === "journal2" && <Journal2Page isActive={true} />}
             {activePage === "learning" && <LearningPage isActive={true} />}
+            {activePage === "learning2" && <Learning2Page isActive={true} />}
             {activePage === "auditor" && <AuditorPage isActive={true} />}
           </Suspense>
         </ErrorBoundary>

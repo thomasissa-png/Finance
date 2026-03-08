@@ -179,7 +179,7 @@ class AgentTrader2(BaseAgent):
         self._last_change_direction: str | None = None
         self._evaluations_today: int = 0
 
-    def run(self, scored_news=None, scan_type=None, **kwargs) -> dict:
+    def run(self, scored_news=None, scan_type=None, learning_data=None, **kwargs) -> dict:
         """Évalue les news scorées et met à jour les positions de tendance.
 
         Contrairement à Trader 1, cet agent ne passe pas d'ordres.
@@ -189,6 +189,7 @@ class AgentTrader2(BaseAgent):
         Args:
             scored_news: list[ScoredNews] from Agent Scoring
             scan_type: ScanType enum
+            learning_data: dict from Agent Learning 2 (optional)
 
         Returns: dict with positions state and any changes made
         """
@@ -196,6 +197,7 @@ class AgentTrader2(BaseAgent):
                          f"Evaluating trend signals ({len(scored_news or [])} news)")
 
         start = time.monotonic()
+        self._current_learning = learning_data or {}
 
         try:
             # Load current positions
@@ -358,13 +360,21 @@ class AgentTrader2(BaseAgent):
 
         Logic:
         1. Score the directional signal from all relevant news
-        2. Check if signal contradicts current position direction
-        3. If strong enough contradiction → change direction
-        4. If confirmation → reinforce confidence, update reasoning
+        2. Apply Learning 2 adjustments (per-ticker, per-newscat, per-direction)
+        3. Check if signal contradicts current position direction
+        4. If strong enough contradiction → change direction
+        5. If confirmation → reinforce confidence, update reasoning
 
         Returns change dict or None if no change.
         """
         current_dir = current_position.get("direction", "NEUTRAL")
+
+        # Load learning adjustments
+        learning = getattr(self, "_current_learning", {})
+        ticker_adj = learning.get("ticker_adj", {})
+        newscat_adj = learning.get("newscat_adj", {})
+        direction_adj = learning.get("direction_adj", {})
+        signal_cal = learning.get("signal_calibration", {})
 
         # Aggregate directional signal from news
         long_score = 0.0
@@ -375,6 +385,12 @@ class AgentTrader2(BaseAgent):
             score = sn.total_score
             # Weight by signal reliability and directional clarity
             weight = score * (sn.signal_reliability / 100) * (sn.directional_clarity / 100)
+
+            # Apply learning 2 adjustments to weight
+            # Per-ticker
+            weight *= ticker_adj.get(ticker, 1.0)
+            # Per-newscat
+            weight *= newscat_adj.get(sn.news_category, 1.0)
 
             # Check direct impact
             direct = ticker in sn.impacted_tickers
@@ -403,6 +419,10 @@ class AgentTrader2(BaseAgent):
                 "reliability": sn.signal_reliability,
                 "direct": direct,
             })
+
+        # Apply direction adjustment to scores
+        long_score *= direction_adj.get("LONG", 1.0)
+        short_score *= direction_adj.get("SHORT", 1.0)
 
         # Determine suggested direction
         net_signal = long_score - short_score
@@ -446,8 +466,8 @@ class AgentTrader2(BaseAgent):
 
         # Contradiction — should we flip?
         # Need stronger signal to change than to confirm
-        # Threshold: signal_strength > 20 (strong reversal signal)
-        change_threshold = 20.0
+        # Base threshold adjusted by Learning 2 signal calibration
+        change_threshold = 20.0 * signal_cal.get("threshold_adj", 1.0)
         if signal_strength >= change_threshold:
             return self._make_change(
                 ticker, current_position, suggested_dir,

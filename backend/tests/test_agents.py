@@ -255,9 +255,11 @@ class TestAgentRegistry:
         assert "trader_1" in agents
         assert "trader_2" in agents
         assert "journal" in agents
+        assert "journal_2" in agents
         assert "learning" in agents
+        assert "learning_2" in agents
         assert "auditor" in agents
-        assert len(agents) == 7
+        assert len(agents) == 9
 
     @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
     @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
@@ -280,7 +282,7 @@ class TestAgentRegistry:
         statuses = get_all_status()
         names = [s["name"] for s in statuses]
         assert "ux" in names
-        assert len(statuses) == 8  # 7 real agents + virtual UX
+        assert len(statuses) == 10  # 9 real agents + virtual UX
 
     @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
     @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
@@ -310,7 +312,7 @@ class TestAgentAuditor:
 
     def test_all_audit_profiles_present(self):
         from backend.app.agents.agent_auditor import AUDIT_PROFILES
-        expected = {"news", "scoring", "trader_1", "trader_2", "journal", "learning", "ux", "auditor"}
+        expected = {"news", "scoring", "trader_1", "trader_2", "journal", "journal_2", "learning", "learning_2", "ux", "auditor"}
         assert set(AUDIT_PROFILES.keys()) == expected
 
     def test_ux_profile_has_checks(self):

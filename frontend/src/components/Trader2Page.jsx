@@ -9,18 +9,21 @@ const DIR_ARROWS = { LONG: "\u2191", SHORT: "\u2193", NEUTRAL: "\u2022" };
 export default function Trader2Page({ isActive }) {
   const [positions, setPositions] = useState({});
   const [logs, setLogs] = useState([]);
+  const [learningAdj, setLearningAdj] = useState(null);
   const [expandedTicker, setExpandedTicker] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     try {
-      const [posRes, logRes] = await Promise.all([
+      const [posRes, logRes, adjRes] = await Promise.all([
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/agents/trader_2/logs?limit=50&level=DECISION")
           .then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/learning2/adjustments").then((r) => r.ok ? r.json() : null).catch(() => null),
       ]);
       setPositions(posRes || {});
       setLogs(Array.isArray(logRes) ? logRes : []);
+      setLearningAdj(adjRes);
     } catch { /* ignore */ } finally {
       setLoading(false);
     }
@@ -71,6 +74,30 @@ export default function Trader2Page({ isActive }) {
           <div className="kpi-label">Changements</div>
         </div>
       </div>
+
+      {/* Learning 2 context */}
+      {learningAdj && learningAdj.stats && learningAdj.stats.sufficient_data && (
+        <div className="section-card" style={{ padding: "12px 16px" }}>
+          <h3 style={{ marginBottom: 8 }}>Learning 2 &mdash; Ajustements actifs</h3>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
+            {Object.entries(learningAdj.ticker_adj || {}).map(([t, v]) => (
+              <span key={t} style={{ color: v >= 1 ? "var(--green)" : "var(--red)" }}>
+                {t}: {v.toFixed(2)}x
+              </span>
+            ))}
+            {learningAdj.signal_calibration?.threshold_adj !== 1.0 && (
+              <span style={{ color: "var(--cyan)" }}>
+                Seuil: {(20 * (learningAdj.signal_calibration?.threshold_adj || 1)).toFixed(1)}
+              </span>
+            )}
+          </div>
+          {(learningAdj.anomalies || []).length > 0 && (
+            <div style={{ marginTop: 6, fontSize: 12, color: "var(--yellow)" }}>
+              {"\u26a0\ufe0f"} {learningAdj.anomalies.join(" | ")}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Position Cards */}
       <div className="section-card">

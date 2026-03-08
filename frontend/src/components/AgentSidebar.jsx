@@ -6,7 +6,9 @@ const AGENT_ICONS = {
   trader_1: "\ud83d\udcb9",
   trader_2: "\ud83d\udcc8",
   journal: "\ud83d\udcd3",
+  journal_2: "\ud83d\udcd4",
   learning: "\ud83e\udde0",
+  learning_2: "\ud83d\udca1",
   auditor: "\ud83d\udd0d",
   ux: "\ud83c\udfa8",
 };
@@ -17,7 +19,9 @@ const AGENT_LABELS = {
   trader_1: "Trader 1",
   trader_2: "Trader 2",
   journal: "Journal",
+  journal_2: "Journal 2",
   learning: "Learning",
+  learning_2: "Learning 2",
   auditor: "Auditeur",
   ux: "UX",
 };
@@ -29,7 +33,9 @@ const AGENT_TO_PAGE = {
   trader_1: "trader",
   trader_2: "trader2",
   journal: "journal",
+  journal_2: "journal2",
   learning: "learning",
+  learning_2: "learning2",
   auditor: "auditor",
 };
 

@@ -17,7 +17,9 @@ from .agent_scoring import AgentScoring
 from .agent_trader import AgentTrader
 from .agent_trader_2 import AgentTrader2
 from .agent_journal import AgentJournal
+from .agent_journal_2 import AgentJournal2
 from .agent_learning import AgentLearning
+from .agent_learning_2 import AgentLearning2
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,9 @@ def _ensure_agents():
             "trader_1": AgentTrader(),
             "trader_2": AgentTrader2(),
             "journal": AgentJournal(),
+            "journal_2": AgentJournal2(),
             "learning": AgentLearning(),
+            "learning_2": AgentLearning2(),
             "auditor": AgentAuditor(),
         }
         logger.info("Agent registry initialized: %s", list(_agents.keys()))
@@ -162,10 +166,15 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
     )
 
     # Step 5: Agent Trader 2 — Trend evaluation (parallel, non-blocking)
+    # Feed Learning 2 adjustments to Trader 2 for signal weighting
     try:
         agent_trader2 = _agents.get("trader_2")
+        agent_learning2 = _agents.get("learning_2")
         if agent_trader2 and scored:
-            agent_trader2.run(scored_news=scored, scan_type=scan_type)
+            learning2_data = (agent_learning2.get_adjustments()
+                              if agent_learning2 else {})
+            agent_trader2.run(scored_news=scored, scan_type=scan_type,
+                              learning_data=learning2_data)
     except Exception as exc:
         logger.warning("Trader 2 trend evaluation failed: %s", exc)
 
@@ -227,6 +236,29 @@ def get_learning_adjustments() -> dict:
     _ensure_agents()
     return _agents["learning"].get_adjustments()
 
+
+def run_daily_journal_2() -> dict:
+    """Execute the daily journal for Trader 2 via Agent Journal 2."""
+    _ensure_agents()
+    return _agents["journal_2"].run()
+
+
+def run_learning_2_update() -> dict:
+    """Run trend learning update after journal 2."""
+    _ensure_agents()
+    return _agents["learning_2"].run()
+
+
+def invalidate_learning_2_cache():
+    """Invalidate trend learning cache after journal 2."""
+    _ensure_agents()
+    _agents["learning_2"].invalidate_cache()
+
+
+def get_learning_2_adjustments() -> dict:
+    """Get cached trend learning adjustments."""
+    _ensure_agents()
+    return _agents["learning_2"].get_adjustments()
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
