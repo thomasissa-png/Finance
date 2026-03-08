@@ -517,6 +517,26 @@ def _run_team3_weekly_config() -> None:
     thread.start()
 
 
+def _run_team4_weekly_config() -> None:
+    """Generate weekly strategy config for Team 4 — Sunday 20:45 CET.
+
+    Runs after Team 3 weekly config (20:30) and before performance weekly (21:30).
+    Validates team combinations, weights, and config for the coming week.
+    """
+    def _worker():
+        try:
+            from .agents.registry import generate_weekly_config_4
+            config = generate_weekly_config_4()
+            logger.info("Team 4 weekly config generated: v%d, %d validated combos",
+                        config.get("config_version", 0),
+                        len(config.get("validated_combos", [])))
+        except Exception as exc:
+            logger.error("Team 4 weekly config generation failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="team4-weekly-config")
+    thread.start()
+
+
 def _run_performance_weekly() -> None:
     """Run weekly performance trends — Sunday 21h30."""
     def _worker():
@@ -606,6 +626,8 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_weekly_source_review, CronTrigger(hour=20, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="weekly_source_review", misfire_grace_time=3600)
     # v2.0: Team 3 weekly strategy config — Sunday 20:30 CET (after source review, before Monday)
     bg_scheduler.add_job(_run_team3_weekly_config, CronTrigger(hour=20, minute=30, day_of_week="sun", timezone="Europe/Paris"), id="team3_weekly_config", misfire_grace_time=3600)
+    # v2.0: Team 4 weekly strategy config — Sunday 20:45 CET (after Team 3, before Monday)
+    bg_scheduler.add_job(_run_team4_weekly_config, CronTrigger(hour=20, minute=45, day_of_week="sun", timezone="Europe/Paris"), id="team4_weekly_config", misfire_grace_time=3600)
     # v7.5: Infrastructure health check every 15 min, maintenance daily at 23h, report weekly Sun 21h
     bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
     bg_scheduler.add_job(_run_infra_maintenance, CronTrigger(hour=23, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_maintenance", misfire_grace_time=3600)
@@ -1556,6 +1578,34 @@ def trigger_learning_4():
     if not agent:
         raise HTTPException(500, "Learning 4 agent not available")
     return agent.run()
+
+
+@app.post("/api/learning4/weekly-config")
+def generate_learning_4_weekly_config():
+    """Manually trigger Learning 4 weekly config generation."""
+    agent = get_agent("learning_4")
+    if not agent:
+        raise HTTPException(500, "Learning 4 agent not available")
+    return agent.generate_weekly_config()
+
+
+@app.get("/api/learning4/weekly-config")
+def get_learning_4_weekly_config():
+    """Get current Learning 4 weekly config."""
+    agent = get_agent("learning_4")
+    if not agent:
+        raise HTTPException(500, "Learning 4 agent not available")
+    config = agent.get_weekly_config()
+    return config or {"status": "no_config_yet"}
+
+
+@app.get("/api/journal4/weekly-summary")
+def get_journal_4_weekly_summary():
+    """Get Journal 4 weekly performance summary."""
+    agent = get_agent("journal_4")
+    if not agent:
+        raise HTTPException(500, "Journal 4 agent not available")
+    return agent.compute_weekly_summary()
 
 
 # ── (#41) Enhanced health check ──────────────────────────────────

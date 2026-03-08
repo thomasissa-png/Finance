@@ -731,12 +731,21 @@ class AgentPerformance(BaseAgent):
         return kpis
 
     def _compute_trader_4_kpis(self) -> dict:
-        """Compute Trader 4 (meta/ensemble) KPIs from positions."""
+        """Compute Trader 4 (meta/ensemble) KPIs from positions and weekly summary."""
         kpis: dict[str, Any] = {
             "open_positions": 0,
             "total_realized_pnl": None,
+            "total_unrealized_pnl": None,
             "upstream_ready": False,
-            "max_confluence": 0,
+            "is_active": False,
+            "activation_date": None,
+            "has_weekly_config": False,
+            "validated_combos": [],
+            "weekly_win_rate": None,
+            "weekly_pnl": None,
+            "weekly_trades": 0,
+            "weekly_sharpe": None,
+            "target_win_rate": 80.0,
         }
         try:
             from . import registry
@@ -745,8 +754,32 @@ class AgentPerformance(BaseAgent):
                 metrics = t4.get_metrics()
                 kpis["open_positions"] = metrics.get("open_positions", 0)
                 kpis["total_realized_pnl"] = metrics.get("total_realized_pnl")
+                kpis["total_unrealized_pnl"] = metrics.get("total_unrealized_pnl")
                 kpis["upstream_ready"] = metrics.get("upstream_ready", False)
-                kpis["max_confluence"] = metrics.get("max_confluence_seen", 0)
+                kpis["is_active"] = metrics.get("is_active", False)
+                kpis["activation_date"] = metrics.get("activation_date")
+
+            # Learning 4 weekly config
+            l4 = registry.get_agent("learning_4")
+            if l4:
+                l4_metrics = l4.get_metrics()
+                kpis["has_weekly_config"] = l4_metrics.get("has_weekly_config", False)
+                config = l4.get_weekly_config()
+                if config:
+                    kpis["validated_combos"] = config.get("validated_combos", [])
+
+            # Journal 4 weekly summary
+            j4 = registry.get_agent("journal_4")
+            if j4:
+                try:
+                    weekly = j4.compute_weekly_summary()
+                    kpis["weekly_win_rate"] = weekly.get("win_rate", 0)
+                    kpis["weekly_pnl"] = weekly.get("total_pnl", 0)
+                    kpis["weekly_trades"] = weekly.get("entries_count", 0)
+                    kpis["weekly_sharpe"] = weekly.get("sharpe")
+                except Exception:
+                    pass
+
         except Exception as exc:
             self.log("Trader 4 KPI error", {"error": str(exc)}, level="WARN")
         return kpis

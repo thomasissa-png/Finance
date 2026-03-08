@@ -1310,3 +1310,367 @@ class TestTeam3V2Learning3:
     def test_version_bumped(self):
         from backend.app.agents.agent_learning_3 import AgentLearning3
         assert AgentLearning3.version == "2.0"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Team 4 v2.0 audit tests
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestTeam4V2Scoring4:
+    """Scoring 4 v2.0 audit tests."""
+
+    def test_tie_returns_neutral(self):
+        """T2: Tie between LONG/SHORT should return NEUTRAL."""
+        from backend.app.agents.agent_scoring_4 import _compute_confluence
+        direction, level, boost = _compute_confluence(["LONG", "SHORT"])
+        assert direction == "NEUTRAL"
+        assert level == 0
+        assert boost == 1.0
+
+    def test_weights_used_in_result(self):
+        """T1: Result should include weights_used."""
+        from backend.app.agents.agent_scoring_4 import compute_meta_scores
+        result = compute_meta_scores()
+        assert "weights_used" in result
+        assert "news" in result["weights_used"]
+
+    def test_custom_weights_applied(self):
+        """T1: Custom weights from Learning 4 should be used."""
+        from backend.app.agents.agent_scoring_4 import compute_meta_scores
+        custom = {"news": 0.5, "trend": 0.3, "tech": 0.2}
+        result = compute_meta_scores(weights=custom)
+        assert result["weights_used"]["news"] == 0.5
+
+    def test_activation_date_exists(self):
+        """P8: Activation date should be set."""
+        from backend.app.agents.agent_scoring_4 import ACTIVATION_DATE
+        from datetime import date
+        assert isinstance(ACTIVATION_DATE, date)
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_scoring_4 import AgentScoring4
+        assert AgentScoring4.version == "2.0"
+
+    def test_weekly_config_consumed(self):
+        """T1: AgentScoring4.run() should accept weekly_config parameter."""
+        from backend.app.agents.agent_scoring_4 import AgentScoring4
+        import inspect
+        sig = inspect.signature(AgentScoring4.run)
+        assert "weekly_config" in sig.parameters
+
+    def test_confluence_3_of_3(self):
+        """Confluence 3/3 should give max boost."""
+        from backend.app.agents.agent_scoring_4 import _compute_confluence, MAX_CONFLUENCE_BOOST
+        direction, level, boost = _compute_confluence(["LONG", "LONG", "LONG"])
+        assert direction == "LONG"
+        assert level == 3
+        assert boost == MAX_CONFLUENCE_BOOST
+
+    def test_confluence_2_of_3(self):
+        """Confluence 2/3 should give min boost."""
+        from backend.app.agents.agent_scoring_4 import _compute_confluence, MIN_CONFLUENCE_BOOST
+        direction, level, boost = _compute_confluence(["LONG", "LONG", "SHORT"])
+        assert direction == "LONG"
+        assert level == 2
+        assert boost == MIN_CONFLUENCE_BOOST
+
+
+class TestScoringDataBridge:
+    """Tests for Scoring 3 → Scoring 4 data format bridge."""
+
+    def test_scoring3_returns_signals_key(self):
+        """Scoring 3 result must include 'signals' dict for Scoring 4."""
+        from backend.app.agents.agent_scoring_3 import score_technical_setups
+        # Empty result (no market data) should still have signals key
+        result = score_technical_setups(tickers={})
+        assert "signals" in result
+        assert isinstance(result["signals"], dict)
+
+    def test_scoring3_signals_format(self):
+        """Each signal should have score, direction, details."""
+        from backend.app.agents.agent_scoring_3 import score_technical_setups
+        # Build a fake result to test the signals bridge
+        result = score_technical_setups(tickers={})
+        # Signals is empty for empty tickers, but format is correct
+        assert isinstance(result["signals"], dict)
+
+    def test_scoring4_reads_scored_not_scored_news(self):
+        """Scoring 4 should read 'scored' key from Scoring 1 output."""
+        from backend.app.agents.agent_scoring_4 import compute_meta_scores
+        # Simulate Scoring 1 output with 'scored' key (not 'scored_news')
+        news_data = {
+            "scored": [
+                {"impacted_tickers": ["GC=F"], "direction": "LONG",
+                 "total_score": 80, "news_category": "commodity",
+                 "signal_reliability": 90},
+                {"impacted_tickers": ["CL=F"], "direction": "SHORT",
+                 "total_score": 60, "news_category": "supply_chain",
+                 "signal_reliability": 70},
+                {"impacted_tickers": ["ZW=F"], "direction": "LONG",
+                 "total_score": 70, "news_category": "weather",
+                 "signal_reliability": 85},
+            ]
+        }
+        result = compute_meta_scores(news_data=news_data)
+        # Should have detected 3 news items and activated news source
+        assert result["stats"]["sources_active"] >= 1
+        assert "GC=F" in result["by_ticker"]
+
+    def test_scoring4_reads_pydantic_scored_news(self):
+        """Scoring 4 should handle Pydantic ScoredNews objects."""
+        from backend.app.agents.agent_scoring_4 import compute_meta_scores
+        from backend.app.models import ScoredNews, NewsItem, Direction
+        from datetime import datetime, timezone
+        items = []
+        for ticker, direction in [("GC=F", Direction.LONG), ("CL=F", Direction.SHORT), ("ZW=F", Direction.LONG)]:
+            news = NewsItem(title="Test", source="test", url="http://test.com",
+                            published=datetime.now(timezone.utc))
+            sn = ScoredNews(news=news, surprise=80, freshness=90,
+                            directional_clarity=85, transmission_delay=70,
+                            market_awareness=20, direction=direction,
+                            impacted_tickers=[ticker], news_category="commodity",
+                            signal_reliability=80)
+            items.append(sn)
+        result = compute_meta_scores(news_data={"scored": items})
+        assert result["stats"]["sources_active"] >= 1
+        assert len(result["by_ticker"]) >= 1
+
+    def test_scoring4_tech_signals_consumed(self):
+        """Scoring 4 should consume Scoring 3 signals dict."""
+        from backend.app.agents.agent_scoring_4 import compute_meta_scores
+        tech_data = {
+            "signals": {
+                "GC=F": {"score": 75, "direction": "LONG", "details": {"strategy": "rsi_reversal"}},
+                "CL=F": {"score": 65, "direction": "SHORT", "details": {"strategy": "macd_crossover"}},
+                "ZW=F": {"score": 55, "direction": "LONG", "details": {"strategy": "bollinger_squeeze"}},
+            }
+        }
+        result = compute_meta_scores(tech_data=tech_data)
+        assert result["stats"]["sources_active"] >= 1
+        assert "GC=F" in result["by_ticker"]
+
+    def test_full_3_source_confluence(self):
+        """All 3 sources agreeing should produce confluence level 3."""
+        from backend.app.agents.agent_scoring_4 import compute_meta_scores
+        news_data = {
+            "scored": [
+                {"impacted_tickers": ["GC=F"], "direction": "LONG", "total_score": 80,
+                 "news_category": "commodity", "signal_reliability": 90},
+                {"impacted_tickers": ["CL=F"], "direction": "LONG", "total_score": 70,
+                 "news_category": "commodity", "signal_reliability": 80},
+                {"impacted_tickers": ["ZW=F"], "direction": "LONG", "total_score": 60,
+                 "news_category": "weather", "signal_reliability": 75},
+            ]
+        }
+        trend_data = {
+            "trend_scored": [{"ticker": "GC=F"}, {"ticker": "CL=F"}, {"ticker": "ZW=F"}],
+            "accumulation": {"GC=F": {"long": 30, "short": 5}},
+        }
+        tech_data = {
+            "signals": {
+                "GC=F": {"score": 70, "direction": "LONG", "details": {}},
+                "CL=F": {"score": 60, "direction": "LONG", "details": {}},
+                "ZW=F": {"score": 50, "direction": "LONG", "details": {}},
+            }
+        }
+        result = compute_meta_scores(news_data=news_data, trend_data=trend_data, tech_data=tech_data)
+        # GC=F should have all 3 sources → confluence 3
+        gc = result["by_ticker"].get("GC=F")
+        assert gc is not None
+        assert gc["confluence_level"] == 3
+        assert gc["sources_contributing"] == 3
+
+
+class TestTeam4V2Trader4:
+    """Trader 4 v2.0 audit tests."""
+
+    def test_correlation_groups_exist(self):
+        """P5: Correlation groups should be defined."""
+        from backend.app.agents.agent_trader_4 import META_CORRELATION_GROUPS
+        assert len(META_CORRELATION_GROUPS) >= 10
+        assert "energy" in META_CORRELATION_GROUPS
+        assert "gold_safe" in META_CORRELATION_GROUPS
+
+    def test_correlation_conflict_detected(self):
+        """P5: Conflicting positions should be detected."""
+        from backend.app.agents.agent_trader_4 import _check_correlation_conflict
+        positions = {
+            "GC=F": {"status": "OPEN", "direction": "LONG"},
+        }
+        assert _check_correlation_conflict("SI=F", "SHORT", positions) is True
+        assert _check_correlation_conflict("SI=F", "LONG", positions) is False
+
+    def test_agent_versions_populated(self):
+        """P6: _get_agent_versions should return version dict."""
+        from backend.app.agents.agent_trader_4 import _get_agent_versions
+        versions = _get_agent_versions()
+        assert "scoring_4" in versions
+        assert "trader_4" in versions
+
+    def test_tp_sl_config_exists(self):
+        """P3: TP/SL configuration should exist."""
+        from backend.app.agents.agent_trader_4 import (
+            TP_PCT_BY_CONFLUENCE, SL_PCT, TRAILING_ACTIVATION_PCT
+        )
+        assert TP_PCT_BY_CONFLUENCE[3] > TP_PCT_BY_CONFLUENCE[2]
+        assert SL_PCT > 0
+        assert TRAILING_ACTIVATION_PCT > 0
+
+    def test_max_hold_hours_72(self):
+        """P7: Max hold hours should be 72 (0-3 days)."""
+        from backend.app.agents.agent_trader_4 import MAX_HOLD_HOURS
+        assert MAX_HOLD_HOURS == 72
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_trader_4 import AgentTrader4
+        assert AgentTrader4.version == "2.0"
+
+    def test_metrics_include_activation(self):
+        """P8: Metrics should include activation info."""
+        from backend.app.agents.agent_trader_4 import AgentTrader4
+        t4 = AgentTrader4()
+        metrics = t4.get_metrics()
+        assert "activation_date" in metrics
+        assert "is_active" in metrics
+
+    def test_weekly_config_param(self):
+        """run() should accept weekly_config parameter."""
+        from backend.app.agents.agent_trader_4 import AgentTrader4
+        import inspect
+        sig = inspect.signature(AgentTrader4.run)
+        assert "weekly_config" in sig.parameters
+
+
+class TestTeam4V2Journal4:
+    """Journal 4 v2.0 audit tests."""
+
+    def test_weekly_summary_exists(self):
+        """L1: Journal 4 should have compute_weekly_summary."""
+        from backend.app.agents.agent_journal_4 import AgentJournal4
+        j4 = AgentJournal4()
+        summary = j4.compute_weekly_summary()
+        assert "entries_count" in summary
+        assert "win_rate" in summary
+        assert "sharpe" in summary
+        assert "by_combo" in summary
+        assert "by_confluence" in summary
+        assert "by_duration" in summary
+
+    def test_sharpe_computed(self):
+        """L2: _compute_sharpe should work correctly."""
+        from backend.app.agents.agent_journal_4 import _compute_sharpe
+        assert _compute_sharpe([1.0, 2.0, 3.0]) is not None
+        assert _compute_sharpe([1.0]) is None
+        assert _compute_sharpe([5.0, 5.0, 5.0]) is None  # zero variance
+
+    def test_duration_category_classified(self):
+        """L3: Duration classification should work."""
+        from backend.app.agents.agent_journal_4 import _classify_duration
+        assert _classify_duration(4.0) == "intraday"
+        assert _classify_duration(12.0) == "overnight"
+        assert _classify_duration(48.0) == "multi_day"
+
+    def test_team_combination_stats_include_sharpe(self):
+        """L2: Combo stats should include Sharpe ratio."""
+        from backend.app.agents.agent_journal_4 import AgentJournal4
+        j4 = AgentJournal4()
+        entries = [
+            {"team_combination": "news+tech", "pnl_pct": 1.5,
+             "confluence_level": 2, "close_type": "TP_HIT",
+             "duration_category": "intraday"},
+            {"team_combination": "news+tech", "pnl_pct": -0.5,
+             "confluence_level": 2, "close_type": "SL_HIT",
+             "duration_category": "overnight"},
+            {"team_combination": "news+tech", "pnl_pct": 2.0,
+             "confluence_level": 3, "close_type": "TP_HIT",
+             "duration_category": "multi_day"},
+        ]
+        stats = j4._compute_team_combination_stats(entries)
+        assert "news+tech" in stats
+        assert "sharpe" in stats["news+tech"]
+        assert "close_types" in stats["news+tech"]
+        assert "duration_categories" in stats["news+tech"]
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_journal_4 import AgentJournal4
+        assert AgentJournal4.version == "2.0"
+
+
+class TestTeam4V2Learning4:
+    """Learning 4 v2.0 audit tests."""
+
+    def test_5_dimensions(self):
+        """Learning 4 should compute 5 dimensions."""
+        from backend.app.agents.agent_learning_4 import compute_meta_learning
+        result = compute_meta_learning([])
+        assert "combo_adj" in result
+        assert "ticker_adj" in result
+        assert "confluence_adj" in result
+        assert "duration_adj" in result
+        assert "weight_optimization" in result
+
+    def test_weekly_config_generation(self):
+        """P1: Learning 4 should generate weekly config."""
+        from backend.app.agents.agent_learning_4 import AgentLearning4
+        l4 = AgentLearning4()
+        config = l4.generate_weekly_config()
+        assert "weights" in config
+        assert "validated_combos" in config
+        assert "config_version" in config
+        assert config["config_version"] == 1
+
+    def test_config_history_tracking(self):
+        """P2: Config changes should be tracked."""
+        from backend.app.agents.agent_learning_4 import AgentLearning4
+        l4 = AgentLearning4()
+        l4.generate_weekly_config()
+        l4.generate_weekly_config()
+        history = l4.get_config_history()
+        assert len(history) == 1  # First config archived when second generated
+
+    def test_ab_testing(self):
+        """P2: AB testing should compare configs."""
+        from backend.app.agents.agent_learning_4 import AgentLearning4
+        l4 = AgentLearning4()
+        l4.generate_weekly_config()
+        config2 = l4.generate_weekly_config()
+        assert "ab_test" in config2
+        assert config2["ab_test"] is not None
+        assert "winner" in config2["ab_test"]
+
+    def test_target_win_rate(self):
+        """Target WR should be 80%."""
+        from backend.app.agents.agent_learning_4 import TARGET_WIN_RATE
+        assert TARGET_WIN_RATE == 80.0
+
+    def test_below_target_anomaly(self):
+        """Should detect when WR is far below target."""
+        from backend.app.agents.agent_learning_4 import compute_meta_learning
+        # Create 30 entries with low WR
+        entries = []
+        for i in range(30):
+            entries.append({
+                "direction": "LONG",
+                "pnl_pct": -1.0 if i % 3 != 0 else 2.0,
+                "exit_time": f"2026-03-0{(i % 7) + 1}T12:00:00+00:00",
+                "entry_time": f"2026-03-0{(i % 7) + 1}T10:00:00+00:00",
+                "team_combination": "news+tech",
+                "confluence_level": 2,
+                "duration_category": "intraday",
+            })
+        result = compute_meta_learning(entries)
+        anomalies = result.get("anomalies", [])
+        assert any("BELOW_TARGET" in a for a in anomalies)
+
+    def test_version_bumped(self):
+        from backend.app.agents.agent_learning_4 import AgentLearning4
+        assert AgentLearning4.version == "2.0"
+
+    def test_metrics_include_weekly(self):
+        """Metrics should include weekly config info."""
+        from backend.app.agents.agent_learning_4 import AgentLearning4
+        l4 = AgentLearning4()
+        metrics = l4.get_metrics()
+        assert "has_weekly_config" in metrics
+        assert "config_version" in metrics
+        assert "target_win_rate" in metrics

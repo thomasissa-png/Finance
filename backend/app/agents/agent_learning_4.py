@@ -2,19 +2,22 @@
 
 Responsabilités :
 - Consumes completed trades from Journal 4
-- Calculates 4 dimensions of learning adapted for meta/ensemble approach:
+- Calculates 5 dimensions of learning adapted for meta/ensemble approach:
   1. Per-team-combination: which team combos produce best results
-     (news+trend, news+tech, trend+tech, news+trend+tech)
   2. Per-ticker: which assets benefit most from multi-signal approach
   3. Per-confluence-level: how reliable are 2/3 vs 3/3 confluences
-  4. Weight optimization: adjusts news_weight, trend_weight, tech_weight
-- Reads results from ALL teams' journals to cross-analyze
+  4. Per-duration-category: intraday vs overnight vs multi_day
+  5. Weight optimization: adjusts news_weight, trend_weight, tech_weight
+- Weekly config generation (Sunday): freezes validated strategy for next week
+- AB testing: compares current vs previous config performance
 - Publishes "learning_4_updated" on bus → Trader 4 and Scoring 4 consume
 
 Différences avec les autres learnings :
 - Learning 1 : apprend des trades intraday (6 dimensions, ticker/session/newscat/regime/dir/delay)
 - Learning 2 : apprend des positions de tendance (4 dimensions, ticker/newscat/dir/calibration)
-- Learning 4 : apprend des combinaisons multi-signal (4 dimensions, combo/ticker/confluence/weights)
+- Learning 3 : apprend des positions techniques (3 dimensions, strategy/ticker/timeframe), weekly config
+- Learning 4 : apprend des combinaisons multi-signal (5 dimensions, combo/ticker/confluence/duration/weights),
+  weekly config, AB testing
 
 Expertise incarnée :
 - 10+ ans ML : multi-factor model optimization
@@ -38,6 +41,7 @@ MIN_HISTORY_TRADES = 30
 MIN_SAMPLES_COMBO = 5       # Per team combination
 MIN_SAMPLES_TICKER = 5      # Per ticker
 MIN_SAMPLES_CONFLUENCE = 8  # Per confluence level
+MIN_SAMPLES_DURATION = 5    # Per duration category
 MIN_SAMPLES_WEIGHTS = 15    # For weight optimization
 
 # Adjustment bounds
@@ -59,6 +63,14 @@ DEFAULT_WEIGHTS = {
 # Weight adjustment bounds (relative to defaults)
 WEIGHT_ADJ_MIN = 0.5   # Minimum 50% of default weight
 WEIGHT_ADJ_MAX = 2.0   # Maximum 200% of default weight
+
+# Target win rate for Team 4
+TARGET_WIN_RATE = 80.0
+
+# AB testing: ranking formula weights (same as Team 3)
+AB_WEIGHT_WR = 0.30
+AB_WEIGHT_PNL = 0.40
+AB_WEIGHT_SHARPE = 0.30
 
 
 def _clamp(value: float, lo: float = ADJ_MIN, hi: float = ADJ_MAX) -> float:
@@ -84,10 +96,7 @@ def _compute_decay_weight(entry: dict, now: datetime) -> float:
 
 
 def _is_significant(pnls: list[float], min_effect_size: float = 0.1) -> bool:
-    """Pseudo t-test for significance on small samples.
-
-    Returns True if the mean PnL is significantly different from zero.
-    """
+    """Pseudo t-test for significance on small samples."""
     n = len(pnls)
     if n < 2:
         return False
@@ -108,11 +117,7 @@ def _compute_adj(pnl_weight_pairs: list[tuple[float, float]],
                  sensitivity: float = 0.15,
                  pnl_cap: float = 0.3,
                  lo: float = ADJ_MIN, hi: float = ADJ_MAX) -> float | None:
-    """Compute adjustment from weighted (pnl, weight) pairs.
-
-    Uses decay weights and checks significance.
-    Returns None if not significant.
-    """
+    """Compute adjustment from weighted (pnl, weight) pairs."""
     if not pnl_weight_pairs:
         return None
     total_w = sum(w for _, w in pnl_weight_pairs)
@@ -133,14 +138,27 @@ def _compute_adj(pnl_weight_pairs: list[tuple[float, float]],
     return round(_clamp(adj, lo, hi), 3)
 
 
+def _compute_sharpe(pnls: list[float]) -> float | None:
+    """Compute annualized Sharpe ratio."""
+    if len(pnls) < 3:
+        return None
+    mean = sum(pnls) / len(pnls)
+    variance = sum((p - mean) ** 2 for p in pnls) / (len(pnls) - 1)
+    if variance == 0:
+        return None
+    std = math.sqrt(variance)
+    return round(mean / std * math.sqrt(250), 2)
+
+
 def compute_meta_learning(entries: list[dict]) -> dict:
     """Compute learning adjustments from completed meta/ensemble trades.
 
-    4 dimensions:
+    5 dimensions:
     1. Per-team-combination: which combos work best
     2. Per-ticker: which assets benefit from multi-signal
     3. Per-confluence-level: 2/3 vs 3/3 reliability
-    4. Weight optimization: adjust source weights
+    4. Per-duration-category: intraday vs overnight vs multi_day
+    5. Weight optimization: adjust source weights
 
     Args:
         entries: List of journal 4 entries (completed meta trades)
@@ -149,6 +167,7 @@ def compute_meta_learning(entries: list[dict]) -> dict:
         - combo_adj: {combo_key: multiplier}
         - ticker_adj: {ticker: multiplier}
         - confluence_adj: {level: multiplier}
+        - duration_adj: {category: multiplier}
         - weight_optimization: {news: adj, trend: adj, tech: adj}
         - anomalies: [str]
         - stats: {global metrics}
@@ -157,6 +176,7 @@ def compute_meta_learning(entries: list[dict]) -> dict:
         "combo_adj": {},
         "ticker_adj": {},
         "confluence_adj": {},
+        "duration_adj": {},
         "weight_optimization": {},
         "anomalies": [],
         "stats": {},
@@ -196,6 +216,8 @@ def compute_meta_learning(entries: list[dict]) -> dict:
     mfe_values = [e.get("mfe_pct") for e in valid if e.get("mfe_pct") is not None]
     avg_mae = sum(mae_values) / len(mae_values) if mae_values else 0
     avg_mfe = sum(mfe_values) / len(mfe_values) if mfe_values else 0
+    all_pnls = [e.get("pnl_pct", 0) for e in valid]
+    sharpe = _compute_sharpe(all_pnls)
 
     result["stats"] = {
         "total_trades": len(valid),
@@ -207,6 +229,9 @@ def compute_meta_learning(entries: list[dict]) -> dict:
         "avg_mfe_pct": round(avg_mfe, 2),
         "wins": len(wins),
         "losses": len(losses),
+        "sharpe": sharpe,
+        "target_wr": TARGET_WIN_RATE,
+        "wr_gap": round(TARGET_WIN_RATE - win_rate, 1),
     }
 
     # ── 1. Per-team-combination adjustments ──
@@ -253,8 +278,23 @@ def compute_meta_learning(entries: list[dict]) -> dict:
             if adj is not None:
                 result["confluence_adj"][level] = adj
 
-    # ── 4. Weight optimization ──
-    # Analyze which source type correlates most with winning trades
+    # ── 4. Per-duration-category adjustments ──
+    duration_groups: dict[str, list[tuple[float, float]]] = {}
+    for e, w in zip(valid, weights):
+        dur = e.get("duration_category", "unknown")
+        pnl = e.get("pnl_pct", 0)
+        duration_groups.setdefault(dur, []).append((pnl, w))
+
+    for dur, pairs in duration_groups.items():
+        if len(pairs) >= MIN_SAMPLES_DURATION:
+            adj = _compute_adj(
+                pairs, sensitivity=0.12, pnl_cap=0.25,
+                lo=ADJ_MIN_NARROW, hi=ADJ_MAX_NARROW
+            )
+            if adj is not None:
+                result["duration_adj"][dur] = adj
+
+    # ── 5. Weight optimization ──
     if len(valid) >= MIN_SAMPLES_WEIGHTS:
         source_performance: dict[str, list[float]] = {
             "news": [], "trend": [], "tech": [],
@@ -271,12 +311,10 @@ def compute_meta_learning(entries: list[dict]) -> dict:
         for source_key, pnls in source_performance.items():
             if len(pnls) < 5:
                 continue
-            avg = sum(pnls) / len(pnls)
             wr = sum(1 for p in pnls if p > 0) / len(pnls)
 
             # Compute relative performance vs global
-            rel_wr = wr - (win_rate / 100)  # difference from global WR
-            # Map to weight multiplier: +10pp WR → 1.3x weight, -10pp → 0.7x
+            rel_wr = wr - (win_rate / 100)
             raw_mult = 1.0 + rel_wr * 3.0
             clamped = max(WEIGHT_ADJ_MIN, min(WEIGHT_ADJ_MAX, raw_mult))
 
@@ -292,7 +330,7 @@ def compute_meta_learning(entries: list[dict]) -> dict:
                     k: round(v / total_w, 3) for k, v in weight_adj.items()
                 }
 
-    # ── 5. Anomaly detection ──
+    # ── 6. Anomaly detection ──
     anomalies = result["anomalies"]
 
     # Low win rate overall
@@ -342,6 +380,13 @@ def compute_meta_learning(entries: list[dict]) -> dict:
                     f"WEAK_COMBO: {combo} WR={wr*100:.0f}% on {len(pairs)} trades"
                 )
 
+    # Far from target WR
+    if win_rate < TARGET_WIN_RATE - 20 and len(valid) >= MIN_HISTORY_TRADES:
+        anomalies.append(
+            f"BELOW_TARGET: WR={win_rate:.0f}% vs target {TARGET_WIN_RATE:.0f}% "
+            f"(gap={TARGET_WIN_RATE - win_rate:.0f}pp)"
+        )
+
     return result
 
 
@@ -350,11 +395,12 @@ class AgentLearning4(BaseAgent):
 
     Learns from completed meta trades to optimize team combination weights,
     per-ticker performance, confluence reliability, and source weight allocation.
+    Generates weekly config (Sunday) with validated strategy for next week.
     """
 
     name = "learning_4"
     description = "Learning & optimisation — meta/ensemble trading"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()
@@ -363,6 +409,9 @@ class AgentLearning4(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        # Weekly config
+        self._weekly_config: dict | None = None
+        self._config_history: list[dict] = []
 
     def run(self, **kwargs) -> dict:
         """Recalculate meta learning dimensions and publish adjustments.
@@ -388,7 +437,7 @@ class AgentLearning4(BaseAgent):
 
             # Step 2: Compute adjustments
             learning_data = self.execute(
-                "Computing meta learning (4 dimensions)",
+                "Computing meta learning (5 dimensions)",
                 compute_meta_learning,
                 entries,
             )
@@ -401,13 +450,15 @@ class AgentLearning4(BaseAgent):
             combo_adj = learning_data.get("combo_adj", {})
             ticker_adj = learning_data.get("ticker_adj", {})
             confluence_adj = learning_data.get("confluence_adj", {})
+            duration_adj = learning_data.get("duration_adj", {})
             weight_opt = learning_data.get("weight_optimization", {})
             anomalies = learning_data.get("anomalies", [])
             stats = learning_data.get("stats", {})
 
             self._last_adjustment_count = (
                 len(combo_adj) + len(ticker_adj)
-                + len(confluence_adj) + (1 if weight_opt else 0)
+                + len(confluence_adj) + len(duration_adj)
+                + (1 if weight_opt else 0)
             )
             self._last_anomalies = anomalies
 
@@ -415,6 +466,7 @@ class AgentLearning4(BaseAgent):
                 len(combo_adj) > 0,
                 len(ticker_adj) > 0,
                 len(confluence_adj) > 0,
+                len(duration_adj) > 0,
                 len(weight_opt) > 0,
             ])
 
@@ -428,6 +480,7 @@ class AgentLearning4(BaseAgent):
                 "combo_adj": combo_adj,
                 "ticker_adj": ticker_adj,
                 "confluence_adj": confluence_adj,
+                "duration_adj": duration_adj,
                 "weight_optimization": weight_opt,
                 "stats": stats,
                 "dimensions_active": dims_updated,
@@ -450,6 +503,9 @@ class AgentLearning4(BaseAgent):
             for k, v in confluence_adj.items():
                 if abs(v - 1.0) > 0.05:
                     significant[f"confl:{k}"] = v
+            for k, v in duration_adj.items():
+                if abs(v - 1.0) > 0.05:
+                    significant[f"duration:{k}"] = v
             if significant:
                 self.log_decision("Significant meta adjustments", significant)
 
@@ -480,6 +536,163 @@ class AgentLearning4(BaseAgent):
             self._set_status(AgentStatus.ERROR, str(exc))
             raise
 
+    def generate_weekly_config(self) -> dict:
+        """P1: Generate weekly config for Team 4 (called Sunday evening).
+
+        Freezes the current learning state into a config that Scoring 4
+        and Trader 4 will use for the entire next week.
+
+        Includes AB testing comparison with previous config.
+        """
+        self._set_status(AgentStatus.WORKING, "Generating weekly config")
+
+        try:
+            # Get current learning adjustments
+            adjustments = self.get_adjustments()
+            stats = adjustments.get("stats", {})
+            anomalies = adjustments.get("anomalies", [])
+
+            # Get weekly summary from Journal 4
+            weekly_summary = {}
+            try:
+                from .agent_journal_4 import AgentJournal4
+                # Use a fresh instance to call the method
+                from . import registry
+                j4 = registry.get_agent("journal_4")
+                if j4:
+                    weekly_summary = j4.compute_weekly_summary()
+            except Exception as exc:
+                logger.warning("Could not get weekly summary: %s", exc)
+
+            # Determine validated combos (win_rate > 50% with enough data)
+            combo_adj = adjustments.get("combo_adj", {})
+            validated_combos = []
+            disabled_combos = []
+            for combo, adj in combo_adj.items():
+                if adj >= 1.0:
+                    validated_combos.append(combo)
+                elif adj < 0.8:
+                    disabled_combos.append(combo)
+
+            # Get optimized weights
+            weight_opt = adjustments.get("weight_optimization", {})
+            weights = weight_opt if weight_opt else dict(DEFAULT_WEIGHTS)
+
+            # AB testing comparison with previous config
+            ab_result = None
+            if self._weekly_config:
+                ab_result = self._compare_configs(
+                    self._weekly_config, adjustments, weekly_summary
+                )
+
+            # Build config
+            config = {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "valid_from": datetime.now(timezone.utc).isoformat(),
+                "weights": weights,
+                "validated_combos": validated_combos,
+                "disabled_combos": disabled_combos,
+                "combo_adj": combo_adj,
+                "ticker_adj": adjustments.get("ticker_adj", {}),
+                "confluence_adj": adjustments.get("confluence_adj", {}),
+                "duration_adj": adjustments.get("duration_adj", {}),
+                "stats": stats,
+                "weekly_summary": weekly_summary,
+                "anomalies": anomalies,
+                "ab_test": ab_result,
+                "config_version": len(self._config_history) + 1,
+            }
+
+            # Archive previous config
+            if self._weekly_config:
+                self._config_history.append(self._weekly_config)
+                # Keep last 10 configs
+                self._config_history = self._config_history[-10:]
+
+            self._weekly_config = config
+
+            self.log_decision("Weekly config generated", {
+                "config_version": config["config_version"],
+                "validated_combos": validated_combos,
+                "disabled_combos": disabled_combos,
+                "weights": weights,
+                "win_rate": stats.get("win_rate", 0),
+                "target_wr": TARGET_WIN_RATE,
+                "ab_test": ab_result,
+            })
+
+            self.publish("learning_4_weekly_config", {
+                "config_version": config["config_version"],
+                "validated_combos": validated_combos,
+                "weights": weights,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+            self._set_status(AgentStatus.IDLE,
+                             f"Config v{config['config_version']} generated")
+
+            return config
+
+        except Exception as exc:
+            self.log("Weekly config generation failed",
+                     {"error": str(exc)}, level="ERROR")
+            self._set_status(AgentStatus.ERROR, str(exc))
+            raise
+
+    def _compare_configs(self, previous_config: dict,
+                         current_adjustments: dict,
+                         weekly_summary: dict) -> dict:
+        """P2: AB test — compare previous config vs current learning state."""
+        prev_stats = previous_config.get("stats", {})
+        curr_stats = current_adjustments.get("stats", {})
+        prev_weekly = previous_config.get("weekly_summary", {})
+
+        prev_wr = prev_weekly.get("win_rate", prev_stats.get("win_rate", 0))
+        curr_wr = weekly_summary.get("win_rate", curr_stats.get("win_rate", 0))
+
+        prev_pnl = prev_weekly.get("avg_pnl", prev_stats.get("avg_pnl_pct", 0))
+        curr_pnl = weekly_summary.get("avg_pnl", curr_stats.get("avg_pnl_pct", 0))
+
+        prev_sharpe = prev_weekly.get("sharpe") or prev_stats.get("sharpe")
+        curr_sharpe = weekly_summary.get("sharpe") or curr_stats.get("sharpe")
+
+        # Compute AB scores
+        def _score(wr, pnl, sharpe_val):
+            s = 0.0
+            s += (wr or 0) * AB_WEIGHT_WR
+            s += (pnl or 0) * AB_WEIGHT_PNL * 10  # Scale PnL to comparable range
+            s += (sharpe_val or 0) * AB_WEIGHT_SHARPE
+            return round(s, 2)
+
+        prev_score = _score(prev_wr, prev_pnl, prev_sharpe)
+        curr_score = _score(curr_wr, curr_pnl, curr_sharpe)
+
+        return {
+            "previous": {
+                "win_rate": prev_wr,
+                "avg_pnl": prev_pnl,
+                "sharpe": prev_sharpe,
+                "score": prev_score,
+                "config_version": previous_config.get("config_version", 0),
+            },
+            "current": {
+                "win_rate": curr_wr,
+                "avg_pnl": curr_pnl,
+                "sharpe": curr_sharpe,
+                "score": curr_score,
+            },
+            "improvement": round(curr_score - prev_score, 2),
+            "winner": "current" if curr_score >= prev_score else "previous",
+        }
+
+    def get_weekly_config(self) -> dict | None:
+        """Get current weekly config (for Scoring 4 and Trader 4)."""
+        return self._weekly_config
+
+    def get_config_history(self) -> list[dict]:
+        """Get history of weekly configs."""
+        return self._config_history
+
     def get_adjustments(self) -> dict:
         """Get cached meta learning adjustments (used by Trader 4 and Scoring 4).
 
@@ -503,4 +716,7 @@ class AgentLearning4(BaseAgent):
             "anomalies": self._last_anomalies[:5],
             "total_recalculations": self._total_recalculations,
             "cache_valid": self._cache_valid,
+            "has_weekly_config": self._weekly_config is not None,
+            "config_version": (self._weekly_config or {}).get("config_version", 0),
+            "target_win_rate": TARGET_WIN_RATE,
         }

@@ -5,13 +5,15 @@ Responsabilités :
 - Closes expired meta positions (open > max_hold_hours without signal renewal)
 - Records: which teams contributed to each signal, confluence level, per-team accuracy
 - Tracks which team combinations produce best results (1+2, 1+3, 2+3, 1+2+3)
-- MAE/MFE per trade
+- MAE/MFE per trade, Sharpe ratio per combo
+- Weekly summary for Learning 4 validation cycle
 - Publishes "journal_4_complete" on bus → Agent Learning 4 consomme
 
 Différences avec les autres journaux :
 - Journal 1 : ferme les trades PENDING intraday (TP/SL/EXPIRED)
 - Journal 2 : enrichit les positions de tendance (flips, daily bars)
-- Journal 4 : tracks multi-team confluence accuracy, team combination performance
+- Journal 3 : journal technique, A/B testing par stratégie, Sharpe ratio
+- Journal 4 : tracks multi-team confluence accuracy, team combination performance, weekly summary
 
 Expertise incarnée :
 - Multi-factor attribution analysis
@@ -21,6 +23,7 @@ Expertise incarnée :
 
 import json
 import logging
+import math
 import fcntl
 import os
 import time
@@ -216,16 +219,39 @@ def _team_combination_key(teams: list[str]) -> str:
     return "+".join(sorted(teams))
 
 
+def _classify_duration(duration_hours: float) -> str:
+    """L3: Classify trade duration into categories for learning."""
+    if duration_hours <= 8:
+        return "intraday"
+    elif duration_hours <= 24:
+        return "overnight"
+    else:
+        return "multi_day"
+
+
+def _compute_sharpe(pnls: list[float]) -> float | None:
+    """Compute annualized Sharpe ratio from a list of PnL percentages."""
+    if len(pnls) < 3:
+        return None
+    mean = sum(pnls) / len(pnls)
+    variance = sum((p - mean) ** 2 for p in pnls) / (len(pnls) - 1)
+    if variance == 0:
+        return None
+    std = math.sqrt(variance)
+    # Annualize: assume ~250 trading days
+    return round(mean / std * math.sqrt(250), 2)
+
+
 class AgentJournal4(BaseAgent):
     """Agent Journal 4 — Journal dédié au Meta/Ensemble trading (Trader 4).
 
     Enrichit les positions meta avec MAE/MFE, tracks team combination
-    performance, closes expired positions.
+    performance, closes expired positions, provides weekly summary.
     """
 
     name = "journal_4"
     description = "Journal & analyse des positions meta/ensemble"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()
@@ -401,6 +427,8 @@ class AgentJournal4(BaseAgent):
                     "mfe_pct": entry.get("mfe_pct"),
                     "confluence_level": entry.get("confluence_level"),
                     "team_combination": entry.get("team_combination"),
+                    "close_type": entry.get("close_type"),
+                    "duration_category": entry.get("duration_category"),
                 })
 
             self.log("Journal 4 run complete", {
@@ -496,6 +524,7 @@ class AgentJournal4(BaseAgent):
             "bar_count": bar_count,
             "duration_hours": duration_hours,
             "duration_days": round(duration_hours / 24, 1) if duration_hours > 0 else 0.0,
+            "duration_category": _classify_duration(duration_hours),
             "confluence_level": position.get("confluence_level", 0),
             "team_combination": _team_combination_key(teams),
             "teams_contributing": teams,
@@ -503,6 +532,10 @@ class AgentJournal4(BaseAgent):
             "reason": reason,
             "close_type": "EXPIRED",
             "source_details": position.get("source_details", {}),
+            "agent_versions": position.get("agent_versions", {}),
+            "tp_pct": position.get("tp_pct"),
+            "sl_pct": position.get("sl_pct"),
+            "signal_renewal_count": position.get("signal_renewal_count", 0),
         }
 
         # Update position to CLOSED
@@ -526,6 +559,7 @@ class AgentJournal4(BaseAgent):
             "exit_price": current_price,
             "pnl_pct": close_pnl,
             "reason": reason,
+            "close_type": "EXPIRED",
             "entry_time": entry_time,
             "confluence_level": position.get("confluence_level"),
         })
@@ -573,6 +607,7 @@ class AgentJournal4(BaseAgent):
                 logger.warning("MAE/MFE fetch failed for %s: %s", ticker, exc)
 
         teams = _extract_team_contributions(hist_entry.get("source_details", {}))
+        close_type = hist_entry.get("close_type", "SIGNAL")
 
         return {
             "ticker": ticker,
@@ -587,19 +622,25 @@ class AgentJournal4(BaseAgent):
             "bar_count": bar_count,
             "duration_hours": duration_hours,
             "duration_days": round(duration_hours / 24, 1) if duration_hours > 0 else 0.0,
+            "duration_category": _classify_duration(duration_hours),
             "confluence_level": hist_entry.get("confluence_level", 0),
             "team_combination": _team_combination_key(teams),
             "teams_contributing": teams,
             "meta_score": hist_entry.get("meta_score", 0),
             "reason": hist_entry.get("reason", ""),
-            "close_type": "SIGNAL",
+            "close_type": close_type,
             "source_details": hist_entry.get("source_details", {}),
+            "agent_versions": hist_entry.get("agent_versions", {}),
+            "tp_pct": hist_entry.get("tp_pct"),
+            "sl_pct": hist_entry.get("sl_pct"),
+            "signal_renewal_count": hist_entry.get("signal_renewal_count", 0),
         }
 
     def _compute_team_combination_stats(self, entries: list[dict]) -> dict:
         """Compute performance stats by team combination.
 
         Tracks which team combos (news+trend, news+tech, etc.) produce best results.
+        L2: Includes Sharpe ratio per combination.
         """
         combo_stats: dict[str, dict] = {}
 
@@ -615,15 +656,23 @@ class AgentJournal4(BaseAgent):
                     "total_pnl": 0.0,
                     "avg_confluence": 0.0,
                     "confluence_sum": 0,
+                    "pnls": [],
+                    "close_types": Counter(),
+                    "duration_categories": Counter(),
                 }
 
             stats = combo_stats[combo]
             stats["count"] += 1
             pnl = entry.get("pnl_pct", 0)
             stats["total_pnl"] += pnl
+            stats["pnls"].append(pnl)
             if pnl > 0:
                 stats["wins"] += 1
             stats["confluence_sum"] += entry.get("confluence_level", 0)
+            close_type = entry.get("close_type", "SIGNAL")
+            stats["close_types"][close_type] += 1
+            dur_cat = entry.get("duration_category", "unknown")
+            stats["duration_categories"][dur_cat] += 1
 
         # Finalize
         for combo, stats in combo_stats.items():
@@ -632,12 +681,113 @@ class AgentJournal4(BaseAgent):
                 stats["win_rate"] = round(stats["wins"] / n * 100, 1)
                 stats["avg_pnl"] = round(stats["total_pnl"] / n, 2)
                 stats["avg_confluence"] = round(stats["confluence_sum"] / n, 1)
+                # L2: Sharpe ratio
+                stats["sharpe"] = _compute_sharpe(stats["pnls"])
             else:
                 stats["win_rate"] = 0.0
                 stats["avg_pnl"] = 0.0
+                stats["sharpe"] = None
+            # Clean up internal fields
             del stats["confluence_sum"]
+            stats["close_types"] = dict(stats["close_types"])
+            stats["duration_categories"] = dict(stats["duration_categories"])
+            del stats["pnls"]
 
         return combo_stats
+
+    def compute_weekly_summary(self) -> dict:
+        """L1: Compute weekly summary for Learning 4 validation cycle.
+
+        Returns performance metrics for the past 7 days, segmented by
+        team combination, confluence level, and duration category.
+        """
+        entries = _load_journal_entries()
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=7)).isoformat()
+
+        weekly = [
+            e for e in entries
+            if (e.get("exit_time", "") or e.get("entry_time", "")) > cutoff
+        ]
+
+        if not weekly:
+            return {
+                "entries_count": 0,
+                "win_rate": 0.0,
+                "total_pnl": 0.0,
+                "avg_pnl": 0.0,
+                "sharpe": None,
+                "by_combo": {},
+                "by_confluence": {},
+                "by_duration": {},
+                "by_close_type": {},
+            }
+
+        pnls = [e.get("pnl_pct", 0) for e in weekly]
+        wins = sum(1 for p in pnls if p > 0)
+        total_pnl = sum(pnls)
+
+        # By combo
+        by_combo = {}
+        for e in weekly:
+            combo = e.get("team_combination", "unknown")
+            by_combo.setdefault(combo, {"count": 0, "wins": 0, "pnls": []})
+            by_combo[combo]["count"] += 1
+            p = e.get("pnl_pct", 0)
+            by_combo[combo]["pnls"].append(p)
+            if p > 0:
+                by_combo[combo]["wins"] += 1
+        for combo, stats in by_combo.items():
+            n = stats["count"]
+            stats["win_rate"] = round(stats["wins"] / n * 100, 1) if n else 0
+            stats["avg_pnl"] = round(sum(stats["pnls"]) / n, 2) if n else 0
+            stats["sharpe"] = _compute_sharpe(stats["pnls"])
+            del stats["pnls"]
+
+        # By confluence level
+        by_confluence = {}
+        for e in weekly:
+            level = str(e.get("confluence_level", 0))
+            by_confluence.setdefault(level, {"count": 0, "wins": 0, "total_pnl": 0})
+            by_confluence[level]["count"] += 1
+            p = e.get("pnl_pct", 0)
+            by_confluence[level]["total_pnl"] += p
+            if p > 0:
+                by_confluence[level]["wins"] += 1
+        for level, stats in by_confluence.items():
+            n = stats["count"]
+            stats["win_rate"] = round(stats["wins"] / n * 100, 1) if n else 0
+            stats["avg_pnl"] = round(stats["total_pnl"] / n, 2) if n else 0
+
+        # By duration category
+        by_duration = {}
+        for e in weekly:
+            dur = e.get("duration_category", "unknown")
+            by_duration.setdefault(dur, {"count": 0, "wins": 0, "total_pnl": 0})
+            by_duration[dur]["count"] += 1
+            p = e.get("pnl_pct", 0)
+            by_duration[dur]["total_pnl"] += p
+            if p > 0:
+                by_duration[dur]["wins"] += 1
+        for dur, stats in by_duration.items():
+            n = stats["count"]
+            stats["win_rate"] = round(stats["wins"] / n * 100, 1) if n else 0
+            stats["avg_pnl"] = round(stats["total_pnl"] / n, 2) if n else 0
+
+        # By close type
+        by_close_type = Counter(e.get("close_type", "SIGNAL") for e in weekly)
+
+        return {
+            "entries_count": len(weekly),
+            "win_rate": round(wins / len(weekly) * 100, 1),
+            "total_pnl": round(total_pnl, 2),
+            "avg_pnl": round(total_pnl / len(weekly), 2),
+            "sharpe": _compute_sharpe(pnls),
+            "by_combo": by_combo,
+            "by_confluence": by_confluence,
+            "by_duration": by_duration,
+            "by_close_type": dict(by_close_type),
+        }
 
     def get_entries(self) -> list[dict]:
         """Get all journal entries (for API/frontend)."""

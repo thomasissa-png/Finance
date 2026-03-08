@@ -8,6 +8,7 @@ Responsabilités :
 - Confluence detection: when multiple teams agree on direction → signal boost
 - Publishes "meta_scored" on bus → Trader 4 consomme
 - Only activates when upstream teams have enough data (graceful degradation)
+- Consumes weekly_config from Learning 4 for optimized weights
 
 Différences avec les autres scorers :
 - Scoring 1 : évalue l'edge intraday (transmission_delay, market_awareness)
@@ -23,18 +24,17 @@ Expertise incarnée :
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 
 from .base import BaseAgent, AgentStatus
 
 logger = logging.getLogger(__name__)
 
-# ── Configurable source weights ───────────────────────────────────
-# These determine how much each team's signal contributes to the meta-score.
-# Sum does NOT need to equal 1.0 — they are relative weights.
-NEWS_WEIGHT = 0.35       # Team 1: News edge scoring
-TREND_WEIGHT = 0.25      # Team 2: Trend accumulation
-TECH_WEIGHT = 0.40       # Team 3: Technical indicators
+# ── Default source weights ────────────────────────────────────────
+# Overridden by Learning 4 weekly_config when available.
+DEFAULT_NEWS_WEIGHT = 0.35       # Team 1: News edge scoring
+DEFAULT_TREND_WEIGHT = 0.25      # Team 2: Trend accumulation
+DEFAULT_TECH_WEIGHT = 0.40       # Team 3: Technical indicators
 
 # Minimum data thresholds — scoring 4 only activates when upstream
 # teams have produced enough data to be meaningful
@@ -44,6 +44,9 @@ MAX_CONFLUENCE_BOOST = 1.5   # 3/3 teams agree → 50% boost
 
 # Minimum meta-score to include in output
 MIN_META_SCORE = 5.0
+
+# Activation date — Team 4 only starts trading after this date
+ACTIVATION_DATE = date(2026, 3, 16)  # Monday 2026-03-16
 
 
 def _normalize_direction(direction: str) -> str:
@@ -79,9 +82,8 @@ def _compute_confluence(directions: list[str]) -> tuple[str, int, float]:
         consensus = "SHORT"
         agree_count = short_count
     else:
-        # Tie — no clear confluence
-        consensus = active[0]  # Take first signal
-        agree_count = 1
+        # T2 fix: Tie → NEUTRAL (was arbitrarily taking active[0])
+        return "NEUTRAL", 0, 1.0
 
     total_sources = len(active)
     if total_sources >= 3 and agree_count >= 3:
@@ -108,17 +110,18 @@ def compute_meta_scores(
                           "trend_scored" (list of dicts)
         tech_data: Scoring 3 output — dict with technical signals
             Expected keys: "signals" (dict[ticker, {score, direction}])
-        weights: Optional override for source weights
+        weights: Optional override for source weights (from Learning 4)
 
     Returns dict with:
         - meta_scored: list[dict] — all meta-scored items per ticker
         - by_ticker: dict[ticker, dict] — meta-score details per ticker
         - confluence_summary: dict — overall confluence statistics
         - stats: {total_tickers, avg_meta_score, max_confluence_level, sources_active}
+        - weights_used: {news, trend, tech} — actual weights used
     """
-    w_news = (weights or {}).get("news", NEWS_WEIGHT)
-    w_trend = (weights or {}).get("trend", TREND_WEIGHT)
-    w_tech = (weights or {}).get("tech", TECH_WEIGHT)
+    w_news = (weights or {}).get("news", DEFAULT_NEWS_WEIGHT)
+    w_trend = (weights or {}).get("trend", DEFAULT_TREND_WEIGHT)
+    w_tech = (weights or {}).get("tech", DEFAULT_TECH_WEIGHT)
 
     result = {
         "meta_scored": [],
@@ -136,6 +139,11 @@ def compute_meta_scores(
             "max_confluence_level": 0,
             "sources_active": 0,
         },
+        "weights_used": {
+            "news": round(w_news, 3),
+            "trend": round(w_trend, 3),
+            "tech": round(w_tech, 3),
+        },
     }
 
     # ── Collect per-ticker signals from each team ──
@@ -145,25 +153,37 @@ def compute_meta_scores(
     sources_active = 0
 
     # Team 1: News edge signals
+    # Scoring 1 returns {"scored": [ScoredNews...], "market_context": ...}
+    # ScoredNews are Pydantic objects — use getattr() not .get()
     news_items = []
     if news_data:
-        news_items = news_data.get("scored_news", [])
-        if not news_items and isinstance(news_data, list):
+        if isinstance(news_data, dict):
+            news_items = news_data.get("scored", []) or news_data.get("scored_news", [])
+        elif isinstance(news_data, list):
             news_items = news_data
 
     if len(news_items) >= MIN_DATA_THRESHOLD:
         sources_active += 1
         for item in news_items:
-            # Support both ScoredNews-like dicts and flat dicts
-            tickers = item.get("impacted_tickers", [])
+            # Support both ScoredNews Pydantic objects and plain dicts
+            if hasattr(item, "impacted_tickers"):
+                tickers = item.impacted_tickers
+                direction_raw = item.direction
+                direction = _normalize_direction(
+                    direction_raw.value if hasattr(direction_raw, "value") else str(direction_raw)
+                )
+                score = item.total_score if hasattr(item, "total_score") else 0
+                category = item.news_category if hasattr(item, "news_category") else "other"
+                reliability = item.signal_reliability if hasattr(item, "signal_reliability") else 0
+            else:
+                tickers = item.get("impacted_tickers", [])
+                direction = _normalize_direction(str(item.get("direction", "NEUTRAL")))
+                score = item.get("total_score", 0) or item.get("score", 0) or 0
+                category = item.get("news_category", "other")
+                reliability = item.get("signal_reliability", 0)
+
             if isinstance(tickers, str):
                 tickers = [tickers]
-            direction = _normalize_direction(
-                item.get("direction", "NEUTRAL")
-                if isinstance(item.get("direction"), str)
-                else getattr(item.get("direction", "NEUTRAL"), "value", "NEUTRAL")
-            )
-            score = item.get("total_score", 0) or item.get("score", 0) or 0
 
             for ticker in tickers:
                 ticker_signals.setdefault(ticker, {})
@@ -175,8 +195,8 @@ def compute_meta_scores(
                         "direction": direction,
                         "source": "news",
                         "details": {
-                            "category": item.get("news_category", ""),
-                            "reliability": item.get("signal_reliability", 0),
+                            "category": category,
+                            "reliability": reliability,
                         },
                     }
 
@@ -329,11 +349,12 @@ class AgentScoring4(BaseAgent):
 
     Aggregates independent scoring perspectives into unified meta-scores
     with confluence detection. Does NOT call Claude — pure aggregation.
+    Consumes weekly_config from Learning 4 for optimized weights.
     """
 
     name = "scoring_4"
     description = "Meta-scoring — combines news, trend, and technical signals"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()
@@ -343,9 +364,14 @@ class AgentScoring4(BaseAgent):
         self._total_computations: int = 0
         self._last_sources_active: int = 0
         self._last_result: dict | None = None
+        self._last_weights_used: dict = {
+            "news": DEFAULT_NEWS_WEIGHT,
+            "trend": DEFAULT_TREND_WEIGHT,
+            "tech": DEFAULT_TECH_WEIGHT,
+        }
 
     def run(self, news_data=None, trend_data=None, tech_data=None,
-            weights=None, **kwargs) -> dict:
+            weights=None, weekly_config=None, **kwargs) -> dict:
         """Combine upstream signals into meta-scores.
 
         Args:
@@ -353,11 +379,43 @@ class AgentScoring4(BaseAgent):
             trend_data: Scoring 2 output (trend accumulation dict)
             tech_data: Scoring 3 output (technical signals dict)
             weights: Optional weight overrides {news, trend, tech}
+            weekly_config: Optional weekly config from Learning 4
 
         Returns dict with meta-scored results.
         """
+        # P8: Check activation date
+        if date.today() < ACTIVATION_DATE:
+            self.log("Team 4 not yet activated", {
+                "activation_date": ACTIVATION_DATE.isoformat(),
+                "today": date.today().isoformat(),
+            })
+            self._set_status(AgentStatus.IDLE,
+                             f"Activation {ACTIVATION_DATE.isoformat()}")
+            return {
+                "meta_scored": [], "by_ticker": {},
+                "confluence_summary": {
+                    "level_3_count": 0, "level_2_count": 0,
+                    "level_1_count": 0, "level_0_count": 0,
+                },
+                "stats": {
+                    "total_tickers": 0, "avg_meta_score": 0.0,
+                    "max_meta_score": 0.0, "max_confluence_level": 0,
+                    "sources_active": 0,
+                },
+                "weights_used": self._last_weights_used,
+                "reason": "not_yet_activated",
+            }
+
+        # T1 fix: Consume optimized weights from Learning 4 weekly_config
+        effective_weights = weights
+        if not effective_weights and weekly_config:
+            wc_weights = weekly_config.get("weights")
+            if wc_weights and isinstance(wc_weights, dict):
+                effective_weights = wc_weights
+                self.log("Using Learning 4 optimized weights", wc_weights)
+
         source_counts = {
-            "news": len(news_data) if isinstance(news_data, list) else len((news_data or {}).get("scored_news", [])),
+            "news": len(news_data) if isinstance(news_data, list) else len((news_data or {}).get("scored", (news_data or {}).get("scored_news", []))),
             "trend": len((trend_data or {}).get("trend_scored", [])),
             "tech": len((tech_data or {}).get("signals", {})),
         }
@@ -374,7 +432,7 @@ class AgentScoring4(BaseAgent):
             meta_data = self.execute(
                 "Computing meta-scores (3 sources)",
                 compute_meta_scores,
-                news_data, trend_data, tech_data, weights,
+                news_data, trend_data, tech_data, effective_weights,
             )
 
             self._last_result = meta_data
@@ -383,6 +441,7 @@ class AgentScoring4(BaseAgent):
             self._last_avg_score = meta_data["stats"]["avg_meta_score"]
             self._last_max_confluence = meta_data["stats"]["max_confluence_level"]
             self._last_sources_active = meta_data["stats"]["sources_active"]
+            self._last_weights_used = meta_data.get("weights_used", self._last_weights_used)
 
             # Step 2: Log results
             stats = meta_data["stats"]
@@ -396,6 +455,7 @@ class AgentScoring4(BaseAgent):
                 "sources_active": stats["sources_active"],
                 "confluence_3": confluence.get("level_3_count", 0),
                 "confluence_2": confluence.get("level_2_count", 0),
+                "weights_used": meta_data.get("weights_used", {}),
             })
 
             # Log high-confluence signals
@@ -450,4 +510,5 @@ class AgentScoring4(BaseAgent):
             "last_max_confluence": self._last_max_confluence,
             "last_sources_active": self._last_sources_active,
             "total_computations": self._total_computations,
+            "weights_used": self._last_weights_used,
         }

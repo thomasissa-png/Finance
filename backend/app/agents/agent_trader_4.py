@@ -3,20 +3,23 @@
 Stratégie :
 - Consumes meta-scored signals from Scoring 4 (confluence of news, trend, tech)
 - Confluence trades: when news + technical + trend agree → high conviction
-- Arbitrage: when teams disagree → identifies mispricings
 - Position sizing based on confluence level (3/3 = full, 2/3 = half)
-- Holding period: adaptive (hours to days based on signal type)
+- Holding period: 0-3 days (72h max)
+- TP/SL with trailing stop for risk management
+- Correlation check to avoid conflicting positions
 
 Architecture :
 - Consumes meta-scores from Agent Scoring 4
 - Manages persistent positions (PG + JSON fallback)
 - Tracks per-team accuracy to learn which combinations work best
 - Requires minimum history from teams 1-3 before activating
+- Weekly config from Learning 4 (weights, validated combos, etc.)
 
 Différences avec les autres traders :
 - Trader 1 : day trading intraday, news-only, TP/SL
 - Trader 2 : trend following, commodity-only, flip on reversal
-- Trader 4 : multi-signal ensemble, any asset, confluence-driven
+- Trader 3 : technical indicators, multi-strategy, A/B testing
+- Trader 4 : multi-signal ensemble, any asset, confluence-driven, 0-3j holding
 
 Expertise incarnée :
 - 15+ ans combining fundamental + technical analysis
@@ -30,7 +33,7 @@ import os
 import time
 import fcntl
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
@@ -56,15 +59,43 @@ SIZING_BY_CONFLUENCE = {
 # Maximum concurrent positions
 MAX_POSITIONS = 6
 
-# Minimum history trades from upstream teams before activating
-MIN_HISTORY_TRADES = 10
-
 # Timeout constants
 GLOBAL_TIMEOUT_S = 120
 PER_FETCH_TIMEOUT_S = 15
 
 # History pruning — keep 1 year
 HISTORY_MAX_AGE_DAYS = 365
+
+# P7 fix: Max hold hours aligned at 72h (0-3 days as per spec)
+MAX_HOLD_HOURS = 72
+
+# P3 fix: TP/SL configuration
+# TP/SL are percentages relative to entry price
+TP_PCT_BY_CONFLUENCE = {
+    3: 3.0,    # 3% target for full confluence
+    2: 2.0,    # 2% target for partial confluence
+}
+SL_PCT = 1.5       # 1.5% stop-loss (applies to all)
+TRAILING_ACTIVATION_PCT = 1.0   # Activate trailing after 1% profit
+TRAILING_DISTANCE_PCT = 0.7     # Trail 0.7% behind peak
+
+# Activation date — Team 4 only starts trading after this date
+ACTIVATION_DATE = date(2026, 3, 16)  # Monday 2026-03-16
+
+# P5 fix: Correlation groups (shared with Team 1 & 3)
+META_CORRELATION_GROUPS = {
+    "energy": ["TTE.PA", "CL=F", "BZ=F", "NG=F"],
+    "gold_safe": ["GC=F", "SI=F", "USDCHF=X"],
+    "risk_on_eu": ["^FCHI", "^GDAXI", "^FTSE"],
+    "risk_on_us": ["^GSPC", "^DJI", "^IXIC", "^RUT"],
+    "jpy_carry": ["USDJPY=X", "EURJPY=X", "^N225"],
+    "luxury": ["MC.PA", "RMS.PA", "OR.PA"],
+    "agri": ["ZC=F", "ZW=F", "ZS=F"],
+    "tropical_soft": ["KC=F", "SB=F", "CC=F", "OJ=F"],
+    "livestock": ["LE=F", "HE=F"],
+    "pgm": ["PL=F", "PA=F"],
+    "china_proxy": ["USDCNH=X", "HG=F", "AUDUSD=X"],
+}
 
 # Persistence file (JSON fallback)
 POSITIONS_FILE = Path(os.getenv("DATA_DIR", "data")) / "meta_positions.json"
@@ -177,16 +208,66 @@ def _fetch_current_price(ticker: str) -> float | None:
     return None
 
 
+def _check_correlation_conflict(ticker: str, direction: str,
+                                 positions: dict) -> bool:
+    """P5: Check if opening this position conflicts with existing correlated positions.
+
+    Returns True if conflict detected (should NOT open).
+    """
+    for group_name, group_tickers in META_CORRELATION_GROUPS.items():
+        if ticker not in group_tickers:
+            continue
+        # Check if any open position in the same group has opposite direction
+        for other_ticker in group_tickers:
+            if other_ticker == ticker:
+                continue
+            other_pos = positions.get(other_ticker)
+            if not other_pos or other_pos.get("status") != "OPEN":
+                continue
+            other_dir = other_pos.get("direction")
+            if other_dir and other_dir != direction:
+                logger.info("Correlation conflict: %s %s vs %s %s (group=%s)",
+                            ticker, direction, other_ticker, other_dir, group_name)
+                return True
+    return False
+
+
+def _get_agent_versions() -> dict:
+    """P6: Get current versions of all Team 4 agents."""
+    versions = {}
+    try:
+        from .agent_scoring_4 import AgentScoring4
+        versions["scoring_4"] = AgentScoring4.version
+    except Exception:
+        pass
+    try:
+        versions["trader_4"] = AgentTrader4.version
+    except Exception:
+        pass
+    try:
+        from .agent_journal_4 import AgentJournal4
+        versions["journal_4"] = AgentJournal4.version
+    except Exception:
+        pass
+    try:
+        from .agent_learning_4 import AgentLearning4
+        versions["learning_4"] = AgentLearning4.version
+    except Exception:
+        pass
+    return versions
+
+
 class AgentTrader4(BaseAgent):
     """Agent Trader 4 — Meta/Ensemble trader using confluence signals.
 
     Combines signals from Teams 1, 2, 3 via Scoring 4 meta-scores.
     Opens positions when multiple independent signals agree (confluence).
+    TP/SL with trailing stop, correlation check, 0-3 day holding.
     """
 
     name = "trader_4"
     description = "Meta trading — confluence-driven ensemble positions"
-    version = "1.0"
+    version = "2.0"
 
     def __init__(self):
         super().__init__()
@@ -197,15 +278,24 @@ class AgentTrader4(BaseAgent):
         self._last_action_direction: str | None = None
         self._upstream_ready: bool = False
 
-    def run(self, meta_scored=None, learning_data=None, **kwargs) -> dict:
+    def run(self, meta_scored=None, learning_data=None,
+            weekly_config=None, **kwargs) -> dict:
         """Evaluate meta-scored signals and manage ensemble positions.
 
         Args:
             meta_scored: dict from Agent Scoring 4 (meta-scores with confluence)
             learning_data: dict from Agent Learning 4 (optional adjustments)
+            weekly_config: dict from Learning 4 weekly config (optional)
 
         Returns: dict with positions state and any changes made.
         """
+        # P8: Check activation date
+        if date.today() < ACTIVATION_DATE:
+            self._set_status(AgentStatus.IDLE,
+                             f"Activation {ACTIVATION_DATE.isoformat()}")
+            return {"positions": {}, "changes": [],
+                    "reason": "not_yet_activated"}
+
         meta_items = (meta_scored or {}).get("meta_scored", [])
         self._set_status(
             AgentStatus.WORKING,
@@ -230,7 +320,21 @@ class AgentTrader4(BaseAgent):
 
             changes = []
 
-            # Step 1: Evaluate new signals for potential entries
+            # Step 1: Check existing positions for TP/SL/trailing
+            for ticker in list(positions.keys()):
+                elapsed = time.monotonic() - start
+                if elapsed > GLOBAL_TIMEOUT_S:
+                    break
+                pos = positions[ticker]
+                if pos.get("status") != "OPEN":
+                    continue
+                tp_sl_change = self._check_tp_sl_trailing(ticker, pos, positions)
+                if tp_sl_change:
+                    changes.append(tp_sl_change)
+                    positions[ticker] = tp_sl_change["new_position"]
+                    self._position_closes_total += 1
+
+            # Step 2: Evaluate new signals for potential entries
             for item in meta_items:
                 elapsed = time.monotonic() - start
                 if elapsed > GLOBAL_TIMEOUT_S:
@@ -245,7 +349,7 @@ class AgentTrader4(BaseAgent):
                 change = self.execute(
                     f"Evaluating {ticker}",
                     self._evaluate_signal,
-                    ticker, item, positions, learning,
+                    ticker, item, positions, learning, weekly_config,
                 )
 
                 if change:
@@ -258,7 +362,7 @@ class AgentTrader4(BaseAgent):
                     self._last_action_ticker = ticker
                     self._last_action_direction = change.get("direction")
 
-            # Step 2: Check existing positions for exits (confluence lost)
+            # Step 3: Check existing positions for exits (confluence lost / expiry)
             for ticker in list(positions.keys()):
                 elapsed = time.monotonic() - start
                 if elapsed > GLOBAL_TIMEOUT_S:
@@ -281,11 +385,12 @@ class AgentTrader4(BaseAgent):
                         age_hours = (
                             datetime.now(timezone.utc) - entry_dt
                         ).total_seconds() / 3600
-                        # Close positions older than 48h without signal renewal
-                        if age_hours > 48:
+                        # P7: Close positions older than MAX_HOLD_HOURS
+                        if age_hours > MAX_HOLD_HOURS:
                             close_change = self._close_position(
                                 ticker, positions[ticker],
-                                "Signal expired — no confluence renewal for 48h"
+                                f"Signal expired — no renewal for {age_hours:.0f}h > {MAX_HOLD_HOURS}h max",
+                                "EXPIRED"
                             )
                             if close_change:
                                 changes.append(close_change)
@@ -294,7 +399,7 @@ class AgentTrader4(BaseAgent):
                     except (ValueError, AttributeError, TypeError):
                         pass
 
-            # Step 3: Update prices for open positions
+            # Step 4: Update prices for open positions
             self._update_prices(positions)
 
             # Save
@@ -324,6 +429,7 @@ class AgentTrader4(BaseAgent):
                     "meta_score": c.get("meta_score"),
                     "reason": c.get("reason", ""),
                     "pnl_pct": c.get("close_pnl"),
+                    "close_type": c.get("close_type"),
                 })
 
             if not changes:
@@ -362,8 +468,79 @@ class AgentTrader4(BaseAgent):
         self._upstream_ready = sources_active >= 2
         return self._upstream_ready
 
+    def _check_tp_sl_trailing(self, ticker: str, pos: dict,
+                               positions: dict) -> dict | None:
+        """P3: Check TP, trailing stop, then SL for an open position.
+
+        Order: TP → Trailing → SL (trailing evaluated BEFORE SL).
+        """
+        entry_price = pos.get("entry_price")
+        current_price = pos.get("current_price")
+        direction = pos.get("direction", "NEUTRAL")
+        confluence_level = pos.get("confluence_level", 2)
+
+        if not entry_price or not current_price or direction == "NEUTRAL":
+            return None
+
+        # Calculate current P&L
+        if direction == "LONG":
+            pnl_pct = (current_price - entry_price) / entry_price * 100
+        else:
+            pnl_pct = (entry_price - current_price) / entry_price * 100
+
+        tp_pct = TP_PCT_BY_CONFLUENCE.get(confluence_level, 2.0)
+        stop_price = pos.get("stop_price")
+        peak_price = pos.get("peak_price", current_price)
+
+        # 1. TP check
+        if pnl_pct >= tp_pct:
+            return self._close_position(
+                ticker, pos,
+                f"TP_HIT: +{pnl_pct:.2f}% >= {tp_pct}% target",
+                "TP_HIT"
+            )
+
+        # 2. Trailing stop update
+        if pnl_pct >= TRAILING_ACTIVATION_PCT:
+            if direction == "LONG":
+                new_peak = max(peak_price or current_price, current_price)
+                new_stop = new_peak * (1 - TRAILING_DISTANCE_PCT / 100)
+            else:
+                new_peak = min(peak_price or current_price, current_price)
+                new_stop = new_peak * (1 + TRAILING_DISTANCE_PCT / 100)
+
+            pos["peak_price"] = new_peak
+            if stop_price is None or (direction == "LONG" and new_stop > stop_price) \
+                    or (direction == "SHORT" and new_stop < stop_price):
+                pos["stop_price"] = round(new_stop, 4)
+
+        # 3. SL check (uses trailed stop if available)
+        effective_stop = stop_price or pos.get("stop_price")
+        if effective_stop is None:
+            # Default SL
+            if direction == "LONG":
+                effective_stop = entry_price * (1 - SL_PCT / 100)
+            else:
+                effective_stop = entry_price * (1 + SL_PCT / 100)
+
+        if direction == "LONG" and current_price <= effective_stop:
+            return self._close_position(
+                ticker, pos,
+                f"SL_HIT: {pnl_pct:.2f}% (stop={effective_stop:.4f})",
+                "SL_HIT"
+            )
+        elif direction == "SHORT" and current_price >= effective_stop:
+            return self._close_position(
+                ticker, pos,
+                f"SL_HIT: {pnl_pct:.2f}% (stop={effective_stop:.4f})",
+                "SL_HIT"
+            )
+
+        return None
+
     def _evaluate_signal(self, ticker: str, signal: dict,
-                         positions: dict, learning: dict) -> dict | None:
+                         positions: dict, learning: dict,
+                         weekly_config: dict | None = None) -> dict | None:
         """Evaluate a meta-scored signal for position action.
 
         Returns change dict or None if no action.
@@ -382,34 +559,47 @@ class AgentTrader4(BaseAgent):
             return None
 
         # Apply learning adjustments if available
-        weight_adj = learning.get("weight_optimization", {})
         confluence_adj = learning.get("confluence_adj", {})
         ticker_adj = learning.get("ticker_adj", {})
+        combo_adj = learning.get("combo_adj", {})
 
         adjusted_score = meta_score * ticker_adj.get(ticker, 1.0)
         level_adj = confluence_adj.get(str(confluence_level), 1.0)
         adjusted_score *= level_adj
+
+        # Apply combo adjustment
+        source_details = signal.get("source_details", {})
+        teams = sorted(source_details.keys())
+        combo_key = "+".join(teams)
+        c_adj = combo_adj.get(combo_key, 1.0)
+        adjusted_score *= c_adj
 
         # Check existing position
         existing = positions.get(ticker)
         if existing and existing.get("status") == "OPEN":
             existing_dir = existing.get("direction")
             if existing_dir == direction:
-                # Same direction — reinforce confidence
+                # Same direction — reinforce confidence, extend hold
                 existing["confidence"] = min(100,
                     existing.get("confidence", 50) + int(adjusted_score / 10))
                 existing["last_evaluation"] = datetime.now(timezone.utc).isoformat()
                 existing["last_meta_score"] = round(adjusted_score, 1)
+                existing["signal_renewal_count"] = existing.get("signal_renewal_count", 0) + 1
                 return None
             else:
-                # Opposite direction — close existing and potentially open new
+                # Opposite direction — close existing
                 close_change = self._close_position(
                     ticker, existing,
-                    f"Confluence reversal: {existing_dir} → {direction}"
+                    f"Confluence reversal: {existing_dir} → {direction}",
+                    "REVERSAL"
                 )
                 if close_change:
                     return close_change
                 return None
+
+        # P5: Check correlation conflict
+        if _check_correlation_conflict(ticker, direction, positions):
+            return None
 
         # Check max positions
         open_count = sum(
@@ -426,6 +616,15 @@ class AgentTrader4(BaseAgent):
             return None
 
         now_iso = datetime.now(timezone.utc).isoformat()
+
+        # P3: Calculate TP/SL prices
+        tp_pct = TP_PCT_BY_CONFLUENCE.get(confluence_level, 2.0)
+        if direction == "LONG":
+            tp_price = price * (1 + tp_pct / 100) if price else None
+            sl_price = price * (1 - SL_PCT / 100) if price else None
+        else:
+            tp_price = price * (1 - tp_pct / 100) if price else None
+            sl_price = price * (1 + SL_PCT / 100) if price else None
 
         new_position = {
             "ticker": ticker,
@@ -448,6 +647,16 @@ class AgentTrader4(BaseAgent):
             "history": positions.get(ticker, {}).get("history", []),
             "total_trades": positions.get(ticker, {}).get("total_trades", 0) + 1,
             "realized_pnl_pct": positions.get(ticker, {}).get("realized_pnl_pct", 0.0),
+            # P3: TP/SL
+            "tp_price": round(tp_price, 4) if tp_price else None,
+            "sl_price": round(sl_price, 4) if sl_price else None,
+            "stop_price": round(sl_price, 4) if sl_price else None,
+            "peak_price": price,
+            "tp_pct": tp_pct,
+            "sl_pct": SL_PCT,
+            # P6: Agent versions
+            "agent_versions": _get_agent_versions(),
+            "signal_renewal_count": 0,
         }
 
         return {
@@ -458,11 +667,12 @@ class AgentTrader4(BaseAgent):
             "meta_score": round(adjusted_score, 1),
             "position_size": position_size,
             "reason": new_position["reasoning"],
+            "close_type": None,
             "new_position": new_position,
         }
 
     def _close_position(self, ticker: str, position: dict,
-                        reason: str) -> dict | None:
+                        reason: str, close_type: str = "SIGNAL") -> dict | None:
         """Close an existing position and record P&L."""
         entry_price = position.get("entry_price")
         current_price = position.get("current_price") or _fetch_current_price(ticker)
@@ -488,7 +698,12 @@ class AgentTrader4(BaseAgent):
             "meta_score": position.get("last_meta_score"),
             "source_details": position.get("source_details", {}),
             "reason": reason,
+            "close_type": close_type,
             "entry_time": position.get("entry_time"),
+            "agent_versions": position.get("agent_versions", {}),
+            "tp_pct": position.get("tp_pct"),
+            "sl_pct": position.get("sl_pct"),
+            "signal_renewal_count": position.get("signal_renewal_count", 0),
         }
 
         history = position.get("history", [])
@@ -518,6 +733,10 @@ class AgentTrader4(BaseAgent):
             "realized_pnl_pct": round(
                 position.get("realized_pnl_pct", 0.0) + close_pnl, 2
             ),
+            "tp_price": None,
+            "sl_price": None,
+            "stop_price": None,
+            "peak_price": None,
         }
 
         return {
@@ -528,6 +747,7 @@ class AgentTrader4(BaseAgent):
             "confluence_level": position.get("confluence_level"),
             "meta_score": position.get("last_meta_score"),
             "reason": reason,
+            "close_type": close_type,
             "new_position": new_position,
         }
 
@@ -615,6 +835,8 @@ class AgentTrader4(BaseAgent):
             "upstream_ready": self._upstream_ready,
             "last_action_ticker": self._last_action_ticker,
             "last_action_direction": self._last_action_direction,
+            "activation_date": ACTIVATION_DATE.isoformat(),
+            "is_active": date.today() >= ACTIVATION_DATE,
         }
 
     def reset_daily_counters(self):

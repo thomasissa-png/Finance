@@ -46,19 +46,19 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | Scoring | 7.4 | 9 fixes, token tracking |
 | Scoring 2 | 7.3 | 13 fixes, category mults |
 | Scoring 3 | 2.0 | Multi-timeframe, SMA 200, stochastic strategy, regime filter, configurable params |
-| Scoring 4 | 1.0 | Initial — meta-scorer combining Teams 1/2/3 signals |
+| Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
 | Trader 1 | 6.5 | Timeout audit, trailing stop |
 | Trader 2 | 7.2 | 16 fixes, flip history |
 | Trader 3 | 2.0 | Correlation check, trailing per-strategy, regime filter, agent_versions, weekly config |
-| Trader 4 | 1.0 | Initial — confluence-driven ensemble trading |
+| Trader 4 | 2.0 | TP/SL/trailing, correlation groups, agent_versions, 72h hold, activation date |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
 | Journal 2 | 7.1 | 17 fixes, daily bars |
 | Journal 3 | 2.0 | PG fix, weekly summary, R/R réalisé, Sharpe ratio, dedup fix |
-| Journal 4 | 1.0 | Initial — meta positions journal |
+| Journal 4 | 2.0 | Weekly summary, Sharpe per combo, duration category, close_type tracking |
 | Learning 1 | 5.2 | 6 dims, granular commodities |
 | Learning 2 | 7.1 | 4 dims trend, churning |
 | Learning 3 | 2.0 | Weekly config generation, Sharpe ranking, AB-test as dimension, param tracking |
-| Learning 4 | 1.0 | Initial — weight optimization, combination analysis |
+| Learning 4 | 2.0 | 5 dims, weekly config, AB testing, target 80% WR, duration learning |
 | Infrastructure | 7.5 | Health check, VACUUM 9 tables |
 | Performance | 8.1 | PG persistence, version-aware, Teams 3/4 KPIs |
 | Auditor | 8.1 | Dict dispatch, 22 profiles (Teams 3/4 added) |
@@ -122,12 +122,14 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 - **API** : `POST /api/learning3/weekly-config` (génère), `GET /api/learning3/weekly-config` (consulte), `GET /api/journal3/weekly-summary`
 
 ### Équipe 4 — Meta/Ensemble Trading
-- **Scoring 4** : combine les signaux des Teams 1 (news), 2 (trend), 3 (technique) en meta-scores unifiés par ticker. Poids configurables (news=0.35, trend=0.25, tech=0.40). Confluence detection : 2/3 teams agree → 1.2x boost, 3/3 → 1.5x boost. Seuil minimum 3 items/source. NE rappelle PAS Claude — pure agrégation.
-- **Trader 4** : positions confluence-driven (min confluence level 2), sizing adapté (3/3=100%, 2/3=50%), max 6 positions, expiry 48h sans renouvellement signal. Consomme Learning 4 (combination_adj, ticker_adj, confluence_adj, weight optimization).
-- **Journal 4** : journalise les positions fermées, tracking par combinaison de sources (ex: "news+trend+tech"), analyse par niveau de confluence. Dedup par (ticker, entry_time). Persistence PG (meta_journal_entries) + JSON.
-- **Learning 4** : optimisation des poids (news/trend/tech), ajustements par combinaison d'équipes, par ticker, par niveau de confluence. Bounds [0.6, 1.4], decay 45j. Anomaly detection.
+- **Mission** : combiner les learnings des 3 équipes pour trouver les meilleures combinaisons de signaux. Objectif 80% WR. Trades 0-3 jours. AB testing hebdomadaire. Activation lundi 2026-03-16.
+- **Scoring 4** : combine les signaux des Teams 1 (news), 2 (trend), 3 (technique) en meta-scores unifiés par ticker. Poids par défaut (news=0.35, trend=0.25, tech=0.40), optimisés par Learning 4 weekly_config. Confluence detection : 2/3 teams agree → 1.2x boost, 3/3 → 1.5x boost. Tie LONG/SHORT → NEUTRAL (v2.0). NE rappelle PAS Claude — pure agrégation.
+- **Trader 4** : positions confluence-driven (min confluence level 2), sizing adapté (3/3=100%, 2/3=50%), max 6 positions, holding max 72h (0-3 jours). TP/SL par confluence (3/3=3%, 2/3=2%, SL=1.5%), trailing stop (activation 1%, distance 0.7%). Correlation groups (11 groupes). Agent versions sur chaque position. Consomme Learning 4 (combo_adj, ticker_adj, confluence_adj, duration_adj, weight optimization, weekly_config).
+- **Journal 4** : journalise les positions fermées, tracking par combinaison de sources (ex: "news+trend+tech"), analyse par niveau de confluence. Sharpe ratio par combo (v2.0). Duration category (intraday/overnight/multi_day). Close type tracking (TP_HIT/SL_HIT/EXPIRED/REVERSAL/SIGNAL). Weekly summary pour validation Learning 4. Dedup par (ticker, entry_time). Persistence PG (meta_journal_entries) + JSON.
+- **Learning 4** : 5 dimensions (combo, ticker, confluence, duration, weight optimization). Weekly config generation dimanche 20h45 CET. AB testing vs config précédente. Target WR 80%. Config history (10 dernières). Anomaly detection (BELOW_TARGET, WEAK_COMBO, STREAK, HIGH_MAE, CONFLUENCE_PARADOX). Bounds [0.6, 1.4], decay 45j.
 - **Boucle** : Journal 4 → Learning 4 → poids optimisés → Scoring 4/Trader 4 utilisent au prochain scan
-- **Dépendance upstream** : démarre uniquement quand suffisamment de données des Teams 1/2/3 sont disponibles (graceful degradation)
+- **Boucle hebdomadaire** : Dimanche 20h45 → Learning 4 generate_weekly_config() → freeze weights + validated combos → Scoring 4 + Trader 4 utilisent la semaine suivante
+- **Dépendance upstream** : démarre uniquement le 2026-03-16. Nécessite ≥2 sources actives (sur 3: news, trend, tech). Graceful degradation.
 - **Persistence** : Tables PG `meta_positions` + `meta_journal_entries` + fallback JSON
 
 ### Infrastructure agents
@@ -153,9 +155,18 @@ Journal 1 (ferme trades PENDING)
   → Journal 3 (journalise positions techniques fermées)
   → Learning 3 (recalcule 3 dimensions technique)
   → Journal 4 (journalise positions meta fermées)
-  → Learning 4 (optimise poids, recalcule ajustements)
+  → Learning 4 (optimise poids, recalcule 5 dimensions)
   → Cache scan vidé
   → Infrastructure maintenance 23h (VACUUM, pruning, stats)
+```
+
+### Pipeline hebdomadaire (dimanche CET)
+```
+20:00 — Weekly source review (Agent News)
+20:30 — Team 3 weekly config (Learning 3 → Scoring 3/Trader 3)
+20:45 — Team 4 weekly config (Learning 4 → Scoring 4/Trader 4)
+21:00 — Infrastructure report
+21:30 — Performance weekly trends
 ```
 
 ### Pipeline scan (4x/jour)
@@ -163,7 +174,7 @@ Journal 1 (ferme trades PENDING)
 News → Scoring → [Learning 1 cache] → Trader 1
               → Scoring 2 → [Learning 2 cache] → Trader 2
      Scoring 3 (technique, indépendant des news) → [Learning 3 cache] → Trader 3
-     Scoring 4 (combine Scoring 1+2+3) → [Learning 4 cache] → Trader 4
+     Scoring 4 (combine Scoring 1+2+3) → [Learning 4 weekly_config] → Trader 4
 ```
 
 ### Ajouter une nouvelle équipe (Équipe N)

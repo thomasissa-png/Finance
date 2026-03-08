@@ -275,17 +275,25 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
             scoring3_result = (scoring3_output.get_last_result()
                                if scoring3_output else None)
 
-            meta_scoring = agent_scoring4.run(
-                scoring1_output=scoring_result,
-                scoring2_output=scoring2_result,
-                scoring3_output=scoring3_output.get_last_result() if scoring3_output else None,
-                scan_type=scan_type,
-            )
+            # Get weekly config and learning adjustments from Learning 4
+            weekly_config_4 = (agent_learning4.get_weekly_config()
+                               if agent_learning4 else None)
             learning4_data = (agent_learning4.get_adjustments()
                               if agent_learning4 else {})
+
+            # Pass weekly_config to Scoring 4 (weight optimization)
+            meta_scoring = agent_scoring4.run(
+                news_data=scoring_result,
+                trend_data=scoring2_result,
+                tech_data=scoring3_result,
+                scan_type=scan_type,
+                weekly_config=weekly_config_4,
+            )
+            # Pass weekly_config and learning to Trader 4
             agent_trader4.run(meta_scoring=meta_scoring,
                               scan_type=scan_type,
-                              learning_data=learning4_data)
+                              learning_data=learning4_data,
+                              weekly_config=weekly_config_4)
     except Exception as exc:
         logger.warning("Équipe 4 meta evaluation failed: %s", exc)
 
@@ -436,6 +444,18 @@ def get_learning_4_adjustments() -> dict:
     """Get cached meta learning adjustments."""
     _ensure_agents()
     return _agents["learning_4"].get_adjustments()
+
+
+def generate_weekly_config_4() -> dict:
+    """Generate weekly strategy config for Team 4 (called Sunday)."""
+    _ensure_agents()
+    return _agents["learning_4"].generate_weekly_config()
+
+
+def get_weekly_config_4() -> dict | None:
+    """Get current weekly config for Team 4."""
+    _ensure_agents()
+    return _agents["learning_4"].get_weekly_config()
 
 
 # ── Infrastructure helpers ─────────────────────────────────────────────

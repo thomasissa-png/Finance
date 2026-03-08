@@ -1083,6 +1083,27 @@ def score_technical_setups(tickers: dict | None = None,
     if strategy_counts:
         result["stats"]["top_strategy"] = max(strategy_counts, key=strategy_counts.get)
 
+    # Build "signals" aggregation for Scoring 4 consumption.
+    # Scoring 4 expects: {ticker: {score, direction, details}}
+    # We pick the best setup per ticker (highest score).
+    signals: dict[str, dict] = {}
+    for setup in all_setups:
+        t = setup["ticker"]
+        if t not in signals or setup["score"] > signals[t]["score"]:
+            signals[t] = {
+                "score": setup["score"],
+                "direction": setup["direction"],
+                "details": {
+                    "strategy": setup["strategy"],
+                    "confidence": setup.get("confidence", 0),
+                    "regime": setup.get("regime", ""),
+                    "volume_ratio": setup.get("volume_ratio", 1.0),
+                    "target_pct": setup.get("target_pct", 0),
+                    "stop_pct": setup.get("stop_pct", 0),
+                },
+            }
+    result["signals"] = signals
+
     return result
 
 
