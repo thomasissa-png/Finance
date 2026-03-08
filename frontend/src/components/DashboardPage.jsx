@@ -41,10 +41,10 @@ function getNextScanInfo() {
 }
 
 const SCAN_DEFS = [
-  { key: "europe", label: "SCAN EUROPE — 07:50 CET", btn: "Europe (07:50)", cls: "europe" },
-  { key: "mid_session", label: "SCAN MID-SESSION — 11:15 CET", btn: "Mid-Session (11:15)", cls: "europe" },
-  { key: "us", label: "SCAN PRE-US — 14:50 CET", btn: "Pre-US (14:50)", cls: "us" },
-  { key: "us_session", label: "SCAN US SESSION — 17:00 CET", btn: "US Session (17:00)", cls: "us" },
+  { key: "europe", label: "Scan Europe 07:50 CET", btn: "Europe (07:50)", cls: "europe" },
+  { key: "mid_session", label: "Scan Mid-Session 11:15 CET", btn: "Mid-Session (11:15)", cls: "europe" },
+  { key: "us", label: "Scan Pre-US 14:50 CET", btn: "Pre-US (14:50)", cls: "us" },
+  { key: "us_session", label: "Scan US Session 17:00 CET", btn: "US Session (17:00)", cls: "us" },
 ];
 
 const PROGRESS_STEPS = ["Collecte RSS", "Analyse Claude", "Selection trade"];
@@ -120,17 +120,17 @@ export default function DashboardPage({ isActive, agents }) {
           const recs = result.recommendations || [];
           const count = recs.length || (result.recommendation ? 1 : 0);
           addToast(count > 1
-            ? `${count} trades detectes : ${recs.map((r) => tickerName(r.ticker)).join(", ")}`
-            : `Trade detecte : ${tickerName(result.recommendation?.ticker)}`, "success");
+            ? `${count} trades détectés : ${recs.map((r) => tickerName(r.ticker)).join(", ")}`
+            : `Trade détecté : ${tickerName(result.recommendation?.ticker)}`, "success");
         } else {
-          addToast(`Scan ${scanType} termine — pas de trade`, "warning");
+          addToast(`Scan ${scanType} terminé, pas de trade`, "warning");
         }
       } else {
         const err = await res.json().catch(() => ({}));
         addToast(err.detail || `Erreur scan ${scanType}`, "error");
       }
     } catch (err) {
-      addToast("Erreur reseau", "error");
+      addToast("Erreur réseau", "error");
     } finally {
       clearTimeout(t1); clearTimeout(t2);
       setLoading((prev) => ({ ...prev, [scanType]: false }));
@@ -142,7 +142,7 @@ export default function DashboardPage({ isActive, agents }) {
     <div>
       <div className="page-header">
         <div className="page-title">Dashboard</div>
-        <div className="page-subtitle">Vue consolidee des trades — toutes equipes</div>
+        <div className="page-subtitle">Vue consolidée des trades, toutes équipes</div>
       </div>
 
       {/* KPI Cards */}
@@ -177,9 +177,9 @@ export default function DashboardPage({ isActive, agents }) {
           <strong>API Claude hors service</strong>
           <span>
             {apiErrorScan.api_error === "AuthenticationError"
-              ? "Cle API invalide ou credits epuises."
+              ? "Clé API invalide ou crédits épuisés."
               : apiErrorScan.api_error === "RateLimitError"
-                ? "Limite de requetes atteinte."
+                ? "Limite de requêtes atteinte."
                 : `Erreur : ${apiErrorScan.reason_no_trade || apiErrorScan.api_error}`}
           </span>
         </div>
@@ -223,7 +223,7 @@ export default function DashboardPage({ isActive, agents }) {
           if (scan?.has_trade && recs.length > 1) {
             return (
               <div key={s.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div className="scan-multi-label">{s.label} — {recs.length} trades</div>
+                <div className="scan-multi-label">{s.label} ({recs.length} trades)</div>
                 {recs.map((rec, i) => (
                   <TradeCard key={`${s.key}-${rec.ticker}-${i}`} scan={{ ...scan, recommendation: rec }} label={`${s.label} #${i + 1}`} />
                 ))}
@@ -237,7 +237,7 @@ export default function DashboardPage({ isActive, agents }) {
       {/* Last update */}
       <div className="last-update-bar">
         {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
-        <button className="refresh-btn" onClick={fetchScans} title="Rafraichir">↻</button>
+        <button className="refresh-btn" onClick={fetchScans} title="Rafraîchir">↻</button>
       </div>
 
       {/* Toasts */}

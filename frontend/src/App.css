@@ -1115,3 +1115,227 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
   margin: 20px 0;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   HAMBURGER MENU (Mobile)
+   ══════════════════════════════════════════════════════════════ */
+
+.hamburger-btn {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+}
+.hamburger-line {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: var(--text-secondary);
+  border-radius: 1px;
+  transition: all 0.2s ease;
+}
+.hamburger-line.open:nth-child(1) { transform: rotate(45deg) translate(3px, 5px); }
+.hamburger-line.open:nth-child(2) { opacity: 0; }
+.hamburger-line.open:nth-child(3) { transform: rotate(-45deg) translate(3px, -5px); }
+
+.mobile-menu-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 90;
+}
+
+@media (max-width: 768px) {
+  .hamburger-btn { display: flex; }
+  .mobile-menu-overlay { display: block; }
+
+  .nav-links {
+    display: none;
+    position: fixed;
+    top: 50px;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    flex-direction: column;
+    padding: 8px;
+    z-index: 95;
+    box-shadow: var(--shadow-md);
+  }
+  .nav-links-open { display: flex; }
+  .nav-link { padding: 10px 16px; text-align: left; font-size: 14px; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   TEAMS OVERVIEW PAGE
+   ══════════════════════════════════════════════════════════════ */
+
+.teams-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.team-overview-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.team-overview-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-card-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.team-overview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.team-overview-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.team-overview-subtitle {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.team-overview-status {
+  display: flex;
+  gap: 4px;
+}
+
+.team-overview-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 16px;
+}
+
+.team-overview-kpis {
+  display: flex;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.team-overview-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+
+.team-overview-kpi-value {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.team-overview-kpi-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+.team-overview-agents {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.team-overview-agent-dot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.team-overview-agent-name {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.team-overview-action {
+  font-size: 12px;
+  color: var(--accent);
+  text-align: right;
+}
+
+@media (max-width: 768px) {
+  .teams-grid { grid-template-columns: 1fr; }
+  .team-overview-kpis { gap: 8px; }
+  .team-overview-kpi-value { font-size: 15px; }
+}
+
+@media (max-width: 480px) {
+  .team-overview-card { padding: 14px; }
+  .team-overview-name { font-size: 14px; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MOBILE IMPROVEMENTS — Additional responsive fixes
+   ══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  /* Trade mobile cards with expandable details */
+  .trade-mobile-card {
+    cursor: pointer;
+    transition: background var(--transition);
+  }
+  .trade-mobile-card:active { background: var(--bg-card-hover); }
+
+  /* Compact table on mobile */
+  .compact-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .compact-table table { min-width: 500px; }
+
+  /* Team tab scroll fix */
+  .team-tabs { -ms-overflow-style: none; scrollbar-width: none; }
+  .team-tabs::-webkit-scrollbar { display: none; }
+
+  /* KPI cards tighter on mobile */
+  .kpi-row { gap: 6px; }
+  .kpi-card { padding: 10px 8px; }
+  .kpi-value { font-size: 16px; }
+  .kpi-label { font-size: 10px; }
+
+  /* Section cards tighter */
+  .section-card { padding: 12px; margin-bottom: 12px; }
+  .section-card h3 { font-size: 13px; margin-bottom: 10px; }
+
+  /* Learning grid mobile */
+  .learning-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .learning-item { padding: 8px; }
+  .learning-item-ticker { font-size: 10px; }
+  .learning-item-mult { font-size: 12px; }
+
+  /* Audit on mobile */
+  .audit-trigger-grid { gap: 4px; }
+  .audit-trigger-grid .trigger-btn { font-size: 10px; padding: 5px 8px; }
+  .audit-score-circle { width: 40px; height: 40px; font-size: 14px; }
+
+  /* Performance grid */
+  .perf-grid { grid-template-columns: 1fr; gap: 8px; }
+  .perf-card { padding: 10px; }
+  .perf-card-value { font-size: 16px; }
+}

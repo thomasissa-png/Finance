@@ -43,9 +43,9 @@ export default function Trader2Page({ isActive }) {
   return (
     <div className="agent-page">
       <div className="agent-page-header">
-        <h2>{"\ud83d\udcc8"} Agent Trader 2 — Trend Commodities</h2>
+        <h2>Agent Trader 2 Trend Commodities</h2>
         <span className="agent-page-desc">
-          Positions de tendance sur cuivre, cacao, caf&eacute;, bl&eacute; &mdash; change de direction quand les news l'exigent
+          Positions de tendance sur cuivre, cacao, café, blé. Change de direction quand les news l'exigent
         </span>
       </div>
 
@@ -164,7 +164,7 @@ export default function Trader2Page({ isActive }) {
                   </div>
 
                   <div className="trend-detail-section">
-                    <h4>Historique ({pos.total_switches || 0} changements) &mdash; P&L r&eacute;alis&eacute; : {(pos.realized_pnl_pct || 0).toFixed(2)}%</h4>
+                    <h4>Historique ({pos.total_switches || 0} changements), P&L réalisé : {(pos.realized_pnl_pct || 0).toFixed(2)}%</h4>
                     <div className="trend-history-list">
                       {(pos.history || []).slice(0, 10).map((h, i) => (
                         <div key={i} className="trend-history-entry">
@@ -190,7 +190,7 @@ export default function Trader2Page({ isActive }) {
             </div>
           ))}
           {tickers.length === 0 && !loading && (
-            <div className="trend-no-data">Aucune position — l'agent sera initialis&eacute; au prochain scan</div>
+            <div className="trend-no-data">Aucune position, l'agent sera initialisé au prochain scan</div>
           )}
         </div>
       </div>
@@ -216,7 +216,7 @@ export default function Trader2Page({ isActive }) {
                     <div className="agent-log-news">
                       {log.details.key_news.map((n, j) => (
                         <div key={j} className="agent-log-news-item">
-                          {n.direction} {n.category} (score {n.score}) — {n.title}
+                          {n.direction} {n.category} (score {n.score}) {n.title}
                         </div>
                       ))}
                     </div>

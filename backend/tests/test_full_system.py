@@ -1036,8 +1036,8 @@ class TestFrontendIntegrity:
     def test_app_jsx_references_all_pages(self):
         """App.jsx importe et route vers toutes les pages."""
         app_content = Path("/home/user/Finance/frontend/src/App.jsx").read_text()
-        # v8.2: App uses TeamPage for teams + dedicated pages for shared agents
-        for page in ["DashboardPage", "TeamPage", "NewsPage",
+        # v8.3: App uses TeamsOverviewPage + TeamPage for teams + dedicated pages
+        for page in ["DashboardPage", "TeamsOverviewPage", "TeamPage", "NewsPage",
                       "PerformancePage", "AuditorPage", "AdminPage"]:
             assert page in app_content, f"App.jsx missing reference to {page}"
 

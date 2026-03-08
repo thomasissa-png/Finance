@@ -39,7 +39,7 @@ function AdminPage({ isActive }) {
     <div>
       <div className="page-header">
         <h2>Administration</h2>
-        <p className="page-subtitle">Infrastructure, base de donnees, maintenance</p>
+        <p className="page-subtitle">Infrastructure, base de données, maintenance</p>
       </div>
 
       {error && <div className="disconnect-banner">{error}</div>}
@@ -118,7 +118,7 @@ function AdminPage({ isActive }) {
       {/* DB Stats */}
       {dbStats && (
         <div className="section-card">
-          <h3>Base de donnees — Statistiques</h3>
+          <h3>Base de données</h3>
           <div className="compact-table-wrap">
             <table className="compact-table">
               <thead>
@@ -175,7 +175,7 @@ function AdminPage({ isActive }) {
       {/* Maintenance results */}
       {maintenanceResult && (
         <div className="section-card">
-          <h3>Resultat Maintenance</h3>
+          <h3>Résultat Maintenance</h3>
           <div className="compact-table-wrap">
             <table className="compact-table">
               <thead>

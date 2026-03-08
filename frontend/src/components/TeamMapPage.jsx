@@ -5,10 +5,10 @@ import React, { useEffect, useState, useCallback } from "react";
 
 const TEAM_DEFS = [
   { id: "shared", label: "Agents Partagés", desc: "Alimentent toutes les équipes" },
-  { id: "team1", label: "Équipe 1 — Intraday", desc: "Day trading event-driven, 0-1 trade par scan" },
-  { id: "team2", label: "Équipe 2 — Tendance", desc: "Trend following commodities, positions longue durée" },
-  { id: "team3", label: "Équipe 3 — Technique", desc: "Trading sur indicateurs techniques, heures à 3 jours" },
-  { id: "team4", label: "Équipe 4 — Meta", desc: "Ensemble multi-signal, confluence teams 1-3" },
+  { id: "team1", label: "Équipe 1 Intraday", desc: "Day trading event-driven, 0-1 trade par scan" },
+  { id: "team2", label: "Équipe 2 Tendance", desc: "Trend following commodities, positions longue durée" },
+  { id: "team3", label: "Équipe 3 Technique", desc: "Trading sur indicateurs techniques, heures à 3 jours" },
+  { id: "team4", label: "Équipe 4 Meta", desc: "Ensemble multi-signal, confluence teams 1-3" },
   { id: "infra", label: "Infrastructure & Suivi", desc: "Monitoring, audit, performance" },
 ];
 
@@ -416,7 +416,7 @@ export default function TeamMapPage({ isActive, agents, onNavigate }) {
     <div className="agent-page team-map-page">
       <div className="agent-page-header">
         <h2>{"\ud83d\udcda"} Vue d'ensemble de l'équipe</h2>
-        <span>{agents.length} agents &mdash; {TEAM_DEFS.length} groupes</span>
+        <span>{agents.length} agents, {TEAM_DEFS.length} groupes</span>
       </div>
 
       {/* Global KPIs */}

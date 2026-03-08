@@ -4,13 +4,14 @@ import NotificationCenter from "./components/NotificationCenter";
 
 // Lazy-load pages
 const DashboardPage = lazy(() => import("./components/DashboardPage"));
+const TeamsOverviewPage = lazy(() => import("./components/TeamsOverviewPage"));
 const TeamPage = lazy(() => import("./components/TeamPage"));
 const NewsPage = lazy(() => import("./components/NewsPage"));
 const PerformancePage = lazy(() => import("./components/PerformancePage"));
 const AuditorPage = lazy(() => import("./components/AuditorPage"));
 const AdminPage = lazy(() => import("./components/AdminPage"));
 
-const PAGES = ["dashboard", "team1", "team2", "team3", "team4", "news", "performance", "auditor", "admin"];
+const PAGES = ["dashboard", "equipes", "team1", "team2", "team3", "team4", "news", "performance", "auditor", "admin"];
 
 function getPageFromHash() {
   const hash = window.location.hash.replace("#", "");
@@ -36,7 +37,7 @@ class ErrorBoundary extends React.Component {
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
             <button className="trigger-btn" onClick={() => this.setState({ hasError: false, error: null })}>
-              Reessayer
+              Réessayer
             </button>
             <button className="trigger-btn export" onClick={() => window.location.reload()}>
               Recharger
@@ -58,7 +59,7 @@ const LoadingFallback = () => (
 
 function getHeaderStatus() {
   const day = getParisDay();
-  if (day === 0 || day === 6) return { cls: "weekend", text: "Ferme" };
+  if (day === 0 || day === 6) return { cls: "weekend", text: "Fermé" };
   const hour = getParisHour();
   if (hour >= 7 && hour < 20) return { cls: "online", text: "Ouvert" };
   return { cls: "offline", text: "Hors session" };
@@ -66,15 +67,20 @@ function getHeaderStatus() {
 
 const NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard" },
-  { id: "team1", label: "Equipe 1" },
-  { id: "team2", label: "Equipe 2" },
-  { id: "team3", label: "Equipe 3" },
-  { id: "team4", label: "Equipe 4" },
+  { id: "equipes", label: "Équipes", matchIds: ["equipes", "team1", "team2", "team3", "team4"] },
   { id: "news", label: "News" },
   { id: "performance", label: "Performance" },
   { id: "auditor", label: "Audit" },
   { id: "admin", label: "Admin" },
 ];
+
+/* SVG bell icon — matches flat fintech style */
+const BellIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 13.5a2 2 0 0 0 4 0" />
+    <path d="M13 6A5 5 0 0 0 3 6c0 3.5-1.5 5-1.5 5h13S13 9.5 13 6z" />
+  </svg>
+);
 
 export default function App() {
   const [activePage, setActivePage] = useState(getPageFromHash);
@@ -84,6 +90,7 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [lastNotifCheck, setLastNotifCheck] = useState(Date.now());
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Fetch agents status
   const fetchAgents = useCallback(() => {
@@ -146,6 +153,7 @@ export default function App() {
   const navigate = useCallback((pageId) => {
     setActivePage(pageId);
     setShowNotifications(false);
+    setMobileMenuOpen(false);
     window.location.hash = pageId;
   }, []);
 
@@ -180,29 +188,51 @@ export default function App() {
       if (["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) return;
       if (e.key === "Escape") {
         if (showNotifications) setShowNotifications(false);
+        else if (mobileMenuOpen) setMobileMenuOpen(false);
         else navigate("dashboard");
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate, showNotifications]);
+  }, [navigate, showNotifications, mobileMenuOpen]);
+
+  const isTeamPage = ["team1", "team2", "team3", "team4"].includes(activePage);
 
   return (
     <div className="app-layout">
       {/* Top Navbar */}
       <nav className="top-navbar">
         <div className="nav-left">
-          <span className="nav-brand">PLATEFORME TRADING</span>
-          <div className="nav-links">
-            {NAV_ITEMS.map((item) => (
-              <button
-                key={item.id}
-                className={`nav-link ${activePage === item.id ? "active" : ""}`}
-                onClick={() => navigate(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
+          <span className="nav-brand" onClick={() => navigate("dashboard")} style={{ cursor: "pointer" }}>
+            PLATEFORME TRADING
+          </span>
+
+          {/* Hamburger for mobile */}
+          <button
+            className="hamburger-btn"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label="Menu"
+          >
+            <span className={`hamburger-line ${mobileMenuOpen ? "open" : ""}`} />
+            <span className={`hamburger-line ${mobileMenuOpen ? "open" : ""}`} />
+            <span className={`hamburger-line ${mobileMenuOpen ? "open" : ""}`} />
+          </button>
+
+          <div className={`nav-links ${mobileMenuOpen ? "nav-links-open" : ""}`}>
+            {NAV_ITEMS.map((item) => {
+              const isActive = item.matchIds
+                ? item.matchIds.includes(activePage)
+                : activePage === item.id;
+              return (
+                <button
+                  key={item.id}
+                  className={`nav-link ${isActive ? "active" : ""}`}
+                  onClick={() => navigate(item.id)}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
         </div>
         <div className="nav-right">
@@ -216,8 +246,9 @@ export default function App() {
               setShowNotifications(!showNotifications);
               if (!showNotifications) markAllRead();
             }}
+            aria-label="Notifications"
           >
-            {"🔔"}
+            <BellIcon />
             {unreadCount > 0 && (
               <span className="nav-alert-badge">{unreadCount > 9 ? "9+" : unreadCount}</span>
             )}
@@ -225,22 +256,23 @@ export default function App() {
         </div>
       </nav>
 
+      {/* Mobile menu overlay */}
+      {mobileMenuOpen && <div className="mobile-menu-overlay" onClick={() => setMobileMenuOpen(false)} />}
+
       {/* Main content */}
       <div className="app-main">
         {!backendUp && (
           <div className="disconnect-banner">
             <span className="status-dot offline" />
-            Backend deconnecte — tentative de reconnexion...
+            Backend déconnecté, tentative de reconnexion...
           </div>
         )}
 
         <ErrorBoundary>
           <Suspense fallback={<LoadingFallback />}>
             {activePage === "dashboard" && <DashboardPage isActive agents={agents} />}
-            {activePage === "team1" && <TeamPage teamId="1" isActive agents={agents} />}
-            {activePage === "team2" && <TeamPage teamId="2" isActive agents={agents} />}
-            {activePage === "team3" && <TeamPage teamId="3" isActive agents={agents} />}
-            {activePage === "team4" && <TeamPage teamId="4" isActive agents={agents} />}
+            {activePage === "equipes" && <TeamsOverviewPage isActive agents={agents} onNavigate={navigate} />}
+            {isTeamPage && <TeamPage teamId={activePage.replace("team", "")} isActive agents={agents} onNavigateBack={() => navigate("equipes")} />}
             {activePage === "news" && <NewsPage isActive />}
             {activePage === "performance" && <PerformancePage isActive agents={agents} />}
             {activePage === "auditor" && <AuditorPage isActive />}

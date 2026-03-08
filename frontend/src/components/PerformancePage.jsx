@@ -65,7 +65,7 @@ export default function PerformancePage({ isActive, agents }) {
     <div className="agent-page">
       <div className="page-header">
         <div className="page-title">Performance</div>
-        <div className="page-subtitle">KPIs consolides, evolution des equipes, versions des agents</div>
+        <div className="page-subtitle">KPIs consolidés, évolution des équipes, versions des agents</div>
       </div>
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement...</div>}
@@ -112,10 +112,10 @@ export default function PerformancePage({ isActive, agents }) {
 
       {/* Per-team performance */}
       <div className="section-card">
-        <h3>Performance par equipe</h3>
+        <h3>Performance par équipe</h3>
         <div className="perf-grid">
           <div className="perf-card">
-            <div className="perf-card-title">Equipe 1 — Intraday</div>
+            <div className="perf-card-title">Équipe 1 Intraday</div>
             <div className="perf-card-value" style={{ color: (t1.win_rate || 0) >= 50 ? "var(--green)" : "var(--red)" }}>
               {t1.win_rate != null ? `${t1.win_rate.toFixed(1)}% WR` : "N/A"}
             </div>
@@ -124,16 +124,16 @@ export default function PerformancePage({ isActive, agents }) {
             </div>
           </div>
           <div className="perf-card">
-            <div className="perf-card-title">Equipe 2 — Tendance</div>
+            <div className="perf-card-title">Équipe 2 Tendance</div>
             <div className="perf-card-value" style={{ color: (t2.flip_win_rate || 0) >= 50 ? "var(--green)" : "var(--red)" }}>
               {t2.flip_win_rate != null ? `${t2.flip_win_rate.toFixed(1)}% WR` : "N/A"}
             </div>
             <div className="perf-card-sub">
-              P&L realise {t2.realized_pnl != null ? `${t2.realized_pnl > 0 ? "+" : ""}${t2.realized_pnl.toFixed(2)}%` : "N/A"}
+              P&L réalisé {t2.realized_pnl != null ? `${t2.realized_pnl > 0 ? "+" : ""}${t2.realized_pnl.toFixed(2)}%` : "N/A"}
             </div>
           </div>
           <div className="perf-card">
-            <div className="perf-card-title">Equipe 3 — Technique</div>
+            <div className="perf-card-title">Équipe 3 Technique</div>
             <div className="perf-card-value" style={{ color: "var(--text-secondary)" }}>
               {report?.trader_3?.win_rate != null ? `${report.trader_3.win_rate.toFixed(1)}% WR` : "N/A"}
             </div>
@@ -142,7 +142,7 @@ export default function PerformancePage({ isActive, agents }) {
             </div>
           </div>
           <div className="perf-card">
-            <div className="perf-card-title">Equipe 4 — Meta</div>
+            <div className="perf-card-title">Équipe 4 Meta</div>
             <div className="perf-card-value" style={{ color: "var(--text-secondary)" }}>
               {report?.trader_4?.win_rate != null ? `${report.trader_4.win_rate.toFixed(1)}% WR` : "N/A"}
             </div>
@@ -202,7 +202,7 @@ export default function PerformancePage({ isActive, agents }) {
                     <td className="ticker-cell">{av.agent}</td>
                     <td>v{av.version}</td>
                     <td style={{ color: liveAgent?.version ? "var(--green)" : "var(--text-muted)" }}>
-                      {liveAgent?.version ? `v${liveAgent.version}` : "—"}
+                      {liveAgent?.version ? `v${liveAgent.version}` : "-"}
                     </td>
                   </tr>
                 );

@@ -89,7 +89,7 @@ export default function NotificationCenter({ notifications, onClose, onNavigate 
 
         <div className="notif-list">
           {filtered.length === 0 ? (
-            <div className="notif-empty">Aucune alerte recente</div>
+            <div className="notif-empty">Aucune alerte récente</div>
           ) : (
             filtered.map((n, i) => {
               const style = LEVEL_STYLES[n.level] || LEVEL_STYLES.INFO;
