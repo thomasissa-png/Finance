@@ -485,6 +485,19 @@ class AgentTrader2(BaseAgent):
             ticker_mult = ticker_adj.get(ticker, 1.0)
             long_score *= ticker_mult
             short_score *= ticker_mult
+            # T2: Apply newscat_adj even when using Scoring 2 accumulations
+            # Compute weighted newscat multiplier from contributing news
+            newscat_mults = []
+            for sn in news_list:
+                cross_key = f"{sn.news_category}+{ticker}"
+                if cross_key in newscat_ticker_adj:
+                    newscat_mults.append(newscat_ticker_adj[cross_key])
+                elif sn.news_category in newscat_adj:
+                    newscat_mults.append(newscat_adj[sn.news_category])
+            if newscat_mults:
+                avg_newscat = sum(newscat_mults) / len(newscat_mults)
+                long_score *= avg_newscat
+                short_score *= avg_newscat
 
         for sn in news_list:
             # P7: Determine direct impact once, used by both paths
