@@ -459,6 +459,102 @@ class TestAuditProfile:
             assert len(report["findings"]) > 0
 
 
+class TestNewsSourceCoverage:
+    """Trader 2 audits the News agent — ensuring all 4 tickers have adequate coverage."""
+
+    def test_cc_f_in_yfinance_key_tickers(self):
+        """CC=F (cocoa) must be in KEY_TICKERS for yfinance news collection."""
+        from backend.app.news_collector import collect_yfinance_news
+        import inspect
+        source = inspect.getsource(collect_yfinance_news)
+        assert '"CC=F"' in source or "'CC=F'" in source, \
+            "CC=F missing from KEY_TICKERS — cocoa gets no yfinance news"
+
+    def test_all_trader2_tickers_in_yfinance_news(self):
+        """All 4 Trader 2 tickers must be in yfinance KEY_TICKERS."""
+        import inspect
+        from backend.app.news_collector import collect_yfinance_news
+        source = inspect.getsource(collect_yfinance_news)
+        for ticker in TREND_TICKERS:
+            assert f'"{ticker}"' in source or f"'{ticker}'" in source, \
+                f"{ticker} missing from yfinance KEY_TICKERS"
+
+    def test_zw_f_chain_reactions_complete(self):
+        """ZW=F must chain to ZC=F, ZS=F, LE=F, HE=F (rotation + feed cost)."""
+        from backend.app.config import CHAIN_REACTIONS
+        zw_chains = CHAIN_REACTIONS.get("ZW=F", [])
+        chain_tickers = {c["ticker"] for c in zw_chains}
+        assert "ZC=F" in chain_tickers, "ZW=F missing chain to ZC=F (corn rotation)"
+        assert "ZS=F" in chain_tickers, "ZW=F missing chain to ZS=F (soy rotation)"
+        assert "LE=F" in chain_tickers, "ZW=F missing chain to LE=F (feed cost inverse)"
+        assert "HE=F" in chain_tickers, "ZW=F missing chain to HE=F (feed cost inverse)"
+
+    def test_zw_f_feed_cost_chains_are_inverse(self):
+        """Wheat→Livestock chains must be inverse (wheat up = feed cost up = margin pressure)."""
+        from backend.app.config import CHAIN_REACTIONS
+        zw_chains = {c["ticker"]: c["direction"] for c in CHAIN_REACTIONS.get("ZW=F", [])}
+        assert zw_chains.get("LE=F") == "inverse", "ZW=F→LE=F should be inverse (feed cost)"
+        assert zw_chains.get("HE=F") == "inverse", "ZW=F→HE=F should be inverse (feed cost)"
+
+    def test_gnews_drought_query_includes_cc_f(self):
+        """GNews drought query must include CC=F — cocoa is highly drought-sensitive."""
+        from backend.app.data_apis import GNEWS_QUERIES
+        drought_q = [q for q in GNEWS_QUERIES if "drought" in q["q"]]
+        assert drought_q, "No drought query found in GNEWS_QUERIES"
+        all_drought_tickers = set()
+        for q in drought_q:
+            all_drought_tickers.update(q["tickers"])
+        assert "CC=F" in all_drought_tickers, \
+            "CC=F missing from drought GNews queries — Côte d'Ivoire/Ghana drought = cocoa crisis"
+
+    def test_gnews_portuguese_query_includes_cc_f(self):
+        """Portuguese GNews query must include CC=F — Brazil is 5th largest cocoa producer."""
+        from backend.app.data_apis import GNEWS_QUERIES
+        pt_queries = [q for q in GNEWS_QUERIES if q.get("lang") == "pt"]
+        assert pt_queries, "No Portuguese query found in GNEWS_QUERIES"
+        pt_tickers = set()
+        for q in pt_queries:
+            pt_tickers.update(q["tickers"])
+        assert "CC=F" in pt_tickers, \
+            "CC=F missing from Portuguese GNews query — Brazil cocoa = 12-24h edge"
+
+    def test_gnews_portuguese_query_includes_cacau(self):
+        """Portuguese query should contain 'cacau' keyword for Brazilian cocoa news."""
+        from backend.app.data_apis import GNEWS_QUERIES
+        pt_queries = [q for q in GNEWS_QUERIES if q.get("lang") == "pt"]
+        assert any("cacau" in q["q"] for q in pt_queries), \
+            "Portuguese query missing 'cacau' keyword — won't match Brazilian cocoa news"
+
+    def test_all_trader2_tickers_have_chain_reactions(self):
+        """Each Trader 2 ticker must appear in CHAIN_REACTIONS (as source or target)."""
+        from backend.app.config import CHAIN_REACTIONS
+        # Collect all tickers that appear anywhere in chain reactions
+        all_chain_tickers = set(CHAIN_REACTIONS.keys())
+        for targets in CHAIN_REACTIONS.values():
+            for t in targets:
+                all_chain_tickers.add(t["ticker"])
+        for ticker in TREND_TICKERS:
+            assert ticker in all_chain_tickers, \
+                f"{ticker} has no chain reaction coverage — isolated from spillover signals"
+
+    def test_cocoa_gnews_dedicated_query_exists(self):
+        """There must be a dedicated GNews query for cocoa (CC=F)."""
+        from backend.app.data_apis import GNEWS_QUERIES
+        cocoa_dedicated = [q for q in GNEWS_QUERIES
+                           if "CC=F" in q["tickers"] and "cocoa" in q["q"].lower()]
+        assert cocoa_dedicated, "No dedicated cocoa GNews query — CC=F under-covered"
+
+    def test_trader2_relevant_categories_include_weather(self):
+        """Trader 2 MUST accept weather category — critical for commodity trends."""
+        assert "weather" in RELEVANT_CATEGORIES, \
+            "weather not in RELEVANT_CATEGORIES — misses drought/frost/hurricane signals"
+
+    def test_trader2_excludes_zero_edge_categories(self):
+        """Trader 2 must NOT accept earnings or macro — zero edge for commodities."""
+        assert "earnings" not in RELEVANT_CATEGORIES
+        assert "macro" not in RELEVANT_CATEGORIES
+
+
 class TestDatabaseTable:
     def test_trend_positions_ddl_in_init_db(self):
         """The trend_positions table DDL should be in database.py."""

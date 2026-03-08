@@ -620,7 +620,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     # ── Weather: drought (merged with harvest failure — same signal) ──
     {
         "q": "drought crop failure harvest loss shortage",
-        "tickers": ["ZC=F", "ZW=F", "ZS=F"],
+        "tickers": ["ZC=F", "ZW=F", "ZS=F", "CC=F"],
         "category": "weather",
     },
     {
@@ -705,8 +705,8 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     },
     # ── Portuguese queries for Brazil (12-24h earlier than English media) ──
     {
-        "q": "geada cafe seca milho soja safra quebra frio",
-        "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F"],
+        "q": "geada cafe cacau seca milho soja safra quebra frio",
+        "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F", "CC=F"],
         "category": "weather",
         "lang": "pt",
     },

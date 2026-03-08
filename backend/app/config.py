@@ -114,6 +114,9 @@ CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
     ],
     "ZW=F":  [
         {"ticker": "ZC=F", "direction": "same", "reason": "Rotation cultures — prix ble tire mais"},
+        {"ticker": "ZS=F", "direction": "same", "reason": "Rotation cultures — memes terres Midwest/Argentine"},
+        {"ticker": "LE=F", "direction": "inverse", "reason": "Ble monte = feed cost hausse = pression sur betail"},
+        {"ticker": "HE=F", "direction": "inverse", "reason": "Ble monte = feed cost hausse = pression sur porc"},
     ],
     "KC=F":  [
         {"ticker": "SB=F", "direction": "same", "reason": "Memes planteurs bresil — sucre et cafe"},

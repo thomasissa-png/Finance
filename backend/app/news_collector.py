@@ -132,7 +132,7 @@ def collect_yfinance_news() -> list[NewsItem]:
     # Euronext and minor forex are well-covered by Phase 0/1 RSS feeds.
     KEY_TICKERS = [
         "CL=F", "BZ=F", "NG=F", "GC=F",     # energy + gold
-        "ZC=F", "ZW=F", "ZS=F", "KC=F",      # agriculture
+        "ZC=F", "ZW=F", "ZS=F", "KC=F", "CC=F",  # agriculture + soft
         "^GSPC", "^FCHI", "^DJI",             # major indices
         "EURUSD=X", "USDJPY=X",              # key forex
         "HG=F", "SI=F",                       # metals
