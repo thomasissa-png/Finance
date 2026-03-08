@@ -11,9 +11,10 @@ const JournalPage = lazy(() => import("./components/JournalPage"));
 const NewsPage = lazy(() => import("./components/NewsPage"));
 const LearningPage = lazy(() => import("./components/LearningPage"));
 const AuditorPage = lazy(() => import("./components/AuditorPage"));
+const Trader2Page = lazy(() => import("./components/Trader2Page"));
 
 const PAGES = [
-  "dashboard", "news", "scoring", "trader", "journal", "learning", "auditor",
+  "dashboard", "news", "scoring", "trader", "trader2", "journal", "learning", "auditor",
 ];
 
 function getPageFromHash() {
@@ -247,6 +248,7 @@ export default function App() {
             {activePage === "news" && <NewsPage isActive={true} />}
             {activePage === "scoring" && <ScoringPage isActive={true} />}
             {activePage === "trader" && <TraderPage isActive={true} />}
+            {activePage === "trader2" && <Trader2Page isActive={true} />}
             {activePage === "journal" && <JournalPage isActive={true} />}
             {activePage === "learning" && <LearningPage isActive={true} />}
             {activePage === "auditor" && <AuditorPage isActive={true} />}

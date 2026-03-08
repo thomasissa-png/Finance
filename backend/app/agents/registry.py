@@ -15,6 +15,7 @@ from .agent_auditor import AgentAuditor
 from .agent_news import AgentNews
 from .agent_scoring import AgentScoring
 from .agent_trader import AgentTrader
+from .agent_trader_2 import AgentTrader2
 from .agent_journal import AgentJournal
 from .agent_learning import AgentLearning
 
@@ -38,6 +39,7 @@ def _ensure_agents():
             "news": AgentNews(),
             "scoring": AgentScoring(),
             "trader_1": AgentTrader(),
+            "trader_2": AgentTrader2(),
             "journal": AgentJournal(),
             "learning": AgentLearning(),
             "auditor": AgentAuditor(),
@@ -158,6 +160,14 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
         existing_trade_ticker=existing_trade_ticker,
         market_context=market_ctx,
     )
+
+    # Step 5: Agent Trader 2 — Trend evaluation (parallel, non-blocking)
+    try:
+        agent_trader2 = _agents.get("trader_2")
+        if agent_trader2 and scored:
+            agent_trader2.run(scored_news=scored, scan_type=scan_type)
+    except Exception as exc:
+        logger.warning("Trader 2 trend evaluation failed: %s", exc)
 
     # Attach source health
     source_health = news_result.get("source_health")

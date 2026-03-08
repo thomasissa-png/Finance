@@ -561,6 +561,15 @@ def init_db() -> None:
                 ON audit_reports(target_agent, created_at)
             """)
 
+            # v7.1: Trend positions for Agent Trader 2
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS trend_positions (
+                    ticker VARCHAR(30) PRIMARY KEY,
+                    data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+
             # v6.3: Add missing trade columns for learning feedback (safe for existing DBs)
             for col_name, col_type in [
                 ("surprise", "INTEGER"),
@@ -1137,7 +1146,7 @@ def pg_run_maintenance() -> dict:
 
     results = {}
     tables = ["trades", "journal_entries", "scan_history", "last_scans",
-              "agent_messages", "agent_logs", "audit_reports"]
+              "agent_messages", "agent_logs", "audit_reports", "trend_positions"]
     for table in tables:
         try:
             pool = _get_pool()

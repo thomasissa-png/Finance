@@ -1091,6 +1091,27 @@ def get_latest_audit(target_agent: str):
     return report
 
 
+# ── Agent Trader 2 — Trend Positions API ────────────────────────
+
+
+@app.get("/api/trader2/positions")
+def get_trend_positions():
+    """Get current trend positions for Trader 2."""
+    agent = get_agent("trader_2")
+    if not agent:
+        return {}
+    return agent.get_positions()
+
+
+@app.get("/api/trader2/positions/{ticker}/history")
+def get_trend_position_history(ticker: str):
+    """Get position change history for a ticker."""
+    agent = get_agent("trader_2")
+    if not agent:
+        return []
+    return agent.get_position_history(ticker)
+
+
 # ── (#41) Enhanced health check ──────────────────────────────────
 
 

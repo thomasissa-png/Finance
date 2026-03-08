@@ -253,10 +253,11 @@ class TestAgentRegistry:
         assert "news" in agents
         assert "scoring" in agents
         assert "trader_1" in agents
+        assert "trader_2" in agents
         assert "journal" in agents
         assert "learning" in agents
         assert "auditor" in agents
-        assert len(agents) == 6
+        assert len(agents) == 7
 
     @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
     @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
@@ -279,7 +280,7 @@ class TestAgentRegistry:
         statuses = get_all_status()
         names = [s["name"] for s in statuses]
         assert "ux" in names
-        assert len(statuses) == 7  # 6 real agents + virtual UX
+        assert len(statuses) == 8  # 7 real agents + virtual UX
 
     @patch("backend.app.agents.base.MessageBus._use_pg", return_value=False)
     @patch("backend.app.agents.base.AgentLogger._use_pg", return_value=False)
