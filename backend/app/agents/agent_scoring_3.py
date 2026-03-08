@@ -90,25 +90,46 @@ STRATEGIES = {
     },
 }
 
-# ── Indicator parameters ──────────────────────────────────────────
-RSI_PERIODS = [14, 21]
-RSI_OVERSOLD = 30
-RSI_OVERBOUGHT = 70
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
-BB_PERIOD = 20
-BB_STD = 2.0
-SMA_FAST = 20
-SMA_MID = 50
-SMA_SLOW = 200
-STOCH_K = 14
-STOCH_D = 3
-ADX_PERIOD = 14
-ADX_TREND_THRESHOLD = 25  # ADX > 25 = trending market
+# ── Default indicator parameters (overridable via weekly_config) ──
+DEFAULT_PARAMS = {
+    "rsi_oversold": 30,
+    "rsi_overbought": 70,
+    "rsi_periods": [14, 21],
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bb_period": 20,
+    "bb_std": 2.0,
+    "bb_squeeze_threshold": 3.0,
+    "sma_fast": 20,
+    "sma_mid": 50,
+    "sma_slow": 200,
+    "stoch_k": 14,
+    "stoch_d": 3,
+    "adx_period": 14,
+    "adx_trend_threshold": 25,
+    "min_setup_score": 30.0,
+}
+
+# Module-level defaults (used by indicator computations)
+RSI_PERIODS = DEFAULT_PARAMS["rsi_periods"]
+RSI_OVERSOLD = DEFAULT_PARAMS["rsi_oversold"]
+RSI_OVERBOUGHT = DEFAULT_PARAMS["rsi_overbought"]
+MACD_FAST = DEFAULT_PARAMS["macd_fast"]
+MACD_SLOW = DEFAULT_PARAMS["macd_slow"]
+MACD_SIGNAL = DEFAULT_PARAMS["macd_signal"]
+BB_PERIOD = DEFAULT_PARAMS["bb_period"]
+BB_STD = DEFAULT_PARAMS["bb_std"]
+SMA_FAST = DEFAULT_PARAMS["sma_fast"]
+SMA_MID = DEFAULT_PARAMS["sma_mid"]
+SMA_SLOW = DEFAULT_PARAMS["sma_slow"]
+STOCH_K = DEFAULT_PARAMS["stoch_k"]
+STOCH_D = DEFAULT_PARAMS["stoch_d"]
+ADX_PERIOD = DEFAULT_PARAMS["adx_period"]
+ADX_TREND_THRESHOLD = DEFAULT_PARAMS["adx_trend_threshold"]
 
 # Minimum score to emit a setup
-MIN_SETUP_SCORE = 30.0
+MIN_SETUP_SCORE = DEFAULT_PARAMS["min_setup_score"]
 
 # Per-fetch timeout
 PER_FETCH_TIMEOUT_S = 15
@@ -694,8 +715,16 @@ def _compute_all_indicators(ohlcv: dict) -> dict:
     return indicators
 
 
-def score_technical_setups(tickers: dict | None = None) -> dict:
+def score_technical_setups(tickers: dict | None = None,
+                           weekly_config: dict | None = None) -> dict:
     """Compute technical scores for all tickers.
+
+    Args:
+        tickers: Override ticker universe (default: TECH_TICKERS)
+        weekly_config: Weekly strategy config from Learning 3 with:
+            - enabled_strategies: list[str] — only run these strategies
+            - params: dict — override indicator parameters
+            - strategy_weights: dict[str, float] — override strategy weights
 
     Returns dict with:
         - setups: list[dict] — all detected setups sorted by score desc
@@ -704,43 +733,84 @@ def score_technical_setups(tickers: dict | None = None) -> dict:
         - stats: {total_tickers, setups_found, avg_score, top_strategy}
     """
     target_tickers = tickers or TECH_TICKERS
+    config = weekly_config or {}
+
+    # Apply parameter overrides from weekly config
+    params = {**DEFAULT_PARAMS, **(config.get("params", {}))}
+    enabled = set(config.get("enabled_strategies", list(STRATEGIES.keys())))
+    strategy_weight_overrides = config.get("strategy_weights", {})
 
     result = {
         "setups": [],
         "by_ticker": {},
         "by_strategy": {},
+        "weekly_config_applied": bool(weekly_config),
         "stats": {
             "total_tickers": len(target_tickers),
             "setups_found": 0,
             "avg_score": 0.0,
             "top_strategy": "",
+            "enabled_strategies": list(enabled),
         },
     }
 
-    all_setups = []
+    # Build detector list based on enabled strategies
+    detector_map = {
+        "rsi_reversal": _detect_rsi_reversal,
+        "macd_crossover": _detect_macd_crossover,
+        "bollinger_squeeze": _detect_bollinger_squeeze,
+        "ma_trend": _detect_ma_trend,
+        "momentum_divergence": _detect_momentum_divergence,
+    }
     strategy_detectors = [
-        _detect_rsi_reversal,
-        _detect_macd_crossover,
-        _detect_bollinger_squeeze,
-        _detect_ma_trend,
-        _detect_momentum_divergence,
+        (name, fn) for name, fn in detector_map.items()
+        if name in enabled
     ]
 
+    # Fetch OHLCV data in parallel for all tickers
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    ohlcv_data: dict[str, dict | None] = {}
+    ticker_list = list(target_tickers.keys())
+    try:
+        with ThreadPoolExecutor(max_workers=min(len(ticker_list), 5)) as executor:
+            futures = {
+                executor.submit(_fetch_ohlcv, t, "6mo", "1d"): t
+                for t in ticker_list
+            }
+            for future in as_completed(futures, timeout=PER_FETCH_TIMEOUT_S * len(ticker_list)):
+                ticker = futures[future]
+                try:
+                    ohlcv_data[ticker] = future.result(timeout=PER_FETCH_TIMEOUT_S)
+                except Exception:
+                    ohlcv_data[ticker] = None
+    except Exception:
+        # Fallback: sequential
+        for t in ticker_list:
+            if t not in ohlcv_data:
+                ohlcv_data[t] = _fetch_ohlcv(t, "6mo", "1d")
+
+    all_setups = []
+
     for ticker, info in target_tickers.items():
-        # Fetch daily data (primary timeframe)
-        ohlcv = _fetch_ohlcv(ticker, period="6mo", interval="1d")
+        ohlcv = ohlcv_data.get(ticker)
         if not ohlcv:
             continue
 
         indicators = _compute_all_indicators(ohlcv)
+        # Inject configurable thresholds into indicators for detectors
+        indicators["_params"] = params
         atr = indicators.get("atr")
         last_close = indicators.get("last_close")
 
         if not last_close or last_close <= 0:
             continue
 
-        # Run all strategy detectors
-        for detector in strategy_detectors:
+        # Determine market regime from ADX
+        adx = indicators.get("adx")
+        regime = "trending" if (adx is not None and adx >= params["adx_trend_threshold"]) else "ranging"
+
+        # Run enabled strategy detectors
+        for strategy_name, detector in strategy_detectors:
             try:
                 setup = detector(indicators)
             except Exception as exc:
@@ -750,16 +820,18 @@ def score_technical_setups(tickers: dict | None = None) -> dict:
             if setup is None:
                 continue
 
-            strategy_name = setup["strategy"]
-            strategy_weight = STRATEGIES.get(strategy_name, {}).get("weight", 1.0)
+            strategy_weight = strategy_weight_overrides.get(
+                strategy_name,
+                STRATEGIES.get(strategy_name, {}).get("weight", 1.0)
+            )
 
             # Volume boost: high volume confirms setup
             vol_ratio = indicators.get("volume_ratio", 1.0)
             volume_boost = 1.0
-            if vol_ratio > 1.5:
-                volume_boost = 1.15
-            elif vol_ratio > 2.0:
+            if vol_ratio > 2.0:
                 volume_boost = 1.25
+            elif vol_ratio > 1.5:
+                volume_boost = 1.15
 
             # Compute final score with strategy weight and volume
             final_score = min(100, setup["score"] * strategy_weight * volume_boost)
@@ -787,7 +859,8 @@ def score_technical_setups(tickers: dict | None = None) -> dict:
                 "stop_pct": stop_pct,
                 "atr": atr,
                 "volume_ratio": vol_ratio,
-                "adx": indicators.get("adx"),
+                "adx": adx,
+                "regime": regime,
                 "signals": setup.get("signals", {}),
                 "timeframe": "1d",  # Primary timeframe used
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -841,8 +914,11 @@ class AgentScoring3(BaseAgent):
         self._total_scorings: int = 0
         self._last_result: dict | None = None
 
-    def run(self, **kwargs) -> dict:
+    def run(self, weekly_config=None, **kwargs) -> dict:
         """Score all tickers for technical setups.
+
+        Args:
+            weekly_config: Optional weekly strategy config from Learning 3
 
         Returns dict with scored setups.
         """
@@ -852,10 +928,12 @@ class AgentScoring3(BaseAgent):
         start = time.monotonic()
 
         try:
-            # Compute technical scores
+            # Compute technical scores with optional weekly config
             tech_data = self.execute(
                 "Computing technical indicator scores",
                 score_technical_setups,
+                None,  # tickers (use default)
+                weekly_config,
             )
 
             self._last_result = tech_data
