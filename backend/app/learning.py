@@ -63,7 +63,7 @@ _TRADES_CACHE_TTL = 60.0  # seconds
 DECAY_HALF_LIFE_DAYS_LOW = 45.0   # When few trades
 DECAY_HALF_LIFE_DAYS_HIGH = 30.0  # When many trades
 DECAY_TRANSITION_START = 50       # Start transitioning at 50 closed trades
-DECAY_TRANSITION_END = 200        # Fully transitioned at 200 closed trades
+DECAY_TRANSITION_END = 80         # Fully transitioned at 80 closed trades (was 200 — too slow)
 
 # Baseline hours for converting actual_pricing_time_hours to 0-100 delay score
 TRANSMISSION_DELAY_BASELINE_HOURS = 6.0  # 6h of pricing time = delay score 100
@@ -636,8 +636,8 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     ticker_adj: dict[str, float] = {}
     for ticker, entries in ticker_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.5, pnl_cap=0.25,
-                                  bounds=(0.5, 1.5), min_significant=8,
-                                  t_threshold=2.0)
+                                  bounds=(0.5, 1.5), min_significant=5,
+                                  t_threshold=1.5)
         if adj is not None:
             ticker_adj[ticker] = adj
 
@@ -721,10 +721,10 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
 
     regime_adj: dict[str, float] = {}
     for regime, entries in regime_weighted.items():
-        # C1: min 15 trades for regime (was 5 — too few leads to overfitting)
+        # C1: min 8 trades for regime (was 15 — too slow to activate, was 5 before that)
         # M8: t_threshold raised to 1.5
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.7, 1.3), min_significant=15,
+                                  bounds=(0.7, 1.3), min_significant=8,
                                   t_threshold=1.5)
         if adj is not None:
             regime_adj[regime] = adj
@@ -739,7 +739,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     direction_adj: dict[str, float] = {}
     for d, entries in dir_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.8, 1.2), min_significant=8)
+                                  bounds=(0.8, 1.2), min_significant=5)
         if adj is not None:
             direction_adj[d] = adj
 

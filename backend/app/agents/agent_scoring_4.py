@@ -23,6 +23,7 @@ Expertise incarnée :
 """
 
 import logging
+import os
 import time
 from datetime import datetime, timezone, date
 
@@ -46,7 +47,12 @@ MAX_CONFLUENCE_BOOST = 1.5   # 3/3 teams agree → 50% boost
 MIN_META_SCORE = 5.0
 
 # Activation date — Team 4 only starts trading after this date
-ACTIVATION_DATE = date(2026, 3, 16)  # Monday 2026-03-16
+# Configurable via TEAM4_ACTIVATION_DATE env var (format: YYYY-MM-DD)
+_activation_str = os.environ.get("TEAM4_ACTIVATION_DATE", "2026-03-16")
+try:
+    ACTIVATION_DATE = date.fromisoformat(_activation_str)
+except ValueError:
+    ACTIVATION_DATE = date(2026, 3, 16)
 
 
 def _normalize_direction(direction: str) -> str:

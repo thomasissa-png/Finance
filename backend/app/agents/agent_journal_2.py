@@ -289,6 +289,7 @@ class AgentJournal2(BaseAgent):
 
         start = time.monotonic()
         result = {
+            "status": "ok",
             "new_entries": [],
             "snapshots": [],
             "flips_processed": 0,

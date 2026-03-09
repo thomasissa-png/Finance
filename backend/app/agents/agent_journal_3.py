@@ -213,6 +213,7 @@ class AgentJournal3(BaseAgent):
 
         start = time.monotonic()
         result = {
+            "status": "ok",
             "new_entries": [],
             "expired_closed": 0,
             "strategy_performance": {},

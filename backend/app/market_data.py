@@ -609,6 +609,29 @@ def fetch_quote(ticker: str) -> dict | None:
     return result
 
 
+def fetch_price(ticker: str) -> float | None:
+    """Fetch current price for a ticker.
+
+    Wrapper around fetch_quote() — returns just the price float or None.
+    Used by agents (Trader 2/3/4, Journal 2/3) for position monitoring.
+    """
+    quote = fetch_quote(ticker)
+    if quote and "price" in quote:
+        return quote["price"]
+    return None
+
+
+def fetch_intraday(ticker: str, period: str = "5d", interval: str = "1h") -> pd.DataFrame | None:
+    """Fetch intraday OHLCV data for a ticker.
+
+    Wrapper around fetch_history() — converts period string to days.
+    Used by Journal 2 for MAE/MFE enrichment with intraday bars.
+    """
+    period_map = {"1d": 1, "2d": 2, "5d": 5, "7d": 7, "10d": 10, "30d": 30}
+    period_days = period_map.get(period, 5)
+    return fetch_history(ticker, period_days=period_days, interval=interval)
+
+
 def get_provider_status() -> dict:
     """Return status info about the market data provider for health checks."""
     with _blacklist_lock:

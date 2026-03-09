@@ -390,20 +390,19 @@ def test_v34_regime_adj():
 
 
 def test_v34_per_ticker_stricter_significance():
-    """v3.4 #3: Per-ticker needs 8 trades and t>1.5 to be significant."""
-    # Only 6 trades — should NOT produce per-ticker adjustment
+    """Per-ticker needs min_significant=5 trades and t>1.5 to be significant."""
+    # Only 3 trades — should NOT produce per-ticker adjustment (min_significant=5)
     trades = []
-    for i in range(6):
-        pnl = 1.0 if i < 5 else -0.5
+    for i in range(5):
+        pnl = 1.0 if i < 4 else -0.5
         result = TradeResult.TP_HIT if pnl > 0 else TradeResult.SL_HIT
-        trades.append(_make_trade(result=result, pnl_pct=pnl))
+        # Use 3 different tickers so no single ticker has enough trades
+        ticker = ["MC.PA", "TTE.PA", "BNP.PA"][i % 3]
+        trades.append(_make_trade(result=result, pnl_pct=pnl, ticker=ticker))
     raw = [t.model_dump(mode="json") for t in trades]
     with _with_temp_trades(raw):
         result = compute_learning_adjustments()
-    # category adj may exist (min 5) but per-ticker should NOT (min 8)
-    ticker_mult = _get_ticker_adj(result, "MC.PA")
-    # With 6 trades < min 8, ticker-level should be None or default to cat_adj only
-    # The ticker may still appear in adjustments due to cat_adj being applied
+    # With < 5 trades per ticker, no ticker should have per-ticker adjustment
     decomp = result.get("decomposition", {}).get("MC.PA", {})
     assert decomp.get("ticker_mult", 1.0) == 1.0  # Not enough for per-ticker
 
