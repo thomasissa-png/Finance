@@ -233,9 +233,12 @@ def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20)
     """Compute 20-day rolling correlation between two tickers (G. dynamic correlation).
 
     v4.0 D3: Results are cached for 1h to avoid redundant API calls.
+    v6.5 P9: fetch_history calls wrapped with 10s timeout each to prevent
+    silent hangs that block the entire scan pipeline.
     Returns correlation coefficient (-1 to 1), or None if data unavailable.
     """
     import time as _time
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
     cache_key = f"{min(ticker1, ticker2)}:{max(ticker1, ticker2)}"
     cached = _corr_cache.get(cache_key)
     if cached is not None:
@@ -244,8 +247,21 @@ def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20)
             return corr_val
 
     try:
-        data1 = fetch_history(ticker1, period_days=lookback + 5, interval="1day")
-        data2 = fetch_history(ticker2, period_days=lookback + 5, interval="1day")
+        # v6.5 P9: Use ThreadPoolExecutor with timeout to prevent indefinite blocking
+        # on fetch_history calls (root cause of 11:33 CET pipeline hang)
+        executor = ThreadPoolExecutor(max_workers=2)
+        try:
+            f1 = executor.submit(fetch_history, ticker1, period_days=lookback + 5, interval="1day")
+            f2 = executor.submit(fetch_history, ticker2, period_days=lookback + 5, interval="1day")
+            data1 = f1.result(timeout=10)
+            data2 = f2.result(timeout=10)
+        except (TimeoutError, FuturesTimeoutError):
+            logger.warning("Dynamic correlation TIMEOUT for %s vs %s (10s)", ticker1, ticker2)
+            _corr_cache[cache_key] = (None, _time.time())
+            return None
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
         if data1 is None or data2 is None or len(data1) < lookback or len(data2) < lookback:
             return None
         returns1 = data1["Close"].pct_change().dropna().tail(lookback)
@@ -302,7 +318,13 @@ def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | No
         # If both appear in static groups (even different ones), the groups already capture
         # their correlation profile — no need for expensive yfinance rolling correlation.
         if not (ticker_in_any_group and existing_in_any_group):
+            import time as _corr_time
+            _corr_start = _corr_time.monotonic()
             dyn_corr = _compute_dynamic_correlation(ticker, existing)
+            _corr_elapsed = _corr_time.monotonic() - _corr_start
+            if _corr_elapsed > 5.0:
+                logger.warning("Dynamic correlation slow: %s vs %s took %.1fs",
+                               ticker, existing, _corr_elapsed)
             if dyn_corr is not None and abs(dyn_corr) > DYNAMIC_CORRELATION_THRESHOLD:
                 logger.info("Dynamic correlation block: %s vs %s = %.3f (threshold: %.1f)",
                             ticker, existing, dyn_corr, DYNAMIC_CORRELATION_THRESHOLD)

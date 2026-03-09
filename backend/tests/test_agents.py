@@ -1803,3 +1803,98 @@ class TestPositionMonitoring:
             result = t4.run_position_monitor()
             assert result["active"] == 0
             assert result["closed"] == 0
+
+
+class TestTradeSelectionTimeout:
+    """v6.5 P9: Tests for trade selection timeout protection.
+
+    Production incident 2026-03-09: trade_selector hung on market data fetch,
+    blocking the entire pipeline (Teams 2-4 never ran).
+    """
+
+    def test_dynamic_correlation_has_timeout(self):
+        """P9: _compute_dynamic_correlation uses ThreadPoolExecutor with timeout."""
+        import inspect
+        from backend.app.trade_selector import _compute_dynamic_correlation
+        source = inspect.getsource(_compute_dynamic_correlation)
+        assert "ThreadPoolExecutor" in source, \
+            "Dynamic correlation must use ThreadPoolExecutor for timeout"
+        assert "timeout=10" in source, \
+            "Dynamic correlation fetch_history must have 10s timeout"
+        assert "shutdown(wait=False" in source, \
+            "Executor must use non-blocking shutdown"
+
+    def test_dynamic_correlation_timeout_returns_none(self):
+        """P9: When fetch_history times out, correlation returns None (not hang)."""
+        import time
+        from backend.app.trade_selector import _compute_dynamic_correlation, _corr_cache
+
+        # Clear cache to force fetch
+        _corr_cache.clear()
+
+        def slow_fetch(*args, **kwargs):
+            time.sleep(15)  # Longer than 10s timeout
+            return None
+
+        with patch("backend.app.trade_selector.fetch_history", side_effect=slow_fetch):
+            start = time.monotonic()
+            result = _compute_dynamic_correlation("FAKE1", "FAKE2")
+            elapsed = time.monotonic() - start
+            assert result is None, "Timed-out correlation must return None"
+            assert elapsed < 12, f"Correlation took {elapsed:.1f}s — should timeout at 10s"
+
+    def test_trader1_select_trade_has_global_timeout(self):
+        """P9: AgentTrader._select_trade wraps select_trade with 60s timeout."""
+        import inspect
+        from backend.app.agents.agent_trader import AgentTrader
+        source = inspect.getsource(AgentTrader._select_trade)
+        assert "timeout=60" in source, \
+            "_select_trade must have 60s global timeout"
+        assert "ThreadPoolExecutor" in source, \
+            "_select_trade must use ThreadPoolExecutor for timeout"
+        assert "shutdown(wait=False" in source, \
+            "Executor must use non-blocking shutdown"
+
+    def test_trader1_timeout_returns_scan_result(self):
+        """P9: When select_trade times out, return a valid ScanResult with error."""
+        from backend.app.agents.agent_trader import AgentTrader
+        from backend.app.models import ScanType
+        import time
+
+        def slow_select_trade(*args, **kwargs):
+            time.sleep(120)
+
+        agent = AgentTrader()
+        # Patch at module level where the lazy import resolves
+        with patch("backend.app.trade_selector.select_trade",
+                    side_effect=slow_select_trade):
+            with patch.object(agent, "log"):  # Suppress logging
+                start = time.monotonic()
+                result = agent._select_trade(
+                    [], ScanType.EUROPE, {}, None, None)
+                elapsed = time.monotonic() - start
+                assert elapsed < 65, f"Timeout took {elapsed:.1f}s — expected ~60s"
+                assert result.has_trade is False
+                assert "timeout" in result.reason_no_trade.lower()
+
+    def test_pipeline_trader1_failure_doesnt_block_teams(self):
+        """P9: If Trader 1 raises, Teams 2-4 still execute in registry."""
+        import inspect
+        from backend.app.agents.registry import run_scan_pipeline
+        source = inspect.getsource(run_scan_pipeline)
+        # Trader 1 call must be wrapped in try/except
+        trader1_section = source[source.find("Step 4"):source.find("Step 5")]
+        assert "try:" in trader1_section, \
+            "Trader 1 call must be wrapped in try/except"
+        assert "except Exception" in trader1_section, \
+            "Trader 1 must catch exceptions to let Teams 2-4 run"
+        assert "pipeline continues" in trader1_section.lower() or "Teams 2-4" in trader1_section, \
+            "Error message must mention pipeline continuation"
+
+    def test_correlation_slow_check_logging(self):
+        """P9: Dynamic correlation logs warning when taking >5s."""
+        import inspect
+        from backend.app.trade_selector import _check_correlation
+        source = inspect.getsource(_check_correlation)
+        assert "correlation slow" in source.lower() or "corr_elapsed" in source, \
+            "Slow correlation check must log a warning"

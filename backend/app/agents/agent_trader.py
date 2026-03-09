@@ -183,12 +183,38 @@ class AgentTrader(BaseAgent):
 
     def _select_trade(self, scored, scan_type, learning_data,
                       existing_trade_ticker, market_context):
+        """Select best trade with global 60s timeout to prevent pipeline hang.
+
+        v6.5 P9: The trade selector can hang on market data fetches
+        (correlation checks, price lookups). A global timeout ensures
+        the scan pipeline always progresses to Teams 2-4.
+        """
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
         from ..trade_selector import select_trade
-        return select_trade(
-            scored, scan_type, learning_data,
-            existing_trade_ticker=existing_trade_ticker,
-            market_context=market_context,
-        )
+        from ..models import ScanResult
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(
+                select_trade,
+                scored, scan_type, learning_data,
+                existing_trade_ticker=existing_trade_ticker,
+                market_context=market_context,
+            )
+            return future.result(timeout=60)
+        except (TimeoutError, FuturesTimeoutError):
+            self.log("Trade selection TIMEOUT after 60s — pipeline continues",
+                     {"candidates": len(scored), "scan_type": scan_type.value if scan_type else None},
+                     level="ERROR")
+            return ScanResult(
+                scan_type=scan_type,
+                timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                has_trade=False,
+                reason_no_trade="Trade selection timeout (60s) — possible market data hang",
+                news_analyzed=len(scored),
+            )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _save_trade(self, rec):
         from ..learning import save_trade

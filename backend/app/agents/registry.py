@@ -228,11 +228,24 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
     learning_data = agent_learning.get_adjustments()
 
     # Step 4: Agent Trader 1 — Decide (Équipe 1)
-    result_dict = agent_trader.run(
-        scored, scan_type, learning_data,
-        existing_trade_ticker=existing_trade_ticker,
-        market_context=market_ctx,
-    )
+    # v6.5 P9: Wrap Trader 1 in try/except so Teams 2-4 always execute.
+    # Production incident 2026-03-09 11:33 CET: Trader 1 hung on market data
+    # fetch, blocking the entire pipeline — Teams 2-4 never ran.
+    try:
+        result_dict = agent_trader.run(
+            scored, scan_type, learning_data,
+            existing_trade_ticker=existing_trade_ticker,
+            market_context=market_ctx,
+        )
+    except Exception as exc:
+        logger.error("Équipe 1 Trader failed: %s — pipeline continues to Teams 2-4", exc)
+        result_dict = {
+            "scan_type": scan_type.value,
+            "has_trade": False,
+            "reason_no_trade": f"Trader 1 error: {str(exc)[:200]}",
+            "news_analyzed": len(news_items),
+            "all_scored_news": [],
+        }
 
     # Step 5: Équipe 2 — Scoring 2 + Trader 2 (non-blocking)
     try:
