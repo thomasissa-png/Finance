@@ -62,7 +62,7 @@ _pool = None
 
 # M1: Track last connection use time for conditional pre-ping
 _last_conn_use: float = 0.0
-_PRE_PING_IDLE_THRESHOLD = 60.0  # 1 minute — reduced from 300s to catch stale connections faster
+_PRE_PING_IDLE_THRESHOLD = 30.0  # 30s — aggressive pre-ping to catch SSL drops on Replit
 
 # M6: Guard against repeated auto-migration attempts
 _migration_attempted: dict[str, bool] = {}
@@ -212,11 +212,22 @@ def get_conn():
         conn.commit()
         _last_conn_use = time.monotonic()
     except Exception as exc:
-        # Handle "connection already closed" — rollback would also fail
+        # Handle "connection already closed" or SSL dropped — rollback would also fail
+        is_conn_dead = conn.closed if hasattr(conn, 'closed') else False
+        exc_str = str(exc).lower()
+        is_ssl_error = "ssl" in exc_str or "connection" in exc_str and "closed" in exc_str
         try:
-            conn.rollback()
+            if not is_conn_dead:
+                conn.rollback()
         except Exception:
-            logger.warning("Rollback failed (connection may be dead): %s", exc)
+            is_conn_dead = True
+            logger.warning("Rollback failed (connection dead): %s", exc)
+        # If connection is dead, close it so pool creates a fresh one
+        if is_conn_dead or is_ssl_error:
+            try:
+                conn.close()
+            except Exception:
+                pass
         raise
     finally:
         elapsed = time.monotonic() - start_time
@@ -224,7 +235,11 @@ def get_conn():
         if elapsed > 2.0:
             logger.warning("Slow PG operation: %.2fs", elapsed)
         try:
-            pool.putconn(conn)
+            # putconn with close=True if connection is dead — pool replaces it
+            if conn.closed:
+                pool.putconn(conn, close=True)
+            else:
+                pool.putconn(conn)
         except Exception:
             pass  # Connection already closed — pool will create a new one
 

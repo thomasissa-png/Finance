@@ -1552,6 +1552,27 @@ def list_agents():
     return get_agents_status()
 
 
+@app.get("/api/agents/logs/all")
+def all_agent_logs(limit: int = 15, level: str = "WARN,ERROR", since_hours: float = 48):
+    """Get consolidated logs across ALL agents in a single request.
+
+    Replaces 21 individual /api/agents/{name}/logs calls from the frontend
+    notification polling (was ~42 requests/min, now ~2 requests/min).
+    """
+    from .agents.registry import get_all_agents
+    all_logs = []
+    for name, agent in get_all_agents().items():
+        try:
+            logs = agent.logger.get_logs(limit=limit, level=level, since_hours=since_hours)
+            for log in (logs if isinstance(logs, list) else []):
+                log["agent"] = name
+                all_logs.append(log)
+        except Exception:
+            pass
+    all_logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return all_logs[:50]
+
+
 @app.get("/api/agents/{agent_name}/logs")
 def agent_logs(agent_name: str, limit: int = 50, level: str | None = None, since_hours: float | None = None):
     """Get structured logs for a specific agent.

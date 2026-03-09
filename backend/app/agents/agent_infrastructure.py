@@ -266,8 +266,9 @@ class AgentInfrastructure(BaseAgent):
         # 2. Pool health
         if pg_ok:
             self._check_pool_health(result)
-        # 3. Pending trades check
-        self._check_pending_trades(result)
+        # 3. Pending trades check (skip if PG is down — avoid cascading errors)
+        if pg_ok:
+            self._check_pending_trades(result)
         # 4. JSON fallback detection
         self._check_fallback_status(result)
         # 5. Table sizes (lightweight — only counts)

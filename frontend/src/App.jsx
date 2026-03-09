@@ -102,8 +102,9 @@ export default function App() {
   });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Fetch agents status
+  // Fetch agents status — reduced from 5s to 30s to ease PG pool pressure
   const fetchAgents = useCallback(() => {
+    if (document.hidden) return;
     fetch("/api/agents")
       .then((r) => r.json())
       .then((data) => { if (Array.isArray(data)) setAgents(data); })
@@ -112,36 +113,32 @@ export default function App() {
 
   useEffect(() => {
     fetchAgents();
-    const id = setInterval(fetchAgents, 5000);
+    const id = setInterval(fetchAgents, 30_000);
     return () => clearInterval(id);
   }, [fetchAgents]);
 
-  // Fetch notifications — consolidated (1 request per known agent instead of 2×18)
+  // Fetch notifications — single consolidated endpoint (was 21 individual requests)
   const fetchNotifications = useCallback(() => {
-    const knownAgents = (agents || []).map((a) => a.name).filter(Boolean);
-    if (knownAgents.length === 0) return;
-    const requests = knownAgents.map((name) =>
-      fetch(`/api/agents/${name}/logs?limit=15&level=WARN,ERROR&since_hours=48`)
-        .then((r) => r.ok ? r.json() : [])
-        .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
-        .catch(() => [])
-    );
-    Promise.all(requests).then((results) => {
-      const combined = results.flat().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-      const seen = new Set();
-      const deduped = combined.filter((n) => {
-        const key = `${n.timestamp}-${n.agent}-${n.action}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }).slice(0, 50);
-      setNotifications(deduped);
-    });
-  }, [agents]);
+    if (document.hidden) return;
+    fetch("/api/agents/logs/all?limit=15&level=WARN,ERROR&since_hours=48")
+      .then((r) => r.ok ? r.json() : [])
+      .then((logs) => {
+        if (!Array.isArray(logs)) return;
+        const seen = new Set();
+        const deduped = logs.filter((n) => {
+          const key = `${n.timestamp}-${n.agent}-${n.action}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 50);
+        setNotifications(deduped);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetchNotifications();
-    const id = setInterval(fetchNotifications, 30000);
+    const id = setInterval(fetchNotifications, 60_000);
     return () => clearInterval(id);
   }, [fetchNotifications]);
 

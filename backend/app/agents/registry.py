@@ -280,9 +280,9 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
         agent_scoring2 = _agents.get("scoring_2")
         agent_trader2 = _agents.get("trader_2")
         agent_learning2 = _agents.get("learning_2")
-        if agent_trader2 and scored:
+        if agent_trader2:
             trend_scoring = None
-            if agent_scoring2:
+            if agent_scoring2 and scored:
                 trend_scoring = agent_scoring2.run(
                     scored_news=scored, scan_type=scan_type)
 
