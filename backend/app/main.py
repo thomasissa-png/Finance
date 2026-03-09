@@ -654,7 +654,210 @@ def _run_infra_report() -> None:
     thread.start()
 
 
-_CLEANUP_SENTINEL = Path(os.getenv("DATA_DIR", "data")) / ".cleanup_done_2026_03_09b"
+_CLEANUP_SENTINEL = Path(os.getenv("DATA_DIR", "data")) / ".cleanup_done_2026_03_09c"
+
+_ALL_PG_TABLES = [
+    "trades", "journal_entries", "scan_history", "last_scans",
+    "price_archive",
+    "trend_positions", "trend_journal_entries",
+    "tech_positions", "tech_journal_entries",
+    "meta_positions", "meta_journal_entries",
+    "agent_messages", "agent_logs", "audit_reports",
+    "performance_data", "source_health",
+]
+
+_ALL_JSON_FILES = [
+    "trades.json", "journal.json", "scan_history.json", "last_scans.json",
+    "trend_positions.json", "trend_journal.json",
+    "tech_positions.json", "tech_journal.json",
+    "meta_positions.json", "meta_journal.json",
+    "audit_reports.json", "source_health.json",
+]
+
+_LEARNING_CONFIG_FILES = [
+    "learning3_config_history.json", "learning4_config_history.json",
+    "learning3_weekly_config.json", "learning4_weekly_config.json",
+]
+
+
+def _truncate_pg_tables() -> dict:
+    """Truncate all PG tables. Returns per-table results dict."""
+    results = {}
+    if not is_pg_enabled():
+        return results
+    for table in _ALL_PG_TABLES:
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    # Check table exists first — TRUNCATE does NOT support IF EXISTS in PG
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.tables "
+                        "WHERE table_schema = 'public' AND table_name = %s",
+                        (table,),
+                    )
+                    if cur.fetchone():
+                        cur.execute(f"TRUNCATE TABLE {table} CASCADE")
+                        results[table] = "truncated"
+                    else:
+                        results[table] = "not_found"
+                conn.commit()
+            logger.info("  PG table %s: %s", table, results[table])
+        except Exception as exc:
+            results[table] = f"error: {exc}"
+            logger.warning("  PG table %s: error: %s", table, exc)
+    return results
+
+
+def _reset_json_files() -> tuple[dict, bool]:
+    """Reset all JSON files to empty. Returns (results_dict, all_ok)."""
+    data_dir = Path(os.getenv("DATA_DIR", "data"))
+    results = {}
+    all_ok = True
+    for fname in _ALL_JSON_FILES:
+        fpath = data_dir / fname
+        try:
+            empty = "{}" if "last_scans" in fname else "[]"
+            fpath.parent.mkdir(parents=True, exist_ok=True)
+            fpath.write_text(empty)
+            results[fname] = "reset"
+            logger.info("  JSON file %s: reset", fname)
+        except Exception as exc:
+            all_ok = False
+            results[fname] = f"error: {exc}"
+            logger.error("  JSON file %s: error: %s", fname, exc)
+    return results, all_ok
+
+
+def _delete_learning_configs() -> dict:
+    """Delete learning weekly config files. Returns results dict."""
+    data_dir = Path(os.getenv("DATA_DIR", "data"))
+    results = {}
+    for fname in _LEARNING_CONFIG_FILES:
+        fpath = data_dir / fname
+        try:
+            if fpath.exists():
+                fpath.unlink()
+                results[fname] = "deleted"
+                logger.info("  Learning config %s: deleted", fname)
+            else:
+                results[fname] = "not_found"
+        except Exception as exc:
+            results[fname] = f"error: {exc}"
+            logger.error("  Learning config %s: error: %s", fname, exc)
+    return results
+
+
+def _clear_agent_memory() -> dict:
+    """Clear in-memory caches and state of all agents."""
+    results = {}
+    try:
+        all_agents = get_all_agents()
+    except Exception:
+        return {"error": "could not get agents"}
+
+    for name, agent in all_agents.items():
+        cleared = []
+        try:
+            # Learning agents: invalidate caches
+            if hasattr(agent, "_cached_adjustments"):
+                agent._cached_adjustments = None
+                agent._cache_valid = False
+                cleared.append("cached_adjustments")
+            if hasattr(agent, "_last_anomalies") and isinstance(getattr(agent, "_last_anomalies", None), list):
+                agent._last_anomalies = []
+                cleared.append("anomalies")
+            if hasattr(agent, "_total_recalculations"):
+                agent._total_recalculations = 0
+                cleared.append("recalculations")
+            if hasattr(agent, "_last_run_time"):
+                agent._last_run_time = None
+                cleared.append("last_run_time")
+
+            # Trader agents: reset counters and cached data
+            for attr in ["_trades_today", "_trades_total", "_rejections_today",
+                         "_evaluations_today", "_position_changes_total",
+                         "_trades_opened_total", "_trades_closed_total",
+                         "_position_opens_total", "_position_closes_total",
+                         "_pending_positions"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+            for attr in ["_last_trade_ticker", "_last_trade_direction",
+                         "_last_change_ticker", "_last_change_direction",
+                         "_last_action_ticker", "_last_action_direction"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, None)
+                    cleared.append(attr)
+            # Trader cached learning / scoring / weekly config
+            if hasattr(agent, "_current_learning"):
+                agent._current_learning = {}
+                cleared.append("current_learning")
+            if hasattr(agent, "_current_trend_scoring"):
+                agent._current_trend_scoring = {}
+                cleared.append("current_trend_scoring")
+            if hasattr(agent, "_weekly_config"):
+                agent._weekly_config = None
+                cleared.append("weekly_config")
+
+            # Journal agents: reset run stats
+            for attr in ["_last_run_trades_closed", "_last_run_tp", "_last_run_sl",
+                         "_last_run_expired", "_total_entries"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+            if hasattr(agent, "_last_pnl_sum"):
+                agent._last_pnl_sum = 0.0
+                cleared.append("last_pnl_sum")
+
+            # Scoring agents: reset counters and cached results
+            for attr in ["_last_scored_count", "_last_zero_edge_filtered",
+                         "_total_scored", "_total_tokens_used", "_cache_hits"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+            if hasattr(agent, "_last_result"):
+                agent._last_result = None
+                cleared.append("last_result")
+
+            # News agent
+            for attr in ["_last_collect_count", "_last_source_errors",
+                         "_total_collected", "_total_filtered_dedup"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+
+            # Performance agent: clear history
+            if hasattr(agent, "_snapshots") and isinstance(getattr(agent, "_snapshots", None), list):
+                agent._snapshots = []
+                cleared.append("snapshots")
+            if hasattr(agent, "_daily_reports") and isinstance(getattr(agent, "_daily_reports", None), list):
+                agent._daily_reports = []
+                cleared.append("daily_reports")
+            if hasattr(agent, "_last_report"):
+                agent._last_report = None
+                cleared.append("last_report")
+            for attr in ["_total_snapshots", "_total_reports"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+
+            if cleared:
+                results[name] = cleared
+        except Exception as exc:
+            results[name] = f"error: {exc}"
+
+    # Clear MessageBus in-memory messages
+    try:
+        from .agents.base import MessageBus
+        bus = MessageBus()
+        if hasattr(bus, "_memory_messages"):
+            bus._memory_messages.clear()
+            results["message_bus"] = ["memory_messages"]
+    except Exception as exc:
+        results["message_bus"] = f"error: {exc}"
+
+    logger.info("  Cleared agent memory: %s", results)
+    return results
 
 
 def _one_time_cleanup() -> None:
@@ -671,63 +874,19 @@ def _one_time_cleanup() -> None:
     logger.info("ONE-TIME CLEANUP — Resetting all trading data for fresh start")
     logger.info("=" * 60)
 
-    data_dir = Path(os.getenv("DATA_DIR", "data"))
-    json_ok = True
+    # 1. PG tables
+    _truncate_pg_tables()
 
-    # 1. Clear PG tables — per-table to avoid one missing table blocking everything
-    if is_pg_enabled():
-        tables = [
-            "trades", "journal_entries", "scan_history", "last_scans",
-            "price_archive",
-            "trend_positions", "trend_journal_entries",
-            "tech_positions", "tech_journal_entries",
-            "meta_positions", "meta_journal_entries",
-            "agent_messages", "agent_logs", "audit_reports",
-            "performance_data", "source_health",
-        ]
-        for table in tables:
-            try:
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(f"TRUNCATE TABLE IF EXISTS {table} CASCADE")
-                    conn.commit()
-                logger.info("  Truncated PG table: %s", table)
-            except Exception as exc:
-                logger.warning("  Failed to truncate PG table %s: %s", table, exc)
-        logger.info("PG cleanup complete")
+    # 2. JSON files
+    _, json_ok = _reset_json_files()
 
-    # 2. Reset JSON files to empty state (always — agents fall back to JSON when PG pool exhausted)
-    json_files_to_reset = [
-        "trades.json", "journal.json", "scan_history.json", "last_scans.json",
-        "trend_positions.json", "trend_journal.json",
-        "tech_positions.json", "tech_journal.json",
-        "meta_positions.json", "meta_journal.json",
-        "audit_reports.json", "source_health.json",
-    ]
-    for fname in json_files_to_reset:
-        fpath = data_dir / fname
-        try:
-            # Reset even if file doesn't exist yet — create it empty so fallback reads get clean state
-            empty = "{}" if "last_scans" in fname else "[]"
-            fpath.parent.mkdir(parents=True, exist_ok=True)
-            fpath.write_text(empty)
-            logger.info("  Reset JSON file: %s", fname)
-        except Exception as exc:
-            json_ok = False
-            logger.error("  Failed to reset JSON file %s: %s", fname, exc)
+    # 3. Learning configs
+    _delete_learning_configs()
 
-    # 3. Clear learning config history (fresh learning)
-    for fname in ["learning3_config_history.json", "learning4_config_history.json",
-                   "learning3_weekly_config.json", "learning4_weekly_config.json"]:
-        fpath = data_dir / fname
-        if fpath.exists():
-            try:
-                fpath.unlink()
-                logger.info("  Deleted learning config: %s", fname)
-            except Exception as exc:
-                logger.error("  Failed to delete learning config %s: %s", fname, exc)
+    # 4. Agent in-memory state
+    _clear_agent_memory()
 
-    # 4. Write sentinel ONLY if JSON cleanup succeeded
+    # 5. Write sentinel ONLY if JSON cleanup succeeded
     if json_ok:
         _CLEANUP_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
         _CLEANUP_SENTINEL.write_text(f"Cleanup performed at {datetime.now(timezone.utc).isoformat()}\n")
@@ -1468,65 +1627,31 @@ def get_infra_report():
 def reset_all_data():
     """Reset ALL trading data for a fresh start.
 
-    Truncates all PG tables and resets JSON fallback files.
-    Removes cleanup sentinel so _one_time_cleanup won't block.
+    Truncates all PG tables, resets JSON files, clears learning configs,
+    clears agent in-memory state, removes cleanup sentinel.
     """
-    results: dict = {"pg_tables": {}, "json_files": {}, "learning_configs": {}}
+    results: dict = {}
 
-    # 1. PG tables — per-table, IF EXISTS to avoid crash on missing table
-    if is_pg_enabled():
-        tables = [
-            "trades", "journal_entries", "scan_history", "last_scans",
-            "price_archive",
-            "trend_positions", "trend_journal_entries",
-            "tech_positions", "tech_journal_entries",
-            "meta_positions", "meta_journal_entries",
-            "agent_messages", "agent_logs", "audit_reports",
-            "performance_data", "source_health",
-        ]
-        for table in tables:
-            try:
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(f"TRUNCATE TABLE IF EXISTS {table} CASCADE")
-                    conn.commit()
-                results["pg_tables"][table] = "truncated"
-            except Exception as exc:
-                results["pg_tables"][table] = f"error: {exc}"
+    # 1. PG tables
+    results["pg_tables"] = _truncate_pg_tables()
 
     # 2. JSON files
-    data_dir = Path(os.getenv("DATA_DIR", "data"))
-    json_files = [
-        "trades.json", "journal.json", "scan_history.json", "last_scans.json",
-        "trend_positions.json", "trend_journal.json",
-        "tech_positions.json", "tech_journal.json",
-        "meta_positions.json", "meta_journal.json",
-        "audit_reports.json", "source_health.json",
-    ]
-    for fname in json_files:
-        fpath = data_dir / fname
-        try:
-            empty = "{}" if "last_scans" in fname else "[]"
-            fpath.parent.mkdir(parents=True, exist_ok=True)
-            fpath.write_text(empty)
-            results["json_files"][fname] = "reset"
-        except Exception as exc:
-            results["json_files"][fname] = f"error: {exc}"
+    json_results, _ = _reset_json_files()
+    results["json_files"] = json_results
 
     # 3. Learning configs
-    for fname in ["learning3_config_history.json", "learning4_config_history.json",
-                   "learning3_weekly_config.json", "learning4_weekly_config.json"]:
-        fpath = data_dir / fname
-        try:
-            if fpath.exists():
-                fpath.unlink()
-                results["learning_configs"][fname] = "deleted"
-            else:
-                results["learning_configs"][fname] = "not_found"
-        except Exception as exc:
-            results["learning_configs"][fname] = f"error: {exc}"
+    results["learning_configs"] = _delete_learning_configs()
 
-    # 4. Remove cleanup sentinel so next deploy won't skip
+    # 4. Clear agent in-memory state (caches, counters, positions)
+    results["agent_memory"] = _clear_agent_memory()
+
+    # 5. Clear in-memory scan cache
+    global _last_scans
+    with _scans_lock:
+        _last_scans = {}
+    results["scan_cache"] = "cleared"
+
+    # 6. Remove cleanup sentinel so next deploy won't skip
     if _CLEANUP_SENTINEL.exists():
         _CLEANUP_SENTINEL.unlink()
         results["sentinel"] = "removed"
