@@ -33,7 +33,7 @@ from .base import BaseAgent, AgentStatus
 class AgentPerformance(BaseAgent):
     name = "performance"
     description = "Mesure & suivi des KPIs de tous les agents"
-    version = "8.2"  # v8.2: Version-aware filtering for all 4 teams
+    version = "8.3"  # v8.3: fix cascade failure in daily report
 
     def __init__(self):
         super().__init__()
@@ -139,59 +139,24 @@ class AgentPerformance(BaseAgent):
         }
 
         try:
-            # Trader 1 KPIs (main)
-            report["trader_1"] = self.execute(
-                "Computing Trader 1 KPIs",
-                self._compute_trader_1_kpis,
-            )
-
-            # Trader 2 KPIs (trend)
-            report["trader_2"] = self.execute(
-                "Computing Trader 2 KPIs",
-                self._compute_trader_2_kpis,
-            )
-
-            # Scoring KPIs
-            report["scoring"] = self.execute(
-                "Computing Scoring KPIs",
-                self._compute_scoring_kpis,
-            )
-
-            # News KPIs
-            report["news"] = self.execute(
-                "Computing News KPIs",
-                self._compute_news_kpis,
-            )
-
-            # Journal KPIs
-            report["journal"] = self.execute(
-                "Computing Journal KPIs",
-                self._compute_journal_kpis,
-            )
-
-            # Learning KPIs
-            report["learning"] = self.execute(
-                "Computing Learning KPIs",
-                self._compute_learning_kpis,
-            )
-
-            # Infrastructure KPIs
-            report["infrastructure"] = self.execute(
-                "Computing Infrastructure KPIs",
-                self._compute_infra_kpis,
-            )
-
-            # Trader 3 KPIs (technical)
-            report["trader_3"] = self.execute(
-                "Computing Trader 3 KPIs",
-                self._compute_trader_3_kpis,
-            )
-
-            # Trader 4 KPIs (meta/ensemble)
-            report["trader_4"] = self.execute(
-                "Computing Trader 4 KPIs",
-                self._compute_trader_4_kpis,
-            )
+            # Compute each KPI section independently — one failure doesn't abort the report
+            kpi_sections = [
+                ("trader_1", "Computing Trader 1 KPIs", self._compute_trader_1_kpis),
+                ("trader_2", "Computing Trader 2 KPIs", self._compute_trader_2_kpis),
+                ("scoring", "Computing Scoring KPIs", self._compute_scoring_kpis),
+                ("news", "Computing News KPIs", self._compute_news_kpis),
+                ("journal", "Computing Journal KPIs", self._compute_journal_kpis),
+                ("learning", "Computing Learning KPIs", self._compute_learning_kpis),
+                ("infrastructure", "Computing Infrastructure KPIs", self._compute_infra_kpis),
+                ("trader_3", "Computing Trader 3 KPIs", self._compute_trader_3_kpis),
+                ("trader_4", "Computing Trader 4 KPIs", self._compute_trader_4_kpis),
+            ]
+            for key, desc, fn in kpi_sections:
+                try:
+                    report[key] = self.execute(desc, fn)
+                except Exception as exc:
+                    self.log(f"KPI computation failed: {key}", {"error": str(exc)}, level="WARN")
+                    report[key] = {"error": str(exc)}
 
             # Ranking & alerts
             self._rank_agents(report)

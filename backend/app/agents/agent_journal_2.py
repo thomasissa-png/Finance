@@ -252,7 +252,7 @@ class AgentJournal2(BaseAgent):
 
     name = "journal_2"
     description = "Journal & analyse des positions de tendance"
-    version = "7.1"  # v7.1: 17 fixes, MAE/MFE daily bars, snapshots, dedup, pruning
+    version = "7.2"  # v7.2: fix JSON fallback triple write data destruction
 
     def __init__(self):
         super().__init__()
@@ -364,27 +364,28 @@ class AgentJournal2(BaseAgent):
                     snapshots.append(snapshot)
 
             # Step 3: Save new entries only (P3: don't re-write existing)
-            if new_entries:
-                # Save new entries to PG/JSON
-                _save_journal_entries(new_entries)
+            from ..database import is_pg_enabled
+            if new_entries or snapshots:
+                snapshot_entries = [
+                    {**s, "entry_type": "snapshot"}
+                    for s in snapshots
+                ] if snapshots else []
 
-                # Prune old entries from JSON (PG handles this via DELETE)
-                from ..database import is_pg_enabled
-                if not is_pg_enabled():
-                    all_entries = new_entries + existing_entries
+                if is_pg_enabled():
+                    # PG: ON CONFLICT DO NOTHING handles dedup safely
+                    if new_entries:
+                        _pg_save_entries(new_entries)
+                    if snapshot_entries:
+                        _pg_save_entries(snapshot_entries)
+                else:
+                    # JSON: single atomic write with all entries combined
+                    all_entries = existing_entries + new_entries + snapshot_entries
                     cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
                     all_entries = [
                         e for e in all_entries
                         if e.get("entry_time", "") > cutoff or e.get("exit_time", "") > cutoff
                     ]
                     _save_entries_json(all_entries)
-
-            # P2: Persist snapshots as special entries
-            if snapshots:
-                _save_journal_entries([
-                    {**s, "entry_type": "snapshot"}
-                    for s in snapshots
-                ])
 
             # Step 4: Compute totals
             total_unrealized = sum(

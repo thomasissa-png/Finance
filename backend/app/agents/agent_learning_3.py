@@ -20,10 +20,13 @@ Differences with Learning 1/2:
   includes weekly strategy validation cycle and A/B-driven config
 """
 
+import json
 import logging
 import math
+import os
 import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
 
@@ -46,6 +49,28 @@ DECAY_HALF_LIFE_DAYS = 30  # Shorter than trend (30 vs 45) — technical signals
 
 # ADX threshold for regime classification
 ADX_TRENDING_THRESHOLD = 25.0
+
+# Weekly config persistence file
+_WEEKLY_CONFIG_FILE = Path(os.getenv("DATA_DIR", "data")) / "learning3_weekly_config.json"
+
+
+def _load_persisted_weekly_config() -> dict | None:
+    """Load weekly config from disk (survives restarts)."""
+    try:
+        if _WEEKLY_CONFIG_FILE.exists():
+            return json.loads(_WEEKLY_CONFIG_FILE.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to load learning3 weekly config: %s", exc)
+    return None
+
+
+def _persist_weekly_config(config: dict):
+    """Persist weekly config to disk."""
+    try:
+        _WEEKLY_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _WEEKLY_CONFIG_FILE.write_text(json.dumps(config, indent=2, default=str))
+    except OSError as exc:
+        logger.warning("Failed to persist learning3 weekly config: %s", exc)
 
 
 def _clamp(value: float, lo: float = ADJ_MIN, hi: float = ADJ_MAX) -> float:
@@ -433,7 +458,7 @@ class AgentLearning3(BaseAgent):
 
     name = "learning_3"
     description = "Learning & A/B testing — technical trading strategies"
-    version = "2.0"
+    version = "2.1"  # v2.1: persist weekly config to disk
 
     def __init__(self):
         super().__init__()
@@ -443,7 +468,7 @@ class AgentLearning3(BaseAgent):
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
         self._last_run_time = None  # P3.13: stale cache monitoring
-        self._weekly_config: dict | None = None  # C3: weekly strategy config
+        self._weekly_config: dict | None = _load_persisted_weekly_config()  # C3: weekly strategy config (persisted)
         self._config_history: list[dict] = []  # L2: track config changes
 
     def run(self, **kwargs) -> dict:
@@ -680,6 +705,7 @@ class AgentLearning3(BaseAgent):
         self._config_history = self._config_history[-10:]
 
         self._weekly_config = config
+        _persist_weekly_config(config)
 
         self.log("Weekly config generated", {
             "enabled": len(enabled_strategies),

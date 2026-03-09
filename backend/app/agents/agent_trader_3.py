@@ -326,6 +326,11 @@ class AgentTrader3(BaseAgent):
 
         Called by scheduler every 15 min. Only monitors existing positions,
         does NOT evaluate new setups (no Scoring 3 data needed).
+
+        CRITICAL fix: Always save after monitoring — trailing stop updates
+        modify effective_stop in memory and must be persisted even when no
+        position is closed. Without this, trailing stops revert to their
+        original value at the next load cycle.
         """
         state = _load_positions()
         active = state.get("active", [])
@@ -335,12 +340,7 @@ class AgentTrader3(BaseAgent):
         still_active, newly_closed = self._monitor_positions(active)
 
         if newly_closed:
-            closed_history = state.get("closed", [])
-            closed_history.extend(newly_closed)
             self._trades_closed_total += len(newly_closed)
-            state = {"active": still_active, "closed": closed_history}
-            _save_positions(state)
-
             for pos in newly_closed:
                 self.log_decision("POSITION CLOSED (monitor)", {
                     "ticker": pos["ticker"],
@@ -348,6 +348,12 @@ class AgentTrader3(BaseAgent):
                     "result": pos.get("result"),
                     "pnl_pct": pos.get("pnl_pct"),
                 })
+
+        # Always save — trailing stop updates modify effective_stop on still_active
+        closed_history = state.get("closed", [])
+        closed_history.extend(newly_closed)
+        state = {"active": still_active, "closed": closed_history}
+        _save_positions(state)
 
         return {"active": len(still_active), "closed": len(newly_closed)}
 

@@ -100,16 +100,26 @@ MIN_TREND_SCORE = 8.0
 CHAIN_DISCOUNT = 0.7
 
 
+import re
+
+# Precompile word-boundary patterns for structural keywords to avoid substring
+# false positives (e.g. "ban" must not match "banana", "demand" not "commandeered")
+_STRUCTURAL_PATTERNS: dict[str, tuple[re.Pattern, float]] = {}
+for _kw, _mult in STRUCTURAL_KEYWORDS.items():
+    _STRUCTURAL_PATTERNS[_kw] = (re.compile(r'\b' + re.escape(_kw) + r'\b', re.IGNORECASE), _mult)
+
+
 def _compute_persistence_mult(title: str, description: str = "") -> float:
     """Evaluate how structurally persistent a news signal is.
 
     Structural events (drought, embargo) → higher multiplier.
     Temporary/speculative events → lower multiplier.
+    Uses word-boundary matching to avoid false positives.
     """
-    text = (title + " " + (description or "")).lower()
+    text = title + " " + (description or "")
     best_mult = 1.0
-    for keyword, mult in STRUCTURAL_KEYWORDS.items():
-        if keyword in text:
+    for keyword, (pattern, mult) in _STRUCTURAL_PATTERNS.items():
+        if pattern.search(text):
             best_mult = max(best_mult, mult)
     return best_mult
 
@@ -324,7 +334,7 @@ class AgentScoring2(BaseAgent):
 
     name = "scoring_2"
     description = "Scoring tendance — re-pondération pour commodities"
-    version = "7.3"  # v7.3: 13 fixes, category mults, structural keywords, accumulation
+    version = "7.4"  # v7.4: fix substring keyword matching (word boundaries)
 
     def __init__(self):
         super().__init__()

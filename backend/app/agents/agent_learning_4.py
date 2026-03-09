@@ -25,10 +25,13 @@ Expertise incarnée :
 - Cross-validation across independent signal sources
 """
 
+import json
 import logging
 import math
+import os
 import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
 
@@ -52,6 +55,29 @@ ADJ_MAX_NARROW = 1.2
 
 # Temporal decay — half-life in days
 DECAY_HALF_LIFE_DAYS = 45
+
+# Weekly config persistence file
+_WEEKLY_CONFIG_FILE = Path(os.getenv("DATA_DIR", "data")) / "learning4_weekly_config.json"
+
+
+def _load_persisted_weekly_config() -> dict | None:
+    """Load weekly config from disk (survives restarts)."""
+    try:
+        if _WEEKLY_CONFIG_FILE.exists():
+            return json.loads(_WEEKLY_CONFIG_FILE.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to load learning4 weekly config: %s", exc)
+    return None
+
+
+def _persist_weekly_config(config: dict):
+    """Persist weekly config to disk."""
+    try:
+        _WEEKLY_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _WEEKLY_CONFIG_FILE.write_text(json.dumps(config, indent=2, default=str))
+    except OSError as exc:
+        logger.warning("Failed to persist learning4 weekly config: %s", exc)
+
 
 # Default source weights (same as Scoring 4)
 DEFAULT_WEIGHTS = {
@@ -432,7 +458,7 @@ class AgentLearning4(BaseAgent):
 
     name = "learning_4"
     description = "Learning & optimisation — meta/ensemble trading"
-    version = "2.0"
+    version = "2.1"  # v2.1: persist weekly config to disk
 
     def __init__(self):
         super().__init__()
@@ -442,8 +468,8 @@ class AgentLearning4(BaseAgent):
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
         self._last_run_time = None  # P3.13: stale cache monitoring
-        # Weekly config
-        self._weekly_config: dict | None = None
+        # Weekly config (persisted to survive restarts)
+        self._weekly_config: dict | None = _load_persisted_weekly_config()
         self._config_history: list[dict] = []
 
     def run(self, **kwargs) -> dict:
@@ -644,6 +670,7 @@ class AgentLearning4(BaseAgent):
                 self._config_history = self._config_history[-10:]
 
             self._weekly_config = config
+            _persist_weekly_config(config)
 
             self.log_decision("Weekly config generated", {
                 "config_version": config["config_version"],

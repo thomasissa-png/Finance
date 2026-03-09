@@ -178,7 +178,7 @@ class AgentJournal3(BaseAgent):
 
     name = "journal_3"
     description = "Journal & A/B analysis — technical trading strategies"
-    version = "2.0"
+    version = "2.1"  # v2.1: fix JSON fallback double write
 
     def __init__(self):
         super().__init__()
@@ -323,12 +323,13 @@ class AgentJournal3(BaseAgent):
 
             # Step 4: Save journal entries
             if new_entries:
-                _save_journal_entries(new_entries)
-
-                # Prune old entries from JSON
                 from ..database import is_pg_enabled
-                if not is_pg_enabled():
-                    all_entries = new_entries + existing_entries
+                if is_pg_enabled():
+                    # PG: ON CONFLICT DO NOTHING handles dedup safely
+                    _pg_save_entries(new_entries)
+                else:
+                    # JSON: single atomic write with all entries combined
+                    all_entries = existing_entries + new_entries
                     cutoff = (now - timedelta(days=365)).isoformat()
                     all_entries = [
                         e for e in all_entries

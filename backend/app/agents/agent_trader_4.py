@@ -272,7 +272,7 @@ class AgentTrader4(BaseAgent):
 
     name = "trader_4"
     description = "Meta trading — confluence-driven ensemble positions"
-    version = "2.0"
+    version = "2.1"  # v2.1: trailing stop persistence fix, stale stop_price fix
 
     def __init__(self):
         super().__init__()
@@ -509,8 +509,10 @@ class AgentTrader4(BaseAgent):
                 positions[ticker] = change["new_position"]
                 self._position_closes_total += 1
 
+        # Always save — trailing stop updates modify stop_price/peak_price on still-open positions
+        _save_positions(positions)
+
         if changes:
-            _save_positions(positions)
             for c in changes:
                 self.log_decision("POSITION CLOSED (monitor)", {
                     "ticker": c.get("ticker"),
@@ -575,8 +577,8 @@ class AgentTrader4(BaseAgent):
                     or (direction == "SHORT" and new_stop < stop_price):
                 pos["stop_price"] = round(new_stop, 4)
 
-        # 3. SL check (uses trailed stop if available)
-        effective_stop = stop_price or pos.get("stop_price")
+        # 3. SL check (uses CURRENT stop_price after trailing update, not stale capture)
+        effective_stop = pos.get("stop_price")
         if effective_stop is None:
             # Default SL
             if direction == "LONG":

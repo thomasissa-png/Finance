@@ -354,7 +354,7 @@ class AgentLearning2(BaseAgent):
 
     name = "learning_2"
     description = "Learning & optimisation — trend commodities"
-    version = "7.1"  # v7.1: 4 dims trend, churning detection, threshold calibration
+    version = "7.2"  # v7.2: fix snapshot contamination, cache recalc tracking
 
     def __init__(self):
         super().__init__()
@@ -383,9 +383,13 @@ class AgentLearning2(BaseAgent):
 
         try:
             # Step 1: Load journal 2 entries + version filter
+            # Filter out snapshot entries (entry_type=snapshot) — they have pnl_pct=0
+            # and would contaminate learning if included
             self.log("Loading trend journal entries for learning")
             from .agent_journal_2 import _load_journal_entries
-            entries = _filter_by_current_versions(_load_journal_entries())
+            raw_entries = _load_journal_entries()
+            raw_entries = [e for e in raw_entries if e.get("entry_type") != "snapshot"]
+            entries = _filter_by_current_versions(raw_entries)
 
             # Step 2: Compute adjustments
             learning_data = self.execute(
@@ -480,9 +484,13 @@ class AgentLearning2(BaseAgent):
         """
         if not self._cache_valid or self._cached_adjustments is None:
             from .agent_journal_2 import _load_journal_entries
-            entries = _filter_by_current_versions(_load_journal_entries())
+            raw_entries = _load_journal_entries()
+            raw_entries = [e for e in raw_entries if e.get("entry_type") != "snapshot"]
+            entries = _filter_by_current_versions(raw_entries)
             self._cached_adjustments = compute_trend_learning(entries)
             self._cache_valid = True
+            self._total_recalculations += 1
+            self._last_run_time = datetime.now(timezone.utc)
         return self._cached_adjustments
 
     def invalidate_cache(self):

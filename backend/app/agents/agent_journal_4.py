@@ -251,7 +251,7 @@ class AgentJournal4(BaseAgent):
 
     name = "journal_4"
     description = "Journal & analyse des positions meta/ensemble"
-    version = "2.0"
+    version = "2.1"  # v2.1: fix JSON fallback double write
 
     def __init__(self):
         super().__init__()
@@ -364,26 +364,28 @@ class AgentJournal4(BaseAgent):
             # Step 4: Save force-closed entries + new entries
             all_new = force_closed + new_entries
             if all_new:
-                _save_journal_entries(all_new)
+                try:
+                    from ..database import is_pg_enabled
+                    if is_pg_enabled():
+                        # PG: ON CONFLICT DO NOTHING handles dedup safely
+                        _pg_save_entries(all_new)
+                    else:
+                        # JSON: single atomic write with all entries combined
+                        all_entries = existing_entries + all_new
+                        cutoff = (now - timedelta(days=365)).isoformat()
+                        all_entries = [
+                            e for e in all_entries
+                            if e.get("entry_time", "") > cutoff
+                            or e.get("exit_time", "") > cutoff
+                        ]
+                        _save_entries_json(all_entries)
+                except Exception:
+                    # Last resort fallback
+                    _save_entries_json(existing_entries + all_new)
 
             # Save updated positions (force-closed ones)
             if force_closed:
                 _save_positions(positions)
-
-            # Prune old entries from JSON
-            try:
-                from ..database import is_pg_enabled
-                if not is_pg_enabled() and all_new:
-                    all_entries = all_new + existing_entries
-                    cutoff = (now - timedelta(days=365)).isoformat()
-                    all_entries = [
-                        e for e in all_entries
-                        if e.get("entry_time", "") > cutoff
-                        or e.get("exit_time", "") > cutoff
-                    ]
-                    _save_entries_json(all_entries)
-            except Exception:
-                pass
 
             # Step 5: Compute team combination stats
             all_journal = all_new + existing_entries

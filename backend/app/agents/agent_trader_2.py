@@ -200,7 +200,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "7.2"  # v7.2: 16 fixes, flip history, persistence PG/JSON, Learning 2 integration
+    version = "7.3"  # v7.3: fix news double-counting, null price guard
 
     def __init__(self):
         super().__init__()
@@ -430,15 +430,19 @@ class AgentTrader2(BaseAgent):
             if sn.direction.value == "NEUTRAL":
                 continue
 
-            # Check if any of our tickers are impacted
+            # Check if any of our tickers are impacted (direct OR chain, but not both)
+            matched_tickers = set()
             for ticker in TREND_TICKERS:
                 if ticker in sn.impacted_tickers:
-                    result.setdefault(ticker, []).append(sn)
+                    matched_tickers.add(ticker)
 
-            # Also check chain reactions
+            # Also check chain reactions (only if not already matched directly)
             for cr in (sn.chain_reactions or []):
                 if cr.ticker in TREND_TICKERS:
-                    result.setdefault(cr.ticker, []).append(sn)
+                    matched_tickers.add(cr.ticker)
+
+            for ticker in matched_tickers:
+                result.setdefault(ticker, []).append(sn)
 
         return result
 
@@ -619,7 +623,7 @@ class AgentTrader2(BaseAgent):
         return None
 
     def _make_change(self, ticker: str, position: dict, new_dir: str,
-                     reason: str, key_news: list, strength: float) -> dict:
+                     reason: str, key_news: list, strength: float) -> dict | None:
         """Create a position change record and update position state.
 
         Audit fixes v7.2:
@@ -631,6 +635,11 @@ class AgentTrader2(BaseAgent):
         old_dir = position.get("direction", "NEUTRAL")
         old_entry = position.get("entry_price")
         current_price = position.get("current_price") or _fetch_current_price(ticker)
+
+        # Guard: cannot open a position without a valid price
+        if not current_price:
+            logger.warning("Cannot change position for %s — no price available", ticker)
+            return None
 
         # P8: Calculate realized P&L with entry_price > 0 guard
         close_pnl = 0.0

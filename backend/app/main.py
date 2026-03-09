@@ -26,7 +26,6 @@ from .agents.registry import (
     get_all_status as get_agents_status,
     get_agent,
     invalidate_learning_cache,
-    invalidate_learning_2_cache,
     run_learning_update,
     run_learning_2_update,
     run_daily_journal as agents_run_journal,
