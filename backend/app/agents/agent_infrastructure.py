@@ -16,6 +16,7 @@ Schedule :
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 
 from .base import BaseAgent, AgentStatus
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 class AgentInfrastructure(BaseAgent):
     name = "infrastructure"
     description = "Surveillance & maintenance infrastructure système"
-    version = "7.5"  # v7.5: health check 15min, VACUUM 9 tables, divergence detection
+    version = "7.6"  # v7.6: C1 16 tables stats, C2 SQL safe_table, I2 file lock, I3 health timeout, M1 8 bloat checks
 
     def __init__(self):
         super().__init__()
@@ -58,6 +59,9 @@ class AgentInfrastructure(BaseAgent):
 
     # ── Health Check (léger, toutes les 15 min) ──────────────────────
 
+    # I3 (v7.6): Global timeout for health check — prevents overlap with next scheduled run
+    _HEALTH_CHECK_TIMEOUT_S = 60
+
     def run_health_check(self) -> dict:
         """Quick health check — PG connectivity, pool, pending trades, fallbacks."""
         self._set_status(AgentStatus.WORKING, "Health check")
@@ -73,22 +77,20 @@ class AgentInfrastructure(BaseAgent):
         }
 
         try:
-            # 1. PostgreSQL connectivity
-            pg_ok = self._check_pg_connectivity(result)
-
-            # 2. Pool health
-            if pg_ok:
-                self._check_pool_health(result)
-
-            # 3. Pending trades check
-            self._check_pending_trades(result)
-
-            # 4. JSON fallback detection
-            self._check_fallback_status(result)
-
-            # 5. Table sizes (lightweight — only counts)
-            if pg_ok:
-                self._check_table_health(result)
+            # Run all checks inside a global timeout to prevent hanging
+            executor = ThreadPoolExecutor(max_workers=1)
+            try:
+                future = executor.submit(self._run_health_checks_inner, result)
+                pg_ok = future.result(timeout=self._HEALTH_CHECK_TIMEOUT_S)
+            except FuturesTimeoutError:
+                result["issues"].append({
+                    "area": "health_check",
+                    "severity": "WARN",
+                    "detail": f"Health check timed out after {self._HEALTH_CHECK_TIMEOUT_S}s",
+                })
+                pg_ok = False
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
 
             # Overall status
             if result["issues"]:
@@ -257,6 +259,22 @@ class AgentInfrastructure(BaseAgent):
             self._set_status(AgentStatus.ERROR, str(exc))
             raise
 
+    def _run_health_checks_inner(self, result: dict) -> bool:
+        """Run all health sub-checks. Returns True if PG is OK."""
+        # 1. PostgreSQL connectivity
+        pg_ok = self._check_pg_connectivity(result)
+        # 2. Pool health
+        if pg_ok:
+            self._check_pool_health(result)
+        # 3. Pending trades check
+        self._check_pending_trades(result)
+        # 4. JSON fallback detection
+        self._check_fallback_status(result)
+        # 5. Table sizes (lightweight — only counts)
+        if pg_ok:
+            self._check_table_health(result)
+        return pg_ok
+
     # ── Private: PG checks ───────────────────────────────────────────
 
     def _check_pg_connectivity(self, result: dict) -> bool:
@@ -360,6 +378,8 @@ class AgentInfrastructure(BaseAgent):
 
             # Check if JSON files have data while PG might be empty
             from pathlib import Path
+            from ..database import get_conn, _safe_table
+            import fcntl
             data_dir = Path(__file__).resolve().parent.parent.parent.parent / "data"
             json_files = {
                 "trades.json": "trades",
@@ -372,12 +392,16 @@ class AgentInfrastructure(BaseAgent):
                     try:
                         import json
                         with open(fpath, "r") as f:
-                            data = json.load(f)
+                            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                            try:
+                                data = json.load(f)
+                            finally:
+                                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                         if isinstance(data, list) and len(data) > 0:
                             # JSON has data — check if PG also has data
                             with get_conn() as conn:
                                 with conn.cursor() as cur:
-                                    cur.execute(f"SELECT COUNT(*) FROM {pg_table}")
+                                    cur.execute(f"SELECT COUNT(*) FROM {_safe_table(pg_table)}")
                                     pg_count = cur.fetchone()[0]
                             if pg_count == 0 and len(data) > 5:
                                 result["issues"].append({
@@ -390,26 +414,32 @@ class AgentInfrastructure(BaseAgent):
         except Exception:
             pass
 
+    # M1/C2 (v7.6): Table bloat thresholds — checked during health check
+    _TABLE_BLOAT_THRESHOLDS = {
+        "agent_messages": 50000,
+        "agent_logs": 100000,
+        "scan_history": 200000,
+        "performance_data": 10000,
+        "trend_journal_entries": 50000,
+        "tech_journal_entries": 50000,
+        "meta_journal_entries": 50000,
+        "price_archive": 500000,
+    }
+
     def _check_table_health(self, result: dict) -> None:
-        """Quick table row count check."""
+        """Quick table row count check for bloat detection."""
         try:
-            from ..database import get_conn
+            from ..database import get_conn, _safe_table
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    for table in ["agent_messages", "agent_logs"]:
-                        cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    for table, threshold in self._TABLE_BLOAT_THRESHOLDS.items():
+                        cur.execute(f"SELECT COUNT(*) FROM {_safe_table(table)}")
                         count = cur.fetchone()[0]
-                        if table == "agent_messages" and count > 50000:
+                        if count > threshold:
                             result["issues"].append({
                                 "area": "table_bloat",
                                 "severity": "WARN",
-                                "detail": f"{table} has {count} rows — pruning may be needed",
-                            })
-                        elif table == "agent_logs" and count > 100000:
-                            result["issues"].append({
-                                "area": "table_bloat",
-                                "severity": "WARN",
-                                "detail": f"{table} has {count} rows — pruning may be needed",
+                                "detail": f"{table} has {count} rows (threshold {threshold}) — pruning may be needed",
                             })
         except Exception:
             pass

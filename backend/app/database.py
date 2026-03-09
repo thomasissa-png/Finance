@@ -78,6 +78,23 @@ _PG_POOL_MAX = int(os.environ.get("PG_POOL_MAX", "10"))
 _PG_MAX_RETRIES = 3
 _PG_RETRY_BACKOFF = [1, 2, 4]  # seconds
 
+# C2 (v7.6): Whitelist of valid table names — prevents SQL injection via f-strings
+_VALID_TABLES = frozenset({
+    "trades", "journal_entries", "scan_history", "last_scans",
+    "agent_messages", "agent_logs", "audit_reports",
+    "trend_positions", "trend_journal_entries",
+    "tech_positions", "tech_journal_entries",
+    "meta_positions", "meta_journal_entries",
+    "performance_data", "price_archive", "source_health",
+})
+
+
+def _safe_table(table: str) -> str:
+    """Validate table name against whitelist. Raises ValueError if not allowed."""
+    if table not in _VALID_TABLES:
+        raise ValueError(f"Invalid table name: {table!r}")
+    return table
+
 
 def is_pg_enabled() -> bool:
     """Check if PostgreSQL persistence is available and configured."""
@@ -1390,7 +1407,7 @@ def pg_run_maintenance() -> dict:
                 # VACUUM requires autocommit mode
                 conn.autocommit = True
                 with conn.cursor() as cur:
-                    cur.execute(f"VACUUM ANALYZE {table}")
+                    cur.execute(f"VACUUM ANALYZE {_safe_table(table)}")
                 results[table] = "ok"
             finally:
                 conn.autocommit = False
@@ -1428,7 +1445,7 @@ def pg_full_reset() -> dict:
             with conn.cursor() as cur:
                 for table in tables:
                     try:
-                        cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+                        cur.execute(f"TRUNCATE TABLE {_safe_table(table)} RESTART IDENTITY CASCADE")
                         results[table] = "truncated"
                     except Exception as exc:
                         results[table] = f"error: {exc}"
@@ -1458,8 +1475,12 @@ def pg_table_stats() -> dict:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 stats = {}
                 for table in ["trades", "journal_entries", "scan_history", "last_scans",
-                              "agent_messages", "agent_logs", "audit_reports"]:
-                    cur.execute(f"SELECT COUNT(*) as row_count FROM {table}")
+                              "agent_messages", "agent_logs", "audit_reports",
+                              "trend_positions", "trend_journal_entries",
+                              "tech_positions", "tech_journal_entries",
+                              "meta_positions", "meta_journal_entries",
+                              "performance_data", "price_archive", "source_health"]:
+                    cur.execute(f"SELECT COUNT(*) as row_count FROM {_safe_table(table)}")
                     row_count = cur.fetchone()["row_count"]
 
                     cur.execute("""

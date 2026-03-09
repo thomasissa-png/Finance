@@ -462,8 +462,7 @@ def _run_daily_journal() -> None:
                     trader_2.reset_daily_counters()
             except Exception as exc:
                 logger.warning("Failed to reset daily counters: %s", exc)
-            # Invalidate learning cache and run full learning update
-            invalidate_learning_cache()
+            # Run Learning 1 update (after Journal 1)
             try:
                 run_learning_update()
             except Exception as exc:
@@ -471,31 +470,26 @@ def _run_daily_journal() -> None:
             # Run Journal 2 (trend positions) + Learning 2 update
             try:
                 agents_run_journal_2()
-                invalidate_learning_2_cache()
                 run_learning_2_update()
             except Exception as exc:
                 logger.warning("Journal 2 / Learning 2 update failed: %s", exc)
             # Run Journal 3 (technical) + Learning 3 update
             try:
                 from .agents.registry import (run_daily_journal_3,
-                                              invalidate_learning_3_cache,
                                               run_learning_3_update)
                 run_daily_journal_3()
-                invalidate_learning_3_cache()
                 run_learning_3_update()
             except Exception as exc:
                 logger.warning("Journal 3 / Learning 3 update failed: %s", exc)
             # Run Journal 4 (meta) + Learning 4 update
             try:
                 from .agents.registry import (run_daily_journal_4,
-                                              invalidate_learning_4_cache,
                                               run_learning_4_update)
                 run_daily_journal_4()
-                invalidate_learning_4_cache()
                 run_learning_4_update()
             except Exception as exc:
                 logger.warning("Journal 4 / Learning 4 update failed: %s", exc)
-            # P3.9: Centralized cache invalidation — ensures all caches are fresh
+            # I4 (v7.6): Single centralized cache invalidation — replaces per-team invalidations
             try:
                 from .agents.registry import invalidate_all_learning_caches
                 invalidate_all_learning_caches()

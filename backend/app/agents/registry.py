@@ -517,10 +517,9 @@ def invalidate_all_learning_caches():
             logging.getLogger(__name__).warning("Failed to invalidate %s cache: %s", key, exc)
     # Publish bus message for any downstream consumers
     try:
+        from datetime import datetime, timezone
         _agents["learning"].publish("journal_all_complete", {
-            "timestamp": __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
     except Exception:
         pass

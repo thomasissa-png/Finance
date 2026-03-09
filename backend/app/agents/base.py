@@ -57,6 +57,7 @@ class MessageBus:
         self._memory_messages: deque = deque(maxlen=1000)
         self._memory_lock = threading.Lock()
         self._subscribers: dict[str, list] = {}  # msg_type -> [callback]
+        self._subscribers_lock = threading.Lock()
 
     def _use_pg(self) -> bool:
         try:
@@ -94,8 +95,10 @@ class MessageBus:
             with self._memory_lock:
                 self._memory_messages.append(msg)
 
-        # Notify subscribers
-        for callback in self._subscribers.get(msg_type, []):
+        # Notify subscribers (snapshot list under lock for thread safety)
+        with self._subscribers_lock:
+            callbacks = list(self._subscribers.get(msg_type, []))
+        for callback in callbacks:
             try:
                 callback(msg)
             except Exception as exc:
@@ -156,7 +159,17 @@ class MessageBus:
 
     def subscribe(self, msg_type: str, callback) -> None:
         """Register a callback for a message type (real-time notification)."""
-        self._subscribers.setdefault(msg_type, []).append(callback)
+        with self._subscribers_lock:
+            self._subscribers.setdefault(msg_type, []).append(callback)
+
+    def unsubscribe(self, msg_type: str, callback) -> None:
+        """Remove a previously registered callback."""
+        with self._subscribers_lock:
+            cbs = self._subscribers.get(msg_type, [])
+            try:
+                cbs.remove(callback)
+            except ValueError:
+                pass
 
     def recent_messages(self, limit: int = 50) -> list[dict]:
         """Get recent messages for debugging (all types)."""
@@ -189,7 +202,8 @@ class MessageBus:
                 pass
 
         with self._memory_lock:
-            return list(reversed(list(self._memory_messages)))[:limit]
+            # Slice from the end (newest) and reverse to get descending order
+            return list(self._memory_messages)[-limit:][::-1]
 
 
 # ── Agent Logger ───────────────────────────────────────────────────────
