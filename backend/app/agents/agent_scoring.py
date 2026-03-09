@@ -193,9 +193,15 @@ class AgentScoring(BaseAgent):
             return result
 
         except Exception as exc:
-            self.log("Scoring failed", {"error": str(exc)}, level="ERROR")
-            self._set_status(AgentStatus.ERROR, str(exc))
-            raise
+            error_str = str(exc)
+            error_type = type(exc).__name__
+            self.log("Scoring failed", {"error": error_str, "type": error_type}, level="ERROR")
+            self._set_status(AgentStatus.ERROR, error_str)
+            # Return partial result with error info instead of raising
+            # so the pipeline can differentiate timeout vs auth failure
+            result["error_type"] = error_type
+            result["error_message"] = error_str
+            return result
 
     # ── Private helpers ────────────────────────────────────────────
 

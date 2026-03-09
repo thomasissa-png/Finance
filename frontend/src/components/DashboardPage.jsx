@@ -53,9 +53,10 @@ const PROGRESS_STEPS = ["Collecte RSS", "Analyse Claude", "Sélection trade"];
 function getApiError(scans) {
   for (const key of Object.keys(scans)) {
     const scan = scans[key];
-    if (scan?.api_error) return scan;
+    // Only show banner for real API failures, not timeouts or empty results
+    if (scan?.api_error === "AuthenticationError" || scan?.api_error === "RateLimitError") return scan;
     const reason = scan?.reason_no_trade || "";
-    if (reason.includes("API Claude") || reason.includes("AuthenticationError") || reason.includes("RateLimitError")) return scan;
+    if (reason.includes("clé API invalide") || reason.includes("AuthenticationError") || reason.includes("RateLimitError")) return scan;
   }
   return null;
 }
@@ -367,9 +368,9 @@ export default function DashboardPage({ isActive, agents }) {
         fetch("/api/performance/report").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch("/api/performance/history?limit=30").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/agents/trader_3/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
-        fetch("/api/agents/trader_4/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
 
       // Only apply if this is still the most recent fetch
@@ -381,10 +382,16 @@ export default function DashboardPage({ isActive, agents }) {
       if (Array.isArray(histRes)) setHistory(histRes);
 
       // Normalize positions for all teams
+      // Team 1: trades array, filter PENDING
       const pending1 = Array.isArray(t1Res) ? t1Res.filter((t) => t.result === "PENDING") : [];
-      const active2 = Array.isArray(t2Res) ? t2Res.filter((t) => t.direction && t.direction !== "FLAT") : [];
-      const active3 = Array.isArray(t3Res?.positions) ? t3Res.positions : [];
-      const active4 = Array.isArray(t4Res?.positions) ? t4Res.positions : [];
+      // Team 2: dict {ticker: posData} — convert to array, filter non-FLAT
+      const t2Values = t2Res && typeof t2Res === "object" && !Array.isArray(t2Res) ? Object.values(t2Res) : [];
+      const active2 = t2Values.filter((t) => t.direction && t.direction !== "FLAT");
+      // Team 3: {active: [...], closed: [...]}
+      const active3 = Array.isArray(t3Res?.active) ? t3Res.active : [];
+      // Team 4: dict {ticker: posData} — convert to array, filter active
+      const t4Values = t4Res && typeof t4Res === "object" && !Array.isArray(t4Res) ? Object.values(t4Res) : [];
+      const active4 = t4Values.filter((t) => t.direction && t.direction !== "FLAT" && t.direction !== "NONE");
       setPositions({ "1": pending1, "2": active2, "3": active3, "4": active4 });
 
       setLastUpdate(new Date());
@@ -396,14 +403,16 @@ export default function DashboardPage({ isActive, agents }) {
     try {
       const [t1Res, t2Res, t3Res, t4Res] = await Promise.all([
         fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/agents/trader_3/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
-        fetch("/api/agents/trader_4/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
       const pending1 = Array.isArray(t1Res) ? t1Res.filter((t) => t.result === "PENDING") : [];
-      const active2 = Array.isArray(t2Res) ? t2Res.filter((t) => t.direction && t.direction !== "FLAT") : [];
-      const active3 = Array.isArray(t3Res?.positions) ? t3Res.positions : [];
-      const active4 = Array.isArray(t4Res?.positions) ? t4Res.positions : [];
+      const t2Values = t2Res && typeof t2Res === "object" && !Array.isArray(t2Res) ? Object.values(t2Res) : [];
+      const active2 = t2Values.filter((t) => t.direction && t.direction !== "FLAT");
+      const active3 = Array.isArray(t3Res?.active) ? t3Res.active : [];
+      const t4Values = t4Res && typeof t4Res === "object" && !Array.isArray(t4Res) ? Object.values(t4Res) : [];
+      const active4 = t4Values.filter((t) => t.direction && t.direction !== "FLAT" && t.direction !== "NONE");
       setPositions({ "1": pending1, "2": active2, "3": active3, "4": active4 });
       setLastUpdate(new Date());
     } catch { /* */ }
@@ -531,7 +540,7 @@ export default function DashboardPage({ isActive, agents }) {
       {/* Equity curve */}
       <EquityCurve history={history} />
 
-      {/* API error */}
+      {/* API error — only real auth/rate-limit failures */}
       {apiErrorScan && (
         <div className="api-error-banner">
           <strong>API Claude hors service</strong>

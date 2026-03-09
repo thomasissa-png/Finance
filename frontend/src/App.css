@@ -1003,6 +1003,39 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
 .perf-card-value { font-family: var(--font-mono); font-size: 20px; font-weight: 700; }
 .perf-card-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
+/* Performance page tabs */
+.perf-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  overflow-x: auto;
+}
+.perf-tab {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.perf-tab:hover { color: var(--text-primary); background: rgba(59,130,246,0.1); }
+.perf-tab.active { color: var(--accent); background: var(--bg-surface); box-shadow: var(--shadow-sm); }
+
+/* Mini KPI cards for team detail */
+.kpi-card.mini {
+  padding: 8px 12px;
+  min-width: 0;
+}
+.kpi-card.mini .kpi-value { font-size: 16px; }
+.kpi-card.mini .kpi-label { font-size: 10px; }
+
 .version-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .version-table th { text-align: left; padding: 8px 10px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
 .version-table td { padding: 8px 10px; border-bottom: 1px solid rgba(30,45,74,0.4); color: var(--text-secondary); }

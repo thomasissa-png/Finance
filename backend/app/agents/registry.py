@@ -189,7 +189,21 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
     market_ctx = scoring_result.get("market_context")
 
     if not scored:
-        reason = "API Claude hors service — les news n'ont pas pu être scorées"
+        # Differentiate between API failure types
+        error_type = scoring_result.get("error_type", "")
+        error_msg = scoring_result.get("error_message", "")
+        if "Timeout" in error_type or "timeout" in error_msg.lower():
+            reason = f"Timeout API Claude — réessai au prochain scan ({error_type})"
+        elif "Authentication" in error_type or "authentication" in error_msg.lower():
+            reason = "API Claude hors service — clé API invalide ou crédits épuisés"
+            error_type = "AuthenticationError"
+        elif "RateLimit" in error_type or "rate" in error_msg.lower():
+            reason = "API Claude — limite de requêtes atteinte"
+            error_type = "RateLimitError"
+        elif error_type:
+            reason = f"Erreur API Claude ({error_type}): {error_msg[:200]}"
+        else:
+            reason = "Aucune news scorée — toutes filtrées ou cache vide"
         result_dict = {
             "scan_type": scan_type.value,
             "has_trade": False,
@@ -197,6 +211,8 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
             "news_analyzed": len(news_items),
             "all_scored_news": [],
         }
+        if error_type:
+            result_dict["api_error"] = error_type
         _append_scan_result(result_dict, news_result)
         return result_dict
 
