@@ -16,6 +16,7 @@ Provides:
 
 import logging
 import threading
+import time
 from typing import Any
 
 from .agent_auditor import AgentAuditor
@@ -46,9 +47,59 @@ logger = logging.getLogger(__name__)
 _agents: dict[str, Any] = {}
 _init_lock = threading.Lock()
 
+# P1 (v7.8): Staggered initialization — agents are grouped into waves
+# with a short sleep between each wave. This prevents 21 agents from
+# all hitting PG simultaneously at startup, which exhausts the connection pool.
+_INIT_WAVE_DELAY_S = 0.3  # seconds between waves
+
+_AGENT_WAVES = [
+    # Wave 1: Shared agents (News + Scoring) — needed by all teams
+    [
+        ("news", AgentNews),
+        ("scoring", AgentScoring),
+    ],
+    # Wave 2: Équipe 1 — Intraday
+    [
+        ("trader_1", AgentTrader),
+        ("journal", AgentJournal),
+        ("learning", AgentLearning),
+    ],
+    # Wave 3: Équipe 2 — Trend
+    [
+        ("scoring_2", AgentScoring2),
+        ("trader_2", AgentTrader2),
+        ("journal_2", AgentJournal2),
+        ("learning_2", AgentLearning2),
+    ],
+    # Wave 4: Équipe 3 — Technical Indicators
+    [
+        ("scoring_3", AgentScoring3),
+        ("trader_3", AgentTrader3),
+        ("journal_3", AgentJournal3),
+        ("learning_3", AgentLearning3),
+    ],
+    # Wave 5: Équipe 4 — Meta/Ensemble
+    [
+        ("scoring_4", AgentScoring4),
+        ("trader_4", AgentTrader4),
+        ("journal_4", AgentJournal4),
+        ("learning_4", AgentLearning4),
+    ],
+    # Wave 6: Infrastructure agents (non-trading, can wait)
+    [
+        ("infrastructure", AgentInfrastructure),
+        ("performance", AgentPerformance),
+        ("auditor", AgentAuditor),
+    ],
+]
+
 
 def _ensure_agents():
-    """Lazily initialize all agents (singleton).
+    """Lazily initialize all agents (singleton) in staggered waves.
+
+    P1 (v7.8): Agents are initialized in 6 waves with a short delay between
+    each wave. This prevents 21 agents from simultaneously exhausting the
+    PG connection pool at startup (Replit pool_max=30, 21 agents = thundering herd).
 
     Each agent is initialized independently — if one fails, the others
     still start. This prevents a single broken agent from killing the
@@ -60,43 +111,20 @@ def _ensure_agents():
     with _init_lock:
         if _agents:
             return
-        agent_classes = [
-            # Shared
-            ("news", AgentNews),
-            ("scoring", AgentScoring),
-            # Équipe 1 — Intraday
-            ("trader_1", AgentTrader),
-            ("journal", AgentJournal),
-            ("learning", AgentLearning),
-            # Équipe 2 — Trend
-            ("scoring_2", AgentScoring2),
-            ("trader_2", AgentTrader2),
-            ("journal_2", AgentJournal2),
-            ("learning_2", AgentLearning2),
-            # Équipe 3 — Technical Indicators
-            ("scoring_3", AgentScoring3),
-            ("trader_3", AgentTrader3),
-            ("journal_3", AgentJournal3),
-            ("learning_3", AgentLearning3),
-            # Équipe 4 — Meta/Ensemble
-            ("scoring_4", AgentScoring4),
-            ("trader_4", AgentTrader4),
-            ("journal_4", AgentJournal4),
-            ("learning_4", AgentLearning4),
-            # Infrastructure
-            ("infrastructure", AgentInfrastructure),
-            ("performance", AgentPerformance),
-            ("auditor", AgentAuditor),
-        ]
         result = {}
-        for name, cls in agent_classes:
-            try:
-                result[name] = cls()
-            except Exception as exc:
-                logger.error("Failed to initialize agent '%s': %s", name, exc)
+        total_agents = sum(len(wave) for wave in _AGENT_WAVES)
+        for wave_idx, wave in enumerate(_AGENT_WAVES):
+            for name, cls in wave:
+                try:
+                    result[name] = cls()
+                except Exception as exc:
+                    logger.error("Failed to initialize agent '%s': %s", name, exc)
+            # Sleep between waves to let PG connections return to pool
+            if wave_idx < len(_AGENT_WAVES) - 1:
+                time.sleep(_INIT_WAVE_DELAY_S)
         _agents = result
-        logger.info("Agent registry initialized: %d/%d agents — %s",
-                     len(_agents), len(agent_classes), list(_agents.keys()))
+        logger.info("Agent registry initialized: %d/%d agents (6 waves) — %s",
+                     len(_agents), total_agents, list(_agents.keys()))
 
 
 def get_agent(name: str):

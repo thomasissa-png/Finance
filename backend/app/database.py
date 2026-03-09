@@ -71,8 +71,11 @@ _migration_attempted: dict[str, bool] = {}
 _STATEMENT_TIMEOUT_S = int(os.environ.get("PG_STATEMENT_TIMEOUT", "30"))
 
 # M8: Pool size configurable via env var
-_PG_POOL_MIN = int(os.environ.get("PG_POOL_MIN", "2"))
-_PG_POOL_MAX = int(os.environ.get("PG_POOL_MAX", "20"))
+# P1 (v7.8): Increased pool defaults — 21 agents + background jobs need headroom.
+# Old: min=2, max=20 caused thundering herd at startup (13+ agents competing for 20 conns).
+# New: min=4 (pre-warm more connections), max=30 (enough for 21 agents + scheduler + API).
+_PG_POOL_MIN = int(os.environ.get("PG_POOL_MIN", "4"))
+_PG_POOL_MAX = int(os.environ.get("PG_POOL_MAX", "30"))
 
 # H5: Retry configuration
 _PG_MAX_RETRIES = 3

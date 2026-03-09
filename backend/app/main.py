@@ -672,6 +672,8 @@ def _one_time_cleanup() -> None:
     logger.info("=" * 60)
 
     data_dir = Path(os.getenv("DATA_DIR", "data"))
+    pg_ok = True
+    json_ok = True
 
     # 1. Clear PG tables (TRUNCATE is fastest, CASCADE handles FK)
     if is_pg_enabled():
@@ -692,9 +694,10 @@ def _one_time_cleanup() -> None:
                 conn.commit()
             logger.info("PG cleanup complete")
         except Exception as exc:
-            logger.error("PG cleanup error (will continue with JSON): %s", exc)
+            pg_ok = False
+            logger.error("PG cleanup FAILED: %s", exc)
 
-    # 2. Reset JSON files to empty state
+    # 2. Reset JSON files to empty state (always — agents fall back to JSON when PG pool exhausted)
     json_files_to_reset = [
         "trades.json", "journal.json", "scan_history.json", "last_scans.json",
         "trend_positions.json", "trend_journal.json",
@@ -704,27 +707,39 @@ def _one_time_cleanup() -> None:
     ]
     for fname in json_files_to_reset:
         fpath = data_dir / fname
-        if fpath.exists():
-            # Most files expect [] as empty, last_scans expects {}
+        try:
+            # Reset even if file doesn't exist yet — create it empty so fallback reads get clean state
             empty = "{}" if "last_scans" in fname else "[]"
+            fpath.parent.mkdir(parents=True, exist_ok=True)
             fpath.write_text(empty)
             logger.info("  Reset JSON file: %s", fname)
+        except Exception as exc:
+            json_ok = False
+            logger.error("  Failed to reset JSON file %s: %s", fname, exc)
 
     # 3. Clear learning config history (fresh learning)
     for fname in ["learning3_config_history.json", "learning4_config_history.json",
                    "learning3_weekly_config.json", "learning4_weekly_config.json"]:
         fpath = data_dir / fname
         if fpath.exists():
-            fpath.unlink()
-            logger.info("  Deleted learning config: %s", fname)
+            try:
+                fpath.unlink()
+                logger.info("  Deleted learning config: %s", fname)
+            except Exception as exc:
+                logger.error("  Failed to delete learning config %s: %s", fname, exc)
 
-    # 4. Write sentinel so this never runs again
-    _CLEANUP_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
-    _CLEANUP_SENTINEL.write_text(f"Cleanup performed at {datetime.now(timezone.utc).isoformat()}\n")
-
-    logger.info("=" * 60)
-    logger.info("ONE-TIME CLEANUP COMPLETE — Fresh start ready")
-    logger.info("=" * 60)
+    # 4. Write sentinel ONLY if both PG and JSON cleanup succeeded
+    # If either failed, we must retry on next startup to ensure clean state
+    if pg_ok and json_ok:
+        _CLEANUP_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
+        _CLEANUP_SENTINEL.write_text(f"Cleanup performed at {datetime.now(timezone.utc).isoformat()}\n")
+        logger.info("=" * 60)
+        logger.info("ONE-TIME CLEANUP COMPLETE — Fresh start ready")
+        logger.info("=" * 60)
+    else:
+        logger.warning("=" * 60)
+        logger.warning("ONE-TIME CLEANUP INCOMPLETE — pg_ok=%s json_ok=%s — will retry on next startup", pg_ok, json_ok)
+        logger.warning("=" * 60)
 
 
 @asynccontextmanager
