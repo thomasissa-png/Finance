@@ -61,7 +61,7 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
 | Infrastructure | 7.5 | Health check, VACUUM 9 tables |
 | Performance | 8.3 | Cascade-safe daily report (individual try/except per KPI section) |
-| Auditor | 8.1 | Dict dispatch, 22 profiles (Teams 3/4 added) |
+| Auditor | 8.2 | Fix audit checks in except blocks, timedelta import, safe defaults |
 
 ## Architecture v7.0 — Multi-Agent par Équipes
 

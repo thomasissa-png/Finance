@@ -2179,3 +2179,83 @@ class TestMainDeadImport:
         source = main_path.read_text()
         # The import line should not contain invalidate_learning_2_cache
         assert "invalidate_learning_2_cache" not in source
+
+
+class TestAuditorChecksOutsideExcept:
+    """HIGH: Audit checks 6-8 (journal) and 7-9 (learning) must NOT be inside except blocks."""
+
+    def test_journal_checks_outside_except(self):
+        """Price fetch, pruning, recovery checks must run regardless of try/except."""
+        auditor_path = Path(__file__).resolve().parent.parent / "app" / "agents" / "agent_auditor.py"
+        source = auditor_path.read_text()
+        # Find the _audit_journal method
+        method_start = source.find("def _audit_journal(")
+        method_end = source.find("\n    def ", method_start + 1)
+        method_source = source[method_start:method_end]
+        # Check that "# 6. Price fetch" is NOT indented deeper than 8 spaces (inside except)
+        for line in method_source.split("\n"):
+            if "# 6. Price fetch reliability" in line:
+                indent = len(line) - len(line.lstrip())
+                assert indent == 8, f"Check 6 is indented {indent} spaces, should be 8 (outside except)"
+            if "# 7. Pruning verification" in line:
+                indent = len(line) - len(line.lstrip())
+                assert indent == 8, f"Check 7 is indented {indent} spaces, should be 8 (outside except)"
+            if "# 8. Recovery verification" in line:
+                indent = len(line) - len(line.lstrip())
+                assert indent == 8, f"Check 8 is indented {indent} spaces, should be 8 (outside except)"
+
+    def test_learning_checks_outside_except(self):
+        """Decay calibration, anomaly detection, feedback quality must run regardless of try/except."""
+        auditor_path = Path(__file__).resolve().parent.parent / "app" / "agents" / "agent_auditor.py"
+        source = auditor_path.read_text()
+        method_start = source.find("def _audit_learning(")
+        method_end = source.find("\n    def ", method_start + 1)
+        method_source = source[method_start:method_end]
+        for line in method_source.split("\n"):
+            if "# 7. Decay calibration" in line:
+                indent = len(line) - len(line.lstrip())
+                assert indent == 8, f"Check 7 is indented {indent} spaces, should be 8 (outside except)"
+            if "# 8. Anomaly detection" in line:
+                indent = len(line) - len(line.lstrip())
+                assert indent == 8, f"Check 8 is indented {indent} spaces, should be 8 (outside except)"
+            if "# 9. Feedback quality" in line:
+                indent = len(line) - len(line.lstrip())
+                assert indent == 8, f"Check 9 is indented {indent} spaces, should be 8 (outside except)"
+
+    def test_journal_safe_defaults(self):
+        """recent and entries must be defined before try block."""
+        auditor_path = Path(__file__).resolve().parent.parent / "app" / "agents" / "agent_auditor.py"
+        source = auditor_path.read_text()
+        method_start = source.find("def _audit_journal(")
+        method_end = source.find("\n    def ", method_start + 1)
+        method_source = source[method_start:method_end]
+        # entries = [] and recent = [] should appear before "try:"
+        try_pos = method_source.find("try:")
+        pre_try = method_source[:try_pos]
+        assert "entries = []" in pre_try, "entries = [] must be before try block"
+        assert "recent = []" in pre_try, "recent = [] must be before try block"
+
+    def test_learning_safe_defaults(self):
+        """closed and trades must be defined before try block."""
+        auditor_path = Path(__file__).resolve().parent.parent / "app" / "agents" / "agent_auditor.py"
+        source = auditor_path.read_text()
+        method_start = source.find("def _audit_learning(")
+        method_end = source.find("\n    def ", method_start + 1)
+        method_source = source[method_start:method_end]
+        try_pos = method_source.find("try:")
+        pre_try = method_source[:try_pos]
+        assert "closed = []" in pre_try, "closed = [] must be before try block"
+        assert "trades = []" in pre_try, "trades = [] must be before try block"
+
+    def test_timedelta_imported(self):
+        """timedelta must be imported at module level."""
+        auditor_path = Path(__file__).resolve().parent.parent / "app" / "agents" / "agent_auditor.py"
+        source = auditor_path.read_text()
+        # Check first 50 lines for the import
+        header = "\n".join(source.split("\n")[:50])
+        assert "timedelta" in header, "timedelta must be imported at module level"
+
+    def test_auditor_version_bumped(self):
+        """Auditor version should be 8.2 after fixes."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        assert AgentAuditor.version == "8.2"

@@ -36,7 +36,7 @@ typos, missing error handling) peuvent être appliqués directement.
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
@@ -310,7 +310,7 @@ AUDIT_PROFILES = {
 class AgentAuditor(BaseAgent):
     name = "auditor"
     description = "Audit en profondeur de chaque agent"
-    version = "8.1"  # v8.1: dict dispatch, fixed indentation, 14 profiles, version tracking
+    version = "8.2"  # v8.2: fix audit checks in except blocks, timedelta import, safe defaults
 
     def __init__(self):
         super().__init__()
@@ -1422,6 +1422,8 @@ class AgentAuditor(BaseAgent):
         tests = report["tests_to_add"]
         scores = report["score_breakdown"]
 
+        entries = []
+        recent = []
         try:
             from ..journal import load_journal
 
@@ -1504,48 +1506,48 @@ class AgentAuditor(BaseAgent):
             findings.append({"area": "journal", "status": "ERROR", "detail": str(exc)})
             scores["overall"] = 3
 
-            # 6. Price fetch reliability — entries with missing exit_price
+        # 6. Price fetch reliability — entries with missing exit_price
+        if recent:
             no_exit = sum(1 for e in recent if e.get("exit_price") is None and e.get("result") not in (None, "PENDING"))
-            if recent:
-                fetch_rate = (len(recent) - no_exit) / len(recent) * 100
-                findings.append({
-                    "area": "price_fetch_reliability",
-                    "status": "OK" if fetch_rate > 90 else "WARN" if fetch_rate > 70 else "CRITICAL",
-                    "detail": f"Price fetch success: {fetch_rate:.0f}% ({len(recent) - no_exit}/{len(recent)})",
-                })
-                scores["price_fetch_reliability"] = min(10, fetch_rate / 10)
-                if fetch_rate < 80:
-                    improvements.append({
-                        "priority": "HIGH",
-                        "agent": "journal",
-                        "action": f"Price fetch reliability at {fetch_rate:.0f}% — check API keys/connectivity",
-                        "rationale": "Missing exit prices = EXPIRED trades with entry_price fallback",
-                    })
-
-            # 7. Pruning verification
-            try:
-                oldest_date = min((e.get("date", "9999") for e in entries), default="9999")
-                from datetime import datetime as dt, timedelta
-                one_year_ago = (dt.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-                has_old = oldest_date < one_year_ago if oldest_date != "9999" else False
-                findings.append({
-                    "area": "pruning",
-                    "status": "OK" if not has_old else "WARN",
-                    "detail": f"Oldest entry: {oldest_date}" + (" (>1y, should be pruned)" if has_old else ""),
-                })
-                scores["pruning"] = 9 if not has_old else 5
-            except Exception:
-                scores["pruning"] = 5
-
-            # 8. Recovery verification — check agent logs for recovery events
-            recovery_logs = [l for l in self._get_agent_logs("journal", limit=100)
-                             if "recover" in l.get("action", "").lower()]
+            fetch_rate = (len(recent) - no_exit) / len(recent) * 100
             findings.append({
-                "area": "recovery",
-                "status": "OK",
-                "detail": f"Startup recovery events logged: {len(recovery_logs)}",
+                "area": "price_fetch_reliability",
+                "status": "OK" if fetch_rate > 90 else "WARN" if fetch_rate > 70 else "CRITICAL",
+                "detail": f"Price fetch success: {fetch_rate:.0f}% ({len(recent) - no_exit}/{len(recent)})",
             })
-            scores["recovery"] = 8
+            scores["price_fetch_reliability"] = min(10, fetch_rate / 10)
+            if fetch_rate < 80:
+                improvements.append({
+                    "priority": "HIGH",
+                    "agent": "journal",
+                    "action": f"Price fetch reliability at {fetch_rate:.0f}% — check API keys/connectivity",
+                    "rationale": "Missing exit prices = EXPIRED trades with entry_price fallback",
+                })
+
+        # 7. Pruning verification
+        try:
+            oldest_date = min((e.get("date", "9999") for e in entries), default="9999")
+            from datetime import datetime as dt, timedelta
+            one_year_ago = (dt.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+            has_old = oldest_date < one_year_ago if oldest_date != "9999" else False
+            findings.append({
+                "area": "pruning",
+                "status": "OK" if not has_old else "WARN",
+                "detail": f"Oldest entry: {oldest_date}" + (" (>1y, should be pruned)" if has_old else ""),
+            })
+            scores["pruning"] = 9 if not has_old else 5
+        except Exception:
+            scores["pruning"] = 5
+
+        # 8. Recovery verification — check agent logs for recovery events
+        recovery_logs = [l for l in self._get_agent_logs("journal", limit=100)
+                         if "recover" in l.get("action", "").lower()]
+        findings.append({
+            "area": "recovery",
+            "status": "OK",
+            "detail": f"Startup recovery events logged: {len(recovery_logs)}",
+        })
+        scores["recovery"] = 8
 
         # Log analysis for journal agent
         self._analyze_agent_errors(findings, scores, improvements, "journal")
@@ -1561,6 +1563,8 @@ class AgentAuditor(BaseAgent):
         tests = report["tests_to_add"]
         scores = report["score_breakdown"]
 
+        closed = []
+        trades = []
         try:
             from ..learning import compute_learning_adjustments, load_trades
             from ..models import TradeResult
@@ -1668,50 +1672,50 @@ class AgentAuditor(BaseAgent):
             findings.append({"area": "learning", "status": "ERROR", "detail": str(exc)})
             scores["overall"] = 3
 
-            # 7. Decay calibration — verify lookback period is reasonable
-            try:
-                from ..learning import _half_life
-                hl = _half_life(len(closed))
-                lookback_days = hl * 2
-                findings.append({
-                    "area": "decay_calibration",
-                    "status": "OK" if 40 <= lookback_days <= 120 else "WARN",
-                    "detail": f"Half-life: {hl}d, Lookback: {lookback_days}d ({len(closed)} trades)",
-                })
-                scores["decay_calibration"] = 8 if 40 <= lookback_days <= 120 else 5
-            except (ImportError, Exception):
-                scores["decay_calibration"] = 6
-                findings.append({"area": "decay_calibration", "status": "OK", "detail": "Decay function configured (details unavailable)"})
+        # 7. Decay calibration — verify lookback period is reasonable
+        try:
+            from ..learning import _half_life
+            hl = _half_life(len(closed))
+            lookback_days = hl * 2
+            findings.append({
+                "area": "decay_calibration",
+                "status": "OK" if 40 <= lookback_days <= 120 else "WARN",
+                "detail": f"Half-life: {hl}d, Lookback: {lookback_days}d ({len(closed)} trades)",
+            })
+            scores["decay_calibration"] = 8 if 40 <= lookback_days <= 120 else 5
+        except (ImportError, Exception):
+            scores["decay_calibration"] = 6
+            findings.append({"area": "decay_calibration", "status": "OK", "detail": "Decay function configured (details unavailable)"})
 
-            # 8. Anomaly detection — check performance summary for alerts
-            try:
-                from ..learning import build_performance_summary
-                summary = build_performance_summary(trades=trades)
-                alert_lines = [l for l in summary.split("\n") if "ALERT" in l.upper() or "⚠" in l or "streak" in l.lower()]
-                findings.append({
-                    "area": "anomaly_detection",
-                    "status": "OK" if len(alert_lines) < 5 else "WARN",
-                    "detail": f"Active alerts in performance summary: {len(alert_lines)}",
-                })
-                scores["anomaly_detection"] = 8 if len(alert_lines) < 3 else 6
-            except Exception:
-                scores["anomaly_detection"] = 5
-                findings.append({"area": "anomaly_detection", "status": "WARN", "detail": "Cannot build performance summary"})
+        # 8. Anomaly detection — check performance summary for alerts
+        try:
+            from ..learning import build_performance_summary
+            summary = build_performance_summary(trades=trades)
+            alert_lines = [l for l in summary.split("\n") if "ALERT" in l.upper() or "⚠" in l or "streak" in l.lower()]
+            findings.append({
+                "area": "anomaly_detection",
+                "status": "OK" if len(alert_lines) < 5 else "WARN",
+                "detail": f"Active alerts in performance summary: {len(alert_lines)}",
+            })
+            scores["anomaly_detection"] = 8 if len(alert_lines) < 3 else 6
+        except Exception:
+            scores["anomaly_detection"] = 5
+            findings.append({"area": "anomaly_detection", "status": "WARN", "detail": "Cannot build performance summary"})
 
-            # 9. Feedback quality — check that instructions contain recent data
-            try:
-                from ..learning import build_performance_summary as _bps
-                fb = _bps(trades=trades)
-                has_wr = "WR=" in fb or "Win rate" in fb
-                has_pnl = "PnL=" in fb or "pnl" in fb.lower()
-                findings.append({
-                    "area": "feedback_quality",
-                    "status": "OK" if has_wr and has_pnl else "WARN",
-                    "detail": f"Feedback includes: WR={has_wr}, PnL={has_pnl}, length={len(fb)} chars",
-                })
-                scores["feedback_quality"] = 8 if (has_wr and has_pnl) else 5
-            except Exception:
-                scores["feedback_quality"] = 5
+        # 9. Feedback quality — check that instructions contain recent data
+        try:
+            from ..learning import build_performance_summary as _bps
+            fb = _bps(trades=trades)
+            has_wr = "WR=" in fb or "Win rate" in fb
+            has_pnl = "PnL=" in fb or "pnl" in fb.lower()
+            findings.append({
+                "area": "feedback_quality",
+                "status": "OK" if has_wr and has_pnl else "WARN",
+                "detail": f"Feedback includes: WR={has_wr}, PnL={has_pnl}, length={len(fb)} chars",
+            })
+            scores["feedback_quality"] = 8 if (has_wr and has_pnl) else 5
+        except Exception:
+            scores["feedback_quality"] = 5
 
         # Log analysis for learning agent
         self._analyze_agent_errors(findings, scores, improvements, "learning")
