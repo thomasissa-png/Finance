@@ -331,6 +331,11 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
 
 .page-header {
   margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .page-title {
@@ -1552,4 +1557,82 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
   color: var(--text-muted);
   font-size: 12px;
   flex: 1;
+}
+
+/* ── Dashboard: update status ── */
+.dashboard-update-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.last-update-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Dashboard: team badge in positions table ── */
+.team-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+/* ── Dashboard: teams summary row ── */
+.teams-summary-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+@media (max-width: 900px) {
+  .teams-summary-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 500px) {
+  .teams-summary-row {
+    grid-template-columns: 1fr;
+  }
+}
+.team-summary-card {
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent);
+}
+.team-summary-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.team-summary-kpis {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.team-summary-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 40px;
+}
+.team-summary-kpi-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.team-summary-kpi-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }

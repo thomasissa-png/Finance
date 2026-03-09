@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { timeAgo, pnlColor, tickerName } from "../utils/format";
+import { timeAgo, pnlColor, tickerName, formatDate, formatTime } from "../utils/format";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 import TradeCard from "./TradeCard";
 
@@ -149,6 +149,197 @@ function KpiCard({ value, label, color, sparkData, sparkColor }) {
   );
 }
 
+/* Team position label mapping */
+const TEAM_LABELS = {
+  "1": "Eq. 1 — Day Trading",
+  "2": "Eq. 2 — Tendance",
+  "3": "Eq. 3 — Technique",
+  "4": "Eq. 4 — Meta",
+};
+
+const TEAM_COLORS = {
+  "1": "var(--accent)",
+  "2": "#F59E0B",
+  "3": "#8B5CF6",
+  "4": "#EC4899",
+};
+
+/* All-teams open positions section */
+function AllTeamsPositions({ positions, onRefresh, loading }) {
+  const allPositions = useMemo(() => {
+    const result = [];
+    // Team 1: PENDING trades
+    (positions["1"] || []).forEach((t) => {
+      result.push({ ...t, _team: "1", _key: `t1-${t.ticker}-${t.timestamp}` });
+    });
+    // Team 2: active trend positions (not FLAT)
+    (positions["2"] || []).forEach((t) => {
+      result.push({ ...t, _team: "2", _key: `t2-${t.ticker}` });
+    });
+    // Team 3: open tech positions
+    (positions["3"] || []).forEach((t) => {
+      result.push({ ...t, _team: "3", _key: `t3-${t.ticker}-${t.strategy || ""}` });
+    });
+    // Team 4: open meta positions
+    (positions["4"] || []).forEach((t) => {
+      result.push({ ...t, _team: "4", _key: `t4-${t.ticker}-${t.entry_time || ""}` });
+    });
+    return result;
+  }, [positions]);
+
+  const totalCount = allPositions.length;
+
+  return (
+    <div className="section-card">
+      <div className="section-header">
+        <h3>Positions ouvertes — toutes équipes ({totalCount})</h3>
+        <button
+          className="refresh-btn"
+          onClick={onRefresh}
+          disabled={loading}
+          title="Rafraîchir les positions"
+          aria-label="Rafraîchir les positions"
+          style={{ fontSize: 16, padding: "2px 8px" }}
+        >
+          {loading ? <span className="spinner spinner-inline" /> : "↻"}
+        </button>
+      </div>
+
+      {totalCount === 0 ? (
+        <div className="agent-logs-empty" style={{ padding: "16px 0" }}>
+          Aucune position ouverte actuellement.
+        </div>
+      ) : (
+        <>
+          {/* Desktop table */}
+          <div className="compact-table desktop-only">
+            <table>
+              <thead>
+                <tr>
+                  <th>Équipe</th>
+                  <th>Actif</th>
+                  <th>Direction</th>
+                  <th>Entrée</th>
+                  <th>Target</th>
+                  <th>Stop</th>
+                  <th>P&L latent</th>
+                  <th>Ouvert depuis</th>
+                </tr>
+              </thead>
+              <tbody>
+                {allPositions.map((t) => {
+                  const latentPnl = t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
+                  const entryTime = t.timestamp || t.entry_time || t.last_change_time;
+                  return (
+                    <tr key={t._key}>
+                      <td>
+                        <span className="team-badge" style={{ borderColor: TEAM_COLORS[t._team], color: TEAM_COLORS[t._team] }}>
+                          {TEAM_LABELS[t._team] || `Éq. ${t._team}`}
+                        </span>
+                      </td>
+                      <td className="ticker-cell">{tickerName(t.ticker)}</td>
+                      <td>
+                        <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>
+                          {t.direction}
+                        </span>
+                      </td>
+                      <td>{t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</td>
+                      <td style={{ color: "var(--green)" }}>{t.target_price != null ? t.target_price.toFixed(2) : "--"}</td>
+                      <td style={{ color: "var(--red)" }}>{t.stop_price != null ? t.stop_price.toFixed(2) : "--"}</td>
+                      <td style={{ color: pnlColor(latentPnl), fontWeight: 600 }}>
+                        {latentPnl != null ? `${latentPnl > 0 ? "+" : ""}${latentPnl.toFixed(2)}%` : "--"}
+                      </td>
+                      <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                        {entryTime ? formatDate(entryTime) + " " + formatTime(entryTime) : "--"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="mobile-only">
+            {allPositions.map((t) => {
+              const latentPnl = t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
+              return (
+                <div key={t._key} className="trade-mobile-card">
+                  <div className="trade-mobile-header">
+                    <span className="team-badge" style={{ borderColor: TEAM_COLORS[t._team], color: TEAM_COLORS[t._team], fontSize: 9 }}>
+                      {TEAM_LABELS[t._team]}
+                    </span>
+                    <span className="ticker-cell">{tickerName(t.ticker)}</span>
+                    <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
+                  </div>
+                  <div className="trade-mobile-body">
+                    <span>Entrée: {t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</span>
+                    <span style={{ color: pnlColor(latentPnl), fontWeight: 600 }}>
+                      {latentPnl != null ? `${latentPnl > 0 ? "+" : ""}${latentPnl.toFixed(2)}%` : "--"}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* Per-team summary cards */
+function TeamSummaryCards({ report, positions }) {
+  const teams = [
+    { id: "1", name: "Éq. 1 — Day Trading", perfKey: "trader_1", wrKey: "win_rate", pnlKey: "pnl_total", tradesKey: "total_trades" },
+    { id: "2", name: "Éq. 2 — Tendance", perfKey: "trader_2", wrKey: "flip_win_rate", pnlKey: "realized_pnl", tradesKey: "total_flips" },
+    { id: "3", name: "Éq. 3 — Technique", perfKey: "trader_3", wrKey: "win_rate", pnlKey: "pnl_total", tradesKey: "total_trades" },
+    { id: "4", name: "Éq. 4 — Meta", perfKey: "trader_4", wrKey: "win_rate", pnlKey: "pnl_total", tradesKey: "total_trades" },
+  ];
+
+  return (
+    <div className="teams-summary-row">
+      {teams.map((team) => {
+        const perf = report?.[team.perfKey] || {};
+        const wr = perf[team.wrKey];
+        const pnl = perf[team.pnlKey];
+        const trades = perf[team.tradesKey] || 0;
+        const openCount = (positions[team.id] || []).length;
+
+        return (
+          <div key={team.id} className="team-summary-card" style={{ borderLeftColor: TEAM_COLORS[team.id] }}>
+            <div className="team-summary-name">{team.name}</div>
+            <div className="team-summary-kpis">
+              <div className="team-summary-kpi">
+                <span className="team-summary-kpi-value" style={{ color: wr != null && wr >= 50 ? "var(--green)" : wr != null ? "var(--red)" : "var(--text-muted)" }}>
+                  {wr != null ? `${wr.toFixed(1)}%` : "N/A"}
+                </span>
+                <span className="team-summary-kpi-label">WR</span>
+              </div>
+              <div className="team-summary-kpi">
+                <span className="team-summary-kpi-value" style={{ color: pnlColor(pnl) }}>
+                  {pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%` : "N/A"}
+                </span>
+                <span className="team-summary-kpi-label">P&L</span>
+              </div>
+              <div className="team-summary-kpi">
+                <span className="team-summary-kpi-value">{trades}</span>
+                <span className="team-summary-kpi-label">Trades</span>
+              </div>
+              <div className="team-summary-kpi">
+                <span className="team-summary-kpi-value" style={{ color: openCount > 0 ? "var(--accent)" : "var(--text-muted)" }}>
+                  {openCount}
+                </span>
+                <span className="team-summary-kpi-label">Ouvertes</span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function DashboardPage({ isActive, agents }) {
   const [scans, setScans] = useState({});
   const [loading, setLoading] = useState({});
@@ -156,49 +347,98 @@ export default function DashboardPage({ isActive, agents }) {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [progress, setProgress] = useState({});
   const [perf, setPerf] = useState(null);
+  const [report, setReport] = useState(null);
   const [history, setHistory] = useState([]);
+  const [positions, setPositions] = useState({});
+  const [posLoading, setPosLoading] = useState(false);
   const { toasts, addToast, dismissToast } = useToasts();
+  const fetchCountRef = useRef(0);
 
   const apiErrorScan = getApiError(scans);
 
-  const fetchScans = useCallback(async () => {
+  /* ── Fetch all data in a single consolidated call ── */
+  const fetchAllData = useCallback(async () => {
     if (document.hidden) return;
+    const fetchId = ++fetchCountRef.current;
     try {
-      const res = await fetch("/api/scan/latest");
-      if (res.ok) { setScans(await res.json()); setLastUpdate(new Date()); }
+      const [scanRes, perfRes, reportRes, histRes, t1Res, t2Res, t3Res, t4Res] = await Promise.all([
+        fetch("/api/scan/latest").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch("/api/performance/report").then((r) => r.ok ? r.json() : null).catch(() => null),
+        fetch("/api/performance/history?limit=30").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/agents/trader_3/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/agents/trader_4/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+      ]);
+
+      // Only apply if this is still the most recent fetch
+      if (fetchId !== fetchCountRef.current) return;
+
+      setScans(scanRes);
+      if (perfRes) setPerf(perfRes);
+      if (reportRes) setReport(reportRes);
+      if (Array.isArray(histRes)) setHistory(histRes);
+
+      // Normalize positions for all teams
+      const pending1 = Array.isArray(t1Res) ? t1Res.filter((t) => t.result === "PENDING") : [];
+      const active2 = Array.isArray(t2Res) ? t2Res.filter((t) => t.direction && t.direction !== "FLAT") : [];
+      const active3 = Array.isArray(t3Res?.positions) ? t3Res.positions : [];
+      const active4 = Array.isArray(t4Res?.positions) ? t4Res.positions : [];
+      setPositions({ "1": pending1, "2": active2, "3": active3, "4": active4 });
+
+      setLastUpdate(new Date());
     } catch { /* network error — silent */ }
   }, []);
 
-  const fetchPerf = useCallback(async () => {
+  const refreshPositions = useCallback(async () => {
+    setPosLoading(true);
     try {
-      const [pRes, hRes] = await Promise.all([
-        fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch("/api/performance/history?limit=30").then((r) => r.ok ? r.json() : []).catch(() => []),
+      const [t1Res, t2Res, t3Res, t4Res] = await Promise.all([
+        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/agents/trader_3/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/agents/trader_4/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
-      if (pRes) setPerf(pRes);
-      if (Array.isArray(hRes)) setHistory(hRes);
+      const pending1 = Array.isArray(t1Res) ? t1Res.filter((t) => t.result === "PENDING") : [];
+      const active2 = Array.isArray(t2Res) ? t2Res.filter((t) => t.direction && t.direction !== "FLAT") : [];
+      const active3 = Array.isArray(t3Res?.positions) ? t3Res.positions : [];
+      const active4 = Array.isArray(t4Res?.positions) ? t4Res.positions : [];
+      setPositions({ "1": pending1, "2": active2, "3": active3, "4": active4 });
+      setLastUpdate(new Date());
     } catch { /* */ }
+    setPosLoading(false);
   }, []);
 
+  // Initial fetch + polling (30s for positions, 60s for full refresh)
   useEffect(() => {
-    fetchScans(); fetchPerf();
-    const id = setInterval(fetchScans, 60_000);
-    const id2 = setInterval(fetchPerf, 60_000);
-    return () => { clearInterval(id); clearInterval(id2); };
-  }, [fetchScans, fetchPerf]);
+    fetchAllData();
+    const id = setInterval(fetchAllData, 30_000);
+    return () => clearInterval(id);
+  }, [fetchAllData]);
 
-  useEffect(() => { if (isActive) { fetchScans(); fetchPerf(); } }, [isActive, fetchScans, fetchPerf]);
+  // Re-fetch on tab becoming visible or page becoming active
+  useEffect(() => {
+    if (isActive) fetchAllData();
+  }, [isActive, fetchAllData]);
 
   useEffect(() => {
-    const onVisible = () => { if (!document.hidden) fetchScans(); };
+    const onVisible = () => { if (!document.hidden) fetchAllData(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [fetchScans]);
+  }, [fetchAllData]);
 
   useEffect(() => {
     const interval = setInterval(() => setScanInfo(getNextScanInfo()), 60_000);
     return () => clearInterval(interval);
   }, []);
+
+  // Total open positions across all teams
+  const totalOpen = useMemo(() =>
+    (positions["1"] || []).length + (positions["2"] || []).length +
+    (positions["3"] || []).length + (positions["4"] || []).length,
+    [positions]
+  );
 
   // Build sparkline data from history
   const wrSpark = useMemo(() => history.map((h) => ({ v: h.win_rate ?? 0 })).slice(-7), [history]);
@@ -224,6 +464,8 @@ export default function DashboardPage({ isActive, agents }) {
         } else {
           addToast(`Scan ${scanType} terminé, pas de trade`, "warning");
         }
+        // Refresh positions after scan (new trade may have been created)
+        setTimeout(refreshPositions, 2000);
       } else {
         const err = await res.json().catch(() => ({}));
         addToast(err.detail || `Erreur scan ${scanType}`, "error");
@@ -240,31 +482,51 @@ export default function DashboardPage({ isActive, agents }) {
   return (
     <div className="page-fade-in">
       <div className="page-header">
-        <div className="page-title">Dashboard</div>
-        <div className="page-subtitle">Vue consolidée des trades, toutes équipes</div>
+        <div>
+          <div className="page-title">Dashboard</div>
+          <div className="page-subtitle">Vue consolidée, toutes équipes</div>
+        </div>
+        <div className="dashboard-update-status">
+          {lastUpdate && (
+            <span className="last-update-text">
+              MAJ {timeAgo(lastUpdate)}
+            </span>
+          )}
+          <button className="refresh-btn" onClick={fetchAllData} title="Rafraîchir tout" aria-label="Rafraîchir les données">↻</button>
+        </div>
       </div>
 
-      {/* KPI Cards with sparklines */}
+      {/* Global KPI Cards */}
       {perf && (
         <div className="kpi-row">
           <KpiCard value={perf.total_trades || 0} label="Trades total" />
           <KpiCard
             value={`${(perf.win_rate || 0).toFixed(1)}%`}
-            label="Win rate"
+            label="Win rate (Éq. 1)"
             color={(perf.win_rate || 0) >= 50 ? "var(--green)" : "var(--red)"}
             sparkData={wrSpark}
             sparkColor={(perf.win_rate || 0) >= 50 ? "#10B981" : "#EF4444"}
           />
           <KpiCard
             value={perf.total_pnl_pct != null ? `${perf.total_pnl_pct > 0 ? "+" : ""}${perf.total_pnl_pct.toFixed(2)}%` : "--"}
-            label="P&L total"
+            label="P&L (Éq. 1)"
             color={pnlColor(perf.total_pnl_pct)}
             sparkData={pnlSpark}
             sparkColor={(perf.total_pnl_pct || 0) >= 0 ? "#10B981" : "#EF4444"}
           />
-          <KpiCard value={perf.pending || 0} label="En cours" />
+          <KpiCard
+            value={totalOpen}
+            label="Positions ouvertes"
+            color={totalOpen > 0 ? "var(--accent)" : undefined}
+          />
         </div>
       )}
+
+      {/* Per-team summary */}
+      <TeamSummaryCards report={report} positions={positions} />
+
+      {/* All teams open positions */}
+      <AllTeamsPositions positions={positions} onRefresh={refreshPositions} loading={posLoading} />
 
       {/* Equity curve */}
       <EquityCurve history={history} />
@@ -330,12 +592,6 @@ export default function DashboardPage({ isActive, agents }) {
           }
           return <TradeCard key={s.key} scan={scan} label={s.label} />;
         })}
-      </div>
-
-      {/* Last update */}
-      <div className="last-update-bar">
-        {lastUpdate && <span className="last-update">MAJ {timeAgo(lastUpdate)}</span>}
-        <button className="refresh-btn" onClick={fetchScans} title="Rafraîchir" aria-label="Rafraîchir les données">↻</button>
       </div>
 
       {/* Toasts */}

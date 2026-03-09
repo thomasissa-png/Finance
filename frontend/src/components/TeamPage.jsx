@@ -826,6 +826,151 @@ function LearningSection({ teamId }) {
   );
 }
 
+// ── Overview section with positions + perf + agent status + logs ──
+function OverviewSection({ teamId, agents }) {
+  const config = TEAM_CONFIG[teamId];
+  const [trades, setTrades] = useState([]);
+  const [perf, setPerf] = useState(null);
+  const [logFilter, setLogFilter] = useState("DECISION");
+
+  const agentMap = {};
+  (agents || []).forEach((a) => { agentMap[a.name] = a; });
+  const teamAgentNames = Object.values(config.agents);
+
+  useEffect(() => {
+    // Fetch positions
+    if (config?.api.trades) {
+      fetch(config.api.trades)
+        .then((r) => r.ok ? r.json() : [])
+        .then((d) => {
+          if (Array.isArray(d)) setTrades(d);
+          else if (config.api.tradesKey && Array.isArray(d?.[config.api.tradesKey])) setTrades(d[config.api.tradesKey]);
+          else if (Array.isArray(d?.trades)) setTrades(d.trades);
+          else if (Array.isArray(d?.history)) setTrades(d.history);
+          else setTrades([]);
+        })
+        .catch(() => setTrades([]));
+    }
+    // Fetch performance
+    fetch("/api/performance/report")
+      .then((r) => r.ok ? r.json() : null)
+      .then((report) => {
+        if (report && config?.perfKey) setPerf(report[config.perfKey] || null);
+      })
+      .catch(() => {});
+  }, [teamId, config?.api.trades, config?.perfKey]);
+
+  const pending = trades.filter((t) =>
+    t.result === "PENDING" || t.status === "PENDING" ||
+    (teamId === "2" && t.direction && t.direction !== "FLAT") ||
+    (teamId === "3" && !t.result) ||
+    (teamId === "4" && !t.result)
+  );
+
+  const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";
+  const pnlField = teamId === "2" ? "realized_pnl" : "pnl_total";
+
+  return (
+    <div>
+      {/* KPIs */}
+      {perf && (
+        <div className="kpi-row">
+          <div className="kpi-card">
+            <div className="kpi-value" style={{ color: (perf[wrField] || 0) >= 50 ? "var(--green)" : "var(--red)" }}>
+              {perf[wrField] != null ? `${perf[wrField].toFixed(1)}%` : "N/A"}
+            </div>
+            <div className="kpi-label">Win rate</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-value" style={{ color: pnlColor(perf[pnlField]) }}>
+              {perf[pnlField] != null ? `${perf[pnlField] > 0 ? "+" : ""}${perf[pnlField].toFixed(2)}%` : "N/A"}
+            </div>
+            <div className="kpi-label">P&L</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-value">{perf.total_trades || perf.total_flips || 0}</div>
+            <div className="kpi-label">Trades</div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-value" style={{ color: pending.length > 0 ? "var(--accent)" : "var(--text-muted)" }}>{pending.length}</div>
+            <div className="kpi-label">En cours</div>
+          </div>
+        </div>
+      )}
+
+      {/* Open positions */}
+      {pending.length > 0 && (
+        <div className="section-card">
+          <h3>Positions ouvertes ({pending.length})</h3>
+          <div className="compact-table desktop-only">
+            <table>
+              <thead>
+                <tr>
+                  <th>Actif</th>
+                  <th>Direction</th>
+                  <th>Entrée</th>
+                  <th>Target</th>
+                  <th>Stop</th>
+                  <th>R/R</th>
+                  {teamId === "3" && <th>Stratégie</th>}
+                  {teamId === "4" && <th>Confluence</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {pending.map((t, i) => (
+                  <tr key={`${t.ticker}-${i}`}>
+                    <td className="ticker-cell">{tickerName(t.ticker)}</td>
+                    <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
+                    <td>{t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</td>
+                    <td style={{ color: "var(--green)" }}>{t.target_price != null ? t.target_price.toFixed(2) : "--"}</td>
+                    <td style={{ color: "var(--red)" }}>{t.stop_price != null ? t.stop_price.toFixed(2) : "--"}</td>
+                    <td>{t.risk_reward != null ? t.risk_reward.toFixed(2) : "--"}</td>
+                    {teamId === "3" && <td style={{ fontSize: 11 }}>{t.strategy || "--"}</td>}
+                    {teamId === "4" && <td style={{ fontSize: 11 }}>{t.confluence_level || t.sources || "--"}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mobile-only">
+            {pending.map((t, i) => (
+              <div key={`m-${t.ticker}-${i}`} className="trade-mobile-card">
+                <div className="trade-mobile-header">
+                  <span className="ticker-cell">{tickerName(t.ticker)}</span>
+                  <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
+                </div>
+                <div className="trade-mobile-body">
+                  <span>Entrée: {t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</span>
+                  <span>TP: {t.target_price != null ? t.target_price.toFixed(2) : "--"}</span>
+                  <span>SL: {t.stop_price != null ? t.stop_price.toFixed(2) : "--"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {pending.length === 0 && (
+        <div className="section-card">
+          <div className="agent-logs-empty" style={{ padding: "16px 0" }}>
+            Aucune position ouverte actuellement.
+          </div>
+        </div>
+      )}
+
+      {/* Agent status cards */}
+      <div className="agent-cards-row">
+        {teamAgentNames.map((name) => (
+          <AgentStatusCard key={name} agent={agentMap[name]} />
+        ))}
+      </div>
+
+      {/* Logs for trader agent (most relevant) */}
+      <LogSection agentName={config.agents.trader} logFilter={logFilter} setLogFilter={setLogFilter} />
+    </div>
+  );
+}
+
 // ── Main TeamPage ──
 const TABS = [
   { id: "overview", label: "Vue d'ensemble" },
@@ -837,15 +982,9 @@ const TABS = [
 
 export default function TeamPage({ teamId, isActive, agents, onNavigateBack }) {
   const [activeTab, setActiveTab] = useState("overview");
-  const [logFilter, setLogFilter] = useState("DECISION");
 
   const config = TEAM_CONFIG[teamId];
   if (!config) return <div className="agent-logs-empty">Équipe inconnue</div>;
-
-  const agentMap = {};
-  (agents || []).forEach((a) => { agentMap[a.name] = a; });
-
-  const teamAgentNames = Object.values(config.agents);
 
   return (
     <div className="agent-page">
@@ -876,19 +1015,8 @@ export default function TeamPage({ teamId, isActive, agents, onNavigateBack }) {
         ))}
       </div>
 
-      {/* Overview tab */}
-      {activeTab === "overview" && (
-        <div>
-          <div className="agent-cards-row">
-            {teamAgentNames.map((name) => (
-              <AgentStatusCard key={name} agent={agentMap[name]} />
-            ))}
-          </div>
-          {teamAgentNames.map((name) => (
-            <LogSection key={name} agentName={name} logFilter={logFilter} setLogFilter={setLogFilter} />
-          ))}
-        </div>
-      )}
+      {/* Overview tab — now shows positions + perf + agents + logs */}
+      {activeTab === "overview" && <OverviewSection teamId={teamId} agents={agents} />}
 
       {/* Scoring tab */}
       {activeTab === "scoring" && <ScoringSection teamId={teamId} />}
