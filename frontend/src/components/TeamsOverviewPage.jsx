@@ -61,6 +61,18 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
     return m;
   }, [agents]);
 
+  const agentVersions = useMemo(() => {
+    return (agents || [])
+      .filter((a) => a.version)
+      .map((a) => ({
+        agent: a.name?.replace(/_/g, " "),
+        version: a.version,
+        status: a.status,
+        name: a.name,
+      }))
+      .sort((a, b) => a.agent.localeCompare(b.agent));
+  }, [agents]);
+
   // P2.4: Team comparison chart data
   const compareData = useMemo(() => {
     if (!report) return [];
@@ -173,31 +185,32 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
         })}
       </div>
 
-      {/* Shared agents status */}
+      {/* Agent versions (live) */}
       <div className="section-card" style={{ marginTop: 20 }}>
-        <h3>Agents partagés</h3>
-        <div className="agent-cards-row">
-          {["news", "infrastructure", "performance", "auditor"].map((name) => {
-            const a = agentMap[name];
-            if (!a) return null;
-            const statusColor = a.status === "working" ? "var(--accent)" : a.status === "error" ? "var(--red)" : "var(--text-muted)";
-            return (
-              <div key={name} className="agent-mini-card">
-                <div className="agent-mini-card-header">
-                  <span className="agent-mini-name">
-                    {a.name?.replace(/_/g, " ")}
-                    {a.version && <span className="agent-mini-version">v{a.version}</span>}
-                  </span>
-                  <span className="agent-mini-status" style={{ backgroundColor: statusColor }} />
-                </div>
-                {a.last_action && (
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
-                    {a.last_action.slice(0, 50)}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        <h3>Versions des agents (live)</h3>
+        <div className="compact-table">
+          <table className="version-table">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Version</th>
+                <th>Statut</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agentVersions.map((av) => (
+                <tr key={av.name}>
+                  <td className="ticker-cell">{av.agent}</td>
+                  <td style={{ color: "var(--accent)" }}>v{av.version}</td>
+                  <td>
+                    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", marginRight: 6,
+                      background: av.status === "working" ? "var(--accent)" : av.status === "error" ? "var(--red)" : "var(--text-muted)" }} />
+                    {av.status === "working" ? "Actif" : av.status === "error" ? "Erreur" : "En attente"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

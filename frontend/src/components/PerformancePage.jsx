@@ -57,19 +57,6 @@ export default function PerformancePage({ isActive, agents }) {
     ];
   }, [report]);
 
-  // P4.3: Dynamic agent versions from live agents data
-  const agentVersions = useMemo(() => {
-    return (agents || [])
-      .filter((a) => a.version)
-      .map((a) => ({
-        agent: a.name?.replace(/_/g, " "),
-        version: a.version,
-        status: a.status,
-        name: a.name,
-      }))
-      .sort((a, b) => a.agent.localeCompare(b.agent));
-  }, [agents]);
-
   const t1 = report?.trader_1 || {};
   const t2 = report?.trader_2 || {};
 
@@ -77,7 +64,7 @@ export default function PerformancePage({ isActive, agents }) {
     <div className="agent-page page-fade-in">
       <div className="page-header">
         <div className="page-title">Performance</div>
-        <div className="page-subtitle">KPIs consolidés, évolution des équipes, versions des agents</div>
+        <div className="page-subtitle">KPIs consolidés, évolution des équipes</div>
       </div>
 
       {loading && (
@@ -201,36 +188,6 @@ export default function PerformancePage({ isActive, agents }) {
               {report?.trader_4?.total_trades || 0} trades | Objectif 80% WR
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* P4.3: Dynamic version tracking from live agent data */}
-      <div className="section-card">
-        <h3>Versions des agents (live)</h3>
-        <div className="compact-table">
-          <table className="version-table">
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th>Version</th>
-                <th>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agentVersions.map((av) => (
-                <tr key={av.name}>
-                  <td className="ticker-cell">{av.agent}</td>
-                  <td style={{ color: "var(--accent)" }}>v{av.version}</td>
-                  <td>
-                    <span className={`status-dot ${av.status === "working" ? "online" : av.status === "error" ? "offline" : ""}`}
-                      style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", marginRight: 6,
-                        background: av.status === "working" ? "var(--accent)" : av.status === "error" ? "var(--red)" : "var(--text-muted)" }} />
-                    {av.status === "working" ? "Actif" : av.status === "error" ? "Erreur" : "En attente"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
       </div>
 
