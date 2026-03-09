@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
-
-const DIR_COLORS = { LONG: "var(--green)", SHORT: "var(--red)", NEUTRAL: "var(--text-muted)" };
-const DIR_ARROWS = { LONG: "\u2191", SHORT: "\u2193", NEUTRAL: "\u2022" };
+import { DIR_COLORS, DIR_ARROWS, POLL_FAST } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { pnlColor } from "../utils/format";
+import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 
 export default function Trader2Page({ isActive }) {
   const [positions, setPositions] = useState({});
@@ -12,26 +10,32 @@ export default function Trader2Page({ isActive }) {
   const [learningAdj, setLearningAdj] = useState(null);
   const [expandedTicker, setExpandedTicker] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [logFilter, setLogFilter] = useState("ALL");
 
   const fetchData = useCallback(async () => {
     try {
       const [posRes, logRes, adjRes] = await Promise.all([
-        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
-        fetch("/api/agents/trader_2/logs?limit=50&level=DECISION")
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/learning2/adjustments").then((r) => r.ok ? r.json() : null).catch(() => null),
+        apiFetch("/api/trader2/positions", {}, {}),
+        apiFetch("/api/agents/trader_2/logs?limit=50", {}, []),
+        apiFetch("/api/learning2/adjustments", {}, null),
       ]);
       setPositions(posRes || {});
       setLogs(Array.isArray(logRes) ? logRes : []);
       setLearningAdj(adjRes);
-    } catch { /* ignore */ } finally {
+      setError(null);
+      setLastUpdate(new Date());
+    } catch (err) {
+      setError(err.message || "Impossible de charger les données Trader 2");
+    } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 30_000);
+    const id = setInterval(fetchData, POLL_FAST);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
@@ -40,6 +44,8 @@ export default function Trader2Page({ isActive }) {
   const totalUnrealized = tickers.reduce((s, p) => s + (p.unrealized_pnl_pct || 0), 0);
   const totalSwitches = tickers.reduce((s, p) => s + (p.total_switches || 0), 0);
 
+  const filteredLogs = logFilter === "ALL" ? logs : logs.filter((l) => l.level === logFilter);
+
   return (
     <div className="agent-page">
       <div className="agent-page-header">
@@ -47,7 +53,10 @@ export default function Trader2Page({ isActive }) {
         <span className="agent-page-desc">
           Positions de tendance sur cuivre, cacao, café, blé. Change de direction quand les news l'exigent
         </span>
+        <LastUpdated date={lastUpdate} />
       </div>
+
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement...</div>}
 
@@ -58,13 +67,13 @@ export default function Trader2Page({ isActive }) {
           <div className="kpi-label">Actifs suivis</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: totalRealized >= 0 ? "var(--green)" : "var(--red)" }}>
+          <div className="kpi-value" style={{ color: pnlColor(totalRealized) }}>
             {totalRealized >= 0 ? "+" : ""}{totalRealized.toFixed(2)}%
           </div>
           <div className="kpi-label">P&L R&eacute;alis&eacute;</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: totalUnrealized >= 0 ? "var(--green)" : "var(--red)" }}>
+          <div className="kpi-value" style={{ color: pnlColor(totalUnrealized) }}>
             {totalUnrealized >= 0 ? "+" : ""}{totalUnrealized.toFixed(2)}%
           </div>
           <div className="kpi-label">P&L Latent</div>
@@ -93,7 +102,7 @@ export default function Trader2Page({ isActive }) {
           </div>
           {(learningAdj.anomalies || []).length > 0 && (
             <div style={{ marginTop: 6, fontSize: 12, color: "var(--yellow)" }}>
-              {"\u26a0\ufe0f"} {learningAdj.anomalies.join(" | ")}
+              ! {learningAdj.anomalies.join(" | ")}
             </div>
           )}
         </div>
@@ -125,15 +134,15 @@ export default function Trader2Page({ isActive }) {
               <div className="trend-position-prices">
                 <div>
                   <span className="trend-label">Entr&eacute;e</span>
-                  <span className="trend-value">{pos.entry_price ? pos.entry_price.toFixed(2) : "—"}</span>
+                  <span className="trend-value">{pos.entry_price ? pos.entry_price.toFixed(2) : "\u2014"}</span>
                 </div>
                 <div>
                   <span className="trend-label">Actuel</span>
-                  <span className="trend-value">{pos.current_price ? pos.current_price.toFixed(2) : "—"}</span>
+                  <span className="trend-value">{pos.current_price ? pos.current_price.toFixed(2) : "\u2014"}</span>
                 </div>
                 <div>
                   <span className="trend-label">P&L</span>
-                  <span className="trend-value" style={{ color: (pos.unrealized_pnl_pct || 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                  <span className="trend-value" style={{ color: pnlColor(pos.unrealized_pnl_pct) }}>
                     {(pos.unrealized_pnl_pct || 0) >= 0 ? "+" : ""}{(pos.unrealized_pnl_pct || 0).toFixed(2)}%
                   </span>
                 </div>
@@ -174,7 +183,7 @@ export default function Trader2Page({ isActive }) {
                           <span style={{ color: DIR_COLORS[h.from_direction] }}>{h.from_direction}</span>
                           <span>&rarr;</span>
                           <span style={{ color: DIR_COLORS[h.to_direction] }}>{h.to_direction}</span>
-                          <span className="trend-history-pnl" style={{ color: (h.pnl_pct || 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                          <span className="trend-history-pnl" style={{ color: pnlColor(h.pnl_pct) }}>
                             {(h.pnl_pct || 0) >= 0 ? "+" : ""}{(h.pnl_pct || 0).toFixed(2)}%
                           </span>
                           <span className="trend-history-reason">{h.reason}</span>
@@ -190,44 +199,13 @@ export default function Trader2Page({ isActive }) {
             </div>
           ))}
           {tickers.length === 0 && !loading && (
-            <div className="trend-no-data">Aucune position, l'agent sera initialisé au prochain scan</div>
+            <EmptyState message="Aucune position" detail="L'agent sera initialisé au prochain scan" />
           )}
         </div>
       </div>
 
       {/* Decision Logs */}
-      <div className="section-card">
-        <h3>D&eacute;cisions r&eacute;centes</h3>
-        <div className="agent-logs-list">
-          {logs.slice(0, 20).map((log, i) => (
-            <div key={i} className="agent-log-entry" style={{ borderLeftColor: LEVEL_COLORS[log.level] }}>
-              <div className="agent-log-header">
-                <span>{LEVEL_ICONS[log.level] || ""} {log.action}</span>
-                <span className="agent-log-time">
-                  {new Date(log.timestamp).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-              {log.details && (
-                <div className="agent-log-details">
-                  {log.details.ticker && <span><b>{log.details.ticker}</b></span>}
-                  {log.details.from && <span> {log.details.from} &rarr; {log.details.to}</span>}
-                  {log.details.reason && <div className="agent-log-reason">{log.details.reason}</div>}
-                  {log.details.key_news && log.details.key_news.length > 0 && (
-                    <div className="agent-log-news">
-                      {log.details.key_news.map((n, j) => (
-                        <div key={j} className="agent-log-news-item">
-                          {n.direction} {n.category} (score {n.score}) {n.title}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-          {logs.length === 0 && <div className="trend-no-data">Aucune d&eacute;cision enregistr&eacute;e</div>}
-        </div>
-      </div>
+      <LogSection logs={filteredLogs} logFilter={logFilter} setLogFilter={setLogFilter} />
     </div>
   );
 }

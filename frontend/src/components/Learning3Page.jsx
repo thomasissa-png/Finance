@@ -1,21 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
-
-function AdjBar({ value, label }) {
-  const pct = Math.max(0, Math.min(100, ((value - 0.5) / 1.0) * 100));
-  const color = value >= 1.0 ? "var(--green)" : "var(--red)";
-  return (
-    <div className="learning-adj-row">
-      <span className="learning-adj-label">{label}</span>
-      <div className="learning-adj-bar-track">
-        <div className="learning-adj-bar-fill" style={{ width: `${pct}%`, background: color }} />
-        <span className="learning-adj-bar-value">{value.toFixed(3)}</span>
-      </div>
-    </div>
-  );
-}
+import { POLL_NORMAL } from "../utils/constants";
+import { apiFetch, apiTrigger } from "../utils/api";
+import { pnlColor } from "../utils/format";
+import { ErrorBanner, EmptyState, LastUpdated, AdjBar, LogSection } from "./shared";
 
 export default function Learning3Page({ isActive }) {
   const [data, setData] = useState(null);
@@ -23,35 +10,38 @@ export default function Learning3Page({ isActive }) {
   const [logFilter, setLogFilter] = useState("ALL");
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
       const [adjRes, logRes] = await Promise.all([
-        fetch("/api/learning3/adjustments").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch(`/api/agents/learning_3/logs?limit=30${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/learning3/adjustments", {}, null),
+        apiFetch("/api/agents/learning_3/logs?limit=30", {}, []),
       ]);
       setData(adjRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
-    } catch { /* ignore */ } finally {
+      setError(null);
+      setLastUpdate(new Date());
+    } catch (err) {
+      setError(err.message || "Impossible de charger les données Learning 3");
+    } finally {
       setLoading(false);
     }
-  }, [logFilter]);
+  }, []);
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
   const triggerLearning = async () => {
     setTriggering(true);
-    try {
-      await fetch("/api/learning3/trigger", { method: "POST" });
-      setTimeout(fetchData, 2000);
-    } catch { /* ignore */ } finally {
-      setTriggering(false);
-    }
+    const result = await apiTrigger("/api/learning3/trigger");
+    if (!result.ok) setError(result.error);
+    setTimeout(fetchData, 2000);
+    setTriggering(false);
   };
 
   const strategyAdj = data?.strategy_adj || {};
@@ -62,14 +52,19 @@ export default function Learning3Page({ isActive }) {
   const anomalies = data?.anomalies || [];
   const stats = data?.stats || {};
 
+  const filteredLogs = logFilter === "ALL" ? logs : logs.filter((l) => l.level === logFilter);
+
   return (
     <div className="agent-page">
       <div className="agent-page-header">
-        <h2>{"\ud83d\udca1"} Agent Learning 3 &mdash; Apprentissage Technique</h2>
+        <h2>Agent Learning 3 &mdash; Apprentissage Technique</h2>
         <span className="agent-page-desc">
           Apprentissage adaptatif pour Trader 3 &mdash; 5 dimensions (strat&eacute;gie, ticker, timeframe, r&eacute;gime, A/B tests)
         </span>
+        <LastUpdated date={lastUpdate} />
       </div>
+
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement...</div>}
 
@@ -84,7 +79,7 @@ export default function Learning3Page({ isActive }) {
           <div className="kpi-label">Win Rate</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: (stats.avg_pnl_pct || 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+          <div className="kpi-value" style={{ color: pnlColor(stats.avg_pnl_pct) }}>
             {(stats.avg_pnl_pct || 0) >= 0 ? "+" : ""}{(stats.avg_pnl_pct || 0).toFixed(2)}%
           </div>
           <div className="kpi-label">P&L Moyen</div>
@@ -95,7 +90,7 @@ export default function Learning3Page({ isActive }) {
         </div>
       </div>
 
-      {/* Trigger button */}
+      {/* Trigger */}
       <div style={{ marginBottom: 16 }}>
         <button className="trigger-btn" onClick={triggerLearning} disabled={triggering}>
           {triggering ? "En cours..." : "Recalculer Learning 3"}
@@ -105,14 +100,14 @@ export default function Learning3Page({ isActive }) {
       {/* Anomalies */}
       {anomalies.length > 0 && (
         <div className="section-card" style={{ borderLeft: "3px solid var(--yellow)" }}>
-          <h3>{"\u26a0\ufe0f"} Anomalies d&eacute;tect&eacute;es</h3>
+          <h3>! Anomalies d&eacute;tect&eacute;es</h3>
           {anomalies.map((a, i) => (
             <div key={i} style={{ padding: "4px 0", fontSize: 13 }}>{a}</div>
           ))}
         </div>
       )}
 
-      {/* Per-strategy adjustments */}
+      {/* Per-strategy */}
       <div className="section-card">
         <h3>Ajustements par strat&eacute;gie</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
@@ -123,11 +118,11 @@ export default function Learning3Page({ isActive }) {
             <AdjBar key={strategy} label={strategy} value={val} />
           ))
         ) : (
-          <div className="trend-no-data">Pas assez de donn&eacute;es (min trades par strat&eacute;gie)</div>
+          <EmptyState message="Pas assez de données" detail="Min trades par stratégie requis" />
         )}
       </div>
 
-      {/* Per-ticker adjustments */}
+      {/* Per-ticker */}
       <div className="section-card">
         <h3>Ajustements par ticker</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
@@ -138,11 +133,11 @@ export default function Learning3Page({ isActive }) {
             <AdjBar key={ticker} label={ticker} value={val} />
           ))
         ) : (
-          <div className="trend-no-data">Pas assez de donn&eacute;es (min trades par ticker)</div>
+          <EmptyState message="Pas assez de données" detail="Min trades par ticker requis" />
         )}
       </div>
 
-      {/* Per-timeframe adjustments */}
+      {/* Per-timeframe */}
       <div className="section-card">
         <h3>Ajustements par timeframe</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
@@ -153,11 +148,11 @@ export default function Learning3Page({ isActive }) {
             <AdjBar key={tf} label={tf} value={val} />
           ))
         ) : (
-          <div className="trend-no-data">Pas assez de donn&eacute;es (min trades par timeframe)</div>
+          <EmptyState message="Pas assez de données" detail="Min trades par timeframe requis" />
         )}
       </div>
 
-      {/* Per-regime adjustments */}
+      {/* Per-regime */}
       <div className="section-card">
         <h3>Ajustements par r&eacute;gime de march&eacute;</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
@@ -168,7 +163,7 @@ export default function Learning3Page({ isActive }) {
             <AdjBar key={regime} label={regime} value={val} />
           ))
         ) : (
-          <div className="trend-no-data">Pas assez de donn&eacute;es (min trades par r&eacute;gime)</div>
+          <EmptyState message="Pas assez de données" detail="Min trades par régime requis" />
         )}
       </div>
 
@@ -204,40 +199,12 @@ export default function Learning3Page({ isActive }) {
             </tbody>
           </table>
         ) : (
-          <div className="trend-no-data">Aucun test A/B termin&eacute; &mdash; n&eacute;cessite suffisamment de trades par strat&eacute;gie</div>
+          <EmptyState message="Aucun test A/B terminé" detail="Nécessite suffisamment de trades par stratégie" />
         )}
       </div>
 
       {/* Logs */}
-      <div className="section-card">
-        <h3>Logs Agent Learning 3</h3>
-        <div className="log-filter-row">
-          {["ALL", "DECISION", "INFO", "WARN", "ERROR"].map((level) => (
-            <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-              onClick={() => setLogFilter(level)}>
-              {level}
-            </button>
-          ))}
-        </div>
-        <div className="agent-logs-list">
-          {logs.slice(0, 20).map((log, i) => (
-            <div key={i} className="agent-log-entry" style={{ borderLeftColor: LEVEL_COLORS[log.level] }}>
-              <div className="agent-log-header">
-                <span>{LEVEL_ICONS[log.level] || ""} {log.action}</span>
-                <span className="agent-log-time">
-                  {new Date(log.timestamp).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-              {log.details && (
-                <div className="agent-log-details">
-                  {typeof log.details === "object" ? JSON.stringify(log.details) : log.details}
-                </div>
-              )}
-            </div>
-          ))}
-          {logs.length === 0 && <div className="trend-no-data">Aucun log</div>}
-        </div>
-      </div>
+      <LogSection logs={filteredLogs} logFilter={logFilter} setLogFilter={setLogFilter} />
     </div>
   );
 }

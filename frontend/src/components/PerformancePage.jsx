@@ -1,15 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { pnlColor } from "../utils/format";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend, Cell, PieChart, Pie, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from "recharts";
-
-const TEAM_COLORS = {
-  "1": "var(--accent)",
-  "2": "#F59E0B",
-  "3": "#8B5CF6",
-  "4": "#EC4899",
-};
-
-const CHART_STYLE = { background: "#131D33", border: "1px solid #1E2D4A", borderRadius: 6, fontSize: 12, color: "#E8ECF4" };
+import { POLL_SLOW, TEAM_COLORS, CHART_TOOLTIP_STYLE } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid, Legend, Cell, PieChart, Pie } from "recharts";
 
 /* ── Agent version table from registry ── */
 const AGENT_VERSIONS_STATIC = [
@@ -60,13 +53,12 @@ export default function PerformancePage({ isActive, agents }) {
   const fetchData = useCallback(async () => {
     try {
       const [pRes, rRes, hRes] = await Promise.all([
-        fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch("/api/performance/report").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch("/api/performance/history?limit=30").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        apiFetch("/api/performance", {}, null),
+        apiFetch("/api/performance/report", {}, null),
+        apiFetch("/api/performance/history?limit=30", {}, {}),
       ]);
       setPerf(pRes);
       setReport(rRes);
-      // History returns {snapshots: [...], daily_reports: [...]}
       const reports = hRes?.daily_reports || [];
       setDailyReports(Array.isArray(reports) ? reports : []);
     } catch { /* */ } finally { setLoading(false); }
@@ -74,7 +66,7 @@ export default function PerformancePage({ isActive, agents }) {
 
   useEffect(() => {
     fetchData();
-    const id = setInterval(fetchData, 120_000);
+    const id = setInterval(fetchData, POLL_SLOW);
     return () => clearInterval(id);
   }, [fetchData]);
 
@@ -164,7 +156,7 @@ export default function PerformancePage({ isActive, agents }) {
           <div className="page-title">Performance</div>
           <div className="page-subtitle">Suivi détaillé, versioning, évolution</div>
         </div>
-        <button className="refresh-btn" onClick={fetchData} title="Rafraîchir">↻</button>
+        <button className="refresh-btn" onClick={fetchData} title="Rafraîchir">&circlearrowright;</button>
       </div>
 
       {loading && (
@@ -232,7 +224,7 @@ export default function PerformancePage({ isActive, agents }) {
                   <BarChart data={teamCompare} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                     <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#8B9DC3" }} tickLine={false} axisLine={{ stroke: "#1E2D4A" }} />
                     <YAxis tick={{ fontSize: 10, fill: "#8B9DC3" }} tickLine={false} axisLine={false} />
-                    <Tooltip contentStyle={CHART_STYLE} />
+                    <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
                     <Legend wrapperStyle={{ fontSize: 11, color: "#8B9DC3" }} />
                     <Bar dataKey="wr" name="Win Rate %" fill="#3B82F6" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="pnl" name="P&L %" fill="#10B981" radius={[4, 4, 0, 0]} />
@@ -266,7 +258,7 @@ export default function PerformancePage({ isActive, agents }) {
                           <Cell key={i} fill={entry.color} />
                         ))}
                       </Pie>
-                      <Tooltip contentStyle={CHART_STYLE} />
+                      <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -561,7 +553,7 @@ export default function PerformancePage({ isActive, agents }) {
                       <CartesianGrid strokeDasharray="3 3" stroke="#1E2D4A" />
                       <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#8B9DC3" }} tickLine={false} axisLine={{ stroke: "#1E2D4A" }} />
                       <YAxis tick={{ fontSize: 10, fill: "#8B9DC3" }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v > 0 ? "+" : ""}${v.toFixed(1)}%`} width={50} />
-                      <Tooltip contentStyle={CHART_STYLE} formatter={(v) => v != null ? [`${v > 0 ? "+" : ""}${v.toFixed(2)}%`] : ["N/A"]} />
+                      <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(v) => v != null ? [`${v > 0 ? "+" : ""}${v.toFixed(2)}%`] : ["N/A"]} />
                       <Legend wrapperStyle={{ fontSize: 11, color: "#8B9DC3" }} />
                       <Line type="monotone" dataKey="pnl1" name="Éq. 1 Intraday" stroke={TEAM_COLORS["1"]} strokeWidth={2} dot={{ r: 3 }} connectNulls />
                       <Line type="monotone" dataKey="pnl2" name="Éq. 2 Tendance" stroke={TEAM_COLORS["2"]} strokeWidth={2} dot={{ r: 3 }} connectNulls />
@@ -581,7 +573,7 @@ export default function PerformancePage({ isActive, agents }) {
                       <CartesianGrid strokeDasharray="3 3" stroke="#1E2D4A" />
                       <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#8B9DC3" }} tickLine={false} axisLine={{ stroke: "#1E2D4A" }} />
                       <YAxis tick={{ fontSize: 10, fill: "#8B9DC3" }} tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(v) => `${v}%`} width={40} />
-                      <Tooltip contentStyle={CHART_STYLE} formatter={(v) => v != null ? [`${v.toFixed(1)}%`] : ["N/A"]} />
+                      <Tooltip contentStyle={CHART_TOOLTIP_STYLE} formatter={(v) => v != null ? [`${v.toFixed(1)}%`] : ["N/A"]} />
                       <Legend wrapperStyle={{ fontSize: 11, color: "#8B9DC3" }} />
                       <Line type="monotone" dataKey="wr1" name="Éq. 1 WR" stroke={TEAM_COLORS["1"]} strokeWidth={2} dot={{ r: 3 }} connectNulls />
                       <Line type="monotone" dataKey="wr3" name="Éq. 3 WR" stroke={TEAM_COLORS["3"]} strokeWidth={2} dot={{ r: 3 }} connectNulls />

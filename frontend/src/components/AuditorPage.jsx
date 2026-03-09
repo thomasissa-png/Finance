@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "i", WARN: "!", ERROR: "x", DECISION: ">" };
+import { POLL_NORMAL, AGENT_LABELS } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { ErrorBanner, LastUpdated, LogSection } from "./shared";
 
 const AUDIT_TARGETS = [
   "news", "scoring", "scoring_2", "scoring_3", "scoring_4",
@@ -9,29 +10,6 @@ const AUDIT_TARGETS = [
   "learning", "learning_2", "learning_3", "learning_4",
   "infrastructure", "performance", "auditor",
 ];
-
-const TARGET_LABELS = {
-  news: "News",
-  scoring: "Scoring 1",
-  scoring_2: "Scoring 2",
-  scoring_3: "Scoring 3",
-  scoring_4: "Scoring 4",
-  trader_1: "Trader 1",
-  trader_2: "Trader 2",
-  trader_3: "Trader 3",
-  trader_4: "Trader 4",
-  journal: "Journal 1",
-  journal_2: "Journal 2",
-  journal_3: "Journal 3",
-  journal_4: "Journal 4",
-  learning: "Learning 1",
-  learning_2: "Learning 2",
-  learning_3: "Learning 3",
-  learning_4: "Learning 4",
-  infrastructure: "Infrastructure",
-  performance: "Performance",
-  auditor: "Auditeur",
-};
 
 const TARGET_TEAMS = {
   news: "Partagé",
@@ -78,22 +56,23 @@ export default function AuditorPage({ isActive, agents }) {
   const [auditLoading, setAuditLoading] = useState({});
   const [expandedReport, setExpandedReport] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(null);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
   const [auditFeedback, setAuditFeedback] = useState(null);
   const [teamFilter, setTeamFilter] = useState("all");
 
   const fetchData = useCallback(async () => {
     try {
       const [rRes, logRes] = await Promise.all([
-        fetch("/api/agents/auditor/reports?limit=20").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch(`/api/agents/auditor/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/agents/auditor/reports?limit=20", {}, []),
+        apiFetch(`/api/agents/auditor/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`, {}, []),
       ]);
       setReports(Array.isArray(rRes) ? rRes : []);
       setLogs(Array.isArray(logRes) ? logRes : []);
-      setFetchError(null);
+      setError(null);
+      setLastUpdate(new Date());
     } catch (err) {
-      setFetchError(err.message || "Erreur de chargement");
+      setError(err.message || "Erreur de chargement");
     } finally {
       setLoading(false);
     }
@@ -101,7 +80,7 @@ export default function AuditorPage({ isActive, agents }) {
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
@@ -111,7 +90,7 @@ export default function AuditorPage({ isActive, agents }) {
     try {
       const res = await fetch(`/api/agents/auditor/audit/${target}`, { method: "POST" });
       if (res.ok) {
-        setAuditFeedback({ type: "success", message: `Audit ${TARGET_LABELS[target] || target} lancé avec succès` });
+        setAuditFeedback({ type: "success", message: `Audit ${AGENT_LABELS[target] || target} lancé avec succès` });
         setTimeout(fetchData, 1500);
       } else {
         const err = await res.json().catch(() => ({}));
@@ -133,11 +112,12 @@ export default function AuditorPage({ isActive, agents }) {
     <div className="agent-page">
       <div className="page-header">
         <div className="page-title">Audit</div>
-        <div className="page-subtitle">Audit en profondeur de chaque agent, note /10, améliorations, tendances</div>
+        <div className="page-subtitle">Audit en profondeur de chaque agent, note /10, am&eacute;liorations, tendances</div>
+        <LastUpdated date={lastUpdate} />
       </div>
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
-      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
+      <ErrorBanner error={error} onRetry={fetchData} />
       {auditFeedback && (
         <div className={`agent-${auditFeedback.type === "success" ? "success" : "error"}-banner`}>
           {auditFeedback.message}
@@ -173,7 +153,7 @@ export default function AuditorPage({ isActive, agents }) {
                     <span style={{ width: 6, height: 6, borderRadius: "50%", display: "inline-block", marginRight: 4,
                       background: agentMap[target].status === "working" ? "var(--accent)" : agentMap[target].status === "error" ? "var(--red)" : "var(--text-muted)" }} />
                   )}
-                  {TARGET_LABELS[target]}
+                  {AGENT_LABELS[target] || target}
                   <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 4 }}>
                     {TARGET_TEAMS[target]}
                   </span>
@@ -201,7 +181,7 @@ export default function AuditorPage({ isActive, agents }) {
                     <ScoreCircle score={report.score || 0} />
                     <div className="audit-report-meta">
                       <span className="audit-report-agent">
-                        {TARGET_LABELS[report.agent] || report.agent}
+                        {AGENT_LABELS[report.agent] || report.agent}
                       </span>
                       <span className="audit-report-date">
                         {report.timestamp ? new Date(report.timestamp).toLocaleDateString("fr-FR") : ""}{" "}
@@ -232,7 +212,7 @@ export default function AuditorPage({ isActive, agents }) {
 
                       {report.improvements && report.improvements.length > 0 && (
                         <div className="audit-section">
-                          <h4>Améliorations proposées</h4>
+                          <h4>Am&eacute;liorations propos&eacute;es</h4>
                           <ul>
                             {report.improvements.map((imp, i) => (
                               <li key={i}>{typeof imp === "string" ? imp : JSON.stringify(imp)}</li>
@@ -243,7 +223,7 @@ export default function AuditorPage({ isActive, agents }) {
 
                       {report.checks && Object.keys(report.checks).length > 0 && (
                         <div className="audit-section">
-                          <h4>Détail des checks</h4>
+                          <h4>D&eacute;tail des checks</h4>
                           <div className="audit-checks-grid">
                             {Object.entries(report.checks).map(([check, result]) => (
                               <div key={check} className="audit-check">
@@ -269,48 +249,7 @@ export default function AuditorPage({ isActive, agents }) {
       </div>
 
       {/* Agent logs */}
-      <div className="section-card">
-        <div className="section-header">
-          <h3>Logs Auditeur</h3>
-          <div className="log-filter-row">
-            {["ALL", "DECISION", "INFO", "WARN", "ERROR"].map((level) => (
-              <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-                onClick={() => setLogFilter(level)}>
-                {level}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="agent-logs compact-logs">
-          {logs.length === 0 ? (
-            <div className="agent-logs-empty">Aucun log</div>
-          ) : (
-            logs.slice(0, 20).map((log, i) => (
-              <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
-                <div className="agent-log-header">
-                  <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
-                  <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
-                    {log.action}
-                  </span>
-                  <span className="agent-log-time">
-                    {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-                  </span>
-                </div>
-                {log.details && Object.keys(log.details).length > 0 && (
-                  <div className="agent-log-details">
-                    {Object.entries(log.details).slice(0, 3).map(([k, v]) => (
-                      <span key={k} className="agent-log-detail">
-                        <span className="agent-log-detail-key">{k}:</span>{" "}
-                        {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+      <LogSection logs={logs} logFilter={logFilter} setLogFilter={setLogFilter} title="Logs Auditeur" />
     </div>
   );
 }

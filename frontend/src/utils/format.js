@@ -220,3 +220,55 @@ export function formatTimeAgo(isoString) {
   const days = Math.floor(hours / 24);
   return `${days}j`;
 }
+
+// ── Intelligent price formatting ─────────────────────────────
+// Forex: 4-5 decimals, Indices: 0-1 decimals, Commodities: 2
+const FOREX_TICKERS = new Set([
+  "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
+  "USDCHF=X", "EURJPY=X", "USDCNH=X",
+]);
+const INDEX_TICKERS = new Set([
+  "^GSPC", "^DJI", "^IXIC", "^RUT", "^FCHI",
+  "^GDAXI", "^FTSE", "^N225", "^VIX",
+]);
+
+export function formatPrice(price, ticker) {
+  if (price == null) return "--";
+  const p = Number(price);
+  if (isNaN(p)) return "--";
+  if (FOREX_TICKERS.has(ticker)) {
+    // JPY pairs: 3 decimals, others: 5
+    return ticker.includes("JPY") || ticker.includes("CNH")
+      ? p.toFixed(3) : p.toFixed(5);
+  }
+  if (INDEX_TICKERS.has(ticker)) {
+    return p >= 1000 ? p.toFixed(0) : p.toFixed(1);
+  }
+  // Commodities, stocks: 2 decimals
+  return p.toFixed(2);
+}
+
+// ── Log detail formatter (human-readable instead of raw JSON) ─
+export function formatLogDetails(details) {
+  if (!details || typeof details !== "object") return null;
+  const parts = [];
+  for (const [k, v] of Object.entries(details)) {
+    if (k === "news_items") continue; // handled separately
+    if (v == null) continue;
+    let display;
+    if (typeof v === "number") {
+      display = Number.isInteger(v) ? String(v) : v.toFixed(2);
+    } else if (typeof v === "boolean") {
+      display = v ? "oui" : "non";
+    } else if (Array.isArray(v)) {
+      display = v.length > 3 ? `${v.slice(0, 3).join(", ")}... (${v.length})` : v.join(", ");
+    } else if (typeof v === "object") {
+      const keys = Object.keys(v);
+      display = keys.length > 3 ? `{${keys.slice(0, 3).join(", ")}...}` : JSON.stringify(v);
+    } else {
+      display = String(v).slice(0, 100);
+    }
+    parts.push({ key: k.replace(/_/g, " "), value: display });
+  }
+  return parts;
+}

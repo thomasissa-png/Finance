@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
-
-const DIR_COLORS = { LONG: "var(--green)", SHORT: "var(--red)", NEUTRAL: "var(--text-muted)" };
-const DIR_ARROWS = { LONG: "\u2191", SHORT: "\u2193", NEUTRAL: "\u2022" };
+import { DIR_COLORS, DIR_ARROWS, POLL_FAST } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { pnlColor } from "../utils/format";
+import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 
 const STATUS_COLORS = { active: "var(--green)", paused: "var(--yellow)", stopped: "var(--red)" };
 
@@ -13,33 +11,38 @@ export default function Trader3Page({ isActive }) {
   const [strategies, setStrategies] = useState([]);
   const [learningAdj, setLearningAdj] = useState(null);
   const [logs, setLogs] = useState([]);
-  const [logFilter, setLogFilter] = useState("DECISION");
+  const [logFilter, setLogFilter] = useState("ALL");
   const [filterResult, setFilterResult] = useState("");
   const [filterDirection, setFilterDirection] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
       const [posRes, stratRes, adjRes, logRes] = await Promise.all([
-        fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/trader3/strategies").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/learning3/adjustments").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch(`/api/agents/trader_3/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/trader3/positions", {}, []),
+        apiFetch("/api/trader3/strategies", {}, []),
+        apiFetch("/api/learning3/adjustments", {}, null),
+        apiFetch("/api/agents/trader_3/logs?limit=50", {}, []),
       ]);
       setPositions(Array.isArray(posRes?.active) ? posRes.active : Array.isArray(posRes) ? posRes : []);
       setStrategies(Array.isArray(stratRes) ? stratRes : []);
       setLearningAdj(adjRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
-    } catch { /* ignore */ } finally {
+      setError(null);
+      setLastUpdate(new Date());
+    } catch (err) {
+      setError(err.message || "Impossible de charger les données Trader 3");
+    } finally {
       setLoading(false);
     }
-  }, [logFilter]);
+  }, []);
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 30_000);
+    const id = setInterval(fetchData, POLL_FAST);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
@@ -60,17 +63,22 @@ export default function Trader3Page({ isActive }) {
     return true;
   });
   const perPage = 15;
-  const totalPages = Math.max(1, Math.ceil(filteredHistory.length / perPage));
+  const totalPagesCount = Math.max(1, Math.ceil(filteredHistory.length / perPage));
   const pagedHistory = filteredHistory.slice((page - 1) * perPage, page * perPage);
+
+  const filteredLogs = logFilter === "ALL" ? logs : logs.filter((l) => l.level === logFilter);
 
   return (
     <div className="agent-page">
       <div className="agent-page-header">
-        <h2>{"\ud83d\udcc9"} Agent Trader 3 &mdash; Trading Technique (heures-3j)</h2>
+        <h2>Agent Trader 3 &mdash; Trading Technique (heures-3j)</h2>
         <span className="agent-page-desc">
           Positions bas&eacute;es sur les indicateurs techniques &mdash; strat&eacute;gies multiples, dur&eacute;e heures &agrave; 3 jours
         </span>
+        <LastUpdated date={lastUpdate} />
       </div>
+
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement...</div>}
 
@@ -81,13 +89,13 @@ export default function Trader3Page({ isActive }) {
           <div className="kpi-label">Positions actives</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: realizedPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+          <div className="kpi-value" style={{ color: pnlColor(realizedPnl) }}>
             {realizedPnl >= 0 ? "+" : ""}{realizedPnl.toFixed(2)}%
           </div>
           <div className="kpi-label">P&L R&eacute;alis&eacute;</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: latentPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+          <div className="kpi-value" style={{ color: pnlColor(latentPnl) }}>
             {latentPnl >= 0 ? "+" : ""}{latentPnl.toFixed(2)}%
           </div>
           <div className="kpi-label">P&L Latent</div>
@@ -116,7 +124,7 @@ export default function Trader3Page({ isActive }) {
           </div>
           {(learningAdj.anomalies || []).length > 0 && (
             <div style={{ marginTop: 6, fontSize: 12, color: "var(--yellow)" }}>
-              {"\u26a0\ufe0f"} {learningAdj.anomalies.join(" | ")}
+              ! {learningAdj.anomalies.join(" | ")}
             </div>
           )}
         </div>
@@ -151,7 +159,7 @@ export default function Trader3Page({ isActive }) {
                     </td>
                     <td>{p.entry_price != null ? p.entry_price.toFixed(2) : "\u2014"}</td>
                     <td>{p.current_price != null ? p.current_price.toFixed(2) : "\u2014"}</td>
-                    <td style={{ color: (p.unrealized_pnl_pct || 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                    <td style={{ color: pnlColor(p.unrealized_pnl_pct) }}>
                       {(p.unrealized_pnl_pct || 0) >= 0 ? "+" : ""}{(p.unrealized_pnl_pct || 0).toFixed(2)}%
                     </td>
                     <td>{holdingHours}h</td>
@@ -161,11 +169,11 @@ export default function Trader3Page({ isActive }) {
             </tbody>
           </table>
         ) : (
-          !loading && <div className="trend-no-data">Aucune position active</div>
+          !loading && <EmptyState message="Aucune position active" />
         )}
       </div>
 
-      {/* A/B Testing — Strategy comparison */}
+      {/* A/B Testing */}
       <div className="section-card">
         <h3>A/B Testing &mdash; Comparaison des strat&eacute;gies</h3>
         {strategies.length > 0 ? (
@@ -185,7 +193,7 @@ export default function Trader3Page({ isActive }) {
                   <td style={{ fontWeight: 600 }}>{s.strategy_name}</td>
                   <td>{s.trades_count || 0}</td>
                   <td>{s.win_rate != null ? `${s.win_rate.toFixed(1)}%` : "\u2014"}</td>
-                  <td style={{ color: (s.avg_pnl || 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                  <td style={{ color: pnlColor(s.avg_pnl) }}>
                     {(s.avg_pnl || 0) >= 0 ? "+" : ""}{(s.avg_pnl || 0).toFixed(2)}%
                   </td>
                   <td>
@@ -198,7 +206,7 @@ export default function Trader3Page({ isActive }) {
             </tbody>
           </table>
         ) : (
-          !loading && <div className="trend-no-data">Aucune strat&eacute;gie enregistr&eacute;e &mdash; les donn&eacute;es seront disponibles apr&egrave;s les premiers trades</div>
+          !loading && <EmptyState message="Aucune stratégie enregistrée" detail="Les données seront disponibles après les premiers trades" />
         )}
       </div>
 
@@ -241,62 +249,28 @@ export default function Trader3Page({ isActive }) {
                     <td>{t.strategy || "\u2014"}</td>
                     <td style={{ color: DIR_COLORS[t.direction] }}>{t.direction}</td>
                     <td>{t.result}</td>
-                    <td style={{ color: (t.pnl_pct || 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                    <td style={{ color: pnlColor(t.pnl_pct) }}>
                       {(t.pnl_pct || 0) >= 0 ? "+" : ""}{(t.pnl_pct || 0).toFixed(2)}%
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {totalPages > 1 && (
+            {totalPagesCount > 1 && (
               <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 8 }}>
                 <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="log-filter-btn">&laquo;</button>
-                <span style={{ fontSize: 12, lineHeight: "28px" }}>{page}/{totalPages}</span>
-                <button disabled={page >= totalPages} onClick={() => setPage(page + 1)} className="log-filter-btn">&raquo;</button>
+                <span style={{ fontSize: 12, lineHeight: "28px" }}>{page}/{totalPagesCount}</span>
+                <button disabled={page >= totalPagesCount} onClick={() => setPage(page + 1)} className="log-filter-btn">&raquo;</button>
               </div>
             )}
           </>
         ) : (
-          !loading && <div className="trend-no-data">Aucun trade dans l'historique</div>
+          !loading && <EmptyState message="Aucun trade dans l'historique" />
         )}
       </div>
 
       {/* Logs */}
-      <div className="section-card">
-        <h3>Logs Agent Trader 3</h3>
-        <div className="log-filter-row">
-          {["DECISION", "ALL", "INFO", "WARN", "ERROR"].map((level) => (
-            <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-              onClick={() => setLogFilter(level)}>
-              {level}
-            </button>
-          ))}
-        </div>
-        <div className="agent-logs-list">
-          {logs.slice(0, 20).map((log, i) => (
-            <div key={i} className="agent-log-entry" style={{ borderLeftColor: LEVEL_COLORS[log.level] }}>
-              <div className="agent-log-header">
-                <span>{LEVEL_ICONS[log.level] || ""} {log.action}</span>
-                <span className="agent-log-time">
-                  {new Date(log.timestamp).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-              {log.details && (
-                <div className="agent-log-details">
-                  {log.details.ticker && <span><b>{log.details.ticker}</b></span>}
-                  {log.details.strategy && <span> [{log.details.strategy}]</span>}
-                  {log.details.direction && <span> {log.details.direction}</span>}
-                  {log.details.reason && <div className="agent-log-reason">{log.details.reason}</div>}
-                  {!log.details.ticker && typeof log.details === "object" && (
-                    <span>{JSON.stringify(log.details)}</span>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-          {logs.length === 0 && <div className="trend-no-data">Aucune d&eacute;cision enregistr&eacute;e</div>}
-        </div>
-      </div>
+      <LogSection logs={filteredLogs} logFilter={logFilter} setLogFilter={setLogFilter} />
     </div>
   );
 }

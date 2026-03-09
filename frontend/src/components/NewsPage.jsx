@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "i", WARN: "!", ERROR: "x", DECISION: ">" };
+import { POLL_NORMAL } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { ErrorBanner, LastUpdated, LogSection } from "./shared";
 
 function CollectedNewsList({ items }) {
   if (!items || items.length === 0) return null;
@@ -35,23 +36,24 @@ export default function NewsPage({ isActive }) {
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(null);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
   const [expandedLog, setExpandedLog] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
       const [shRes, wrRes, logRes] = await Promise.all([
-        fetch("/api/source-health?days=7").then((r) => { if (!r.ok) throw new Error(`Sources: ${r.status}`); return r.json(); }).catch(() => null),
-        fetch("/api/source-health/weekly").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch(`/api/agents/news/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/source-health?days=7", {}, null),
+        apiFetch("/api/source-health/weekly", {}, null),
+        apiFetch(`/api/agents/news/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`, {}, []),
       ]);
       setSourceHealth(shRes);
       setWeeklyReview(wrRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
-      setFetchError(null);
+      setError(null);
+      setLastUpdate(new Date());
     } catch (err) {
-      setFetchError(err.message || "Erreur de chargement");
+      setError(err.message || "Erreur de chargement");
     } finally {
       setLoading(false);
     }
@@ -59,7 +61,7 @@ export default function NewsPage({ isActive }) {
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
@@ -82,21 +84,25 @@ export default function NewsPage({ isActive }) {
     }
   }
 
+  // NewsPage has custom log rendering (expandable news items), so we keep it inline
+  const filteredLogs = logFilter === "ALL" ? logs : logs.filter((l) => l.level === logFilter);
+
   return (
     <div className="agent-page">
       <div className="page-header">
         <div className="page-title">Agent News</div>
-        <div className="page-subtitle">Collecte, curation, santé des sources, détection d'événements</div>
+        <div className="page-subtitle">Collecte, curation, sant&eacute; des sources, d&eacute;tection d'&eacute;v&eacute;nements</div>
+        <LastUpdated date={lastUpdate} />
       </div>
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
-      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {/* Source Health */}
       <div className="section-card">
-        <h3>Santé des sources</h3>
+        <h3>Sant&eacute; des sources</h3>
         {sources.length === 0 ? (
-          <div className="agent-logs-empty">Aucune donnée de santé disponible. Les données apparaissent après le premier scan.</div>
+          <div className="agent-logs-empty">Aucune donn&eacute;e de sant&eacute; disponible. Les donn&eacute;es apparaissent apr&egrave;s le premier scan.</div>
         ) : (
           <>
           <div className="compact-table desktop-only">
@@ -104,22 +110,22 @@ export default function NewsPage({ isActive }) {
               <thead>
                 <tr>
                   <th>Source</th>
-                  <th>Taux de succès</th>
+                  <th>Taux de succ&egrave;s</th>
                   <th>Sante</th>
-                  <th>Échecs</th>
+                  <th>&Eacute;checs</th>
                   <th>Latence moy.</th>
-                  <th>Dernière erreur</th>
+                  <th>Derni&egrave;re erreur</th>
                 </tr>
               </thead>
               <tbody>
                 {sources.sort((a, b) => (a.success_rate ?? 1) - (b.success_rate ?? 1)).map((s) => (
                   <tr key={s.name}>
                     <td className="ticker-cell">{s.name}</td>
-                    <td>{s.success_rate != null ? `${(s.success_rate * 100).toFixed(0)}%` : "—"}</td>
+                    <td>{s.success_rate != null ? `${(s.success_rate * 100).toFixed(0)}%` : "\u2014"}</td>
                     <td style={{ width: 120 }}><HealthBar rate={s.success_rate} /></td>
                     <td style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</td>
-                    <td>{s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "—"}</td>
-                    <td className="error-cell">{s.last_error ? String(s.last_error).slice(0, 60) : "—"}</td>
+                    <td>{s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "\u2014"}</td>
+                    <td className="error-cell">{s.last_error ? String(s.last_error).slice(0, 60) : "\u2014"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -131,13 +137,13 @@ export default function NewsPage({ isActive }) {
                 <div className="mobile-card-header">
                   <span className="ticker-cell">{s.name}</span>
                   <span style={{ color: (s.success_rate ?? 1) >= 0.8 ? "var(--green)" : (s.success_rate ?? 1) >= 0.5 ? "var(--yellow)" : "var(--red)" }}>
-                    {s.success_rate != null ? `${(s.success_rate * 100).toFixed(0)}%` : "—"}
+                    {s.success_rate != null ? `${(s.success_rate * 100).toFixed(0)}%` : "\u2014"}
                   </span>
                 </div>
                 <HealthBar rate={s.success_rate} />
                 <div className="mobile-card-body">
-                  <span>Échecs : <strong style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</strong></span>
-                  <span>Latence : {s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "—"}</span>
+                  <span>&Eacute;checs : <strong style={{ color: s.failures > 0 ? "var(--red)" : "var(--text-muted)" }}>{s.failures}</strong></span>
+                  <span>Latence : {s.avg_latency != null ? `${Math.round(s.avg_latency)}ms` : "\u2014"}</span>
                 </div>
                 {s.last_error && <div className="mobile-card-error">{String(s.last_error).slice(0, 80)}</div>}
               </div>
@@ -156,15 +162,15 @@ export default function NewsPage({ isActive }) {
               <div className="weekly-summary">
                 <div className="weekly-stat">
                   <span className="weekly-stat-value" style={{ color: "var(--green)" }}>
-                    {weeklyReview.summary.healthy ?? "—"}
+                    {weeklyReview.summary.healthy ?? "\u2014"}
                   </span>
                   <span className="weekly-stat-label">Sources saines</span>
                 </div>
                 <div className="weekly-stat">
                   <span className="weekly-stat-value" style={{ color: "var(--red)" }}>
-                    {weeklyReview.summary.degraded ?? "—"}
+                    {weeklyReview.summary.degraded ?? "\u2014"}
                   </span>
-                  <span className="weekly-stat-label">Sources dégradées</span>
+                  <span className="weekly-stat-label">Sources d&eacute;grad&eacute;es</span>
                 </div>
               </div>
             )}
@@ -182,58 +188,22 @@ export default function NewsPage({ isActive }) {
         </div>
       )}
 
-      {/* Agent logs */}
-      <div className="section-card">
-        <div className="section-header">
-          <h3>Logs Agent News</h3>
-          <div className="log-filter-row">
-            {["ALL", "DECISION", "INFO", "WARN", "ERROR"].map((level) => (
-              <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-                onClick={() => setLogFilter(level)}>{level}</button>
-            ))}
-          </div>
-        </div>
-        <div className="agent-logs compact-logs">
-          {logs.length === 0 ? (
-            <div className="agent-logs-empty">Aucun log</div>
-          ) : [...logs].reverse().slice(0, 30).map((log, i) => {
-            const hasNewsItems = log.details?.news_items && Array.isArray(log.details.news_items) && log.details.news_items.length > 0;
-            const isExpanded = expandedLog === i;
-            const isClickable = hasNewsItems;
-            return (
-              <div
-                key={`${log.timestamp}-${i}`}
-                className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}
-                onClick={isClickable ? () => setExpandedLog(isExpanded ? null : i) : undefined}
-                style={isClickable ? { cursor: "pointer" } : undefined}
-              >
-                <div className="agent-log-header">
-                  <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
-                  <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
-                    {log.action}
-                  </span>
-                  <span className="agent-log-time">
-                    {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-                  </span>
-                  {log.duration_ms != null && <span className="agent-log-duration">{log.duration_ms}ms</span>}
-                  {hasNewsItems && <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 6 }}>{isExpanded ? "▲" : "▼"}</span>}
-                </div>
-                {log.details && Object.keys(log.details).length > 0 && (
-                  <div className="agent-log-details">
-                    {Object.entries(log.details).filter(([k]) => k !== "news_items").slice(0, 4).map(([k, v]) => (
-                      <span key={k} className="agent-log-detail">
-                        <span className="agent-log-detail-key">{k}:</span>{" "}
-                        {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {isExpanded && hasNewsItems && <CollectedNewsList items={log.details.news_items} />}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* Agent logs — custom rendering for expandable news items */}
+      <LogSection
+        logs={filteredLogs}
+        logFilter={logFilter}
+        setLogFilter={setLogFilter}
+        title="Logs Agent News"
+        maxLogs={30}
+        renderExtra={(log, i) => {
+          const hasNewsItems = log.details?.news_items && Array.isArray(log.details.news_items) && log.details.news_items.length > 0;
+          return hasNewsItems && expandedLog === i ? <CollectedNewsList items={log.details.news_items} /> : null;
+        }}
+        onLogClick={(log, i) => {
+          const hasNewsItems = log.details?.news_items && Array.isArray(log.details.news_items) && log.details.news_items.length > 0;
+          if (hasNewsItems) setExpandedLog(expandedLog === i ? null : i);
+        }}
+      />
     </div>
   );
 }

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { formatDate, formatTime, CATEGORY_COLORS, scanLabel } from "../utils/format";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
+import { POLL_NORMAL } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { ErrorBanner, LastUpdated, LogSection } from "./shared";
 
 const DIM_LABELS = {
   surprise: "Surprise",
@@ -20,22 +20,23 @@ export default function ScoringPage({ isActive }) {
   const [expandedScan, setExpandedScan] = useState(null);
   const [logFilter, setLogFilter] = useState("ALL");
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(null);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
       const [hRes, lRes, logRes] = await Promise.all([
-        fetch("/api/scan-history?limit=20").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/learning").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch(`/api/agents/scoring/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/scan-history?limit=20", {}, []),
+        apiFetch("/api/learning", {}, null),
+        apiFetch(`/api/agents/scoring/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`, {}, []),
       ]);
       setHistory(Array.isArray(hRes) ? hRes : []);
       setLearning(lRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
-      setFetchError(null);
+      setError(null);
+      setLastUpdate(new Date());
     } catch (err) {
-      setFetchError(err.message || "Erreur de chargement");
+      setError(err.message || "Erreur de chargement");
     } finally {
       setLoading(false);
     }
@@ -43,7 +44,7 @@ export default function ScoringPage({ isActive }) {
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
@@ -52,17 +53,18 @@ export default function ScoringPage({ isActive }) {
   return (
     <div className="agent-page">
       <div className="agent-page-header">
-        <h2>\ud83c\udfaf Agent Scoring</h2>
-        <span className="agent-page-desc">Notation edge-weighted, analyse Claude, d\u00e9tection de signaux</span>
+        <h2>{"\ud83c\udfaf"} Agent Scoring</h2>
+        <span className="agent-page-desc">Notation edge-weighted, analyse Claude, d&eacute;tection de signaux</span>
+        <LastUpdated date={lastUpdate} />
       </div>
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
-      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {/* Newscat learning adjustments */}
       {Object.keys(newscatAdj).length > 0 && (
         <div className="section-card">
-          <h3>Ajustements par cat\u00e9gorie de news</h3>
+          <h3>Ajustements par cat&eacute;gorie de news</h3>
           <div className="learning-grid">
             {Object.entries(newscatAdj)
               .sort((a, b) => Math.abs(b[1] - 1) - Math.abs(a[1] - 1))
@@ -70,7 +72,7 @@ export default function ScoringPage({ isActive }) {
                 <div key={cat} className={`learning-item ${mult >= 1 ? "boost" : "penalty"}`}>
                   <div className="learning-item-ticker">{cat}</div>
                   <div className="learning-item-mult" style={{ color: mult >= 1 ? "var(--green)" : "var(--red)" }}>
-                    {mult.toFixed(3)}\u00d7
+                    {mult.toFixed(3)}&times;
                   </div>
                 </div>
               ))}
@@ -83,7 +85,7 @@ export default function ScoringPage({ isActive }) {
         <h3>Historique des scans ({history.length})</h3>
         <div className="scoring-history">
           {history.length === 0 ? (
-            <div className="agent-logs-empty">Aucun scan enregistr\u00e9</div>
+            <div className="agent-logs-empty">Aucun scan enregistr&eacute;</div>
           ) : (
             history.map((scan, idx) => {
               const scored = scan.all_scored_news || [];
@@ -102,7 +104,7 @@ export default function ScoringPage({ isActive }) {
                       <span className="scoring-scan-type">{scanLabel(scan.scan_type)}</span>
                     </div>
                     <div className="scoring-scan-stats">
-                      <span>{scored.length} news analys\u00e9es</span>
+                      <span>{scored.length} news analys&eacute;es</span>
                       <span>Score moy: {avgScore}</span>
                       <span>{scan.has_trade ? "\u2705 Trade" : "\u274c Pas de trade"}</span>
                     </div>
@@ -114,7 +116,7 @@ export default function ScoringPage({ isActive }) {
                       {/* Decision summary */}
                       {scan.decision_summary && (
                         <div className="scoring-decision">
-                          <strong>D\u00e9cision :</strong> {scan.decision_summary}
+                          <strong>D&eacute;cision :</strong> {scan.decision_summary}
                         </div>
                       )}
 
@@ -129,7 +131,7 @@ export default function ScoringPage({ isActive }) {
                                 }}>
                                   {(news.score || 0).toFixed(0)}
                                 </span>
-                                <span className="scored-news-ticker">{news.ticker || "—"}</span>
+                                <span className="scored-news-ticker">{news.ticker || "\u2014"}</span>
                                 {news.news_category && (
                                   <span className="cat-badge" style={{ backgroundColor: CATEGORY_COLORS[news.news_category] || "#90a4ae" }}>
                                     {news.news_category}
@@ -139,7 +141,7 @@ export default function ScoringPage({ isActive }) {
                                   <span className={`direction-badge ${news.direction.toLowerCase()}`}>{news.direction}</span>
                                 )}
                               </div>
-                              <div className="scored-news-title">{news.headline || news.title || "—"}</div>
+                              <div className="scored-news-title">{news.headline || news.title || "\u2014"}</div>
 
                               {/* Scoring dimensions */}
                               <div className="scoring-dims">
@@ -172,8 +174,8 @@ export default function ScoringPage({ isActive }) {
                           <h4>Rejets ({scan.rejection_log.length})</h4>
                           {scan.rejection_log.slice(0, 10).map((r, ri) => (
                             <div key={ri} className="rejection-item">
-                              <span className="rejection-ticker">{r.ticker || "—"}</span>
-                              <span className="rejection-reason">{r.reason || r.rejection_reason || "—"}</span>
+                              <span className="rejection-ticker">{r.ticker || "\u2014"}</span>
+                              <span className="rejection-reason">{r.reason || r.rejection_reason || "\u2014"}</span>
                             </div>
                           ))}
                         </div>
@@ -188,46 +190,7 @@ export default function ScoringPage({ isActive }) {
       </div>
 
       {/* Agent logs */}
-      <div className="section-card">
-        <div className="section-header">
-          <h3>Logs Agent Scoring</h3>
-          <div className="log-filter-row">
-            {["ALL", "DECISION", "INFO", "WARN", "ERROR"].map((level) => (
-              <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-                onClick={() => setLogFilter(level)}>
-                {level}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="agent-logs compact-logs">
-          {logs.length === 0 ? (
-            <div className="agent-logs-empty">Aucun log</div>
-          ) : (
-            logs.slice(0, 20).map((log, i) => (
-              <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
-                <div className="agent-log-header">
-                  <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "\u2139\ufe0f"}</span>
-                  <span className="agent-log-action" style={{ color: LEVEL_COLORS[log.level] }}>{log.action}</span>
-                  <span className="agent-log-time">
-                    {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-                  </span>
-                </div>
-                {log.details && Object.keys(log.details).length > 0 && (
-                  <div className="agent-log-details">
-                    {Object.entries(log.details).slice(0, 3).map(([k, v]) => (
-                      <span key={k} className="agent-log-detail">
-                        <span className="agent-log-detail-key">{k}:</span>{" "}
-                        {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+      <LogSection logs={logs} logFilter={logFilter} setLogFilter={setLogFilter} title="Logs Agent Scoring" />
     </div>
   );
 }

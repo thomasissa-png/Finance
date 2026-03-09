@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
-const DIR_COLORS = { LONG: "var(--green)", SHORT: "var(--red)", NEUTRAL: "var(--text-muted)" };
+import { DIR_COLORS, POLL_NORMAL } from "../utils/constants";
+import { apiFetch, apiTrigger } from "../utils/api";
+import { pnlColor } from "../utils/format";
+import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 
 export default function Journal3Page({ isActive }) {
   const [entries, setEntries] = useState([]);
@@ -10,35 +10,38 @@ export default function Journal3Page({ isActive }) {
   const [logFilter, setLogFilter] = useState("ALL");
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
       const [entriesRes, logRes] = await Promise.all([
-        fetch("/api/journal3/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch(`/api/agents/journal_3/logs?limit=30${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/journal3/entries", {}, []),
+        apiFetch("/api/agents/journal_3/logs?limit=30", {}, []),
       ]);
       setEntries(Array.isArray(entriesRes) ? entriesRes : []);
       setLogs(Array.isArray(logRes) ? logRes : []);
-    } catch { /* ignore */ } finally {
+      setError(null);
+      setLastUpdate(new Date());
+    } catch (err) {
+      setError(err.message || "Impossible de charger les données Journal 3");
+    } finally {
       setLoading(false);
     }
-  }, [logFilter]);
+  }, []);
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
   const triggerJournal = async () => {
     setTriggering(true);
-    try {
-      await fetch("/api/journal3/trigger", { method: "POST" });
-      setTimeout(fetchData, 2000);
-    } catch { /* ignore */ } finally {
-      setTriggering(false);
-    }
+    const result = await apiTrigger("/api/journal3/trigger");
+    if (!result.ok) setError(result.error);
+    setTimeout(fetchData, 2000);
+    setTriggering(false);
   };
 
   // KPIs
@@ -58,14 +61,19 @@ export default function Journal3Page({ isActive }) {
     byStrategy[s].push(e);
   });
 
+  const filteredLogs = logFilter === "ALL" ? logs : logs.filter((l) => l.level === logFilter);
+
   return (
     <div className="agent-page">
       <div className="agent-page-header">
-        <h2>{"\ud83d\udcd4"} Agent Journal 3 &mdash; Journal Technique</h2>
+        <h2>Agent Journal 3 &mdash; Journal Technique</h2>
         <span className="agent-page-desc">
           Journal des trades techniques (Trader 3) &mdash; cl&ocirc;ture, P&L, MAE/MFE par strat&eacute;gie
         </span>
+        <LastUpdated date={lastUpdate} />
       </div>
+
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement...</div>}
 
@@ -80,7 +88,7 @@ export default function Journal3Page({ isActive }) {
           <div className="kpi-label">Win Rate</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: totalPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+          <div className="kpi-value" style={{ color: pnlColor(totalPnl) }}>
             {totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(2)}%
           </div>
           <div className="kpi-label">P&L Total</div>
@@ -91,7 +99,7 @@ export default function Journal3Page({ isActive }) {
         </div>
       </div>
 
-      {/* Trigger button */}
+      {/* Trigger */}
       <div style={{ marginBottom: 16 }}>
         <button className="trigger-btn" onClick={triggerJournal} disabled={triggering}>
           {triggering ? "En cours..." : "Lancer Journal 3"}
@@ -127,7 +135,7 @@ export default function Journal3Page({ isActive }) {
                     <td style={{ fontWeight: 600 }}>{strategy}</td>
                     <td>{sEntries.length}</td>
                     <td>{sWR}%</td>
-                    <td style={{ color: sPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                    <td style={{ color: pnlColor(sPnl) }}>
                       {sPnl >= 0 ? "+" : ""}{sPnl.toFixed(2)}%
                     </td>
                     <td>{sAvg}%</td>
@@ -138,7 +146,7 @@ export default function Journal3Page({ isActive }) {
             </tbody>
           </table>
         ) : (
-          !loading && <div className="trend-no-data">Aucune donn&eacute;e par strat&eacute;gie</div>
+          !loading && <EmptyState message="Aucune donnée par stratégie" />
         )}
       </div>
 
@@ -167,7 +175,7 @@ export default function Journal3Page({ isActive }) {
                   <td>{e.strategy || "\u2014"}</td>
                   <td style={{ color: DIR_COLORS[e.direction] }}>{e.direction}</td>
                   <td>{e.result || "\u2014"}</td>
-                  <td style={{ color: (e.pnl_pct || 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                  <td style={{ color: pnlColor(e.pnl_pct) }}>
                     {(e.pnl_pct || 0) >= 0 ? "+" : ""}{(e.pnl_pct || 0).toFixed(2)}%
                   </td>
                   <td>{(e.mae_pct || 0).toFixed(2)}%</td>
@@ -177,40 +185,12 @@ export default function Journal3Page({ isActive }) {
             </tbody>
           </table>
         ) : (
-          !loading && <div className="trend-no-data">Aucun trade enregistr&eacute; &mdash; le journal sera aliment&eacute; apr&egrave;s les premi&egrave;res cl&ocirc;tures</div>
+          !loading && <EmptyState message="Aucun trade enregistré" detail="Le journal sera alimenté après les premières clôtures" />
         )}
       </div>
 
       {/* Logs */}
-      <div className="section-card">
-        <h3>Logs Agent Journal 3</h3>
-        <div className="log-filter-row">
-          {["ALL", "DECISION", "INFO", "WARN", "ERROR"].map((level) => (
-            <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-              onClick={() => setLogFilter(level)}>
-              {level}
-            </button>
-          ))}
-        </div>
-        <div className="agent-logs-list">
-          {logs.slice(0, 20).map((log, i) => (
-            <div key={i} className="agent-log-entry" style={{ borderLeftColor: LEVEL_COLORS[log.level] }}>
-              <div className="agent-log-header">
-                <span>{LEVEL_ICONS[log.level] || ""} {log.action}</span>
-                <span className="agent-log-time">
-                  {new Date(log.timestamp).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-              {log.details && (
-                <div className="agent-log-details">
-                  {typeof log.details === "object" ? JSON.stringify(log.details) : log.details}
-                </div>
-              )}
-            </div>
-          ))}
-          {logs.length === 0 && <div className="trend-no-data">Aucun log</div>}
-        </div>
-      </div>
+      <LogSection logs={filteredLogs} logFilter={logFilter} setLogFilter={setLogFilter} />
     </div>
   );
 }

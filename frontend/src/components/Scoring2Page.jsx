@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
+import { LEVEL_ICONS, LEVEL_COLORS, POLL_NORMAL } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
+import { formatPrice } from "../utils/format";
 
 const DIR_COLORS = { LONG: "var(--green)", SHORT: "var(--red)", NEUTRAL: "var(--text-muted)" };
 
@@ -17,24 +18,31 @@ export default function Scoring2Page({ isActive }) {
   const [data, setData] = useState(null);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [logFilter, setLogFilter] = useState("ALL");
 
   const fetchData = useCallback(async () => {
     try {
+      setError(null);
       const [resultRes, logRes] = await Promise.all([
-        fetch("/api/scoring2/result").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch("/api/agents/scoring_2/logs?limit=30")
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/scoring2/result", {}, null),
+        apiFetch("/api/agents/scoring_2/logs?limit=30", {}, []),
       ]);
       setData(resultRes);
-      setLogs(Array.isArray(logRes) ? logRes : []);
-    } catch { /* ignore */ } finally {
+      const allLogs = Array.isArray(logRes) ? logRes : [];
+      setLogs(logFilter === "ALL" ? allLogs : allLogs.filter((l) => l.level === logFilter));
+      setLastUpdate(new Date());
+    } catch (err) {
+      setError(err.message || "Impossible de charger les données Scoring 2");
+    } finally {
       setLoading(false);
     }
-  }, []);
+  }, [logFilter]);
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 30_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
@@ -46,11 +54,14 @@ export default function Scoring2Page({ isActive }) {
   return (
     <div className="agent-page">
       <div className="agent-page-header">
-        <h2>{"\ud83c\udfaf"} Agent Scoring 2 &mdash; Trend Scoring</h2>
+        <h2>{"\ud83c\udfaf"} Agent Scoring 2 — Trend Scoring</h2>
         <span className="agent-page-desc">
-          Re-pond&eacute;ration des news pour le trend following &mdash; multiplicateurs structurels, persistence, accumulation
+          Re-pondération des news pour le trend following — multiplicateurs structurels, persistence, accumulation
         </span>
+        <LastUpdated date={lastUpdate} />
       </div>
+
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement...</div>}
 
@@ -58,7 +69,7 @@ export default function Scoring2Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{stats.total_items || 0}</div>
-          <div className="kpi-label">News analys&eacute;es</div>
+          <div className="kpi-label">News analysées</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.relevant_items || 0}</div>
@@ -78,7 +89,7 @@ export default function Scoring2Page({ isActive }) {
       <div className="section-card">
         <h3>Accumulation directionnelle par ticker</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12 }}>
-          Signal net accumul&eacute; &mdash; diff&eacute;rence LONG vs SHORT pondr&eacute;e par le trend score
+          Signal net accumulé — différence LONG vs SHORT pondérée par le trend score
         </p>
         <div className="trend-positions-grid">
           {Object.entries(accumulation).map(([ticker, acc]) => {
@@ -116,14 +127,62 @@ export default function Scoring2Page({ isActive }) {
           })}
         </div>
         {Object.keys(accumulation).length === 0 && !loading && (
-          <div className="trend-no-data">Aucune donn&eacute;e &mdash; l'agent sera aliment&eacute; au prochain scan</div>
+          <EmptyState message="Aucune donnée" detail="L'agent sera alimenté au prochain scan" />
         )}
       </div>
 
-      {/* Trend-scored news */}
+      {/* Trend-scored news — desktop table */}
       <div className="section-card">
-        <h3>News re-pond&eacute;r&eacute;es pour le trend ({trendScored.length})</h3>
-        <div className="agent-logs-list">
+        <h3>News re-pondérées pour le trend ({trendScored.length})</h3>
+
+        {/* Desktop view */}
+        <div className="compact-table desktop-only">
+          <table>
+            <thead>
+              <tr>
+                <th>Direction</th>
+                <th>Titre</th>
+                <th>Source</th>
+                <th>Trend</th>
+                <th>Original</th>
+                <th>Catégorie</th>
+                <th>Cat×</th>
+                <th>Persist×</th>
+                <th>Mag / Rel</th>
+                <th>Tickers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trendScored.slice(0, 30).map((item, i) => (
+                <tr key={i}>
+                  <td style={{ color: DIR_COLORS[item.direction], fontWeight: 600 }}>
+                    {item.direction === "LONG" ? "\u2191" : "\u2193"} {item.direction}
+                  </td>
+                  <td style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {item.title}
+                  </td>
+                  <td style={{ color: "var(--text-secondary)", fontSize: 12 }}>{item.source}</td>
+                  <td style={{ color: "var(--cyan)", fontWeight: 600 }}>{item.trend_score}</td>
+                  <td style={{ color: "var(--text-secondary)" }}>{item.original_score}</td>
+                  <td style={{ color: CAT_COLORS[item.news_category] || "var(--text-secondary)" }}>
+                    {item.news_category}
+                  </td>
+                  <td>{item.category_mult}</td>
+                  <td style={{ color: item.persistence_mult > 1.0 ? "var(--yellow)" : "var(--text-muted)" }}>
+                    {item.persistence_mult > 1.0 ? item.persistence_mult : "\u2014"}
+                  </td>
+                  <td>{item.magnitude} / {item.reliability}</td>
+                  <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                    {item.impacted_tickers?.join(", ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Mobile view */}
+        <div className="mobile-only">
           {trendScored.slice(0, 30).map((item, i) => (
             <div key={i} className="agent-log-entry" style={{ borderLeftColor: DIR_COLORS[item.direction] }}>
               <div className="agent-log-header">
@@ -144,10 +203,10 @@ export default function Scoring2Page({ isActive }) {
                 <span style={{ color: CAT_COLORS[item.news_category] || "var(--text-secondary)" }}>
                   {item.news_category}
                 </span>
-                <span>cat&times;{item.category_mult}</span>
+                <span>cat\u00d7{item.category_mult}</span>
                 {item.persistence_mult > 1.0 && (
                   <span style={{ color: "var(--yellow)" }}>
-                    persist&times;{item.persistence_mult}
+                    persist\u00d7{item.persistence_mult}
                   </span>
                 )}
                 <span>mag:{item.magnitude} rel:{item.reliability}</span>
@@ -157,34 +216,15 @@ export default function Scoring2Page({ isActive }) {
               </div>
             </div>
           ))}
-          {trendScored.length === 0 && !loading && (
-            <div className="trend-no-data">Aucune news trend-pertinente dans le dernier scan</div>
-          )}
         </div>
+
+        {trendScored.length === 0 && !loading && (
+          <EmptyState message="Aucune news trend-pertinente" detail="Les données apparaîtront après le prochain scan" />
+        )}
       </div>
 
-      {/* Agent Logs */}
-      <div className="section-card">
-        <h3>Logs Agent Scoring 2</h3>
-        <div className="agent-logs-list">
-          {logs.slice(0, 20).map((log, i) => (
-            <div key={i} className="agent-log-entry" style={{ borderLeftColor: LEVEL_COLORS[log.level] }}>
-              <div className="agent-log-header">
-                <span>{LEVEL_ICONS[log.level] || ""} {log.action}</span>
-                <span className="agent-log-time">
-                  {new Date(log.timestamp).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-              {log.details && (
-                <div className="agent-log-details">
-                  {typeof log.details === "object" ? JSON.stringify(log.details) : log.details}
-                </div>
-              )}
-            </div>
-          ))}
-          {logs.length === 0 && <div className="trend-no-data">Aucun log</div>}
-        </div>
-      </div>
+      {/* Agent Logs — shared LogSection component */}
+      <LogSection logs={logs} logFilter={logFilter} setLogFilter={setLogFilter} limit={20} />
     </div>
   );
 }

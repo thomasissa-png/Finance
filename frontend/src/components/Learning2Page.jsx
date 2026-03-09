@@ -1,54 +1,48 @@
 import React, { useState, useEffect, useCallback } from "react";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
-
-function AdjBar({ value, label }) {
-  const pct = Math.max(0, Math.min(100, ((value - 0.5) / 1.0) * 100));
-  const color = value >= 1.0 ? "var(--green)" : "var(--red)";
-  return (
-    <div className="learning-adj-row">
-      <span className="learning-adj-label">{label}</span>
-      <div className="learning-adj-bar-track">
-        <div className="learning-adj-bar-fill" style={{ width: `${pct}%`, background: color }} />
-        <span className="learning-adj-bar-value">{value.toFixed(3)}</span>
-      </div>
-    </div>
-  );
-}
+import { LEVEL_ICONS, LEVEL_COLORS, POLL_NORMAL } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { ErrorBanner, EmptyState, LastUpdated, AdjBar, LogSection } from "./shared";
 
 export default function Learning2Page({ isActive }) {
   const [data, setData] = useState(null);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [logFilter, setLogFilter] = useState("ALL");
 
   const fetchData = useCallback(async () => {
     try {
       const [adjRes, logRes] = await Promise.all([
-        fetch("/api/learning2/adjustments").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch("/api/agents/learning_2/logs?limit=30")
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/learning2/adjustments", {}, null),
+        apiFetch("/api/agents/learning_2/logs?limit=30", {}, []),
       ]);
       setData(adjRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
-    } catch { /* ignore */ } finally {
+      setError(null);
+      setLastUpdate(new Date());
+    } catch (err) {
+      setError(err.message || "Impossible de charger les données Learning 2");
+    } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
   const triggerLearning = async () => {
     setTriggering(true);
     try {
-      await fetch("/api/learning2/trigger", { method: "POST" });
+      await apiFetch("/api/learning2/trigger", { method: "POST" }, null);
       setTimeout(fetchData, 2000);
-    } catch { /* ignore */ } finally {
+    } catch (err) {
+      setError(err.message || "Échec du recalcul Learning 2");
+    } finally {
       setTriggering(false);
     }
   };
@@ -60,14 +54,21 @@ export default function Learning2Page({ isActive }) {
   const anomalies = data?.anomalies || [];
   const stats = data?.stats || {};
 
+  const filteredLogs = logFilter === "ALL"
+    ? logs
+    : logs.filter((l) => l.level === logFilter);
+
   return (
     <div className="agent-page">
       <div className="agent-page-header">
-        <h2>{"\ud83d\udca1"} Agent Learning 2 &mdash; Trend Learning</h2>
+        <h2>{"\ud83d\udca1"} Agent Learning 2 — Trend Learning</h2>
         <span className="agent-page-desc">
-          Apprentissage adaptatif pour Trader 2 &mdash; 4 dimensions (ticker, newscat, direction, seuil)
+          Apprentissage adaptatif pour Trader 2 — 4 dimensions (ticker, newscat, direction, seuil)
         </span>
+        <LastUpdated date={lastUpdate} />
       </div>
+
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement...</div>}
 
@@ -75,7 +76,7 @@ export default function Learning2Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{stats.total_periods || 0}</div>
-          <div className="kpi-label">P&eacute;riodes analys&eacute;es</div>
+          <div className="kpi-label">Périodes analysées</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.win_rate || 0}%</div>
@@ -103,7 +104,7 @@ export default function Learning2Page({ isActive }) {
       {/* Anomalies */}
       {anomalies.length > 0 && (
         <div className="section-card" style={{ borderLeft: "3px solid var(--yellow)" }}>
-          <h3>{"\u26a0\ufe0f"} Anomalies d&eacute;tect&eacute;es</h3>
+          <h3>{"\u26a0\ufe0f"} Anomalies détectées</h3>
           {anomalies.map((a, i) => (
             <div key={i} style={{ padding: "4px 0", fontSize: 13 }}>{a}</div>
           ))}
@@ -114,29 +115,29 @@ export default function Learning2Page({ isActive }) {
       <div className="section-card">
         <h3>Ajustements par ticker</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Multiplieur appliqu&eacute; au signal de chaque ticker (1.0 = neutre)
+          Multiplieur appliqué au signal de chaque ticker (1.0 = neutre)
         </p>
         {Object.keys(tickerAdj).length > 0 ? (
           Object.entries(tickerAdj).map(([ticker, val]) => (
             <AdjBar key={ticker} label={ticker} value={val} />
           ))
         ) : (
-          <div className="trend-no-data">Pas assez de donn&eacute;es (min {4} flips par ticker)</div>
+          <EmptyState message="Pas assez de données" detail="Minimum 4 flips par ticker requis" />
         )}
       </div>
 
       {/* Per-newscat adjustments */}
       <div className="section-card">
-        <h3>Ajustements par cat&eacute;gorie de news</h3>
+        <h3>Ajustements par catégorie de news</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Quelles cat&eacute;gories produisent de bons retournements ?
+          Quelles catégories produisent de bons retournements ?
         </p>
         {Object.keys(newscatAdj).length > 0 ? (
           Object.entries(newscatAdj).map(([cat, val]) => (
             <AdjBar key={cat} label={cat} value={val} />
           ))
         ) : (
-          <div className="trend-no-data">Pas assez de donn&eacute;es (min {3} flips par cat&eacute;gorie)</div>
+          <EmptyState message="Pas assez de données" detail="Minimum 3 flips par catégorie requis" />
         )}
       </div>
 
@@ -144,14 +145,14 @@ export default function Learning2Page({ isActive }) {
       <div className="section-card">
         <h3>Ajustements par direction</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          LONG vs SHORT &mdash; quelle direction performe mieux ?
+          LONG vs SHORT — quelle direction performe mieux ?
         </p>
         {Object.keys(directionAdj).length > 0 ? (
           Object.entries(directionAdj).map(([dir, val]) => (
             <AdjBar key={dir} label={dir} value={val} />
           ))
         ) : (
-          <div className="trend-no-data">Pas assez de donn&eacute;es (min {4} flips par direction)</div>
+          <EmptyState message="Pas assez de données" detail="Minimum 4 flips par direction requis" />
         )}
       </div>
 
@@ -160,7 +161,7 @@ export default function Learning2Page({ isActive }) {
         <h3>Calibration du seuil de flip</h3>
         <div style={{ display: "flex", gap: 24, padding: 8 }}>
           <div>
-            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Seuil ajust&eacute;</div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Seuil ajusté</div>
             <div style={{ fontSize: 18, fontWeight: 600 }}>
               {(20 * (signalCal.threshold_adj || 1.0)).toFixed(1)}
             </div>
@@ -175,27 +176,11 @@ export default function Learning2Page({ isActive }) {
       </div>
 
       {/* Agent Logs */}
-      <div className="section-card">
-        <h3>Logs Agent Learning 2</h3>
-        <div className="agent-logs-list">
-          {logs.slice(0, 20).map((log, i) => (
-            <div key={i} className="agent-log-entry" style={{ borderLeftColor: LEVEL_COLORS[log.level] }}>
-              <div className="agent-log-header">
-                <span>{LEVEL_ICONS[log.level] || ""} {log.action}</span>
-                <span className="agent-log-time">
-                  {new Date(log.timestamp).toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-              {log.details && (
-                <div className="agent-log-details">
-                  {typeof log.details === "object" ? JSON.stringify(log.details) : log.details}
-                </div>
-              )}
-            </div>
-          ))}
-          {logs.length === 0 && <div className="trend-no-data">Aucun log</div>}
-        </div>
-      </div>
+      <LogSection
+        logs={filteredLogs}
+        logFilter={logFilter}
+        setLogFilter={setLogFilter}
+      />
     </div>
   );
 }

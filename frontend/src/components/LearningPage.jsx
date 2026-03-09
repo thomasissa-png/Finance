@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { pnlColor } from "../utils/format";
-
-const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
-const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
+import { POLL_NORMAL } from "../utils/constants";
+import { apiFetch } from "../utils/api";
+import { ErrorBanner, LastUpdated, LogSection } from "./shared";
 
 const DIM_DESCRIPTIONS = {
   "Per-ticker": "Ajustement par ticker \u00d7 cat\u00e9gorie d'actif. Booste ou p\u00e9nalise chaque instrument selon ses performances historiques.",
@@ -14,12 +14,12 @@ const DIM_DESCRIPTIONS = {
 };
 
 function MultiplierBadge({ value }) {
-  if (value == null) return <span className="mult-badge neutral">—</span>;
+  if (value == null) return <span className="mult-badge neutral">&mdash;</span>;
   const isBoost = value >= 1;
   return (
     <span className={`mult-badge ${isBoost ? "boost" : "penalty"}`}
       style={{ color: isBoost ? "var(--green)" : "var(--red)" }}>
-      {value.toFixed(3)}\u00d7
+      {value.toFixed(3)}&times;
     </span>
   );
 }
@@ -30,22 +30,23 @@ export default function LearningPage({ isActive }) {
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(null);
+  const [error, setError] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
       const [lRes, pRes, logRes] = await Promise.all([
-        fetch("/api/learning").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
-        fetch(`/api/agents/learning/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`)
-          .then((r) => r.ok ? r.json() : []).catch(() => []),
+        apiFetch("/api/learning", {}, null),
+        apiFetch("/api/performance", {}, null),
+        apiFetch(`/api/agents/learning/logs?limit=50${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`, {}, []),
       ]);
       setLearning(lRes);
       setPerf(pRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
-      setFetchError(null);
+      setError(null);
+      setLastUpdate(new Date());
     } catch (err) {
-      setFetchError(err.message || "Erreur de chargement");
+      setError(err.message || "Erreur de chargement");
     } finally {
       setLoading(false);
     }
@@ -53,7 +54,7 @@ export default function LearningPage({ isActive }) {
 
   useEffect(() => {
     if (isActive) fetchData();
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, POLL_NORMAL);
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
@@ -73,11 +74,12 @@ export default function LearningPage({ isActive }) {
     <div className="agent-page">
       <div className="agent-page-header">
         <h2>{"\ud83e\udde0"} Agent Learning</h2>
-        <span className="agent-page-desc">6 dimensions d'apprentissage adaptatif, d\u00e9tection d'anomalies, optimisation continue</span>
+        <span className="agent-page-desc">6 dimensions d'apprentissage adaptatif, d&eacute;tection d'anomalies, optimisation continue</span>
+        <LastUpdated date={lastUpdate} />
       </div>
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
-      {fetchError && <div className="agent-error-banner">Erreur : {fetchError}</div>}
+      <ErrorBanner error={error} onRetry={fetchData} />
 
       {/* KPIs */}
       <div className="kpi-row">
@@ -91,7 +93,7 @@ export default function LearningPage({ isActive }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-value" style={{ color: "var(--red)" }}>{penalties}</div>
-          <div className="kpi-label">P\u00e9nalit\u00e9s</div>
+          <div className="kpi-label">P&eacute;nalit&eacute;s</div>
         </div>
         {perf && (
           <div className="kpi-card">
@@ -148,7 +150,7 @@ export default function LearningPage({ isActive }) {
       {/* Dimension 3: Newscat */}
       {Object.keys(newscatAdj).length > 0 && (
         <div className="section-card">
-          <h3>3. Cat\u00e9gorie de news ({Object.keys(newscatAdj).length})</h3>
+          <h3>3. Cat&eacute;gorie de news ({Object.keys(newscatAdj).length})</h3>
           <p className="dim-desc">{DIM_DESCRIPTIONS["News Category"]}</p>
           <div className="learning-grid">
             {Object.entries(newscatAdj)
@@ -166,7 +168,7 @@ export default function LearningPage({ isActive }) {
       {/* Dimension 4: Regime VIX */}
       {Object.keys(regimeAdj).length > 0 && (
         <div className="section-card">
-          <h3>4. R\u00e9gime VIX</h3>
+          <h3>4. R&eacute;gime VIX</h3>
           <p className="dim-desc">{DIM_DESCRIPTIONS["R\u00e9gime VIX"]}</p>
           <div className="learning-dim-cards">
             {Object.entries(regimeAdj).map(([k, v]) => (
@@ -208,46 +210,7 @@ export default function LearningPage({ isActive }) {
       </div>
 
       {/* Agent logs */}
-      <div className="section-card">
-        <div className="section-header">
-          <h3>Logs Agent Learning</h3>
-          <div className="log-filter-row">
-            {["ALL", "DECISION", "INFO", "WARN", "ERROR"].map((level) => (
-              <button key={level} className={`log-filter-btn ${logFilter === level ? "active" : ""}`}
-                onClick={() => setLogFilter(level)}>
-                {level}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="agent-logs compact-logs">
-          {logs.length === 0 ? (
-            <div className="agent-logs-empty">Aucun log</div>
-          ) : (
-            logs.slice(0, 20).map((log, i) => (
-              <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
-                <div className="agent-log-header">
-                  <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "\u2139\ufe0f"}</span>
-                  <span className="agent-log-action" style={{ color: LEVEL_COLORS[log.level] }}>{log.action}</span>
-                  <span className="agent-log-time">
-                    {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-                  </span>
-                </div>
-                {log.details && Object.keys(log.details).length > 0 && (
-                  <div className="agent-log-details">
-                    {Object.entries(log.details).slice(0, 3).map(([k, v]) => (
-                      <span key={k} className="agent-log-detail">
-                        <span className="agent-log-detail-key">{k}:</span>{" "}
-                        {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+      <LogSection logs={logs} logFilter={logFilter} setLogFilter={setLogFilter} title="Logs Agent Learning" />
     </div>
   );
 }
