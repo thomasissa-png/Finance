@@ -310,6 +310,123 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
         "critical_drought_mm": 2.0,
         "drought_note": "secheresse = export reduction",
     },
+    # ── Team 2 audit: Chile/Peru copper zones ──
+    {
+        "name": "Chile Antofagasta (Copper)",
+        "lat": -23.6, "lon": -70.4,
+        "tickers": ["HG=F"],
+        "crops": "cuivre (mines)",
+        "frost_threshold": -999,  # Arid desert — frost not relevant
+        "heat_threshold": 999,
+        "heat_stress_threshold": 999,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Mining year-round
+        "critical_months": [6, 7, 8],  # Winter rains/floods can disrupt open-pit mines
+        "drought_threshold_mm": -1,  # Water stress for mining (tracked separately)
+        "critical_drought_mm": -1,
+        "drought_note": "Chili = 27% production mondiale cuivre — inondations/seismes = arret mines",
+    },
+    {
+        "name": "Peru Arequipa (Copper)",
+        "lat": -16.4, "lon": -71.5,
+        "tickers": ["HG=F"],
+        "crops": "cuivre (mines)",
+        "frost_threshold": -999,
+        "heat_threshold": 999,
+        "heat_stress_threshold": 999,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [12, 1, 2, 3],  # Rainy season = flooding risk for mines
+        "drought_threshold_mm": -1,
+        "critical_drought_mm": -1,
+        "drought_note": "Perou = 2e producteur cuivre mondial — pluies = coulees de boue/arret mines",
+    },
+    # ── Team 2 audit: Vietnam/Colombia coffee zones ──
+    {
+        "name": "Vietnam Central Highlands (Coffee Robusta)",
+        "lat": 12.7, "lon": 108.0,
+        "tickers": ["KC=F"],
+        "crops": "cafe robusta",
+        "frost_threshold": -999,  # Tropical — no frost
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Year-round
+        "critical_months": [10, 11, 12, 1, 2],  # Oct-Feb: harvest + dry season start
+        "drought_threshold_mm": 10.0,
+        "critical_drought_mm": 5.0,
+        "drought_note": "Vietnam = #1 robusta mondial — secheresse tire arabica par substitution",
+    },
+    {
+        "name": "Colombia Eje Cafetero (Coffee Arabica)",
+        "lat": 4.8, "lon": -75.7,
+        "tickers": ["KC=F"],
+        "crops": "cafe arabica",
+        "frost_threshold": -999,
+        "heat_threshold": 35,
+        "heat_stress_threshold": 30,  # Arabica stressed above 30°C
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 9, 10, 11],  # Two harvest seasons (mitaca + principal)
+        "drought_threshold_mm": 15.0,  # Needs consistent rainfall
+        "critical_drought_mm": 8.0,
+        "drought_note": "Colombie = #3 arabica mondial — La Nina = exces pluie, El Nino = secheresse",
+    },
+    # ── Team 2 audit: France/EU wheat zone ──
+    {
+        "name": "France Beauce (Wheat)",
+        "lat": 48.1, "lon": 1.5,
+        "tickers": ["ZW=F"],
+        "crops": "ble, colza",
+        "frost_threshold": -15,  # Winter wheat hardened
+        "heat_threshold": 38,
+        "heat_stress_threshold": 32,  # Grain fill stress
+        "growing_months": [3, 4, 5, 6, 7, 8, 9, 10, 11],
+        "critical_months": [5, 6, 7],  # May-Jul: grain fill + harvest
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "France = 1er producteur ble UE — canicule 2003/2022 = chute rendements",
+    },
+    # ── Team 2 audit: Cameroon/Nigeria cocoa zones ──
+    {
+        "name": "Cameroon South West (Cocoa)",
+        "lat": 5.0, "lon": 9.5,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 10, 11, 12],
+        "drought_threshold_mm": 15.0,
+        "critical_drought_mm": 8.0,
+        "drought_note": "Cameroun = 5e producteur cacao mondial — black pod disease",
+    },
+    {
+        "name": "Nigeria Ondo/Osun (Cocoa)",
+        "lat": 7.2, "lon": 4.5,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 10, 11, 12],
+        "drought_threshold_mm": 15.0,
+        "critical_drought_mm": 8.0,
+        "drought_note": "Nigeria = 4e producteur cacao mondial",
+    },
+    # ── Team 2 audit: Canada Prairie wheat zone ──
+    {
+        "name": "Canada Saskatchewan (Wheat)",
+        "lat": 51.5, "lon": -106.0,
+        "tickers": ["ZW=F"],
+        "crops": "ble, canola",
+        "frost_threshold": -25,  # Spring wheat planted after last frost
+        "heat_threshold": 38,
+        "heat_stress_threshold": 32,
+        "growing_months": [4, 5, 6, 7, 8, 9, 10],
+        "critical_months": [6, 7, 8],  # Jun-Aug: growing + grain fill
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "Canada = top 5 exportateur ble — secheresse Prairie = choc export",
+    },
     # ── NEW: Cocoa, Cotton, Orange Juice zones ──
     {
         "name": "Ivory Coast (Cocoa)",
@@ -771,6 +888,43 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "Argentina peso capital controls grain export tax soybean",
         "tickers": ["ZS=F", "ZW=F", "ZC=F"],
         "category": "regulatory",
+    },
+    # ── Team 2 audit: targeted queries for uncovered producers ──
+    # Vietnam coffee — #1 robusta, harvest issues directly impact KC=F
+    {
+        "q": "Vietnam coffee robusta harvest drought Central Highlands Dak Lak",
+        "tickers": ["KC=F"],
+        "category": "commodity",
+    },
+    # DRC/Zambia copper — political instability, power shortage, mine disruption
+    {
+        "q": "Congo DRC copper mine Zambia power shortage cobalt Katanga",
+        "tickers": ["HG=F"],
+        "category": "supply_chain",
+    },
+    # Chile copper — mine disruption, labor, water stress
+    {
+        "q": "Chile copper mine Codelco Escondida strike water BHP",
+        "tickers": ["HG=F"],
+        "category": "supply_chain",
+    },
+    # Cameroon/Nigeria cocoa — #4-5 producers, disease, logistics
+    {
+        "q": "Cameroon Nigeria cocoa harvest black pod smuggling port",
+        "tickers": ["CC=F"],
+        "category": "commodity",
+    },
+    # Port Santos — largest coffee export port + Brazil ag exports
+    {
+        "q": "Santos port Brazil coffee congestion strike logistics export",
+        "tickers": ["KC=F", "SB=F", "ZS=F"],
+        "category": "supply_chain",
+    },
+    # Copper smelter / treatment charges — key supply signal
+    {
+        "q": "copper smelter shutdown treatment charges TCRC concentrate",
+        "tickers": ["HG=F"],
+        "category": "commodity",
     },
 ]
 
@@ -1359,6 +1513,10 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
         "SLV": "Silver ETF",
         "CORN": "Corn ETF (Teucrium)",
         "WEAT": "Wheat ETF (Teucrium)",
+        # Team 2 audit: copper + cocoa ETFs for smart money positioning
+        "CPER": "Copper ETF (United States Copper)",
+        "NIB": "Cocoa ETN (iPath)",
+        "JO": "Coffee ETN (iPath)",
     }
 
     # Map ETF options tickers to our tracked universe tickers
@@ -1370,6 +1528,10 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
         "SLV": ["SI=F"],
         "CORN": ["ZC=F"],
         "WEAT": ["ZW=F"],
+        # Team 2 audit: commodity ETFs mapped to tracked tickers
+        "CPER": ["HG=F"],
+        "NIB": ["CC=F"],
+        "JO": ["KC=F"],
     }
 
     items: list[NewsItem] = []
@@ -1566,6 +1728,13 @@ EONET_COMMODITY_REGIONS: list[dict[str, Any]] = [
     {"name": "India", "lat_range": (20, 35), "lon_range": (68, 90), "tickers": ["ZW=F", "CT=F"]},
     {"name": "Argentina", "lat_range": (-40, -25), "lon_range": (-65, -55), "tickers": ["ZS=F", "ZC=F", "ZW=F"]},
     {"name": "Middle East", "lat_range": (20, 40), "lon_range": (35, 60), "tickers": ["CL=F", "GC=F"]},
+    # Team 2 audit: copper-producing regions
+    {"name": "Chile/Peru Copper Belt", "lat_range": (-30, -10), "lon_range": (-80, -65), "tickers": ["HG=F"]},
+    {"name": "DRC/Zambia Copper Belt", "lat_range": (-16, -5), "lon_range": (22, 32), "tickers": ["HG=F"]},
+    # Team 2 audit: additional cocoa/coffee regions
+    {"name": "Cameroon/Nigeria Cocoa", "lat_range": (3, 10), "lon_range": (3, 15), "tickers": ["CC=F"]},
+    {"name": "Vietnam Coffee", "lat_range": (10, 16), "lon_range": (105, 112), "tickers": ["KC=F"]},
+    {"name": "Colombia Coffee", "lat_range": (2, 8), "lon_range": (-78, -72), "tickers": ["KC=F"]},
 ]
 
 
@@ -2348,6 +2517,19 @@ NDVI_MONITORING_ZONES = [
      "growing_months": [1, 2, 3, 4]},
     {"name": "Argentina Pampas", "lat": -34.5, "lon": -59.0, "tickers": ["ZS=F", "ZW=F"], "crop": "soja/ble",
      "growing_months": [10, 11, 12, 1, 2, 3]},
+    # ── Team 2 audit: cocoa + coffee NDVI zones ──
+    {"name": "Ivory Coast Cocoa Belt", "lat": 6.5, "lon": -5.5, "tickers": ["CC=F"], "crop": "cacao",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Ghana Cocoa Belt", "lat": 6.7, "lon": -1.6, "tickers": ["CC=F"], "crop": "cacao",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Brazil Minas Gerais Coffee", "lat": -21.0, "lon": -44.0, "tickers": ["KC=F"], "crop": "cafe arabica",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Brazil Espirito Santo Coffee", "lat": -19.8, "lon": -40.3, "tickers": ["KC=F"], "crop": "cafe robusta",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Vietnam Highlands Coffee", "lat": 12.7, "lon": 108.0, "tickers": ["KC=F"], "crop": "cafe robusta",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "France Beauce Wheat", "lat": 48.1, "lon": 1.5, "tickers": ["ZW=F"], "crop": "ble",
+     "growing_months": [3, 4, 5, 6, 7]},
 ]
 
 
@@ -2687,6 +2869,8 @@ def fetch_dark_pool_signals() -> list[NewsItem]:
         {"ticker": "CORN", "name": "Corn ETF", "mapped": ["ZC=F"]},
         {"ticker": "WEAT", "name": "Wheat ETF", "mapped": ["ZW=F"]},
         {"ticker": "SPY", "name": "S&P500 ETF", "mapped": ["^GSPC"]},
+        # Team 2 audit: copper ETF for dark pool detection
+        {"ticker": "CPER", "name": "Copper ETF", "mapped": ["HG=F"]},
     ]
 
     for target in targets:
@@ -2738,12 +2922,293 @@ def fetch_dark_pool_signals() -> list[NewsItem]:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 18. USDA FAS Export Sales — Weekly commodity export data
+# ═══════════════════════════════════════════════════════════════════════
+# Free, no API key. Published every Thursday 8:30 ET.
+# https://apps.fas.usda.gov/export-sales/
+
+
+def fetch_usda_export_sales() -> list[NewsItem]:
+    """Fetch USDA weekly export sales data for grains.
+
+    The USDA Foreign Agricultural Service publishes weekly export sales
+    reports every Thursday at 8:30 ET. Large sales (especially to China)
+    or cancellations move wheat/corn/soy markets significantly.
+
+    Uses the FAS GATS (Global Agricultural Trade System) public API.
+    """
+    items: list[NewsItem] = []
+
+    # We monitor wheat, corn, soybeans — the three most traded US grains
+    commodities = [
+        {"name": "Wheat", "code": "1001", "tickers": ["ZW=F"]},
+        {"name": "Corn", "code": "1005", "tickers": ["ZC=F"]},
+        {"name": "Soybeans", "code": "1201", "tickers": ["ZS=F"]},
+    ]
+
+    try:
+        # FAS export sales summary — CSV endpoint
+        current_year = datetime.now(timezone.utc).year
+        url = f"https://apps.fas.usda.gov/export-sales/wkly_rpt{current_year % 100:02d}.csv"
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT,
+                           headers={"User-Agent": "Mozilla/5.0"})
+
+        if resp.status_code != 200:
+            # Fallback: try previous marketing year
+            url = f"https://apps.fas.usda.gov/export-sales/wkly_rpt{(current_year - 1) % 100:02d}.csv"
+            resp = requests.get(url, timeout=REQUEST_TIMEOUT,
+                               headers={"User-Agent": "Mozilla/5.0"})
+
+        if resp.status_code == 200 and resp.text.strip():
+            lines = resp.text.strip().split("\n")
+            if len(lines) > 1:
+                for commodity in commodities:
+                    # Search for commodity in the CSV data
+                    for line in lines[-20:]:  # Check last 20 rows (most recent)
+                        if commodity["name"].lower() in line.lower():
+                            title = (
+                                f"[USDA EXPORT] {commodity['name']} — Rapport hebdomadaire export sales "
+                                f"disponible (semaine du {datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
+                            )
+                            items.append(NewsItem(
+                                title=title,
+                                source="USDA FAS",
+                                url="https://apps.fas.usda.gov/export-sales/",
+                                published=datetime.now(timezone.utc),
+                                related_tickers=commodity["tickers"],
+                                source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+                            ))
+                            break
+    except Exception as exc:
+        logger.debug("USDA export sales fetch error: %s", exc)
+
+    if items:
+        logger.info("Fetched %d USDA export sales alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 19. Plant Disease Monitoring — Cocoa/Coffee/Wheat crop diseases
+# ═══════════════════════════════════════════════════════════════════════
+# WOAH only covers animal diseases. Plant diseases (swollen shoot, wheat rust,
+# coffee leaf rust) are monitored via CABI Plantwise and FAO IPPC.
+
+
+def fetch_plant_disease_alerts() -> list[NewsItem]:
+    """Monitor plant disease outbreaks affecting commodity crops.
+
+    Sources:
+    - FAO IPPC (International Plant Protection Convention) alerts
+    - Google News RSS for specific plant disease keywords (free, no limit)
+
+    Diseases monitored:
+    - Cocoa: Swollen Shoot Virus (CSSV), Black Pod (Phytophthora)
+    - Coffee: Coffee Leaf Rust (Hemileia vastatrix), Coffee Berry Disease
+    - Wheat: Wheat Rust (Puccinia), Karnal Bunt, Fusarium Head Blight
+    """
+    items: list[NewsItem] = []
+    seen: set[str] = set()
+
+    # Plant diseases to monitor with their commodity impacts
+    plant_diseases = [
+        # Cocoa diseases
+        {"query": "cocoa swollen shoot virus CSSV Ghana", "tickers": ["CC=F"],
+         "disease": "Swollen Shoot Virus", "severity": "CRITICAL"},
+        {"query": "cocoa black pod phytophthora disease", "tickers": ["CC=F"],
+         "disease": "Black Pod Disease", "severity": "HIGH"},
+        # Coffee diseases
+        {"query": "coffee leaf rust roya hemileia", "tickers": ["KC=F"],
+         "disease": "Coffee Leaf Rust", "severity": "HIGH"},
+        {"query": "coffee berry disease CBD", "tickers": ["KC=F"],
+         "disease": "Coffee Berry Disease", "severity": "MODERATE"},
+        # Wheat diseases
+        {"query": "wheat rust puccinia stem rust", "tickers": ["ZW=F"],
+         "disease": "Wheat Rust", "severity": "HIGH"},
+        {"query": "wheat fusarium head blight vomitoxin DON", "tickers": ["ZW=F"],
+         "disease": "Fusarium Head Blight", "severity": "MODERATE"},
+    ]
+
+    import feedparser
+
+    for disease_cfg in plant_diseases:
+        try:
+            # Google News RSS — free, unlimited, no API key needed
+            query = disease_cfg["query"].replace(" ", "+")
+            rss_url = f"https://news.google.com/rss/search?q={query}&hl=en&gl=US&ceid=US:en"
+            resp = requests.get(rss_url, timeout=REQUEST_TIMEOUT,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+
+            feed = feedparser.parse(resp.content)
+            for entry in feed.entries[:3]:  # Top 3 most recent per disease
+                title = entry.get("title", "")
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+
+                # Parse published date
+                published_dt = datetime.now(timezone.utc)
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    try:
+                        import calendar
+                        published_dt = datetime.fromtimestamp(
+                            calendar.timegm(entry.published_parsed), tz=timezone.utc
+                        )
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+
+                # Only include if recent (< 7 days)
+                age_hours = (datetime.now(timezone.utc) - published_dt).total_seconds() / 3600
+                if age_hours > 168:  # 7 days
+                    continue
+
+                formatted_title = (
+                    f"[PLANT DISEASE] {disease_cfg['severity']} — {disease_cfg['disease']}: "
+                    f"{title[:150]}"
+                )
+                items.append(NewsItem(
+                    title=formatted_title,
+                    source="Plant Disease Monitor",
+                    url=entry.get("link", ""),
+                    published=published_dt,
+                    related_tickers=disease_cfg["tickers"],
+                    source_weight=SOURCE_WEIGHTS.get("Plant Disease", 1.1),
+                ))
+
+        except Exception as exc:
+            logger.debug("Plant disease alert fetch error for %s: %s",
+                        disease_cfg["disease"], exc)
+
+    if items:
+        logger.info("Fetched %d plant disease alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 20. Google News RSS — Free unlimited alternative to GNews API
+# ═══════════════════════════════════════════════════════════════════════
+# Google News RSS is free and has no rate limit. We use it for queries
+# that don't fit in the GNews 100 req/day budget.
+
+
+# Queries that supplement GNews — focused on Team 2 coverage gaps
+GOOGLE_NEWS_QUERIES: list[dict[str, Any]] = [
+    # GASC Egypt wheat tenders — world's largest wheat importer
+    {"q": "Egypt GASC wheat tender purchase import", "tickers": ["ZW=F"],
+     "category": "commodity"},
+    # CONAB Brazil crop estimates — most authoritative Brazil source
+    {"q": "CONAB Brazil coffee crop estimate production safra", "tickers": ["KC=F", "SB=F"],
+     "category": "commodity"},
+    # ICCO cocoa grindings / market report
+    {"q": "ICCO cocoa grindings quarterly report market review", "tickers": ["CC=F"],
+     "category": "commodity"},
+    # ICO coffee export data / monthly report
+    {"q": "ICO international coffee organization export report", "tickers": ["KC=F"],
+     "category": "commodity"},
+    # LME copper warehouse stocks — direct supply signal
+    {"q": "LME copper warehouse stocks certified inventory draw", "tickers": ["HG=F"],
+     "category": "commodity"},
+    # ICE cocoa certified stocks / delivery notices
+    {"q": "ICE cocoa certified stocks delivery notice warehouse", "tickers": ["CC=F"],
+     "category": "commodity"},
+    # ICE coffee certified stocks
+    {"q": "ICE coffee arabica certified stocks grainpro warehouse", "tickers": ["KC=F"],
+     "category": "commodity"},
+    # China copper import customs data
+    {"q": "China copper import customs unwrought monthly data", "tickers": ["HG=F"],
+     "category": "commodity"},
+    # SovEcon/IKAR Russian wheat estimates
+    {"q": "SovEcon IKAR Russia wheat crop estimate export", "tickers": ["ZW=F"],
+     "category": "commodity"},
+    # Harmattan / West Africa dry season (cocoa risk)
+    {"q": "harmattan West Africa Ghana cocoa dry season wind", "tickers": ["CC=F"],
+     "category": "weather"},
+    # Abidjan San Pedro port — cocoa export logistics
+    {"q": "Abidjan San Pedro port cocoa shipment export Ivory Coast", "tickers": ["CC=F"],
+     "category": "supply_chain"},
+]
+
+
+def fetch_google_news_rss() -> list[NewsItem]:
+    """Fetch commodity news via Google News RSS — free, unlimited alternative to GNews.
+
+    Used for queries that exceed GNews 100 req/day budget.
+    Focus on coverage gaps identified in Team 2 audit:
+    - Exchange warehouse stocks (LME, ICE)
+    - Commodity organization reports (CONAB, ICCO, ICO)
+    - Regional monitoring (GASC Egypt, SovEcon Russia, port logistics)
+    """
+    import feedparser
+
+    items: list[NewsItem] = []
+    seen: set[str] = set()
+
+    for query_cfg in GOOGLE_NEWS_QUERIES:
+        try:
+            query = query_cfg["q"].replace(" ", "+")
+            rss_url = f"https://news.google.com/rss/search?q={query}&hl=en&gl=US&ceid=US:en"
+            resp = requests.get(rss_url, timeout=REQUEST_TIMEOUT,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+
+            feed = feedparser.parse(resp.content)
+            for entry in feed.entries[:3]:  # Top 3 per query
+                title = entry.get("title", "")
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+
+                # Parse published date
+                published_dt = datetime.now(timezone.utc)
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    try:
+                        import calendar
+                        published_dt = datetime.fromtimestamp(
+                            calendar.timegm(entry.published_parsed), tz=timezone.utc
+                        )
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+
+                # Only include if recent (< 48h for commodity news)
+                age_hours = (datetime.now(timezone.utc) - published_dt).total_seconds() / 3600
+                if age_hours > 48:
+                    continue
+
+                cat = query_cfg.get("category", "commodity")
+                gnews_weight = {
+                    "weather": 1.0,
+                    "commodity": 0.95,
+                    "supply_chain": 0.95,
+                }.get(cat, 0.85)
+
+                items.append(NewsItem(
+                    title=title,
+                    source="Google News",
+                    url=entry.get("link", ""),
+                    published=published_dt,
+                    related_tickers=query_cfg["tickers"],
+                    source_weight=gnews_weight,
+                ))
+
+        except Exception as exc:
+            logger.debug("Google News RSS fetch error for '%s': %s",
+                        query_cfg.get("q", ""), exc)
+
+    if items:
+        logger.info("Fetched %d items from Google News RSS (%d queries)",
+                    len(items), len(GOOGLE_NEWS_QUERIES))
+    return items
+
+
 def collect_structured_data() -> list[NewsItem]:
     """Collect all structured data from APIs in parallel.
 
     Each source is best-effort — failures don't block the scan.
     Sources are fetched concurrently to minimize total collection time.
-    17 sources (was 11): +WOAH, +NDVI, +Freight, +LME, +Chokepoint, +DarkPool
+    21 sources (was 17): +USDA Export Sales, +Plant Disease, +Google News RSS, +exchange warehouse proxy
 
     v5.2: Each source call is tracked by source_monitor for health reporting.
     """
@@ -2776,10 +3241,14 @@ def collect_structured_data() -> list[NewsItem]:
         ("lme_proxy", fetch_lme_inventory_proxy),
         ("chokepoint", fetch_chokepoint_monitoring),
         ("dark_pool", fetch_dark_pool_signals),
+        # Team 2 audit: new sources for commodity coverage gaps
+        ("usda_export", fetch_usda_export_sales),
+        ("plant_disease", fetch_plant_disease_alerts),
+        ("google_news", fetch_google_news_rss),
     ]
 
     # max_workers=3: Replit kills process on too many concurrent threads.
-    # 17 sources / 3 workers = ~6 waves, but safer on constrained environments.
+    # 20 sources / 3 workers = ~7 waves, but safer on constrained environments.
     executor = ThreadPoolExecutor(max_workers=3)
     # Track start time per future for latency measurement
     _start_times: dict = {}

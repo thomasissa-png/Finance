@@ -509,4 +509,10 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "NBS China": 1.05,
     "PBOC": 1.0,
     "Xinhua Finance": 0.95,
+    # Team 2 audit: new sources
+    "USDA FAS": 1.1,        # Export sales — weekly, directly market-moving
+    "Plant Disease": 1.1,    # Crop disease alerts — structural supply signal
+    "plant_disease": 1.1,
+    "Google News": 0.85,     # Aggregator — used for coverage gap queries
+    "google_news": 0.85,
 }

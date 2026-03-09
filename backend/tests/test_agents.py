@@ -2175,7 +2175,7 @@ class TestScoring2WordBoundary:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_scoring_2 import AgentScoring2
-        assert AgentScoring2.version == "7.4"
+        assert AgentScoring2.version == "7.5"
 
 
 class TestMainDeadImport:

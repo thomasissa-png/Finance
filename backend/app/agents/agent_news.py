@@ -23,7 +23,7 @@ from .base import BaseAgent, AgentStatus
 class AgentNews(BaseAgent):
     name = "news"
     description = "Collecte & curation des sources de données"
-    version = "7.5"  # v7.5: 10 news pipeline fixes, 25 RSS feeds, 17 structured sources
+    version = "7.6"  # v7.6: Team 2 audit — 20 structured sources, +10 weather zones, +6 NDVI zones, +5 EONET regions, plant disease monitor, Google News RSS, USDA export sales
 
     def __init__(self):
         super().__init__()

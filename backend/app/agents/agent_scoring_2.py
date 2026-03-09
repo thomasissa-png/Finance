@@ -80,6 +80,21 @@ STRUCTURAL_KEYWORDS = {
     "el niño": 1.3, "la niña": 1.3, "monsoon": 1.2,
     # P5: Accent-free variants (ASCII text from RSS/API often lacks accents)
     "el nino": 1.3, "la nina": 1.3, "secheresse": 1.5,
+    # Team 2 audit: copper-specific keywords
+    "smelter": 1.4, "concentrate": 1.3, "treatment charges": 1.3,
+    "mine closure": 1.5, "mine shutdown": 1.5,
+    # Team 2 audit: cocoa-specific keywords
+    "swollen shoot": 1.5, "black pod": 1.4, "harmattan": 1.3,
+    "main crop": 1.1, "mid-crop": 1.1, "grindings": 1.3,
+    "certified stocks": 1.4, "warehouse stocks": 1.4,
+    # Team 2 audit: coffee-specific keywords
+    "robusta": 1.2, "arabica": 1.2, "coffee rust": 1.4,
+    "leaf rust": 1.4, "roya": 1.4,  # Spanish name for coffee leaf rust
+    "safrinha": 1.2,  # Brazil second crop
+    # Team 2 audit: wheat-specific keywords
+    "wheat rust": 1.4, "stem rust": 1.4, "karnal bunt": 1.3,
+    "vomitoxin": 1.3, "fusarium": 1.3,
+    "export pace": 1.2, "delivery notice": 1.3,
     # Medium persistence
     "inventory": 1.2, "stockpile": 1.2, "reserves": 1.2,
     "production cut": 1.3, "opec": 1.2, "output": 1.1,
@@ -334,7 +349,7 @@ class AgentScoring2(BaseAgent):
 
     name = "scoring_2"
     description = "Scoring tendance — re-pondération pour commodities"
-    version = "7.4"  # v7.4: fix substring keyword matching (word boundaries)
+    version = "7.5"  # v7.5: +25 structural keywords (copper, cocoa, coffee, wheat specifics)
 
     def __init__(self):
         super().__init__()
