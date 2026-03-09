@@ -79,6 +79,28 @@ def _persist_weekly_config(config: dict):
         logger.warning("Failed to persist learning4 weekly config: %s", exc)
 
 
+_CONFIG_HISTORY_FILE = Path(os.getenv("DATA_DIR", "data")) / "learning4_config_history.json"
+
+
+def _load_config_history() -> list[dict]:
+    """Load config history from disk."""
+    try:
+        if _CONFIG_HISTORY_FILE.exists():
+            return json.loads(_CONFIG_HISTORY_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+def _persist_config_history(history: list[dict]):
+    """Persist config history to disk."""
+    try:
+        _CONFIG_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CONFIG_HISTORY_FILE.write_text(json.dumps(history[-10:], indent=2, default=str))
+    except OSError as exc:
+        logger.warning("Failed to persist learning4 config history: %s", exc)
+
+
 # Default source weights (same as Scoring 4)
 DEFAULT_WEIGHTS = {
     "news": 0.35,
@@ -470,7 +492,7 @@ class AgentLearning4(BaseAgent):
         self._last_run_time = None  # P3.13: stale cache monitoring
         # Weekly config (persisted to survive restarts)
         self._weekly_config: dict | None = _load_persisted_weekly_config()
-        self._config_history: list[dict] = []
+        self._config_history: list[dict] = _load_config_history()
 
     def run(self, **kwargs) -> dict:
         """Recalculate meta learning dimensions and publish adjustments.
@@ -668,6 +690,7 @@ class AgentLearning4(BaseAgent):
                 self._config_history.append(self._weekly_config)
                 # Keep last 10 configs
                 self._config_history = self._config_history[-10:]
+                _persist_config_history(self._config_history)
 
             self._weekly_config = config
             _persist_weekly_config(config)

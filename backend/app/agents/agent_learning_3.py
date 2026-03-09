@@ -50,8 +50,9 @@ DECAY_HALF_LIFE_DAYS = 30  # Shorter than trend (30 vs 45) — technical signals
 # ADX threshold for regime classification
 ADX_TRENDING_THRESHOLD = 25.0
 
-# Weekly config persistence file
+# Weekly config persistence files
 _WEEKLY_CONFIG_FILE = Path(os.getenv("DATA_DIR", "data")) / "learning3_weekly_config.json"
+_CONFIG_HISTORY_FILE = Path(os.getenv("DATA_DIR", "data")) / "learning3_config_history.json"
 
 
 def _load_persisted_weekly_config() -> dict | None:
@@ -71,6 +72,25 @@ def _persist_weekly_config(config: dict):
         _WEEKLY_CONFIG_FILE.write_text(json.dumps(config, indent=2, default=str))
     except OSError as exc:
         logger.warning("Failed to persist learning3 weekly config: %s", exc)
+
+
+def _load_config_history() -> list[dict]:
+    """Load config history from disk."""
+    try:
+        if _CONFIG_HISTORY_FILE.exists():
+            return json.loads(_CONFIG_HISTORY_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+def _persist_config_history(history: list[dict]):
+    """Persist config history to disk."""
+    try:
+        _CONFIG_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CONFIG_HISTORY_FILE.write_text(json.dumps(history[-10:], indent=2, default=str))
+    except OSError as exc:
+        logger.warning("Failed to persist learning3 config history: %s", exc)
 
 
 def _clamp(value: float, lo: float = ADJ_MIN, hi: float = ADJ_MAX) -> float:
@@ -469,7 +489,7 @@ class AgentLearning3(BaseAgent):
         self._cache_valid: bool = False
         self._last_run_time = None  # P3.13: stale cache monitoring
         self._weekly_config: dict | None = _load_persisted_weekly_config()  # C3: weekly strategy config (persisted)
-        self._config_history: list[dict] = []  # L2: track config changes
+        self._config_history: list[dict] = _load_config_history()  # L2: track config changes (persisted)
 
     def run(self, **kwargs) -> dict:
         """Recalculate technical learning dimensions and publish adjustments.
@@ -703,6 +723,7 @@ class AgentLearning3(BaseAgent):
         })
         # Keep last 10 configs
         self._config_history = self._config_history[-10:]
+        _persist_config_history(self._config_history)
 
         self._weekly_config = config
         _persist_weekly_config(config)

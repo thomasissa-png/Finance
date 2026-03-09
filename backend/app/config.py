@@ -381,17 +381,17 @@ RSS_FEEDS = [
 ]
 
 # ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
-# Verified 2026-02-27 — 20 feeds (was 23, removed Suez Canal HTML + defense.gov fallback + dead NCEI)
+# Verified 2026-03-09 — 20 feeds (replaced 4 dead: drought.gov 404, climate.gov 404, NASS SSL, splash247 SSL)
 EARLY_SIGNAL_FEEDS = [
     # Meteo / Agri — signaux physiques pour commodities
-    "https://www.drought.gov/rss/rss.xml",                          # Drought.gov: US drought monitor + outlooks (replaces dead NCEI news.xml)
+    # drought.gov/rss 404 since 2026-03. Covered by Open-Meteo drought API + NWS alerts.
     "https://www.spc.noaa.gov/products/spcrss.xml",                # SPC: severe weather outlooks, tornado/storm watches
     "https://www.weather.gov/rss_page.php?site_name=nws",          # NWS national weather summary
     "https://api.weather.gov/alerts/active.atom",                   # NWS active alerts (CAP v1.2 ATOM)
     "https://www.nhc.noaa.gov/index-at.xml",                       # NHC: Atlantic hurricane advisories (Jun-Nov critical for oil/sugar)
-    "https://www.climate.gov/feeds/all.xml",                        # NOAA Climate.gov: ENSO, seasonal outlooks, climate events
+    # climate.gov archived June 2025, feeds dead. ENSO/outlooks covered by Open-Meteo + NWS.
     # USDA / FAO — rapports sur les recoltes et stocks
-    "https://www.nass.usda.gov/rss/reports.xml",                    # NASS: crop reports, cold storage, production
+    # nass.usda.gov/rss SSL errors since 2026-03. USDA data covered by USDA NASS/WASDE APIs in data_apis.py.
     "https://www.fao.org/feeds/fao-newsroom-rss",                   # FAO: food security, agriculture, crop reports
     # Geopolitique — OSINT, conflits, sanctions, defense
     # defense.gov redirects to war.gov since 2025. Single entry (was 2 — redundant fallback wasted a thread).
@@ -404,7 +404,7 @@ EARLY_SIGNAL_FEEDS = [
     "https://gcaptain.com/feed/",                                   # gCaptain: maritime (intermittent 403)
     "https://www.marinelink.com/news/rss",                          # MarineLink: shipping, maritime, offshore
     "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions
-    "https://splash247.com/feed/",                                  # Splash247: global shipping, ports, containers, BDI commentary
+    "https://www.hellenicshippingnews.com/feed/",                    # Hellenic Shipping News: global shipping, freight, BDI (replaces dead splash247)
     # Canal chokepoints — Panama transit disruptions = supply chain + oil
     # Removed: suezcanal.gov.eg — HTML page, NOT an RSS feed (always fails to parse)
     "https://pancanal.com/en/feed/",                               # ACP: Panama Canal Authority (draft restrictions, transit delays)
@@ -467,8 +467,8 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "maritime-executive": 1.05,
     "OilPrice": 0.9,   # Lowered from 1.0: news aggregator, not primary source (often lags EIA/OPEC)
     "oilprice": 0.9,
-    "Splash247": 1.05,
-    "splash247": 1.05,
+    "Hellenic Shipping News": 1.05,
+    "hellenicshippingnews": 1.05,
     # Removed: Suez Canal source weight — HTML page, not RSS (dead source)
     "Panama Canal": 1.1,
     "pancanal": 1.1,

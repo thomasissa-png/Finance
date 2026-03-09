@@ -682,12 +682,13 @@ async def lifespan(app: FastAPI):
     # P2-5: Event-driven scanner: every 10 min during trading hours (was 15min)
     # Faster detection = less edge lost waiting for next check
     bg_scheduler.add_job(_run_event_check, CronTrigger(minute="*/10", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="event_check", misfire_grace_time=60)
-    # Position monitor: every 15 min during trading hours — trailing stop + time stop
-    bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,22,37,52", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
+    # Position monitor: every 30 min during trading hours — trailing stop + time stop
+    # Reduced from 15min to ease PG pool pressure (3 monitors × 4/hr = 12 conn/hr was too much)
+    bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,37", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
     # V1: Position monitors for Teams 3 and 4 (TP/SL/trailing between scans)
-    # P3.11: Staggered to avoid resource contention — Team 3 at :10, Team 4 at :13
-    bg_scheduler.add_job(_run_position_monitor_3, CronTrigger(minute="10,25,40,55", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3", misfire_grace_time=60)
-    bg_scheduler.add_job(_run_position_monitor_4, CronTrigger(minute="13,28,43,58", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_4", misfire_grace_time=60)
+    # Staggered by 3min to avoid resource contention
+    bg_scheduler.add_job(_run_position_monitor_3, CronTrigger(minute="10,40", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_position_monitor_4, CronTrigger(minute="13,43", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_4", misfire_grace_time=60)
     # Conditional post-EIA scan: Wednesday 16:45 CET (EIA petroleum report at 16:30)
     bg_scheduler.add_job(_run_post_eia_scan, CronTrigger(hour=16, minute=45, day_of_week="wed", timezone="Europe/Paris"), id="post_eia_scan", misfire_grace_time=60)
     # v5.2: Weekly source health review — Sunday 20:00 CET (before Monday trading)

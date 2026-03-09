@@ -251,7 +251,36 @@ class AgentTrader2(BaseAgent):
                     positions[ticker] = self._init_position(ticker, info)
 
             # Filter relevant news for our 4 tickers
-            relevant_news = self._filter_relevant_news(scored_news or [])
+            all_scored = scored_news or []
+            relevant_news = self._filter_relevant_news(all_scored)
+
+            # Diagnostic: log why news were filtered out
+            total_relevant = sum(len(v) for v in relevant_news.values())
+            if total_relevant == 0 and all_scored:
+                # Count filter stages for diagnosis
+                low_score = sum(1 for sn in all_scored if sn.total_score < MIN_NEWS_SCORE)
+                wrong_cat = sum(1 for sn in all_scored
+                                if sn.total_score >= MIN_NEWS_SCORE
+                                and sn.news_category not in RELEVANT_CATEGORIES)
+                neutral = sum(1 for sn in all_scored
+                              if sn.total_score >= MIN_NEWS_SCORE
+                              and sn.news_category in RELEVANT_CATEGORIES
+                              and sn.direction.value == "NEUTRAL")
+                no_ticker = len(all_scored) - low_score - wrong_cat - neutral
+                self.log("No relevant news for trend tickers", {
+                    "total_scored": len(all_scored),
+                    "filtered_low_score": low_score,
+                    "filtered_wrong_category": wrong_cat,
+                    "filtered_neutral": neutral,
+                    "filtered_no_trend_ticker": no_ticker,
+                    "trend_tickers": list(TREND_TICKERS.keys()),
+                }, level="INFO")
+            else:
+                self.log("Relevant news found", {
+                    "total_scored": len(all_scored),
+                    "relevant_count": total_relevant,
+                    "by_ticker": {k: len(v) for k, v in relevant_news.items()},
+                })
 
             changes = []
             for ticker in TREND_TICKERS:

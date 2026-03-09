@@ -189,7 +189,7 @@ def collect_yfinance_news() -> list[NewsItem]:
                 ))
             completed += 1
         except Exception as exc:
-            logger.debug("yfinance news error for %s: %s", ticker, exc)
+            logger.warning("yfinance news error for %s: %s", ticker, exc)
 
         # Free yfinance internal caches between tickers to reduce memory pressure
         gc.collect()

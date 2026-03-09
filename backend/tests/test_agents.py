@@ -1300,8 +1300,12 @@ class TestTeam3V2Learning3:
 
     def test_config_history_tracking(self):
         """L2: Config changes should be tracked."""
-        from backend.app.agents.agent_learning_3 import AgentLearning3
+        from backend.app.agents.agent_learning_3 import AgentLearning3, _CONFIG_HISTORY_FILE
+        # Clean up any persisted history from previous runs
+        if _CONFIG_HISTORY_FILE.exists():
+            _CONFIG_HISTORY_FILE.unlink()
         l3 = AgentLearning3()
+        l3._config_history = []  # Reset in-memory too
         l3.generate_weekly_config()
         l3.generate_weekly_config()
         history = l3.get_config_history()
@@ -1612,8 +1616,12 @@ class TestTeam4V2Learning4:
 
     def test_weekly_config_generation(self):
         """P1: Learning 4 should generate weekly config."""
-        from backend.app.agents.agent_learning_4 import AgentLearning4
+        from backend.app.agents.agent_learning_4 import AgentLearning4, _CONFIG_HISTORY_FILE
+        # Clean up persisted history from previous runs
+        if _CONFIG_HISTORY_FILE.exists():
+            _CONFIG_HISTORY_FILE.unlink()
         l4 = AgentLearning4()
+        l4._config_history = []  # Reset in-memory too
         config = l4.generate_weekly_config()
         assert "weights" in config
         assert "validated_combos" in config

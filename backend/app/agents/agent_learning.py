@@ -198,33 +198,6 @@ class AgentLearning(BaseAgent):
         from ..learning import extract_structured_anomalies
         return extract_structured_anomalies()
 
-    def _extract_anomalies(self, perf_summary) -> list[str]:
-        """Extract anomaly strings from the performance summary."""
-        if not perf_summary:
-            return []
-
-        anomalies = []
-        summary = perf_summary if isinstance(perf_summary, str) else str(perf_summary)
-
-        # Parse alerts-only format for known anomaly patterns
-        alert_keywords = [
-            "EXPIRED rate",
-            "streak",
-            "drawdown",
-            "skewness",
-            "MAE",
-            "reliability",
-            "slippage",
-            "magnitude",
-            "direction accuracy",
-        ]
-        for line in summary.split("\n"):
-            line_lower = line.lower()
-            if any(kw.lower() in line_lower for kw in alert_keywords):
-                anomalies.append(line.strip())
-
-        return anomalies
-
     def get_metrics(self) -> dict:
         return {
             "last_adjustment_count": self._last_adjustment_count,

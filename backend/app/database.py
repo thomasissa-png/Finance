@@ -72,7 +72,7 @@ _STATEMENT_TIMEOUT_S = int(os.environ.get("PG_STATEMENT_TIMEOUT", "30"))
 
 # M8: Pool size configurable via env var
 _PG_POOL_MIN = int(os.environ.get("PG_POOL_MIN", "2"))
-_PG_POOL_MAX = int(os.environ.get("PG_POOL_MAX", "10"))
+_PG_POOL_MAX = int(os.environ.get("PG_POOL_MAX", "20"))
 
 # H5: Retry configuration
 _PG_MAX_RETRIES = 3
@@ -176,7 +176,9 @@ def get_conn():
                     conn.close()
                 except Exception:
                     pass
-                pool.putconn(conn)
+                # Return closed conn to pool (pool needs it back to track count)
+                # then get a fresh one. Pool will create new conn since this one is closed.
+                pool.putconn(conn, close=True)
                 conn = pool.getconn()
         yield conn
         conn.commit()
