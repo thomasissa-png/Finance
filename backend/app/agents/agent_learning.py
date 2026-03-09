@@ -30,7 +30,7 @@ from .base import BaseAgent, AgentStatus
 class AgentLearning(BaseAgent):
     name = "learning"
     description = "Machine learning & optimisation continue"
-    version = "5.3"  # v5.3: zone-aware newscat+zone+ticker cross-dimension
+    version = "5.4"  # v5.4: zone+intensity-aware newscat cross-dimension
 
     def __init__(self):
         super().__init__()

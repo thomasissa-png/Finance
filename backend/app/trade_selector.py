@@ -676,16 +676,36 @@ def select_trades(
         # v4.2 A5: Average multipliers across ALL eligible tickers (not just first)
         ticker_mults = [ticker_adj.get(t, 1.0) for t in eligible_for_news]
         base_mult = sum(ticker_mults) / len(ticker_mults)
-        # v7.6: Cross-dimension lookup: zone+ticker > ticker > broad category > 1.0
+        # v7.7: Cross-dimension lookup with zone + intensity tiers
+        # Priority: zone+intensity+ticker > zone+ticker > intensity+ticker > ticker > broad > 1.0
         nc_mult = 1.0
+        # Compute intensity tier from expected_magnitude
+        _intensity = ""
+        if sn.expected_magnitude is not None:
+            if sn.expected_magnitude <= 33:
+                _intensity = "low"
+            elif sn.expected_magnitude >= 67:
+                _intensity = "high"
         for _t in eligible_for_news:
-            # Try zone-specific first (most granular)
+            # 1. Zone + intensity + ticker (most specific)
+            if sn.news_zone and _intensity:
+                zit_key = f"{sn.news_category}+{sn.news_zone}+{_intensity}+{_t}"
+                if zit_key in newscat_adj:
+                    nc_mult = newscat_adj[zit_key]
+                    break
+            # 2. Zone + ticker
             if sn.news_zone:
                 zone_key = f"{sn.news_category}+{sn.news_zone}+{_t}"
                 if zone_key in newscat_adj:
                     nc_mult = newscat_adj[zone_key]
                     break
-            # Then ticker-specific (v5.2)
+            # 3. Intensity + ticker (no zone)
+            if _intensity:
+                int_key = f"{sn.news_category}+{_intensity}+{_t}"
+                if int_key in newscat_adj:
+                    nc_mult = newscat_adj[int_key]
+                    break
+            # 4. Ticker only (v5.2)
             combo_key = f"{sn.news_category}+{_t}"
             if combo_key in newscat_adj:
                 nc_mult = newscat_adj[combo_key]

@@ -42,21 +42,21 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 ### Versions actuelles
 | Agent | Version | Dernier changement |
 |-------|---------|-------------------|
-| News | 7.5 | 10 news pipeline fixes |
+| News | 7.6 | news_zone geographic tagging |
 | Scoring | 7.4 | 9 fixes, token tracking |
 | Scoring 2 | 7.4 | Word-boundary regex for structural keywords |
 | Scoring 3 | 2.0 | Multi-timeframe, SMA 200, stochastic strategy, regime filter, configurable params |
 | Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
 | Trader 1 | 6.5 | Timeout audit, trailing stop |
-| Trader 2 | 7.3 | News dedup set-based, null price guard in _make_change |
+| Trader 2 | 7.5 | Zone+intensity-aware learning lookup |
 | Trader 3 | 2.0 | Correlation check, trailing per-strategy, regime filter, agent_versions, weekly config |
 | Trader 4 | 2.1 | Always-save after monitor, stale stop_price fix |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
 | Journal 2 | 7.2 | Atomic single-write (PG vs JSON branch), no triple write |
 | Journal 3 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
 | Journal 4 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
-| Learning 1 | 5.2 | 6 dims, granular commodities |
-| Learning 2 | 7.2 | Snapshot contamination filter, recalculation tracking on cache miss |
+| Learning 1 | 5.4 | Zone+intensity-aware newscat cross-dimension |
+| Learning 2 | 7.4 | Zone+intensity-aware newscat cross-dimension |
 | Learning 3 | 2.1 | Weekly config disk persistence (survives restart) |
 | Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
 | Infrastructure | 7.5 | Health check, VACUUM 9 tables |
@@ -200,6 +200,7 @@ News → Scoring → [Learning 1 cache] → Trader 1
 - **API** : `GET /api/trader2/positions`, `GET /api/trader2/positions/{ticker}/history`
 - **Frontend** : `Trader2Page.jsx` — KPIs, cards positions, historique flips, logs DECISION, Learning 2 context
 - **Audit** : Profil `trader_2` dans l'auditeur — 8 checks
+- **v7.5** : Zone+intensity-aware learning lookup (newscat+zone+intensity+ticker priority), news_zone and intensity tier stored in flip records for geographic and magnitude traceability
 - **Tests** : 27 tests dans `test_agent_trader_2.py`
 
 #### Agent Journal 2 — Trend Journal
@@ -228,6 +229,7 @@ News → Scoring → [Learning 1 cache] → Trader 1
 - **API** : `GET /api/learning2/adjustments`, `POST /api/learning2/trigger`
 - **Frontend** : `Learning2Page.jsx` — 4 dimensions avec barres, anomalies, calibration seuil, logs
 - **Audit** : Profil `learning_2` — 8 checks (sample_size, ticker_calibration, newscat_calibration, direction_balance, threshold_stability, churning_detection, anomaly_detection, feedback_loop)
+- **v7.4** : Zone+intensity-aware newscat cross-dimension — uses news_zone and expected_magnitude from flip records to compute geographic+intensity adjustments (ex: weather+india+high+ZW=F), preventing cross-zone and cross-intensity contamination in learning
 - **Tests** : 35 tests dans `test_journal2_learning2.py`
 
 #### Agent Performance — KPIs & Suivi
@@ -606,7 +608,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
 - `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
 - `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES
-- `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr)
+- `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr). v7.6: `news_zone: str = ""` field added to NewsItem, ScoredNews, TradeRecommendation, and JournalEntry for geographic tagging
 - `backend/app/scan_history.py` : PG support, pruning 365j
 - `frontend/src/App.jsx` : v7.0, navigation centrée agents (sidebar-driven), hash routing (#dashboard, #news, #scoring, #scoring2, #trader, #journal, #learning, #auditor), lazy-load pages, notification polling, health check
 - `frontend/src/components/AgentSidebar.jsx` : v7.0, navigation principale (Dashboard + 6 agents + Alertes), status dots, notification badge
@@ -1048,12 +1050,14 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - `vix_at_trade` / `market_regime` : contexte marche au moment du trade
   - `predicted_transmission_delay` / `actual_pricing_time_hours` / `delay_accuracy` : tracking precision
 
-## Learning adaptatif (v5.2 — granular commodities, newscat cross-dimension)
+## Learning adaptatif (v7.7 — granular commodities, zone+intensity-aware newscat cross-dimension)
 - **Par ticker**: ajustement 0.5-1.5 (min **8** trades, t-stat > **2.0**)
 - **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.5) — **DESACTIVE pour commodities** (v5.2: le learning ne penalise jamais les commodities en tant que classe)
 - **Par newscat+ticker** (v5.2): ajustement 0.7-1.3 (min 4 trades) — cross-dimension granulaire (ex: weather+ZW=F au lieu de weather global)
   - Fallback broad category si le combo n'a pas assez de donnees
   - Applique contextuellement par la news_category + ticker du trade courant
+- **Par newscat+zone+ticker** (v7.6): ajustement 0.7-1.3 (min 3 trades) — geographic isolation (ex: weather+france_beauce+ZW=F). Lookup priority: zone+ticker > ticker > broad category > 1.0. Prevents bad trades from one geographic zone from penalizing another zone.
+- **Par newscat+intensity+ticker** (v7.7): ajustement 0.7-1.3 (min 3 trades) — intensity isolation based on expected_magnitude. Tiers: low (0-33), high (67-100), medium uses fallback. Key format: `weather+high+ZW=F`. Prevents low-intensity signals (minor drought) from contaminating high-intensity signals (severe drought). Combined with zone: `weather+india+high+ZW=F` (most granular).
 - **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades, t-stat > 1.5) — applique par le scan courant
 - **Par regime VIX** (v4.2 C1): ajustement 0.7-1.3, **2 buckets** (low_vol=calm+normal, high_vol=elevated+stress), **min 15 trades**
   - Merged from 4 regimes to 2 for larger sample sizes — reduces overfitting
@@ -1099,7 +1103,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **Return format** (v4.2): `compute_learning_adjustments()` retourne un dict structuré :
   - `adjustments`: dict[ticker, multiplier] — base blend ticker*cat
   - `session_adj`: dict[scan_type, multiplier] — appliqué par scan courant
-  - `newscat_adj`: dict[newscat+ticker OR newscat, multiplier] — cross-dimension v5.2 (ex: "weather+ZW=F" ou "weather" fallback)
+  - `newscat_adj`: dict[newscat+zone+intensity+ticker OR newscat+zone+ticker OR newscat+intensity+ticker OR newscat+ticker OR newscat, multiplier] — zone+intensity-aware cross-dimension v7.7 (ex: "weather+india+high+ZW=F" zone+intensity, "weather+india+ZW=F" zone+ticker, "weather+high+ZW=F" intensity+ticker, "weather+ZW=F" ticker-specific, or "weather" broad fallback)
   - `regime_adj`: dict[regime, multiplier] — low_vol/high_vol (v4.2 merged)
   - `direction_adj`: dict[direction, multiplier] — v4.2 B5
   - `delay_bias_adj`: float — v4.2 B1

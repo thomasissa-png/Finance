@@ -260,6 +260,9 @@ def compute_trend_learning(entries: list[dict]) -> dict:
     cross_groups: dict[str, list[tuple[float, float]]] = {}
     # v7.6: Zone-aware cross-dimension
     zone_cross_groups: dict[str, list[tuple[float, float]]] = {}
+    # v7.7: Intensity-aware cross-dimension
+    intensity_cross_groups: dict[str, list[tuple[float, float]]] = {}
+    zone_intensity_cross_groups: dict[str, list[tuple[float, float]]] = {}
     for e, w in zip(valid, weights):
         ticker = e.get("ticker", "")
         cats = e.get("news_categories", ["other"])
@@ -273,9 +276,33 @@ def compute_trend_learning(entries: list[dict]) -> dict:
             if zone:
                 zone_key = f"{primary_cat}+{zone}+{ticker}"
                 zone_cross_groups.setdefault(zone_key, []).append((pnl, w))
+        # v7.7: intensity-aware — from intensity stored on flip entry
+        intensity = e.get("intensity", "")
+        if intensity:
+            int_key = f"{primary_cat}+{intensity}+{ticker}"
+            intensity_cross_groups.setdefault(int_key, []).append((pnl, w))
+            # Most granular: zone + intensity
+            for zone in zones:
+                if zone:
+                    zit_key = f"{primary_cat}+{zone}+{intensity}+{ticker}"
+                    zone_intensity_cross_groups.setdefault(zit_key, []).append((pnl, w))
 
-    # v7.6: Zone+ticker combos (most granular) — min 3 trades
+    # v7.7: Zone+intensity+ticker (most specific) — min 3 trades
+    for key, pairs in zone_intensity_cross_groups.items():
+        if len(pairs) >= 3:
+            adj = _compute_adj(pairs)
+            if adj is not None:
+                result["newscat_ticker_adj"][key] = adj
+
+    # v7.6: Zone+ticker combos — min 3 trades
     for key, pairs in zone_cross_groups.items():
+        if len(pairs) >= 3:
+            adj = _compute_adj(pairs)
+            if adj is not None:
+                result["newscat_ticker_adj"][key] = adj
+
+    # v7.7: Intensity+ticker combos — min 3 trades
+    for key, pairs in intensity_cross_groups.items():
         if len(pairs) >= 3:
             adj = _compute_adj(pairs)
             if adj is not None:
@@ -369,7 +396,7 @@ class AgentLearning2(BaseAgent):
 
     name = "learning_2"
     description = "Learning & optimisation — trend commodities"
-    version = "7.3"  # v7.3: zone-aware newscat cross-dimension
+    version = "7.4"  # v7.4: zone+intensity-aware newscat cross-dimension
 
     def __init__(self):
         super().__init__()
