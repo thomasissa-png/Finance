@@ -1443,6 +1443,36 @@ def run_db_backup():
 # ── v5.1: Price archive & news replay backtest ──────────────────
 
 
+@app.get("/api/prices/current")
+def get_current_prices(tickers: str = ""):
+    """Fetch current prices for a comma-separated list of tickers.
+
+    Used by frontend to show live P&L on open positions.
+    Example: /api/prices/current?tickers=GC=F,CL=F,EURUSD=X
+    """
+    if not tickers:
+        return {}
+    from .market_data import fetch_price
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
+    if len(ticker_list) > 50:
+        raise HTTPException(400, "Max 50 tickers per request")
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(fetch_price, t): t for t in ticker_list}
+        for future in as_completed(futures, timeout=30):
+            ticker = futures[future]
+            try:
+                price = future.result()
+                if price is not None:
+                    results[ticker] = price
+            except Exception:
+                pass
+    return results
+
+
 @app.get("/api/price-archive/stats")
 def get_price_archive_stats():
     """v5.1: Get price archive statistics."""
@@ -1624,12 +1654,18 @@ def get_infra_report():
 
 
 @app.post("/api/infrastructure/reset")
-def reset_all_data():
+def reset_all_data(password: str = ""):
     """Reset ALL trading data for a fresh start.
 
+    Requires RESET_PASSWORD secret to be set and provided.
     Truncates all PG tables, resets JSON files, clears learning configs,
     clears agent in-memory state, removes cleanup sentinel.
     """
+    expected = os.environ.get("RESET_PASSWORD", "")
+    if not expected:
+        raise HTTPException(403, "RESET_PASSWORD secret not configured on server")
+    if password != expected:
+        raise HTTPException(403, "Mot de passe incorrect")
     results: dict = {}
 
     # 1. PG tables

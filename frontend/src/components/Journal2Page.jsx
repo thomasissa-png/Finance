@@ -68,7 +68,7 @@ export default function Journal2Page({ isActive }) {
       <div className="agent-page-header">
         <h2>Agent Journal 2 &mdash; Trend Positions</h2>
         <span className="agent-page-desc">
-          Journal des positions de tendance (Trader 2) &mdash; flips, MAE/MFE, P&L par p&eacute;riode
+          Journal des positions de tendance (Trader 2) &mdash; flips, MAE/MFE, P&L par période
         </span>
         <LastUpdated date={lastUpdate} />
       </div>
@@ -81,7 +81,7 @@ export default function Journal2Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{totalFlips}</div>
-          <div className="kpi-label">P&eacute;riodes cl&ocirc;tur&eacute;es</div>
+          <div className="kpi-label">Périodes clôturées</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{winRate}%</div>
@@ -130,7 +130,7 @@ export default function Journal2Page({ isActive }) {
                     <th>MAE</th>
                     <th>MFE</th>
                     <th>Signal</th>
-                    <th>Cat&eacute;gories</th>
+                    <th>Catégories</th>
                   </tr>
                 </thead>
                 <tbody>

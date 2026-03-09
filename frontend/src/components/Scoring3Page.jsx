@@ -26,7 +26,7 @@ export default function Scoring3Page({ isActive }) {
       setError(null);
       setLastUpdate(new Date());
     } catch (err) {
-      setError(err.message || "Impossible de charger les donn\u00e9es Scoring 3");
+      setError(err.message || "Impossible de charger les données Scoring 3");
     } finally {
       setLoading(false);
     }
@@ -64,7 +64,7 @@ export default function Scoring3Page({ isActive }) {
       <div className="agent-page-header">
         <h2>{"\ud83d\udcca"} Agent Scoring 3 \u2014 Indicateurs Techniques</h2>
         <span className="agent-page-desc">
-          D\u00e9tection et scoring de setups techniques \u2014 strat\u00e9gies, timeframes, signaux directionnels
+          Détection et scoring de setups techniques \u2014 stratégies, timeframes, signaux directionnels
           <LastUpdated date={lastUpdate} />
         </span>
       </div>
@@ -75,7 +75,7 @@ export default function Scoring3Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{stats.setups_detected || 0}</div>
-          <div className="kpi-label">Setups d\u00e9tect\u00e9s</div>
+          <div className="kpi-label">Setups détectés</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.avg_tech_score || 0}</div>
@@ -83,7 +83,7 @@ export default function Scoring3Page({ isActive }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.top_strategy || "\u2014"}</div>
-          <div className="kpi-label">Meilleure strat\u00e9gie</div>
+          <div className="kpi-label">Meilleure stratégie</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.top_timeframe || "\u2014"}</div>
@@ -93,7 +93,7 @@ export default function Scoring3Page({ isActive }) {
 
       {/* Scored technical setups */}
       <div className="section-card">
-        <h3>Setups techniques scor\u00e9s ({setups.length})</h3>
+        <h3>Setups techniques scorés ({setups.length})</h3>
         {setups.length > 0 ? (
           <>
             {/* Desktop table */}
@@ -101,11 +101,11 @@ export default function Scoring3Page({ isActive }) {
               <thead>
                 <tr>
                   <th>Ticker</th>
-                  <th>Strat\u00e9gie</th>
+                  <th>Stratégie</th>
                   <th>Timeframe</th>
                   <th>Direction</th>
                   <th>Score</th>
-                  <th>Entr\u00e9e</th>
+                  <th>Entrée</th>
                   <th>Target</th>
                   <th>Stop</th>
                 </tr>
@@ -141,7 +141,7 @@ export default function Scoring3Page({ isActive }) {
                   </div>
                   <div className="mobile-card-body">
                     <div className="mobile-card-row">
-                      <span className="mobile-card-label">Strat\u00e9gie</span>
+                      <span className="mobile-card-label">Stratégie</span>
                       <span>{s.strategy}</span>
                     </div>
                     <div className="mobile-card-row">
@@ -149,7 +149,7 @@ export default function Scoring3Page({ isActive }) {
                       <span>{s.timeframe}</span>
                     </div>
                     <div className="mobile-card-row">
-                      <span className="mobile-card-label">Entr\u00e9e</span>
+                      <span className="mobile-card-label">Entrée</span>
                       <span>{s.entry_price != null ? s.entry_price.toFixed(2) : "\u2014"}</span>
                     </div>
                     <div className="mobile-card-row">
@@ -166,7 +166,7 @@ export default function Scoring3Page({ isActive }) {
             </div>
           </>
         ) : (
-          !loading && <EmptyState message="Aucun setup d\u00e9tect\u00e9" detail="L'agent sera aliment\u00e9 au prochain scan" />
+          !loading && <EmptyState message="Aucun setup détecté" detail="L'agent sera alimenté au prochain scan" />
         )}
       </div>
 

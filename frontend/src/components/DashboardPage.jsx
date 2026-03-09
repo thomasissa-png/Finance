@@ -165,28 +165,57 @@ const TEAM_COLORS = {
   "4": "#EC4899",
 };
 
+/* Compute live P&L from current price vs entry */
+function computeLivePnl(entry_price, current_price, direction) {
+  if (entry_price == null || current_price == null || !entry_price) return null;
+  const pct = ((current_price - entry_price) / entry_price) * 100;
+  return direction === "SHORT" ? -pct : pct;
+}
+
 /* All-teams open positions section */
 function AllTeamsPositions({ positions, onRefresh, loading }) {
+  const [livePrices, setLivePrices] = useState({});
+  const [pricesLoading, setPricesLoading] = useState(false);
+
   const allPositions = useMemo(() => {
     const result = [];
-    // Team 1: PENDING trades
     (positions["1"] || []).forEach((t) => {
       result.push({ ...t, _team: "1", _key: `t1-${t.ticker}-${t.timestamp}` });
     });
-    // Team 2: active trend positions (not FLAT)
     (positions["2"] || []).forEach((t) => {
       result.push({ ...t, _team: "2", _key: `t2-${t.ticker}` });
     });
-    // Team 3: open tech positions
     (positions["3"] || []).forEach((t) => {
       result.push({ ...t, _team: "3", _key: `t3-${t.ticker}-${t.strategy || ""}` });
     });
-    // Team 4: open meta positions
     (positions["4"] || []).forEach((t) => {
       result.push({ ...t, _team: "4", _key: `t4-${t.ticker}-${t.entry_time || ""}` });
     });
     return result;
   }, [positions]);
+
+  // Fetch live prices for all open tickers
+  const fetchLivePrices = useCallback(async () => {
+    const tickers = [...new Set(allPositions.map((p) => p.ticker).filter(Boolean))];
+    if (tickers.length === 0) return;
+    setPricesLoading(true);
+    try {
+      const res = await fetch(`/api/prices/current?tickers=${encodeURIComponent(tickers.join(","))}`);
+      if (res.ok) {
+        const data = await res.json();
+        setLivePrices(data);
+      }
+    } catch { /* silent */ }
+    setPricesLoading(false);
+  }, [allPositions]);
+
+  // Auto-fetch prices on mount and every 60s
+  useEffect(() => {
+    if (allPositions.length === 0) return;
+    fetchLivePrices();
+    const id = setInterval(fetchLivePrices, 60_000);
+    return () => clearInterval(id);
+  }, [fetchLivePrices, allPositions.length]);
 
   const totalCount = allPositions.length;
 
@@ -194,16 +223,19 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
     <div className="section-card">
       <div className="section-header">
         <h3>Positions ouvertes — toutes équipes ({totalCount})</h3>
-        <button
-          className="refresh-btn"
-          onClick={onRefresh}
-          disabled={loading}
-          title="Rafraîchir les positions"
-          aria-label="Rafraîchir les positions"
-          style={{ fontSize: 16, padding: "2px 8px" }}
-        >
-          {loading ? <span className="spinner spinner-inline" /> : "↻"}
-        </button>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {pricesLoading && <span className="spinner spinner-inline" style={{ width: 12, height: 12 }} />}
+          <button
+            className="refresh-btn"
+            onClick={() => { onRefresh(); fetchLivePrices(); }}
+            disabled={loading}
+            title="Rafraîchir les positions et les prix"
+            aria-label="Rafraîchir les positions"
+            style={{ fontSize: 16, padding: "2px 8px" }}
+          >
+            {loading ? <span className="spinner spinner-inline" /> : "↻"}
+          </button>
+        </div>
       </div>
 
       {totalCount === 0 ? (
@@ -221,6 +253,7 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
                   <th>Actif</th>
                   <th>Direction</th>
                   <th>Entrée</th>
+                  <th>Prix actuel</th>
                   <th>Target</th>
                   <th>Stop</th>
                   <th>P&L latent</th>
@@ -229,7 +262,9 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
               </thead>
               <tbody>
                 {allPositions.map((t) => {
-                  const latentPnl = t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
+                  const currentPrice = livePrices[t.ticker] ?? null;
+                  const livePnl = computeLivePnl(t.entry_price, currentPrice, t.direction);
+                  const displayPnl = livePnl ?? t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
                   const entryTime = t.timestamp || t.entry_time || t.last_change_time;
                   return (
                     <tr key={t._key}>
@@ -245,10 +280,13 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
                         </span>
                       </td>
                       <td>{t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</td>
+                      <td style={{ fontWeight: 500, color: currentPrice ? "var(--text-primary)" : "var(--text-muted)" }}>
+                        {currentPrice != null ? currentPrice.toFixed(2) : "--"}
+                      </td>
                       <td style={{ color: "var(--green)" }}>{t.target_price != null ? t.target_price.toFixed(2) : "--"}</td>
                       <td style={{ color: "var(--red)" }}>{t.stop_price != null ? t.stop_price.toFixed(2) : "--"}</td>
-                      <td style={{ color: pnlColor(latentPnl), fontWeight: 600 }}>
-                        {latentPnl != null ? `${latentPnl > 0 ? "+" : ""}${latentPnl.toFixed(2)}%` : "--"}
+                      <td style={{ color: pnlColor(displayPnl), fontWeight: 600 }}>
+                        {displayPnl != null ? `${displayPnl > 0 ? "+" : ""}${displayPnl.toFixed(2)}%` : "--"}
                       </td>
                       <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
                         {entryTime ? formatDate(entryTime) + " " + formatTime(entryTime) : "--"}
@@ -263,7 +301,9 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
           {/* Mobile cards */}
           <div className="mobile-only">
             {allPositions.map((t) => {
-              const latentPnl = t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
+              const currentPrice = livePrices[t.ticker] ?? null;
+              const livePnl = computeLivePnl(t.entry_price, currentPrice, t.direction);
+              const displayPnl = livePnl ?? t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
               return (
                 <div key={t._key} className="trade-mobile-card">
                   <div className="trade-mobile-header">
@@ -275,8 +315,13 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
                   </div>
                   <div className="trade-mobile-body">
                     <span>Entrée: {t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</span>
-                    <span style={{ color: pnlColor(latentPnl), fontWeight: 600 }}>
-                      {latentPnl != null ? `${latentPnl > 0 ? "+" : ""}${latentPnl.toFixed(2)}%` : "--"}
+                    {currentPrice != null && (
+                      <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>
+                        Actuel: {currentPrice.toFixed(2)}
+                      </span>
+                    )}
+                    <span style={{ color: pnlColor(displayPnl), fontWeight: 600 }}>
+                      {displayPnl != null ? `${displayPnl > 0 ? "+" : ""}${displayPnl.toFixed(2)}%` : "--"}
                     </span>
                   </div>
                 </div>
@@ -337,91 +382,6 @@ function TeamSummaryCards({ report, positions }) {
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function ResetSection({ addToast, onResetDone }) {
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [resetting, setResetting] = useState(false);
-  const [result, setResult] = useState(null);
-
-  const doReset = async () => {
-    setResetting(true);
-    setResult(null);
-    try {
-      const res = await fetch("/api/infrastructure/reset", { method: "POST" });
-      const data = await res.json();
-      setResult(data);
-      if (data.status === "ok") {
-        addToast("Reset complet ! Base de données réinitialisée.", "success");
-        setShowConfirm(false);
-        if (onResetDone) setTimeout(onResetDone, 500);
-      } else {
-        addToast("Reset partiel — voir les détails ci-dessous", "error");
-      }
-    } catch (err) {
-      addToast(`Reset échoué : ${err.message}`, "error");
-    }
-    setResetting(false);
-  };
-
-  return (
-    <div className="section-card" style={{ marginTop: 24, borderColor: "var(--red)", borderWidth: 1, borderStyle: "solid" }}>
-      <div className="section-header">
-        <span className="section-title" style={{ color: "var(--red)" }}>Zone dangereuse</span>
-      </div>
-      <div style={{ padding: "12px 16px" }}>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-secondary)" }}>
-          Réinitialise toutes les données : trades, journal, positions (Éq. 1-4), scan history, learning configs, logs agents.
-        </p>
-        {!showConfirm ? (
-          <button
-            className="trigger-btn"
-            style={{ background: "var(--red)", color: "#fff", border: "none" }}
-            onClick={() => setShowConfirm(true)}
-          >
-            Réinitialiser toutes les données
-          </button>
-        ) : (
-          <div style={{ background: "rgba(239,68,68,0.08)", borderRadius: 8, padding: 16 }}>
-            <p style={{ margin: "0 0 12px", fontWeight: 600, color: "var(--red)" }}>
-              Confirmer la réinitialisation complète ?
-            </p>
-            <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--text-secondary)" }}>
-              Cette action va SUPPRIMER toutes les données de trading (PG + JSON) pour les 4 équipes.
-              Les tables seront vidées, les fichiers JSON remis à zéro, les configs learning supprimées.
-              <strong> Cette action est irréversible.</strong>
-            </p>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                className="trigger-btn"
-                style={{ background: "var(--red)", color: "#fff", border: "none", opacity: resetting ? 0.6 : 1 }}
-                onClick={doReset}
-                disabled={resetting}
-              >
-                {resetting ? "Réinitialisation en cours..." : "Oui, tout supprimer"}
-              </button>
-              <button
-                className="trigger-btn"
-                style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}
-                onClick={() => { setShowConfirm(false); setResult(null); }}
-                disabled={resetting}
-              >
-                Annuler
-              </button>
-            </div>
-          </div>
-        )}
-        {result && (
-          <details style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)" }}>
-            <summary style={{ cursor: "pointer" }}>Détails du reset</summary>
-            <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, background: "var(--bg-secondary)", padding: 8, borderRadius: 6, maxHeight: 200, overflow: "auto" }}>
-              {JSON.stringify(result.results, null, 2)}
-            </pre>
-          </details>
-        )}
-      </div>
     </div>
   );
 }
@@ -687,9 +647,6 @@ export default function DashboardPage({ isActive, agents }) {
           return <TradeCard key={s.key} scan={scan} label={s.label} />;
         })}
       </div>
-
-      {/* Reset section */}
-      <ResetSection addToast={addToast} onResetDone={fetchAllData} />
 
       {/* Toasts */}
       {toasts.length > 0 && (

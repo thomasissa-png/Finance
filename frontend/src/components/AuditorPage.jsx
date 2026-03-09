@@ -112,7 +112,7 @@ export default function AuditorPage({ isActive, agents }) {
     <div className="agent-page">
       <div className="page-header">
         <div className="page-title">Audit</div>
-        <div className="page-subtitle">Audit en profondeur de chaque agent, note /10, am&eacute;liorations, tendances</div>
+        <div className="page-subtitle">Audit en profondeur de chaque agent, note /10, améliorations, tendances</div>
         <LastUpdated date={lastUpdate} />
       </div>
 
@@ -212,7 +212,7 @@ export default function AuditorPage({ isActive, agents }) {
 
                       {report.improvements && report.improvements.length > 0 && (
                         <div className="audit-section">
-                          <h4>Am&eacute;liorations propos&eacute;es</h4>
+                          <h4>Améliorations proposées</h4>
                           <ul>
                             {report.improvements.map((imp, i) => (
                               <li key={i}>{typeof imp === "string" ? imp : JSON.stringify(imp)}</li>
@@ -223,7 +223,7 @@ export default function AuditorPage({ isActive, agents }) {
 
                       {report.checks && Object.keys(report.checks).length > 0 && (
                         <div className="audit-section">
-                          <h4>D&eacute;tail des checks</h4>
+                          <h4>Détail des checks</h4>
                           <div className="audit-checks-grid">
                             {Object.entries(report.checks).map(([check, result]) => (
                               <div key={check} className="audit-check">

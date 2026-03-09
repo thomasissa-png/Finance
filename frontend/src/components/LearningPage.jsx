@@ -5,12 +5,12 @@ import { apiFetch } from "../utils/api";
 import { ErrorBanner, LastUpdated, LogSection } from "./shared";
 
 const DIM_DESCRIPTIONS = {
-  "Per-ticker": "Ajustement par ticker \u00d7 cat\u00e9gorie d'actif. Booste ou p\u00e9nalise chaque instrument selon ses performances historiques.",
+  "Per-ticker": "Ajustement par ticker × catégorie d'actif. Booste ou pénalise chaque instrument selon ses performances historiques.",
   "Session": "Europe vs US \u2014 ajuste selon la performance par session de trading.",
-  "News Category": "Par cat\u00e9gorie de news + ticker (cross-dimension). Ex: weather+ZW=F.",
-  "R\u00e9gime VIX": "Low vol vs High vol \u2014 ajuste selon le r\u00e9gime de volatilit\u00e9 du march\u00e9.",
-  "Direction": "LONG vs SHORT \u2014 ajuste selon la pr\u00e9cision directionnelle historique.",
-  "Delay Bias": "Ajustement global bas\u00e9 sur la pr\u00e9cision des pr\u00e9dictions de d\u00e9lai de transmission.",
+  "News Category": "Par catégorie de news + ticker (cross-dimension). Ex: weather+ZW=F.",
+  "Régime VIX": "Low vol vs High vol \u2014 ajuste selon le régime de volatilité du marché.",
+  "Direction": "LONG vs SHORT \u2014 ajuste selon la précision directionnelle historique.",
+  "Delay Bias": "Ajustement global basé sur la précision des prédictions de délai de transmission.",
 };
 
 function MultiplierBadge({ value }) {
@@ -74,7 +74,7 @@ export default function LearningPage({ isActive }) {
     <div className="agent-page">
       <div className="agent-page-header">
         <h2>{"\ud83e\udde0"} Agent Learning</h2>
-        <span className="agent-page-desc">6 dimensions d'apprentissage adaptatif, d&eacute;tection d'anomalies, optimisation continue</span>
+        <span className="agent-page-desc">6 dimensions d'apprentissage adaptatif, détection d'anomalies, optimisation continue</span>
         <LastUpdated date={lastUpdate} />
       </div>
 
@@ -93,7 +93,7 @@ export default function LearningPage({ isActive }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-value" style={{ color: "var(--red)" }}>{penalties}</div>
-          <div className="kpi-label">P&eacute;nalit&eacute;s</div>
+          <div className="kpi-label">Pénalités</div>
         </div>
         {perf && (
           <div className="kpi-card">
@@ -150,7 +150,7 @@ export default function LearningPage({ isActive }) {
       {/* Dimension 3: Newscat */}
       {Object.keys(newscatAdj).length > 0 && (
         <div className="section-card">
-          <h3>3. Cat&eacute;gorie de news ({Object.keys(newscatAdj).length})</h3>
+          <h3>3. Catégorie de news ({Object.keys(newscatAdj).length})</h3>
           <p className="dim-desc">{DIM_DESCRIPTIONS["News Category"]}</p>
           <div className="learning-grid">
             {Object.entries(newscatAdj)
@@ -168,8 +168,8 @@ export default function LearningPage({ isActive }) {
       {/* Dimension 4: Regime VIX */}
       {Object.keys(regimeAdj).length > 0 && (
         <div className="section-card">
-          <h3>4. R&eacute;gime VIX</h3>
-          <p className="dim-desc">{DIM_DESCRIPTIONS["R\u00e9gime VIX"]}</p>
+          <h3>4. Régime VIX</h3>
+          <p className="dim-desc">{DIM_DESCRIPTIONS["Régime VIX"]}</p>
           <div className="learning-dim-cards">
             {Object.entries(regimeAdj).map(([k, v]) => (
               <div key={k} className="learning-dim-card">

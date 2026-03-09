@@ -66,7 +66,7 @@ export default function TraderPage({ isActive }) {
     <div className="agent-page">
       <div className="agent-page-header">
         <h2>\ud83d\udcb9 Agent Trader</h2>
-        <span className="agent-page-desc">D\u00e9cisions d'investissement, position monitoring, risk management</span>
+        <span className="agent-page-desc">Décisions d'investissement, position monitoring, risk management</span>
       </div>
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
@@ -108,7 +108,7 @@ export default function TraderPage({ isActive }) {
                 <tr>
                   <th>Ticker</th>
                   <th>Direction</th>
-                  <th>Entr\u00e9e</th>
+                  <th>Entrée</th>
                   <th>Target</th>
                   <th>Stop</th>
                   <th>R/R</th>
@@ -139,10 +139,10 @@ export default function TraderPage({ isActive }) {
           <h3>Historique des trades ({filteredTrades.length})</h3>
           <div className="filter-row">
             <select value={filterResult} onChange={(e) => { setFilterResult(e.target.value); setPage(1); }} className="filter-select">
-              <option value="">Tous r\u00e9sultats</option>
+              <option value="">Tous résultats</option>
               <option value="TP_HIT">TP</option>
               <option value="SL_HIT">SL</option>
-              <option value="EXPIRED">Expir\u00e9</option>
+              <option value="EXPIRED">Expiré</option>
             </select>
             <select value={filterDirection} onChange={(e) => { setFilterDirection(e.target.value); setPage(1); }} className="filter-select">
               <option value="">Toutes directions</option>
@@ -150,7 +150,7 @@ export default function TraderPage({ isActive }) {
               <option value="SHORT">SHORT</option>
             </select>
             <select value={filterCategory} onChange={(e) => { setFilterCategory(e.target.value); setPage(1); }} className="filter-select">
-              <option value="">Toutes cat\u00e9gories</option>
+              <option value="">Toutes catégories</option>
               {Object.keys(CATEGORY_COLORS).map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
@@ -163,12 +163,12 @@ export default function TraderPage({ isActive }) {
                 <th>Scan</th>
                 <th>Ticker</th>
                 <th>Dir</th>
-                <th>Cat\u00e9gorie</th>
-                <th>Entr\u00e9e</th>
+                <th>Catégorie</th>
+                <th>Entrée</th>
                 <th>R/R</th>
                 <th>Score</th>
-                <th>Learn.\u00d7</th>
-                <th>R\u00e9sultat</th>
+                <th>Learn.×</th>
+                <th>Résultat</th>
                 <th>P&L</th>
               </tr>
             </thead>
@@ -252,7 +252,7 @@ export default function TraderPage({ isActive }) {
                   <div key={ticker} className={`learning-item ${isBoost ? "boost" : "penalty"}`}>
                     <div className="learning-item-ticker">{ticker}</div>
                     <div className="learning-item-mult" style={{ color: isBoost ? "var(--green)" : "var(--red)" }}>
-                      {mult.toFixed(3)}\u00d7
+                      {mult.toFixed(3)}×
                     </div>
                     {d.ticker_mult != null && (
                       <div className="learning-item-detail">

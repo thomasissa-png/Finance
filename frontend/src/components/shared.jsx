@@ -142,7 +142,7 @@ export function LogSection({ logs, logFilter, setLogFilter, limit, title, maxLog
       </div>
       <div className="agent-logs compact-logs">
         {filtered.length === 0 ? (
-          <EmptyState message="Aucun log" detail="Les logs apparaissent apr\u00e8s la premi\u00e8re ex\u00e9cution de l'agent." />
+          <EmptyState message="Aucun log" detail="Les logs apparaissent après la première exécution de l'agent." />
         ) : (
           [...filtered].reverse().slice(0, displayLimit).map((log, i) => (
             <React.Fragment key={`${log.timestamp}-${i}`}>

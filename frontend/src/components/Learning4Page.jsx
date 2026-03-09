@@ -59,7 +59,7 @@ export default function Learning4Page({ isActive }) {
       <div className="agent-page-header">
         <h2>Agent Learning 4 &mdash; Apprentissage Multi-Signal</h2>
         <span className="agent-page-desc">
-          Apprentissage adaptatif pour Trader 4 &mdash; 4 dimensions (combinaison d'&eacute;quipes, ticker, confluence, poids)
+          Apprentissage adaptatif pour Trader 4 &mdash; 4 dimensions (combinaison d'équipes, ticker, confluence, poids)
         </span>
         <LastUpdated date={lastUpdate} />
       </div>
@@ -72,7 +72,7 @@ export default function Learning4Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{stats.total_trades || 0}</div>
-          <div className="kpi-label">Trades analys&eacute;s</div>
+          <div className="kpi-label">Trades analysés</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.win_rate || 0}%</div>
@@ -86,7 +86,7 @@ export default function Learning4Page({ isActive }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.combinations_tracked || 0}</div>
-          <div className="kpi-label">Combos suiv&eacute;s</div>
+          <div className="kpi-label">Combos suivés</div>
         </div>
       </div>
 
@@ -100,7 +100,7 @@ export default function Learning4Page({ isActive }) {
       {/* Anomalies */}
       {anomalies.length > 0 && (
         <div className="section-card" style={{ borderLeft: "3px solid var(--yellow)" }}>
-          <h3>! Anomalies d&eacute;tect&eacute;es</h3>
+          <h3>! Anomalies détectées</h3>
           {anomalies.map((a, i) => (
             <div key={i} style={{ padding: "4px 0", fontSize: 13 }}>{a}</div>
           ))}
@@ -111,7 +111,7 @@ export default function Learning4Page({ isActive }) {
       <div className="section-card">
         <h3>Optimisation des poids</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12 }}>
-          Poids actuels de chaque source dans le meta-score &mdash; ajust&eacute;s par le learning
+          Poids actuels de chaque source dans le meta-score &mdash; ajustés par le learning
         </p>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
           {[
@@ -146,9 +146,9 @@ export default function Learning4Page({ isActive }) {
 
       {/* Per-combination */}
       <div className="section-card">
-        <h3>Ajustements par combinaison d'&eacute;quipes</h3>
+        <h3>Ajustements par combinaison d'équipes</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Quelles combinaisons produisent les meilleurs r&eacute;sultats ?
+          Quelles combinaisons produisent les meilleurs résultats ?
         </p>
         {Object.keys(comboAdj).length > 0 ? (
           Object.entries(comboAdj).map(([combo, val]) => (
@@ -163,7 +163,7 @@ export default function Learning4Page({ isActive }) {
       <div className="section-card">
         <h3>Ajustements par ticker</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Quels actifs r&eacute;pondent le mieux aux signaux confluents ?
+          Quels actifs répondent le mieux aux signaux confluents ?
         </p>
         {Object.keys(tickerAdj).length > 0 ? (
           Object.entries(tickerAdj).map(([ticker, val]) => (

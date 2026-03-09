@@ -91,7 +91,7 @@ export default function NewsPage({ isActive }) {
     <div className="agent-page">
       <div className="page-header">
         <div className="page-title">Agent News</div>
-        <div className="page-subtitle">Collecte, curation, sant&eacute; des sources, d&eacute;tection d'&eacute;v&eacute;nements</div>
+        <div className="page-subtitle">Collecte, curation, santé des sources, détection d'événements</div>
         <LastUpdated date={lastUpdate} />
       </div>
 
@@ -100,9 +100,9 @@ export default function NewsPage({ isActive }) {
 
       {/* Source Health */}
       <div className="section-card">
-        <h3>Sant&eacute; des sources</h3>
+        <h3>Santé des sources</h3>
         {sources.length === 0 ? (
-          <div className="agent-logs-empty">Aucune donn&eacute;e de sant&eacute; disponible. Les donn&eacute;es apparaissent apr&egrave;s le premier scan.</div>
+          <div className="agent-logs-empty">Aucune donnée de santé disponible. Les données apparaissent après le premier scan.</div>
         ) : (
           <>
           <div className="compact-table desktop-only">
@@ -110,11 +110,11 @@ export default function NewsPage({ isActive }) {
               <thead>
                 <tr>
                   <th>Source</th>
-                  <th>Taux de succ&egrave;s</th>
+                  <th>Taux de succès</th>
                   <th>Sante</th>
                   <th>&Eacute;checs</th>
                   <th>Latence moy.</th>
-                  <th>Derni&egrave;re erreur</th>
+                  <th>Dernière erreur</th>
                 </tr>
               </thead>
               <tbody>
@@ -170,7 +170,7 @@ export default function NewsPage({ isActive }) {
                   <span className="weekly-stat-value" style={{ color: "var(--red)" }}>
                     {weeklyReview.summary.degraded ?? "\u2014"}
                   </span>
-                  <span className="weekly-stat-label">Sources d&eacute;grad&eacute;es</span>
+                  <span className="weekly-stat-label">Sources dégradées</span>
                 </div>
               </div>
             )}

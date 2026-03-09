@@ -94,7 +94,7 @@ export default function Journal4Page({ isActive }) {
       <div className="agent-page-header">
         <h2>Agent Journal 4 &mdash; Journal Meta</h2>
         <span className="agent-page-desc">
-          Journal des trades multi-signal (Trader 4) &mdash; analyse par niveau de confluence et combinaison d'&eacute;quipes
+          Journal des trades multi-signal (Trader 4) &mdash; analyse par niveau de confluence et combinaison d'équipes
         </span>
         <LastUpdated date={lastUpdate} />
       </div>
@@ -107,7 +107,7 @@ export default function Journal4Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{totalTrades}</div>
-          <div className="kpi-label">Trades ferm&eacute;s</div>
+          <div className="kpi-label">Trades fermés</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{winRate}%</div>
@@ -165,9 +165,9 @@ export default function Journal4Page({ isActive }) {
 
       {/* Per-team accuracy */}
       <div className="section-card">
-        <h3>Pr&eacute;cision par &eacute;quipe</h3>
+        <h3>Précision par équipe</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12 }}>
-          Win rate des trades auxquels chaque &eacute;quipe a contribu&eacute;
+          Win rate des trades auxquels chaque équipe a contribué
         </p>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
           {Object.entries(teamAccuracy).map(([team, ta]) => {
@@ -201,7 +201,7 @@ export default function Journal4Page({ isActive }) {
                   <th>Ticker</th>
                   <th>Direction</th>
                   <th>&Eacute;quipes</th>
-                  <th>R&eacute;sultat</th>
+                  <th>Résultat</th>
                   <th>P&L</th>
                 </tr>
               </thead>

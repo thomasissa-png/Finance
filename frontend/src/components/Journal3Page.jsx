@@ -68,7 +68,7 @@ export default function Journal3Page({ isActive }) {
       <div className="agent-page-header">
         <h2>Agent Journal 3 &mdash; Journal Technique</h2>
         <span className="agent-page-desc">
-          Journal des trades techniques (Trader 3) &mdash; cl&ocirc;ture, P&L, MAE/MFE par strat&eacute;gie
+          Journal des trades techniques (Trader 3) &mdash; clôture, P&L, MAE/MFE par stratégie
         </span>
         <LastUpdated date={lastUpdate} />
       </div>
@@ -81,7 +81,7 @@ export default function Journal3Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{totalTrades}</div>
-          <div className="kpi-label">Trades ferm&eacute;s</div>
+          <div className="kpi-label">Trades fermés</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{winRate}%</div>
@@ -108,12 +108,12 @@ export default function Journal3Page({ isActive }) {
 
       {/* Performance par strategie */}
       <div className="section-card">
-        <h3>Performance par strat&eacute;gie</h3>
+        <h3>Performance par stratégie</h3>
         {Object.keys(byStrategy).length > 0 ? (
           <table className="compact-table">
             <thead>
               <tr>
-                <th>Strat&eacute;gie</th>
+                <th>Stratégie</th>
                 <th>Trades</th>
                 <th>Win Rate</th>
                 <th>P&L Total</th>
@@ -152,16 +152,16 @@ export default function Journal3Page({ isActive }) {
 
       {/* Recent entries */}
       <div className="section-card">
-        <h3>Entr&eacute;es r&eacute;centes ({totalTrades})</h3>
+        <h3>Entrées récentes ({totalTrades})</h3>
         {entries.length > 0 ? (
           <table className="compact-table">
             <thead>
               <tr>
                 <th>Date</th>
                 <th>Ticker</th>
-                <th>Strat&eacute;gie</th>
+                <th>Stratégie</th>
                 <th>Direction</th>
-                <th>R&eacute;sultat</th>
+                <th>Résultat</th>
                 <th>P&L</th>
                 <th>MAE</th>
                 <th>MFE</th>

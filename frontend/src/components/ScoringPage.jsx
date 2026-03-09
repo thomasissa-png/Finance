@@ -6,10 +6,10 @@ import { ErrorBanner, LastUpdated, LogSection } from "./shared";
 
 const DIM_LABELS = {
   surprise: "Surprise",
-  directional_clarity: "Clart\u00e9",
-  transmission_delay: "D\u00e9lai transmission",
-  market_awareness: "Awareness march\u00e9",
-  signal_reliability: "Fiabilit\u00e9",
+  directional_clarity: "Clarté",
+  transmission_delay: "Délai transmission",
+  market_awareness: "Awareness marché",
+  signal_reliability: "Fiabilité",
   expected_magnitude: "Magnitude",
 };
 
@@ -54,7 +54,7 @@ export default function ScoringPage({ isActive }) {
     <div className="agent-page">
       <div className="agent-page-header">
         <h2>{"\ud83c\udfaf"} Agent Scoring</h2>
-        <span className="agent-page-desc">Notation edge-weighted, analyse Claude, d&eacute;tection de signaux</span>
+        <span className="agent-page-desc">Notation edge-weighted, analyse Claude, détection de signaux</span>
         <LastUpdated date={lastUpdate} />
       </div>
 
@@ -64,7 +64,7 @@ export default function ScoringPage({ isActive }) {
       {/* Newscat learning adjustments */}
       {Object.keys(newscatAdj).length > 0 && (
         <div className="section-card">
-          <h3>Ajustements par cat&eacute;gorie de news</h3>
+          <h3>Ajustements par catégorie de news</h3>
           <div className="learning-grid">
             {Object.entries(newscatAdj)
               .sort((a, b) => Math.abs(b[1] - 1) - Math.abs(a[1] - 1))
@@ -85,7 +85,7 @@ export default function ScoringPage({ isActive }) {
         <h3>Historique des scans ({history.length})</h3>
         <div className="scoring-history">
           {history.length === 0 ? (
-            <div className="agent-logs-empty">Aucun scan enregistr&eacute;</div>
+            <div className="agent-logs-empty">Aucun scan enregistré</div>
           ) : (
             history.map((scan, idx) => {
               const scored = scan.all_scored_news || [];
@@ -104,7 +104,7 @@ export default function ScoringPage({ isActive }) {
                       <span className="scoring-scan-type">{scanLabel(scan.scan_type)}</span>
                     </div>
                     <div className="scoring-scan-stats">
-                      <span>{scored.length} news analys&eacute;es</span>
+                      <span>{scored.length} news analysées</span>
                       <span>Score moy: {avgScore}</span>
                       <span>{scan.has_trade ? "\u2705 Trade" : "\u274c Pas de trade"}</span>
                     </div>
@@ -116,7 +116,7 @@ export default function ScoringPage({ isActive }) {
                       {/* Decision summary */}
                       {scan.decision_summary && (
                         <div className="scoring-decision">
-                          <strong>D&eacute;cision :</strong> {scan.decision_summary}
+                          <strong>Décision :</strong> {scan.decision_summary}
                         </div>
                       )}
 

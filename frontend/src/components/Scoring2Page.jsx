@@ -203,10 +203,10 @@ export default function Scoring2Page({ isActive }) {
                 <span style={{ color: CAT_COLORS[item.news_category] || "var(--text-secondary)" }}>
                   {item.news_category}
                 </span>
-                <span>cat\u00d7{item.category_mult}</span>
+                <span>cat×{item.category_mult}</span>
                 {item.persistence_mult > 1.0 && (
                   <span style={{ color: "var(--yellow)" }}>
-                    persist\u00d7{item.persistence_mult}
+                    persist×{item.persistence_mult}
                   </span>
                 )}
                 <span>mag:{item.magnitude} rel:{item.reliability}</span>

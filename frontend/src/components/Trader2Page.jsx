@@ -70,7 +70,7 @@ export default function Trader2Page({ isActive }) {
           <div className="kpi-value" style={{ color: pnlColor(totalRealized) }}>
             {totalRealized >= 0 ? "+" : ""}{totalRealized.toFixed(2)}%
           </div>
-          <div className="kpi-label">P&L R&eacute;alis&eacute;</div>
+          <div className="kpi-label">P&L Réalisé</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value" style={{ color: pnlColor(totalUnrealized) }}>
@@ -133,7 +133,7 @@ export default function Trader2Page({ isActive }) {
 
               <div className="trend-position-prices">
                 <div>
-                  <span className="trend-label">Entr&eacute;e</span>
+                  <span className="trend-label">Entrée</span>
                   <span className="trend-value">{pos.entry_price ? pos.entry_price.toFixed(2) : "\u2014"}</span>
                 </div>
                 <div>
@@ -159,7 +159,7 @@ export default function Trader2Page({ isActive }) {
               {expandedTicker === pos.ticker && (
                 <div className="trend-position-detail">
                   <div className="trend-detail-section">
-                    <h4>Catalyseurs cl&eacute;s</h4>
+                    <h4>Catalyseurs clés</h4>
                     {(pos.key_catalysts || []).slice(0, 5).map((c, i) => (
                       <div key={i} className="trend-catalyst">
                         <span className="trend-catalyst-cat">{c.category}</span>
@@ -168,7 +168,7 @@ export default function Trader2Page({ isActive }) {
                       </div>
                     ))}
                     {(!pos.key_catalysts || pos.key_catalysts.length === 0) && (
-                      <div className="trend-no-data">Aucun catalyseur enregistr&eacute;</div>
+                      <div className="trend-no-data">Aucun catalyseur enregistré</div>
                     )}
                   </div>
 
@@ -190,7 +190,7 @@ export default function Trader2Page({ isActive }) {
                         </div>
                       ))}
                       {(!pos.history || pos.history.length === 0) && (
-                        <div className="trend-no-data">Aucun changement enregistr&eacute;</div>
+                        <div className="trend-no-data">Aucun changement enregistré</div>
                       )}
                     </div>
                   </div>

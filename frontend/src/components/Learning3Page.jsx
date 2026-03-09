@@ -59,7 +59,7 @@ export default function Learning3Page({ isActive }) {
       <div className="agent-page-header">
         <h2>Agent Learning 3 &mdash; Apprentissage Technique</h2>
         <span className="agent-page-desc">
-          Apprentissage adaptatif pour Trader 3 &mdash; 5 dimensions (strat&eacute;gie, ticker, timeframe, r&eacute;gime, A/B tests)
+          Apprentissage adaptatif pour Trader 3 &mdash; 5 dimensions (stratégie, ticker, timeframe, régime, A/B tests)
         </span>
         <LastUpdated date={lastUpdate} />
       </div>
@@ -72,7 +72,7 @@ export default function Learning3Page({ isActive }) {
       <div className="kpi-row">
         <div className="kpi-card">
           <div className="kpi-value">{stats.total_trades || 0}</div>
-          <div className="kpi-label">Trades analys&eacute;s</div>
+          <div className="kpi-label">Trades analysés</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.win_rate || 0}%</div>
@@ -86,7 +86,7 @@ export default function Learning3Page({ isActive }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{stats.strategies_tracked || 0}</div>
-          <div className="kpi-label">Strat&eacute;gies suivies</div>
+          <div className="kpi-label">Stratégies suivies</div>
         </div>
       </div>
 
@@ -100,7 +100,7 @@ export default function Learning3Page({ isActive }) {
       {/* Anomalies */}
       {anomalies.length > 0 && (
         <div className="section-card" style={{ borderLeft: "3px solid var(--yellow)" }}>
-          <h3>! Anomalies d&eacute;tect&eacute;es</h3>
+          <h3>! Anomalies détectées</h3>
           {anomalies.map((a, i) => (
             <div key={i} style={{ padding: "4px 0", fontSize: 13 }}>{a}</div>
           ))}
@@ -109,9 +109,9 @@ export default function Learning3Page({ isActive }) {
 
       {/* Per-strategy */}
       <div className="section-card">
-        <h3>Ajustements par strat&eacute;gie</h3>
+        <h3>Ajustements par stratégie</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Multiplieur appliqu&eacute; &agrave; chaque strat&eacute;gie technique (1.0 = neutre)
+          Multiplieur appliqué à chaque stratégie technique (1.0 = neutre)
         </p>
         {Object.keys(strategyAdj).length > 0 ? (
           Object.entries(strategyAdj).map(([strategy, val]) => (
@@ -126,7 +126,7 @@ export default function Learning3Page({ isActive }) {
       <div className="section-card">
         <h3>Ajustements par ticker</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Quels actifs r&eacute;pondent bien aux signaux techniques ?
+          Quels actifs répondent bien aux signaux techniques ?
         </p>
         {Object.keys(tickerAdj).length > 0 ? (
           Object.entries(tickerAdj).map(([ticker, val]) => (
@@ -154,9 +154,9 @@ export default function Learning3Page({ isActive }) {
 
       {/* Per-regime */}
       <div className="section-card">
-        <h3>Ajustements par r&eacute;gime de march&eacute;</h3>
+        <h3>Ajustements par régime de marché</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Low-vol vs high-vol &mdash; quel r&eacute;gime favorise les setups techniques ?
+          Low-vol vs high-vol &mdash; quel régime favorise les setups techniques ?
         </p>
         {Object.keys(regimeAdj).length > 0 ? (
           Object.entries(regimeAdj).map(([regime, val]) => (
@@ -169,17 +169,17 @@ export default function Learning3Page({ isActive }) {
 
       {/* A/B test results */}
       <div className="section-card">
-        <h3>R&eacute;sultats A/B Testing</h3>
+        <h3>Résultats A/B Testing</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Comparaison des strat&eacute;gies &mdash; la gagnante est boost&eacute;e, la perdante p&eacute;nalis&eacute;e
+          Comparaison des stratégies &mdash; la gagnante est boostée, la perdante pénalisée
         </p>
         {Object.keys(abResults).length > 0 ? (
           <table className="compact-table">
             <thead>
               <tr>
                 <th>Test</th>
-                <th>Strat&eacute;gie A</th>
-                <th>Strat&eacute;gie B</th>
+                <th>Stratégie A</th>
+                <th>Stratégie B</th>
                 <th>Gagnant</th>
                 <th>Diff. WR</th>
                 <th>Confiance</th>

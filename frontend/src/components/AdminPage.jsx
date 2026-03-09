@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 
 /**
- * Réglages page — Theme toggle, API list, and infrastructure endpoints.
+ * Réglages page — Theme toggle, API list, infrastructure tools, DB reset.
  */
 
 const API_LIST = [
@@ -26,6 +26,41 @@ const API_LIST = [
   { name: "RSS Feeds (25)", type: "free", desc: "USDA, NOAA, NHC, FAO, gCaptain, ECB, Fed, BoE, Caixin..." },
 ];
 
+const INFRA_ACTIONS = [
+  {
+    key: "health",
+    label: "Health Check",
+    desc: "Vérifie la connexion PostgreSQL, le pool de connexions, les trades en attente et les fichiers de fallback JSON.",
+    url: "/api/infrastructure/health",
+    method: "GET",
+    style: {},
+  },
+  {
+    key: "dbStats",
+    label: "Statistiques DB",
+    desc: "Affiche le nombre de lignes et la taille de chaque table PostgreSQL (trades, journal, positions, logs, etc.).",
+    url: "/api/db/stats",
+    method: "GET",
+    style: {},
+  },
+  {
+    key: "archive",
+    label: "Archive des prix",
+    desc: "Consulte les statistiques de l'archive de prix OHLCV (nombre de tickers, couverture temporelle, entrées).",
+    url: "/api/price-archive/stats",
+    method: "GET",
+    style: {},
+  },
+  {
+    key: "maintenance",
+    label: "Lancer la maintenance",
+    desc: "Exécute VACUUM ANALYZE sur toutes les tables, purge les vieux logs/messages, et recalcule les statistiques. Peut prendre 30-60 secondes.",
+    url: "/api/infrastructure/maintenance",
+    method: "POST",
+    style: { background: "var(--accent)", color: "#fff", border: "none" },
+  },
+];
+
 function AdminPage({ isActive }) {
   const [dbStats, setDbStats] = useState(null);
   const [healthData, setHealthData] = useState(null);
@@ -37,13 +72,38 @@ function AdminPage({ isActive }) {
     try { return localStorage.getItem("theme") || "light"; } catch { return "light"; }
   });
 
-  // Apply theme on mount and change
+  // Reset state
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [resetResult, setResetResult] = useState(null);
+  const [resetError, setResetError] = useState(null);
+
+  // API status from backend
+  const [apiStatus, setApiStatus] = useState(null);
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("theme", theme); } catch { /* */ }
   }, [theme]);
 
-  const fetchWithState = useCallback(async (key, url, setter, method = "GET") => {
+  // Fetch API key status from backend health endpoint
+  useEffect(() => {
+    if (!isActive) return;
+    fetch("/api/infrastructure/health")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setApiStatus(data); })
+      .catch(() => {});
+  }, [isActive]);
+
+  const setterMap = {
+    health: setHealthData,
+    dbStats: setDbStats,
+    archive: setPriceArchiveStats,
+    maintenance: setMaintenanceResult,
+  };
+
+  const fetchWithState = useCallback(async (key, url, method = "GET") => {
     setLoading((prev) => ({ ...prev, [key]: true }));
     setError(null);
     try {
@@ -51,13 +111,34 @@ function AdminPage({ isActive }) {
       const r = await fetch(url, opts);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
-      setter(data);
+      const setter = setterMap[key];
+      if (setter) setter(data);
     } catch (err) {
       setError(`${key}: ${err.message}`);
     } finally {
       setLoading((prev) => ({ ...prev, [key]: false }));
     }
   }, []);
+
+  const doReset = async () => {
+    setResetting(true);
+    setResetError(null);
+    setResetResult(null);
+    try {
+      const res = await fetch(`/api/infrastructure/reset?password=${encodeURIComponent(resetPassword)}`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setResetError(data.detail || `Erreur HTTP ${res.status}`);
+      } else {
+        setResetResult(data);
+        setShowResetConfirm(false);
+        setResetPassword("");
+      }
+    } catch (err) {
+      setResetError(`Erreur réseau : ${err.message}`);
+    }
+    setResetting(false);
+  };
 
   if (!isActive) return null;
 
@@ -105,7 +186,6 @@ function AdminPage({ isActive }) {
           </span>
         </div>
 
-        {/* Keyed APIs */}
         <div className="admin-api-group-label">Clé requise</div>
         <div className="admin-api-grid">
           {apiKeyed.map((api) => (
@@ -119,7 +199,6 @@ function AdminPage({ isActive }) {
           ))}
         </div>
 
-        {/* Free APIs */}
         <div className="admin-api-group-label" style={{ marginTop: 16 }}>Gratuites</div>
         <div className="admin-api-grid">
           {apiFree.map((api) => (
@@ -134,53 +213,39 @@ function AdminPage({ isActive }) {
         </div>
       </div>
 
-      {/* Infrastructure actions */}
+      {/* Infrastructure actions — with descriptions */}
       <div className="section-card">
         <h3>Infrastructure</h3>
-        <div className="admin-infra-actions">
-          <button
-            className="trigger-btn"
-            disabled={loading.health}
-            onClick={() => fetchWithState("health", "/api/infrastructure/health", setHealthData)}
-          >
-            {loading.health ? "..." : "Health Check"}
-          </button>
-          <button
-            className="trigger-btn"
-            disabled={loading.dbStats}
-            onClick={() => fetchWithState("dbStats", "/api/db/stats", setDbStats)}
-          >
-            {loading.dbStats ? "..." : "DB Stats"}
-          </button>
-          <button
-            className="trigger-btn"
-            disabled={loading.archive}
-            onClick={() => fetchWithState("archive", "/api/price-archive/stats", setPriceArchiveStats)}
-          >
-            {loading.archive ? "..." : "Price Archive"}
-          </button>
-          <button
-            className="trigger-btn export"
-            disabled={loading.maintenance}
-            onClick={() => fetchWithState("maintenance", "/api/infrastructure/maintenance", setMaintenanceResult, "POST")}
-          >
-            {loading.maintenance ? "..." : "Lancer Maintenance"}
-          </button>
+        <p className="section-subtitle" style={{ margin: "0 0 16px", fontSize: 13, color: "var(--text-secondary)" }}>
+          Outils de diagnostic et de maintenance de la base de données et du système.
+        </p>
+        <div className="admin-infra-grid">
+          {INFRA_ACTIONS.map((action) => (
+            <div className="admin-infra-card" key={action.key}>
+              <div className="admin-infra-card-top">
+                <button
+                  className="trigger-btn"
+                  style={action.style}
+                  disabled={loading[action.key]}
+                  onClick={() => fetchWithState(action.key, action.url, action.method)}
+                >
+                  {loading[action.key] ? "..." : action.label}
+                </button>
+              </div>
+              <div className="admin-infra-card-desc">{action.desc}</div>
+            </div>
+          ))}
         </div>
       </div>
 
       {/* Health check results */}
       {healthData && (
         <div className="section-card">
-          <h3>Infrastructure Health</h3>
+          <h3>Résultat Health Check</h3>
           <div className="compact-table-wrap">
             <table className="compact-table">
               <thead>
-                <tr>
-                  <th>Check</th>
-                  <th>Status</th>
-                  <th>Detail</th>
-                </tr>
+                <tr><th>Check</th><th>Status</th><th>Détail</th></tr>
               </thead>
               <tbody>
                 {Object.entries(healthData).map(([key, val]) => (
@@ -212,11 +277,7 @@ function AdminPage({ isActive }) {
           <div className="compact-table-wrap">
             <table className="compact-table">
               <thead>
-                <tr>
-                  <th>Table</th>
-                  <th>Lignes</th>
-                  <th>Taille</th>
-                </tr>
+                <tr><th>Table</th><th>Lignes</th><th>Taille</th></tr>
               </thead>
               <tbody>
                 {Object.entries(dbStats)
@@ -240,14 +301,11 @@ function AdminPage({ isActive }) {
       {/* Price Archive Stats */}
       {priceArchiveStats && (
         <div className="section-card">
-          <h3>Price Archive</h3>
+          <h3>Archive des prix</h3>
           <div className="compact-table-wrap">
             <table className="compact-table">
               <thead>
-                <tr>
-                  <th>Info</th>
-                  <th>Valeur</th>
-                </tr>
+                <tr><th>Info</th><th>Valeur</th></tr>
               </thead>
               <tbody>
                 {Object.entries(priceArchiveStats).map(([key, val]) => (
@@ -269,10 +327,7 @@ function AdminPage({ isActive }) {
           <div className="compact-table-wrap">
             <table className="compact-table">
               <thead>
-                <tr>
-                  <th>Table</th>
-                  <th>Status</th>
-                </tr>
+                <tr><th>Table</th><th>Status</th></tr>
               </thead>
               <tbody>
                 {Object.entries(maintenanceResult).map(([table, status]) => (
@@ -290,6 +345,93 @@ function AdminPage({ isActive }) {
           </div>
         </div>
       )}
+
+      {/* ── Zone dangereuse — tout en bas ── */}
+      <div className="section-card" style={{ marginTop: 40, borderColor: "var(--red)", borderWidth: 1, borderStyle: "solid" }}>
+        <div className="section-header">
+          <span className="section-title" style={{ color: "var(--red)" }}>Zone dangereuse</span>
+        </div>
+        <div style={{ padding: "12px 16px" }}>
+          <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-secondary)" }}>
+            Réinitialise toutes les données : trades, journal, positions (Éq. 1-4), scan history, learning configs, logs agents.
+            Cette action nécessite le mot de passe défini dans le secret Replit <code>RESET_PASSWORD</code>.
+          </p>
+
+          {!showResetConfirm ? (
+            <button
+              className="trigger-btn"
+              style={{ background: "var(--red)", color: "#fff", border: "none" }}
+              onClick={() => setShowResetConfirm(true)}
+            >
+              Réinitialiser toutes les données
+            </button>
+          ) : (
+            <div style={{ background: "rgba(239,68,68,0.08)", borderRadius: 8, padding: 16 }}>
+              <p style={{ margin: "0 0 12px", fontWeight: 600, color: "var(--red)" }}>
+                Confirmer la réinitialisation complète ?
+              </p>
+              <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--text-secondary)" }}>
+                Cette action va SUPPRIMER toutes les données de trading (PG + JSON) pour les 4 équipes.
+                Les tables seront vidées, les fichiers JSON remis à zéro, les configs learning supprimées.
+                <strong> Cette action est irréversible.</strong>
+              </p>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                  Mot de passe de réinitialisation
+                </label>
+                <input
+                  type="password"
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  placeholder="Entrer le mot de passe RESET_PASSWORD"
+                  style={{
+                    width: "100%", maxWidth: 320, padding: "8px 12px",
+                    border: "1px solid var(--border)", borderRadius: 6,
+                    background: "var(--bg-primary)", color: "var(--text-primary)",
+                    fontSize: 14,
+                  }}
+                  autoComplete="off"
+                  onKeyDown={(e) => { if (e.key === "Enter" && resetPassword) doReset(); }}
+                />
+              </div>
+              {resetError && (
+                <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--red)" }}>
+                  {resetError}
+                </p>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="trigger-btn"
+                  style={{ background: "var(--red)", color: "#fff", border: "none", opacity: resetting || !resetPassword ? 0.6 : 1 }}
+                  onClick={doReset}
+                  disabled={resetting || !resetPassword}
+                >
+                  {resetting ? "Réinitialisation en cours..." : "Oui, tout supprimer"}
+                </button>
+                <button
+                  className="trigger-btn"
+                  style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}
+                  onClick={() => { setShowResetConfirm(false); setResetPassword(""); setResetError(null); setResetResult(null); }}
+                  disabled={resetting}
+                >
+                  Annuler
+                </button>
+              </div>
+            </div>
+          )}
+          {resetResult && (
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 6, background: "rgba(16,185,129,0.1)", border: "1px solid var(--green)" }}>
+              <strong style={{ color: "var(--green)" }}>Réinitialisation réussie</strong>
+              <details style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>
+                <summary style={{ cursor: "pointer" }}>Détails du reset</summary>
+                <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, background: "var(--bg-secondary)", padding: 8, borderRadius: 6, maxHeight: 200, overflow: "auto" }}>
+                  {JSON.stringify(resetResult.results, null, 2)}
+                </pre>
+              </details>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

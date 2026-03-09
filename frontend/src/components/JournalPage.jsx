@@ -38,7 +38,7 @@ export default function JournalPage({ isActive }) {
     <div className="agent-page">
       <div className="agent-page-header">
         <h2>{"\ud83d\udcd3"} Agent Journal</h2>
-        <span className="agent-page-desc">Documentation, cl\u00f4ture des trades, analyse P&L, MAE/MFE</span>
+        <span className="agent-page-desc">Documentation, clôture des trades, analyse P&L, MAE/MFE</span>
       </div>
 
       {loading && <div className="agent-loading"><span className="spinner" /> Chargement des données...</div>}
@@ -50,7 +50,7 @@ export default function JournalPage({ isActive }) {
       {/* Learning feedback used by journal */}
       {learning && (
         <div className="section-card" style={{ marginTop: 24 }}>
-          <h3>Contexte Learning inject\u00e9 au journal</h3>
+          <h3>Contexte Learning injecté au journal</h3>
           <div className="learning-dimensions">
             {learning.session_adj && Object.keys(learning.session_adj).length > 0 && (
               <div className="learning-dim">
@@ -64,7 +64,7 @@ export default function JournalPage({ isActive }) {
             )}
             {learning.regime_adj && Object.keys(learning.regime_adj).length > 0 && (
               <div className="learning-dim">
-                <span className="learning-dim-label">Ajustements par r\u00e9gime VIX</span>
+                <span className="learning-dim-label">Ajustements par régime VIX</span>
                 {Object.entries(learning.regime_adj).map(([k, v]) => (
                   <span key={k} className="learning-dim-value" style={{ color: v >= 1 ? "var(--green)" : "var(--red)" }}>
                     {k}: {v.toFixed(3)}

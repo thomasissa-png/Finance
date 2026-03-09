@@ -73,7 +73,7 @@ export default function Trader3Page({ isActive }) {
       <div className="agent-page-header">
         <h2>Agent Trader 3 &mdash; Trading Technique (heures-3j)</h2>
         <span className="agent-page-desc">
-          Positions bas&eacute;es sur les indicateurs techniques &mdash; strat&eacute;gies multiples, dur&eacute;e heures &agrave; 3 jours
+          Positions basées sur les indicateurs techniques &mdash; stratégies multiples, durée heures à 3 jours
         </span>
         <LastUpdated date={lastUpdate} />
       </div>
@@ -92,7 +92,7 @@ export default function Trader3Page({ isActive }) {
           <div className="kpi-value" style={{ color: pnlColor(realizedPnl) }}>
             {realizedPnl >= 0 ? "+" : ""}{realizedPnl.toFixed(2)}%
           </div>
-          <div className="kpi-label">P&L R&eacute;alis&eacute;</div>
+          <div className="kpi-label">P&L Réalisé</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value" style={{ color: pnlColor(latentPnl) }}>
@@ -102,7 +102,7 @@ export default function Trader3Page({ isActive }) {
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{topStrategy ? `${topStrategy[0]} (${topStrategy[1]})` : "\u2014"}</div>
-          <div className="kpi-label">Top strat&eacute;gie</div>
+          <div className="kpi-label">Top stratégie</div>
         </div>
       </div>
 
@@ -138,12 +138,12 @@ export default function Trader3Page({ isActive }) {
             <thead>
               <tr>
                 <th>Ticker</th>
-                <th>Strat&eacute;gie</th>
+                <th>Stratégie</th>
                 <th>Direction</th>
-                <th>Entr&eacute;e</th>
+                <th>Entrée</th>
                 <th>Actuel</th>
                 <th>P&L %</th>
-                <th>Dur&eacute;e</th>
+                <th>Durée</th>
               </tr>
             </thead>
             <tbody>
@@ -175,12 +175,12 @@ export default function Trader3Page({ isActive }) {
 
       {/* A/B Testing */}
       <div className="section-card">
-        <h3>A/B Testing &mdash; Comparaison des strat&eacute;gies</h3>
+        <h3>A/B Testing &mdash; Comparaison des stratégies</h3>
         {strategies.length > 0 ? (
           <table className="compact-table">
             <thead>
               <tr>
-                <th>Strat&eacute;gie</th>
+                <th>Stratégie</th>
                 <th>Trades</th>
                 <th>Win Rate</th>
                 <th>P&L Moy.</th>
@@ -216,7 +216,7 @@ export default function Trader3Page({ isActive }) {
         <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <select value={filterResult} onChange={(e) => { setFilterResult(e.target.value); setPage(1); }}
             style={{ background: "var(--bg-tertiary)", color: "var(--text-primary)", border: "1px solid var(--border)", borderRadius: 4, padding: "4px 8px", fontSize: 12 }}>
-            <option value="">Tous r&eacute;sultats</option>
+            <option value="">Tous résultats</option>
             <option value="TP_HIT">TP_HIT</option>
             <option value="SL_HIT">SL_HIT</option>
             <option value="EXPIRED">EXPIRED</option>
@@ -235,9 +235,9 @@ export default function Trader3Page({ isActive }) {
                 <tr>
                   <th>Date</th>
                   <th>Ticker</th>
-                  <th>Strat&eacute;gie</th>
+                  <th>Stratégie</th>
                   <th>Dir.</th>
-                  <th>R&eacute;sultat</th>
+                  <th>Résultat</th>
                   <th>P&L</th>
                 </tr>
               </thead>

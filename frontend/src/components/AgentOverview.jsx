@@ -7,9 +7,9 @@ const AGENT_CONFIG = {
     desc: "Collecte & curation",
     team: "shared",
     metricsDisplay: (m) => [
-      { label: "Collect\u00e9s", value: m.last_collect_count || 0 },
+      { label: "Collectés", value: m.last_collect_count || 0 },
       { label: "Erreurs sources", value: m.source_errors || 0, warn: (m.source_errors || 0) > 0 },
-      { label: "Total collect\u00e9s", value: m.total_collected || 0 },
+      { label: "Total collectés", value: m.total_collected || 0 },
     ],
   },
   scoring: {
@@ -18,18 +18,18 @@ const AGENT_CONFIG = {
     desc: "Notation edge & impact",
     team: "shared",
     metricsDisplay: (m) => [
-      { label: "Scor\u00e9s", value: m.last_scored_count || 0 },
-      { label: "Zero-edge filtr\u00e9s", value: m.zero_edge_filtered || 0 },
+      { label: "Scorés", value: m.last_scored_count || 0 },
+      { label: "Zero-edge filtrés", value: m.zero_edge_filtered || 0 },
       { label: "Tokens", value: m.total_tokens_used ? `${(m.total_tokens_used / 1000).toFixed(1)}k` : "0" },
     ],
   },
   scoring_2: {
     icon: "\ud83d\udccf",
     label: "Agent Scoring 2",
-    desc: "Re-pond\u00e9ration trend",
+    desc: "Re-pondération trend",
     team: "team2",
     metricsDisplay: (m) => [
-      { label: "Items analys\u00e9s", value: m.total_items_analyzed || 0 },
+      { label: "Items analysés", value: m.total_items_analyzed || 0 },
       { label: "Pertinents trend", value: m.relevant_for_trend || 0 },
       { label: "Score moyen", value: m.avg_trend_score ? m.avg_trend_score.toFixed(1) : "\u2014" },
     ],
@@ -52,17 +52,17 @@ const AGENT_CONFIG = {
     team: "team2",
     metricsDisplay: (m) => [
       { label: "Positions", value: m.active_positions || 0 },
-      { label: "P&L r\u00e9alis\u00e9", value: m.realized_pnl != null ? `${m.realized_pnl > 0 ? "+" : ""}${m.realized_pnl.toFixed(2)}%` : "\u2014", positive: (m.realized_pnl || 0) > 0 },
+      { label: "P&L réalisé", value: m.realized_pnl != null ? `${m.realized_pnl > 0 ? "+" : ""}${m.realized_pnl.toFixed(2)}%` : "\u2014", positive: (m.realized_pnl || 0) > 0 },
       { label: "Flips", value: m.total_flips || 0 },
     ],
   },
   journal: {
     icon: "\ud83d\udcd3",
     label: "Agent Journal 1",
-    desc: "Cl\u00f4ture trades & P&L",
+    desc: "Clôture trades & P&L",
     team: "team1",
     metricsDisplay: (m) => [
-      { label: "Ferm\u00e9s", value: m.last_trades_closed || 0 },
+      { label: "Fermés", value: m.last_trades_closed || 0 },
       { label: "TP/SL/EXP", value: `${m.last_tp || 0}/${m.last_sl || 0}/${m.last_expired || 0}` },
       { label: "PnL", value: m.last_pnl_sum ? `${m.last_pnl_sum > 0 ? "+" : ""}${m.last_pnl_sum.toFixed(2)}%` : "\u2014", positive: (m.last_pnl_sum || 0) > 0 },
     ],
@@ -73,7 +73,7 @@ const AGENT_CONFIG = {
     desc: "Journal des flips trend",
     team: "team2",
     metricsDisplay: (m) => [
-      { label: "Flips journalis\u00e9s", value: m.flips_recorded || 0 },
+      { label: "Flips journalisés", value: m.flips_recorded || 0 },
       { label: "MAE moyen", value: m.avg_mae != null ? `${m.avg_mae.toFixed(2)}%` : "\u2014", warn: (m.avg_mae || 0) < -5 },
       { label: "Snapshots", value: m.snapshots_today || 0 },
     ],
@@ -189,7 +189,7 @@ const AGENT_CONFIG = {
   infrastructure: {
     icon: "\ud83d\udee0\ufe0f",
     label: "Agent Infrastructure",
-    desc: "Sant\u00e9 PG & maintenance",
+    desc: "Santé PG & maintenance",
     team: "infra",
     metricsDisplay: (m) => [
       { label: "PG status", value: m.pg_connected ? "OK" : "DOWN", warn: !m.pg_connected },
@@ -234,7 +234,7 @@ const STATUS_LABELS = {
   idle: "En attente",
   working: "En cours",
   error: "Erreur",
-  disabled: "D\u00e9sactiv\u00e9",
+  disabled: "Désactivé",
 };
 
 export default function AgentOverview({ agents, onSelectAgent }) {

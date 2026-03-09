@@ -80,7 +80,7 @@ export default function Trader4Page({ isActive }) {
       <div className="agent-page-header">
         <h2>Agent Trader 4 &mdash; Expert Multi-Signal (15+ ans)</h2>
         <span className="agent-page-desc">
-          Trading haute conviction &mdash; n'agit que sur les signaux confluents de plusieurs &eacute;quipes
+          Trading haute conviction &mdash; n'agit que sur les signaux confluents de plusieurs équipes
         </span>
         <LastUpdated date={lastUpdate} />
       </div>
@@ -95,7 +95,7 @@ export default function Trader4Page({ isActive }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span>!</span>
             <span style={{ fontSize: 13 }}>
-              <b>Agent en attente d'activation</b> &mdash; n&eacute;cessite suffisamment de donn&eacute;es des &eacute;quipes 1, 2 et 3
+              <b>Agent en attente d'activation</b> &mdash; nécessite suffisamment de données des équipes 1, 2 et 3
             </span>
           </div>
           {activationStatus.reason && (
@@ -120,7 +120,7 @@ export default function Trader4Page({ isActive }) {
           <div className="kpi-value" style={{ color: pnlColor(realizedPnl) }}>
             {realizedPnl >= 0 ? "+" : ""}{realizedPnl.toFixed(2)}%
           </div>
-          <div className="kpi-label">P&L R&eacute;alis&eacute;</div>
+          <div className="kpi-label">P&L Réalisé</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{bestCombo ? bestCombo[0] : "\u2014"}</div>
@@ -130,9 +130,9 @@ export default function Trader4Page({ isActive }) {
 
       {/* Team contribution */}
       <div className="section-card">
-        <h3>Contribution par &eacute;quipe</h3>
+        <h3>Contribution par équipe</h3>
         <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12 }}>
-          Fr&eacute;quence de contribution de chaque &eacute;quipe aux signaux de trading
+          Fréquence de contribution de chaque équipe aux signaux de trading
         </p>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
           {Object.entries(teamContrib).map(([team, count]) => {
@@ -163,7 +163,7 @@ export default function Trader4Page({ isActive }) {
                 <th>Direction</th>
                 <th>Confluence</th>
                 <th>&Eacute;quipes</th>
-                <th>Entr&eacute;e</th>
+                <th>Entrée</th>
                 <th>Actuel</th>
                 <th>P&L %</th>
               </tr>
@@ -209,7 +209,7 @@ export default function Trader4Page({ isActive }) {
                   <th>Ticker</th>
                   <th>Dir.</th>
                   <th>Confluence</th>
-                  <th>R&eacute;sultat</th>
+                  <th>Résultat</th>
                   <th>P&L</th>
                 </tr>
               </thead>
