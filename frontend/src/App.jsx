@@ -82,11 +82,11 @@ const BellIcon = () => (
   </svg>
 );
 
-// Apply saved theme on load
+// Apply saved theme on load (default: light)
 (() => {
   try {
-    const t = localStorage.getItem("theme");
-    if (t) document.documentElement.setAttribute("data-theme", t);
+    const t = localStorage.getItem("theme") || "light";
+    document.documentElement.setAttribute("data-theme", t);
   } catch { /* */ }
 })();
 

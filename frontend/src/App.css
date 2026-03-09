@@ -4,47 +4,9 @@
    Light/Dark theme support
    ══════════════════════════════════════════════════════════════ */
 
-/* ── Theme Variables — Dark (default) ──────────────────────── */
+/* ── Theme Variables — Light (default) ─────────────────────── */
 
-:root, [data-theme="dark"] {
-  --bg-primary: #0B1426;
-  --bg-secondary: #0F1A2E;
-  --bg-card: #131D33;
-  --bg-card-hover: #182440;
-  --bg-surface: #1A2540;
-  --border: #1E2D4A;
-  --border-light: #253552;
-  --border-accent: #3B82F6;
-
-  --text-primary: #E8ECF4;
-  --text-secondary: #8B9DC3;
-  --text-muted: #5A6F94;
-
-  --accent: #3B82F6;
-  --accent-light: #60A5FA;
-  --green: #10B981;
-  --green-dim: rgba(16, 185, 129, 0.12);
-  --red: #EF4444;
-  --red-dim: rgba(239, 68, 68, 0.12);
-  --yellow: #F59E0B;
-  --yellow-dim: rgba(245, 158, 11, 0.12);
-  --purple: #8B5CF6;
-  --orange: #F97316;
-
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
-
-  --radius: 8px;
-  --radius-sm: 4px;
-  --radius-lg: 12px;
-  --transition: 0.15s ease;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.25);
-}
-
-/* ── Theme Variables — Light ───────────────────────────────── */
-
-[data-theme="light"] {
+:root, [data-theme="light"] {
   --bg-primary: #F3F5F9;
   --bg-secondary: #FFFFFF;
   --bg-card: #FFFFFF;
@@ -69,8 +31,46 @@
   --purple: #7C3AED;
   --orange: #EA580C;
 
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-lg: 12px;
+  --transition: 0.15s ease;
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.10);
+}
+
+/* ── Theme Variables — Dark ────────────────────────────────── */
+
+[data-theme="dark"] {
+  --bg-primary: #0B1426;
+  --bg-secondary: #0F1A2E;
+  --bg-card: #131D33;
+  --bg-card-hover: #182440;
+  --bg-surface: #1A2540;
+  --border: #1E2D4A;
+  --border-light: #253552;
+  --border-accent: #3B82F6;
+
+  --text-primary: #E8ECF4;
+  --text-secondary: #8B9DC3;
+  --text-muted: #5A6F94;
+
+  --accent: #3B82F6;
+  --accent-light: #60A5FA;
+  --green: #10B981;
+  --green-dim: rgba(16, 185, 129, 0.12);
+  --red: #EF4444;
+  --red-dim: rgba(239, 68, 68, 0.12);
+  --yellow: #F59E0B;
+  --yellow-dim: rgba(245, 158, 11, 0.12);
+  --purple: #8B5CF6;
+  --orange: #F97316;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.25);
 }
 
 /* ── Global Reset ────────────────────────────────────────────── */

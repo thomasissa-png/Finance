@@ -34,7 +34,7 @@ function AdminPage({ isActive }) {
   const [loading, setLoading] = useState({});
   const [error, setError] = useState(null);
   const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem("theme") || "dark"; } catch { return "dark"; }
+    try { return localStorage.getItem("theme") || "light"; } catch { return "light"; }
   });
 
   // Apply theme on mount and change

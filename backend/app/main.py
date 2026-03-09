@@ -39,7 +39,7 @@ from .agents.registry import (
 )
 from .backtest import run_backtest, run_parameter_sweep
 from .config import SCAN_KEY_TO_TYPE, TRIGGER_COOLDOWN_SECONDS
-from .database import is_pg_enabled, init_db
+from .database import is_pg_enabled, init_db, get_conn
 from .economic_calendar import get_upcoming_events
 from .journal import load_journal, run_daily_journal
 from .learning import (
@@ -654,11 +654,85 @@ def _run_infra_report() -> None:
     thread.start()
 
 
+_CLEANUP_SENTINEL = Path(os.getenv("DATA_DIR", "data")) / ".cleanup_done_2026_03_09"
+
+
+def _one_time_cleanup() -> None:
+    """One-time database cleanup for fresh start after v8.3 bugfix sprint.
+
+    Clears all trades, journals, scan history, positions, learning data
+    from both PG and JSON. Uses a sentinel file so it only runs once.
+    """
+    if _CLEANUP_SENTINEL.exists():
+        return
+
+    logger.info("=" * 60)
+    logger.info("ONE-TIME CLEANUP — Resetting all trading data for fresh start")
+    logger.info("=" * 60)
+
+    data_dir = Path(os.getenv("DATA_DIR", "data"))
+
+    # 1. Clear PG tables (TRUNCATE is fastest, CASCADE handles FK)
+    if is_pg_enabled():
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    tables = [
+                        "trades", "journal_entries", "scan_history", "last_scans",
+                        "trend_positions", "trend_journal_entries",
+                        "tech_positions", "tech_journal_entries",
+                        "meta_positions", "meta_journal_entries",
+                        "agent_messages", "agent_logs", "audit_reports",
+                        "performance_data", "source_health",
+                    ]
+                    for table in tables:
+                        cur.execute(f"TRUNCATE TABLE {table} CASCADE")
+                        logger.info("  Truncated PG table: %s", table)
+                conn.commit()
+            logger.info("PG cleanup complete")
+        except Exception as exc:
+            logger.error("PG cleanup error (will continue with JSON): %s", exc)
+
+    # 2. Reset JSON files to empty state
+    json_files_to_reset = [
+        "trades.json", "journal.json", "scan_history.json", "last_scans.json",
+        "trend_positions.json", "trend_journal.json",
+        "tech_positions.json", "tech_journal.json",
+        "meta_positions.json", "meta_journal.json",
+        "audit_reports.json", "source_health.json",
+    ]
+    for fname in json_files_to_reset:
+        fpath = data_dir / fname
+        if fpath.exists():
+            # Most files expect [] as empty, last_scans expects {}
+            empty = "{}" if "last_scans" in fname else "[]"
+            fpath.write_text(empty)
+            logger.info("  Reset JSON file: %s", fname)
+
+    # 3. Clear learning config history (fresh learning)
+    for fname in ["learning3_config_history.json", "learning4_config_history.json",
+                   "learning3_weekly_config.json", "learning4_weekly_config.json"]:
+        fpath = data_dir / fname
+        if fpath.exists():
+            fpath.unlink()
+            logger.info("  Deleted learning config: %s", fname)
+
+    # 4. Write sentinel so this never runs again
+    _CLEANUP_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
+    _CLEANUP_SENTINEL.write_text(f"Cleanup performed at {datetime.now(timezone.utc).isoformat()}\n")
+
+    logger.info("=" * 60)
+    logger.info("ONE-TIME CLEANUP COMPLETE — Fresh start ready")
+    logger.info("=" * 60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _last_scans
     # Initialize PostgreSQL tables if DATABASE_URL is set
     init_db()
+    # One-time cleanup for fresh start (runs only once, uses sentinel file)
+    _one_time_cleanup()
     # (#34) Load cached scans on startup
     with _scans_lock:
         _last_scans = _load_scans_cache()

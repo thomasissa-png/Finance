@@ -250,6 +250,27 @@ class AgentTrader2(BaseAgent):
                 if ticker not in positions:
                     positions[ticker] = self._init_position(ticker, info)
 
+            # Force initial LONG positions on fresh start (all NEUTRAL = no data)
+            # Trend following needs a starting position to track from
+            all_neutral = all(
+                positions[t].get("direction") == "NEUTRAL"
+                for t in TREND_TICKERS
+            )
+            if all_neutral:
+                self.log("Fresh start detected — initializing all positions to LONG", {
+                    "tickers": list(TREND_TICKERS.keys()),
+                }, level="DECISION")
+                for ticker in TREND_TICKERS:
+                    pos = positions[ticker]
+                    price = pos.get("entry_price") or _fetch_current_price(ticker)
+                    pos["direction"] = "LONG"
+                    pos["entry_price"] = price
+                    pos["current_price"] = price
+                    pos["entry_time"] = datetime.now(timezone.utc).isoformat()
+                    pos["last_evaluation"] = datetime.now(timezone.utc).isoformat()
+                    pos["reasoning"] = "Position initiale LONG — départ fresh start"
+                    pos["confidence"] = 50
+
             # Filter relevant news for our 4 tickers
             all_scored = scored_news or []
             relevant_news = self._filter_relevant_news(all_scored)
