@@ -42,7 +42,7 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 ### Versions actuelles
 | Agent | Version | Dernier changement |
 |-------|---------|-------------------|
-| News | 7.6 | news_zone geographic tagging |
+| News | 7.7 | news_zone on EIA/USDA/SHFE sources |
 | Scoring | 7.4 | 9 fixes, token tracking |
 | Scoring 2 | 7.4 | Word-boundary regex for structural keywords |
 | Scoring 3 | 2.0 | Multi-timeframe, SMA 200, stochastic strategy, regime filter, configurable params |

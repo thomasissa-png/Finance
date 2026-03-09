@@ -147,6 +147,7 @@ def fetch_eia_data() -> list[NewsItem]:
                 published=published_dt,
                 related_tickers=tickers,
                 source_weight=SOURCE_WEIGHTS.get("EIA", 1.15),
+                news_zone="us",
             ))
 
         except Exception as exc:
@@ -1228,6 +1229,7 @@ def fetch_usda_crop_data() -> list[NewsItem]:
                 published=usda_published_dt,
                 related_tickers=q["tickers"],
                 source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+                news_zone="us",
             ))
 
         except Exception as exc:
@@ -2188,6 +2190,7 @@ def fetch_usda_wasde() -> list[NewsItem]:
                 published=wasde_published_dt,
                 related_tickers=q["tickers"],
                 source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+                news_zone="us",
             ))
 
         except Exception as exc:
@@ -2379,6 +2382,7 @@ def fetch_shfe_inventories() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=metal["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("SHFE", 1.1),
+                        news_zone="china",
                     ))
 
                 # Detect backwardation (near > far) = inventory tightness
@@ -2397,6 +2401,7 @@ def fetch_shfe_inventories() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=metal["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("SHFE", 1.1),
+                        news_zone="china",
                     ))
                 elif month_return < -5:
                     title = (
@@ -2411,6 +2416,7 @@ def fetch_shfe_inventories() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=metal["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("SHFE", 1.1),
+                        news_zone="china",
                     ))
 
             except Exception as exc:
@@ -3028,6 +3034,7 @@ def fetch_usda_export_sales() -> list[NewsItem]:
                                 published=datetime.now(timezone.utc),
                                 related_tickers=commodity["tickers"],
                                 source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+                                news_zone="us",
                             ))
                             break
     except Exception as exc:
