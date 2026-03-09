@@ -1255,6 +1255,35 @@ def build_performance_summary(max_recent: int = 15,
 
     # B3: Slippage — now handled above in E2/B3 journal-based block
 
+    # v7.8: Per-source performance tracking — alerts-only
+    # Uses TradeRecommendation.news_sources (list[str]) to measure which sources
+    # produce winning vs losing trades. Claude can then adjust signal_reliability.
+    source_stats: dict[str, dict] = {}
+    for t in closed:
+        for src in (t.news_sources or []):
+            if src not in source_stats:
+                source_stats[src] = {"wins": 0, "losses": 0, "expired": 0, "pnls": []}
+            if t.result == TradeResult.TP_HIT:
+                source_stats[src]["wins"] += 1
+            elif t.result == TradeResult.SL_HIT:
+                source_stats[src]["losses"] += 1
+            else:
+                source_stats[src]["expired"] += 1
+            if t.pnl_pct is not None:
+                source_stats[src]["pnls"].append(t.pnl_pct)
+
+    source_outliers = []
+    for src, ss in sorted(source_stats.items(), key=lambda x: x[1]["wins"] + x[1]["losses"] + x[1]["expired"], reverse=True):
+        total = ss["wins"] + ss["losses"] + ss["expired"]
+        if total >= 3:
+            wr = ss["wins"] / total * 100
+            avg = sum(ss["pnls"]) / len(ss["pnls"]) if ss["pnls"] else 0
+            if wr < 30 or wr > 75:
+                source_outliers.append(f"  {src}: WR={wr:.0f}%, PnL={avg:+.2f}%, n={total}")
+    if source_outliers:
+        parts.append("Outliers par source:")
+        parts.extend(source_outliers[:8])  # Top 8 outliers max
+
     # Recent trades (compact — last 10)
     # v5.1: Only include trades with verified PnL (prevent NULL data in Claude prompt)
     recent = sorted(closed, key=lambda t: t.timestamp, reverse=True)[:min(max_recent, 10)]
@@ -1286,6 +1315,8 @@ def build_performance_summary(max_recent: int = 15,
         "- Si EXPIRED rate est eleve → reduis expected_magnitude (les moves sont plus petits que prevu)",
         "- Si direction est faible → augmente le seuil de directional_clarity",
         "- Si une categorie a un WR bas → augmente market_awareness pour cette categorie",
+        "- Si une source a un WR bas → augmente signal_reliability seuil pour cette source (info moins fiable)",
+        "- Si une source a un WR eleve → cette source est en avance de phase, fais-lui confiance",
         "NE COMPENSE PAS l'historique dans le score — les multiplicateurs s'en chargent.",
         "--- FIN INSTRUCTIONS ---",
     ])
