@@ -44,6 +44,10 @@ class NewsItem(BaseModel):
     related_tickers: list[str] = Field(default_factory=list)
     source_weight: float = 0.75  # (#6) reliability weight of source
     description: str = ""  # RSS summary/description — gives Claude more context
+    # v7.6: Geographic zone origin — allows learning to distinguish e.g. France wheat vs Canada wheat
+    # Set by data sources that have geographic specificity (weather, NDVI, EONET).
+    # Format: lowercase slug e.g. "france_beauce", "canada_saskatchewan", "ivory_coast"
+    news_zone: str = ""
 
 
 class ChainReaction(BaseModel):
@@ -68,6 +72,7 @@ class ScoredNews(BaseModel):
     impacted_tickers: list[str] = Field(default_factory=list)
     reasoning: str = ""
     news_category: str = "other"
+    news_zone: str = ""  # v7.6: Geographic zone origin (propagated from NewsItem)
     category_score_mult: float = 1.0  # Edge-priority multiplier from config
     chain_reactions: list[ChainReaction] = Field(default_factory=list)
     convergence_count: int = 0  # v3.6: number of independent sources confirming signal
@@ -148,6 +153,7 @@ class TradeRecommendation(BaseModel):
     news_url: str = ""  # v5.1: Link to original article
     news_description: str = ""  # v5.1: RSS summary/description
     news_category: str = "other"  # Type of news: earnings, macro, geopolitical, etc.
+    news_zone: str = ""  # v7.6: Geographic zone origin (e.g. "france_beauce", "canada_saskatchewan")
     catalyst: str
     entry_price: float
     target_price: float
@@ -271,6 +277,7 @@ class JournalEntry(BaseModel):
     news_title: str
     news_source: str
     news_category: str = "other"  # Type of news event
+    news_zone: str = ""  # v7.6: Geographic zone origin for zone-specific learning
     reasoning: str
     score: float
     ticker: str

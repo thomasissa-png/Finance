@@ -734,6 +734,7 @@ def score_news_batch(
                 impacted_tickers=item.related_tickers or [],
                 reasoning=f"Pre-filtered: {zero_cat} headline — zero edge",
                 news_category=zero_cat, category_score_mult=cat_mult,
+                news_zone=item.news_zone,
             ))
             continue
 
@@ -775,6 +776,7 @@ def score_news_batch(
                 category_score_mult=cat_mult,
                 chain_reactions=chain_reactions,
                 convergence_count=cached.get("_convergence_count", 0),
+                news_zone=item.news_zone,
             ))
             continue
 
@@ -1027,6 +1029,7 @@ def _score_batch(
             category_score_mult=cat_mult,
             chain_reactions=chain_reactions,
             convergence_count=convergence_count,
+            news_zone=item.news_zone,
         ))
 
         # v5.0 C1: Cache POST-hard-cap values (not raw Claude output)

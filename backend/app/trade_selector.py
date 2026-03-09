@@ -676,9 +676,16 @@ def select_trades(
         # v4.2 A5: Average multipliers across ALL eligible tickers (not just first)
         ticker_mults = [ticker_adj.get(t, 1.0) for t in eligible_for_news]
         base_mult = sum(ticker_mults) / len(ticker_mults)
-        # v5.2: Cross-dimension newscat+ticker lookup, fallback to broad category
+        # v7.6: Cross-dimension lookup: zone+ticker > ticker > broad category > 1.0
         nc_mult = 1.0
         for _t in eligible_for_news:
+            # Try zone-specific first (most granular)
+            if sn.news_zone:
+                zone_key = f"{sn.news_category}+{sn.news_zone}+{_t}"
+                if zone_key in newscat_adj:
+                    nc_mult = newscat_adj[zone_key]
+                    break
+            # Then ticker-specific (v5.2)
             combo_key = f"{sn.news_category}+{_t}"
             if combo_key in newscat_adj:
                 nc_mult = newscat_adj[combo_key]
@@ -1056,6 +1063,7 @@ def select_trades(
             news_url=best_news.news.url or "",
             news_description=best_news.news.description or "",
             news_category=best_news.news_category,
+            news_zone=best_news.news_zone,
             catalyst=best_news.reasoning,
             entry_price=round(price, 4),
             target_price=target_price,

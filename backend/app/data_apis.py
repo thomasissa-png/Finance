@@ -515,6 +515,20 @@ AGRICULTURAL_ZONES: list[dict[str, Any]] = [
 ]
 
 
+def _zone_slug(zone_name: str) -> str:
+    """Convert a zone name to a lowercase slug for learning tracking.
+
+    E.g. "France Beauce (Wheat)" → "france_beauce"
+    The slug is used as learning key to distinguish signals by geographic origin.
+    """
+    import re
+    # Remove parenthetical suffixes like "(Wheat)", "(Copper)"
+    name = re.sub(r'\s*\(.*?\)', '', zone_name).strip()
+    # Replace non-alphanumeric with underscore, collapse multiples, lowercase
+    slug = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower()
+    return slug
+
+
 def _is_growing_season(zone: dict[str, Any]) -> bool:
     """Check if the current month is within the zone's growing season."""
     current_month = datetime.now(timezone.utc).month
@@ -602,6 +616,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                        news_zone=_zone_slug(zone["name"]),
                     ))
 
             # ── Check 2: Heat stress alert (only during growing season) ──
@@ -641,6 +656,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                        news_zone=_zone_slug(zone["name"]),
                     ))
 
                 # Alert 2b: Cumulative heat stress (3+ days above stress threshold during critical period)
@@ -661,6 +677,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),  # Cumulative stress during critical period
+                        news_zone=_zone_slug(zone["name"]),
                     ))
 
             # ── Check 3: Drought alert (zone-specific, critical-period-aware) ──
@@ -688,6 +705,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                             published=datetime.now(timezone.utc),
                             related_tickers=zone["tickers"],
                             source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                            news_zone=_zone_slug(zone["name"]),
                         ))
 
             # ── Check 4: Hurricane-force winds (always active for relevant zones) ──
@@ -706,6 +724,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                        news_zone=_zone_slug(zone["name"]),
                     ))
 
         except Exception as exc:
@@ -744,6 +763,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "hurricane tropical storm Gulf Mexico offshore oil",
         "tickers": ["CL=F", "NG=F"],
         "category": "weather",
+        "zone": "gulf_of_mexico",
     },
     # ── Geopolitical (consolidated into 1 query to free a slot for PGM) ──
     {
@@ -767,6 +787,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "Eskom load shedding platinum Nornickel sanctions palladium mine South Africa",
         "tickers": ["PL=F", "PA=F"],
         "category": "supply_chain",
+        "zone": "south_africa",
     },
     {
         "q": "Baltic dry index shipping freight rate",
@@ -809,11 +830,13 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "cocoa crop Ghana Ivory Coast disease swollen shoot drought",
         "tickers": ["CC=F"],
         "category": "commodity",
+        "zone": "west_africa",
     },
     {
         "q": "cotton crop drought Texas India monsoon export ban",
         "tickers": ["CT=F"],
         "category": "commodity",
+        "zone": "",
     },
     {
         "q": "orange juice citrus greening Florida freeze Brazil harvest",
@@ -826,6 +849,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F", "CC=F"],
         "category": "weather",
         "lang": "pt",
+        "zone": "brazil",
     },
     # ── v3.2: New queries for uncovered niches ──
     # Suez Canal disruption (replaces dead RSS feed — HTML page, not RSS)
@@ -833,24 +857,28 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "Suez Canal disruption blocked tanker transit delay",
         "tickers": ["CL=F", "BZ=F", "NG=F"],
         "category": "supply_chain",
+        "zone": "suez",
     },
     # China commodity demand (key driver for metals, agri, energy)
     {
         "q": "China commodity demand stimulus import surge slowdown",
         "tickers": ["HG=F", "CL=F", "ZS=F", "GC=F"],
         "category": "commodity",
+        "zone": "china",
     },
     # EU energy crisis (covers NG=F, TTE.PA via chain reaction)
     {
         "q": "Europe energy crisis gas shortage pipeline sabotage winter",
         "tickers": ["NG=F", "CL=F"],
         "category": "supply_chain",
+        "zone": "europe",
     },
     # Middle East tensions (oil + gold safe haven)
     {
         "q": "Iran Israel Houthi Red Sea attack tanker strike",
         "tickers": ["CL=F", "BZ=F", "GC=F"],
         "category": "geopolitical",
+        "zone": "middle_east",
     },
     # ── P1-6: Export ban queries (moves de 5-15% en 24h) ──
     # India rice export ban — India = 40% of global rice exports
@@ -858,36 +886,42 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "India rice export ban restriction wheat sugar",
         "tickers": ["ZW=F", "ZC=F", "SB=F"],
         "category": "commodity",
+        "zone": "india",
     },
     # Indonesia palm oil export ban — Indonesia = 55% of global palm oil
     {
         "q": "Indonesia palm oil export ban levy DMO biodiesel mandate",
         "tickers": ["ZS=F", "SB=F"],
         "category": "commodity",
+        "zone": "indonesia",
     },
     # Russia/Ukraine grain export ban/restriction
     {
         "q": "Russia wheat export ban quota Black Sea grain corridor Ukraine",
         "tickers": ["ZW=F", "ZC=F"],
         "category": "commodity",
+        "zone": "black_sea",
     },
     # ── P2-1: China demand signals (RSS-supplementing GNews queries) ──
     {
         "q": "China PMI Caixin manufacturing contraction expansion factory",
         "tickers": ["HG=F", "CL=F", "^GSPC"],
         "category": "macro",
+        "zone": "china",
     },
     # China central bank intervention
     {
         "q": "PBOC rate cut RRR reserve yuan devaluation stimulus",
         "tickers": ["AUDUSD=X", "HG=F", "GC=F"],
         "category": "central_bank_subtle",
+        "zone": "china",
     },
     # ── P3-3: Government gazette — regulatory/export bans ──
     {
         "q": "Argentina peso capital controls grain export tax soybean",
         "tickers": ["ZS=F", "ZW=F", "ZC=F"],
         "category": "regulatory",
+        "zone": "argentina",
     },
     # ── Team 2 audit: targeted queries for uncovered producers ──
     # Vietnam coffee — #1 robusta, harvest issues directly impact KC=F
@@ -895,30 +929,35 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "Vietnam coffee robusta harvest drought Central Highlands Dak Lak",
         "tickers": ["KC=F"],
         "category": "commodity",
+        "zone": "vietnam",
     },
     # DRC/Zambia copper — political instability, power shortage, mine disruption
     {
         "q": "Congo DRC copper mine Zambia power shortage cobalt Katanga",
         "tickers": ["HG=F"],
         "category": "supply_chain",
+        "zone": "drc_zambia",
     },
     # Chile copper — mine disruption, labor, water stress
     {
         "q": "Chile copper mine Codelco Escondida strike water BHP",
         "tickers": ["HG=F"],
         "category": "supply_chain",
+        "zone": "chile",
     },
     # Cameroon/Nigeria cocoa — #4-5 producers, disease, logistics
     {
         "q": "Cameroon Nigeria cocoa harvest black pod smuggling port",
         "tickers": ["CC=F"],
         "category": "commodity",
+        "zone": "cameroon_nigeria",
     },
     # Port Santos — largest coffee export port + Brazil ag exports
     {
         "q": "Santos port Brazil coffee congestion strike logistics export",
         "tickers": ["KC=F", "SB=F", "ZS=F"],
         "category": "supply_chain",
+        "zone": "brazil",
     },
     # Copper smelter / treatment charges — key supply signal
     {
@@ -1015,6 +1054,7 @@ def fetch_gnews_targeted() -> list[NewsItem]:
                     published=published,
                     related_tickers=query_cfg["tickers"],
                     source_weight=gnews_weight,
+                    news_zone=query_cfg.get("zone", ""),
                 ))
 
         except Exception as exc:
@@ -1738,16 +1778,16 @@ EONET_COMMODITY_REGIONS: list[dict[str, Any]] = [
 ]
 
 
-def _match_eonet_region(lat: float, lon: float) -> list[str] | None:
+def _match_eonet_region(lat: float, lon: float) -> tuple[list[str], str] | None:
     """Match EONET event coordinates to commodity-relevant regions.
 
-    Returns tickers for the matched region, or None if outside our coverage.
+    Returns (tickers, region_name) for the matched region, or None if outside our coverage.
     """
     for region in EONET_COMMODITY_REGIONS:
         lat_min, lat_max = region["lat_range"]
         lon_min, lon_max = region["lon_range"]
         if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
-            return region["tickers"]
+            return region["tickers"], region["name"]
     return None
 
 
@@ -1798,12 +1838,15 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
             geometry = event.get("geometry", [])
             location_str = ""
             region_tickers = None
+            region_name = ""
             if geometry:
                 coords = geometry[-1].get("coordinates", [])
                 if len(coords) >= 2:
                     lat, lon = coords[1], coords[0]
                     location_str = f" (lat {lat:.1f}, lon {lon:.1f})"
-                    region_tickers = _match_eonet_region(lat, lon)
+                    region_match = _match_eonet_region(lat, lon)
+                    if region_match:
+                        region_tickers, region_name = region_match
 
             # If we have coordinates and the event is NOT in a commodity-relevant region, skip it
             # (e.g., wildfire in Siberia doesn't impact our grains)
@@ -1834,6 +1877,7 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
                 published=eonet_published_dt,
                 related_tickers=list(set(final_tickers)),
                 source_weight=SOURCE_WEIGHTS.get("NASA EONET", 1.1),
+                news_zone=_zone_slug(region_name) if region_name else "",
             ))
 
     except Exception as exc:
@@ -1943,6 +1987,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                         published=agsi_published_dt,
                         related_tickers=["NG=F"],
                         source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),
+                        news_zone="europe",
                     ))
     except Exception as exc:
         logger.debug("GIE AGSI EU fetch error: %s", exc)
@@ -1984,6 +2029,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                     published=country_published_dt,
                     related_tickers=["NG=F"],
                     source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),  # Country-level stress
+                    news_zone=_zone_slug(country_name),
                 ))
         except Exception as exc:
             logger.debug("GIE AGSI %s fetch error: %s", country_code, exc)
@@ -2447,6 +2493,7 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
                                 published=rss_published_dt,
                                 related_tickers=info["tickers"],
                                 source_weight=SOURCE_WEIGHTS.get("WOAH", 1.15),
+                                news_zone=_zone_slug(entry.get("title", "")),
                             ))
                             break
             return items
@@ -2488,6 +2535,7 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
                         published=woah_published_dt,
                         related_tickers=info["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("WOAH", 1.15),
+                        news_zone=_zone_slug(country) if country else "",
                     ))
                     break
 
@@ -2597,6 +2645,7 @@ def fetch_satellite_ndvi() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("NASA POWER", 1.15),
+                        news_zone=_zone_slug(zone["name"]),
                     ))
 
                 # Heat + drought combo = severe
@@ -2613,6 +2662,7 @@ def fetch_satellite_ndvi() -> list[NewsItem]:
                         published=datetime.now(timezone.utc),
                         related_tickers=zone["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("NASA POWER", 1.2),
+                        news_zone=_zone_slug(zone["name"]),
                     ))
 
         except Exception as exc:
@@ -3014,19 +3064,19 @@ def fetch_plant_disease_alerts() -> list[NewsItem]:
     plant_diseases = [
         # Cocoa diseases
         {"query": "cocoa swollen shoot virus CSSV Ghana", "tickers": ["CC=F"],
-         "disease": "Swollen Shoot Virus", "severity": "CRITICAL"},
+         "disease": "Swollen Shoot Virus", "severity": "CRITICAL", "zone": "ghana"},
         {"query": "cocoa black pod phytophthora disease", "tickers": ["CC=F"],
-         "disease": "Black Pod Disease", "severity": "HIGH"},
+         "disease": "Black Pod Disease", "severity": "HIGH", "zone": "west_africa"},
         # Coffee diseases
         {"query": "coffee leaf rust roya hemileia", "tickers": ["KC=F"],
-         "disease": "Coffee Leaf Rust", "severity": "HIGH"},
+         "disease": "Coffee Leaf Rust", "severity": "HIGH", "zone": ""},
         {"query": "coffee berry disease CBD", "tickers": ["KC=F"],
-         "disease": "Coffee Berry Disease", "severity": "MODERATE"},
+         "disease": "Coffee Berry Disease", "severity": "MODERATE", "zone": ""},
         # Wheat diseases
         {"query": "wheat rust puccinia stem rust", "tickers": ["ZW=F"],
-         "disease": "Wheat Rust", "severity": "HIGH"},
+         "disease": "Wheat Rust", "severity": "HIGH", "zone": ""},
         {"query": "wheat fusarium head blight vomitoxin DON", "tickers": ["ZW=F"],
-         "disease": "Fusarium Head Blight", "severity": "MODERATE"},
+         "disease": "Fusarium Head Blight", "severity": "MODERATE", "zone": ""},
     ]
 
     import feedparser
@@ -3075,6 +3125,7 @@ def fetch_plant_disease_alerts() -> list[NewsItem]:
                     published=published_dt,
                     related_tickers=disease_cfg["tickers"],
                     source_weight=SOURCE_WEIGHTS.get("Plant Disease", 1.1),
+                    news_zone=disease_cfg.get("zone", ""),
                 ))
 
         except Exception as exc:
@@ -3097,37 +3148,37 @@ def fetch_plant_disease_alerts() -> list[NewsItem]:
 GOOGLE_NEWS_QUERIES: list[dict[str, Any]] = [
     # GASC Egypt wheat tenders — world's largest wheat importer
     {"q": "Egypt GASC wheat tender purchase import", "tickers": ["ZW=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": "egypt"},
     # CONAB Brazil crop estimates — most authoritative Brazil source
     {"q": "CONAB Brazil coffee crop estimate production safra", "tickers": ["KC=F", "SB=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": "brazil"},
     # ICCO cocoa grindings / market report
     {"q": "ICCO cocoa grindings quarterly report market review", "tickers": ["CC=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": ""},
     # ICO coffee export data / monthly report
     {"q": "ICO international coffee organization export report", "tickers": ["KC=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": ""},
     # LME copper warehouse stocks — direct supply signal
     {"q": "LME copper warehouse stocks certified inventory draw", "tickers": ["HG=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": ""},
     # ICE cocoa certified stocks / delivery notices
     {"q": "ICE cocoa certified stocks delivery notice warehouse", "tickers": ["CC=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": ""},
     # ICE coffee certified stocks
     {"q": "ICE coffee arabica certified stocks grainpro warehouse", "tickers": ["KC=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": ""},
     # China copper import customs data
     {"q": "China copper import customs unwrought monthly data", "tickers": ["HG=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": "china"},
     # SovEcon/IKAR Russian wheat estimates
     {"q": "SovEcon IKAR Russia wheat crop estimate export", "tickers": ["ZW=F"],
-     "category": "commodity"},
+     "category": "commodity", "zone": "russia"},
     # Harmattan / West Africa dry season (cocoa risk)
     {"q": "harmattan West Africa Ghana cocoa dry season wind", "tickers": ["CC=F"],
-     "category": "weather"},
+     "category": "weather", "zone": "west_africa"},
     # Abidjan San Pedro port — cocoa export logistics
     {"q": "Abidjan San Pedro port cocoa shipment export Ivory Coast", "tickers": ["CC=F"],
-     "category": "supply_chain"},
+     "category": "supply_chain", "zone": "ivory_coast"},
 ]
 
 
@@ -3191,6 +3242,7 @@ def fetch_google_news_rss() -> list[NewsItem]:
                     published=published_dt,
                     related_tickers=query_cfg["tickers"],
                     source_weight=gnews_weight,
+                    news_zone=query_cfg.get("zone", ""),
                 ))
 
         except Exception as exc:

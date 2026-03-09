@@ -258,6 +258,8 @@ def compute_trend_learning(entries: list[dict]) -> dict:
 
     # ── 2b. P7: Cross-dimension ticker×newscat ──
     cross_groups: dict[str, list[tuple[float, float]]] = {}
+    # v7.6: Zone-aware cross-dimension
+    zone_cross_groups: dict[str, list[tuple[float, float]]] = {}
     for e, w in zip(valid, weights):
         ticker = e.get("ticker", "")
         cats = e.get("news_categories", ["other"])
@@ -265,6 +267,19 @@ def compute_trend_learning(entries: list[dict]) -> dict:
         pnl = e.get("pnl_pct", 0)
         key = f"{primary_cat}+{ticker}"
         cross_groups.setdefault(key, []).append((pnl, w))
+        # v7.6: zone-aware — from news_zones stored on flip entry
+        zones = e.get("news_zones", [])
+        for zone in zones:
+            if zone:
+                zone_key = f"{primary_cat}+{zone}+{ticker}"
+                zone_cross_groups.setdefault(zone_key, []).append((pnl, w))
+
+    # v7.6: Zone+ticker combos (most granular) — min 3 trades
+    for key, pairs in zone_cross_groups.items():
+        if len(pairs) >= 3:
+            adj = _compute_adj(pairs)
+            if adj is not None:
+                result["newscat_ticker_adj"][key] = adj
 
     for key, pairs in cross_groups.items():
         # Need at least 3 samples for cross-dimension
@@ -354,7 +369,7 @@ class AgentLearning2(BaseAgent):
 
     name = "learning_2"
     description = "Learning & optimisation — trend commodities"
-    version = "7.2"  # v7.2: fix snapshot contamination, cache recalc tracking
+    version = "7.3"  # v7.3: zone-aware newscat cross-dimension
 
     def __init__(self):
         super().__init__()

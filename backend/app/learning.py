@@ -674,10 +674,14 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         if adj is not None:
             session_adj[scan_type] = adj
 
-    # ── v5.2: Per newscat+ticker cross-dimension (replaces broad newscat_adj) ──
-    # Fixes: weather+ZW=F failures no longer penalize weather+CC=F trades.
-    # Key format: "weather+ZW=F", looked up by caller with news_category+ticker.
-    # Falls back to broad newscat if no cross-dimension data exists for the combo.
+    # ── v7.6: Per newscat+zone+ticker cross-dimension ──
+    # Fixes: weather from France (ZW=F) failures no longer penalize weather from Canada (ZW=F).
+    # Key formats (lookup priority in trade_selector):
+    #   1. "weather+france_beauce+ZW=F" — most granular (zone-specific)
+    #   2. "weather+ZW=F" — ticker-specific (existing v5.2)
+    #   3. "weather" — broad category fallback
+    #   4. 1.0 — default (no data)
+    newscat_zone_ticker_weighted: dict[str, list[tuple[float, float]]] = {}
     newscat_ticker_weighted: dict[str, list[tuple[float, float]]] = {}
     newscat_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
@@ -686,8 +690,20 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
             combo_key = f"{t.news_category}+{t.ticker}"
             newscat_ticker_weighted.setdefault(combo_key, []).append((t.pnl_pct, w))
             newscat_weighted.setdefault(t.news_category, []).append((t.pnl_pct, w))
+            # v7.6: Zone-aware — only if trade has a zone
+            zone = t.news_zone or ""
+            if zone:
+                zone_key = f"{t.news_category}+{zone}+{t.ticker}"
+                newscat_zone_ticker_weighted.setdefault(zone_key, []).append((t.pnl_pct, w))
 
     newscat_adj: dict[str, float] = {}
+    # v7.6: Zone+ticker combos (most granular) — min 3 trades
+    for combo, entries in newscat_zone_ticker_weighted.items():
+        adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
+                                  bounds=(0.7, 1.3), min_significant=3,
+                                  t_threshold=1.5)
+        if adj is not None:
+            newscat_adj[combo] = adj
     # Cross-dimension combos (granular)
     for combo, entries in newscat_ticker_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
@@ -697,7 +713,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
             newscat_adj[combo] = adj
     # Broad category fallback — always computed so tickers without enough
     # cross-dimension data can still benefit from the pooled category signal.
-    # Lookup priority in trade_selector: cross-key > broad category > 1.0
+    # Lookup priority in trade_selector: zone+ticker > ticker > broad category > 1.0
     for ncat, entries in newscat_weighted.items():
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
                                   bounds=(0.7, 1.3), min_significant=5,

@@ -200,7 +200,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "7.3"  # v7.3: fix news double-counting, null price guard
+    version = "7.4"  # v7.4: zone-aware learning lookup, news_zone in flip records
 
     def __init__(self):
         super().__init__()
@@ -544,6 +544,12 @@ class AgentTrader2(BaseAgent):
             # Compute weighted newscat multiplier from contributing news
             newscat_mults = []
             for sn in news_list:
+                # v7.6: zone-aware lookup: zone+ticker > ticker > broad
+                if sn.news_zone:
+                    zone_key = f"{sn.news_category}+{sn.news_zone}+{ticker}"
+                    if zone_key in newscat_ticker_adj:
+                        newscat_mults.append(newscat_ticker_adj[zone_key])
+                        continue
                 cross_key = f"{sn.news_category}+{ticker}"
                 if cross_key in newscat_ticker_adj:
                     newscat_mults.append(newscat_ticker_adj[cross_key])
@@ -569,11 +575,19 @@ class AgentTrader2(BaseAgent):
 
                 # Apply learning 2 adjustments
                 weight *= ticker_adj.get(ticker, 1.0)
-                cross_key = f"{sn.news_category}+{ticker}"
-                if cross_key in newscat_ticker_adj:
-                    weight *= newscat_ticker_adj[cross_key]
-                else:
-                    weight *= newscat_adj.get(sn.news_category, 1.0)
+                # v7.6: zone-aware lookup
+                nc_applied = False
+                if sn.news_zone:
+                    zone_key = f"{sn.news_category}+{sn.news_zone}+{ticker}"
+                    if zone_key in newscat_ticker_adj:
+                        weight *= newscat_ticker_adj[zone_key]
+                        nc_applied = True
+                if not nc_applied:
+                    cross_key = f"{sn.news_category}+{ticker}"
+                    if cross_key in newscat_ticker_adj:
+                        weight *= newscat_ticker_adj[cross_key]
+                    else:
+                        weight *= newscat_adj.get(sn.news_category, 1.0)
 
                 if is_direct:
                     if sn.direction.value == "LONG":
@@ -600,6 +614,7 @@ class AgentTrader2(BaseAgent):
                 "score": round(sn.total_score, 1),
                 "direction": sn.direction.value,
                 "category": sn.news_category,
+                "zone": sn.news_zone or "",
                 "reliability": sn.signal_reliability,
                 "direct": is_direct,
                 "published": published_iso,
@@ -711,6 +726,9 @@ class AgentTrader2(BaseAgent):
                     "net": round(ticker_acc.get("long", 0) - ticker_acc.get("short", 0), 1),
                 }
 
+        # v7.6: Extract news zones from key news for zone-aware learning
+        news_zones = [n.get("zone", "") for n in key_news if n.get("zone")]
+
         # Record in history
         history_entry = {
             "time": datetime.now(timezone.utc).isoformat(),
@@ -724,6 +742,8 @@ class AgentTrader2(BaseAgent):
             "key_news": key_news[:5],
             # Store position entry_time for Journal 2 MAE/MFE
             "position_entry_time": position.get("entry_time"),
+            # v7.6: Primary zone for zone-aware learning
+            "news_zones": news_zones[:3],
         }
         # J2: Include trend scoring snapshot if available
         if trend_scoring_snapshot:

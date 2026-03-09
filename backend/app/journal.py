@@ -974,6 +974,7 @@ def run_daily_journal() -> list[dict]:
             news_title=trade.news_headline or trade.catalyst[:200],
             news_source=trade.news_sources[0] if trade.news_sources else "—",
             news_category=trade.news_category,
+            news_zone=trade.news_zone,
             reasoning=trade.catalyst,
             score=trade.confidence,
             ticker=trade.ticker,
