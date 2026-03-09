@@ -664,8 +664,8 @@ def init_db() -> None:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS tech_positions (
                     id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(30) NOT NULL,
-                    strategy VARCHAR(60) NOT NULL,
+                    ticker VARCHAR(30) NOT NULL UNIQUE,
+                    strategy VARCHAR(60) NOT NULL DEFAULT '',
                     data JSONB NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -674,6 +674,13 @@ def init_db() -> None:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tech_positions_ticker
                 ON tech_positions(ticker)
+            """)
+            # v8.1: Add UNIQUE constraint on ticker if missing (for ON CONFLICT)
+            cur.execute("""
+                DO $$ BEGIN
+                    ALTER TABLE tech_positions ADD CONSTRAINT tech_positions_ticker_key UNIQUE (ticker);
+                EXCEPTION WHEN duplicate_table OR duplicate_object THEN NULL;
+                END $$
             """)
 
             # v8.0: Tech journal entries for Agent Journal 3 (Équipe 3)
@@ -698,7 +705,7 @@ def init_db() -> None:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS meta_positions (
                     id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(30) NOT NULL,
+                    ticker VARCHAR(30) NOT NULL UNIQUE,
                     data JSONB NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -707,6 +714,13 @@ def init_db() -> None:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_meta_positions_ticker
                 ON meta_positions(ticker)
+            """)
+            # v8.1: Add UNIQUE constraint on ticker if missing (for ON CONFLICT)
+            cur.execute("""
+                DO $$ BEGIN
+                    ALTER TABLE meta_positions ADD CONSTRAINT meta_positions_ticker_key UNIQUE (ticker);
+                EXCEPTION WHEN duplicate_table OR duplicate_object THEN NULL;
+                END $$
             """)
 
             # v8.0: Meta journal entries for Agent Journal 4 (Équipe 4)
