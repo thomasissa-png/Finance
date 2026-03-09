@@ -1,13 +1,30 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 
 /**
- * P3.12: Admin page — exposes infrastructure endpoints:
- * - DB stats (table row counts, sizes)
- * - Infrastructure health check
- * - Manual maintenance trigger (VACUUM, pruning)
- * - Backtest replay trigger
- * - Price archive stats
+ * Réglages page — Theme toggle, API list, and infrastructure endpoints.
  */
+
+const API_LIST = [
+  { name: "Anthropic (Claude)", type: "key", env: "ANTHROPIC_API_KEY", desc: "Scoring des news via Claude Haiku" },
+  { name: "Twelve Data", type: "key", env: "TWELVE_DATA_API_KEY", desc: "Market data temps réel (800 crédits/jour)" },
+  { name: "EIA", type: "key", env: "EIA_API_KEY", desc: "Stocks pétrole/gaz/distillats US" },
+  { name: "GNews", type: "key", env: "GNEWS_API_KEY", desc: "Recherche news ciblée (100 req/jour)" },
+  { name: "USDA NASS", type: "key", env: "USDA_API_KEY", desc: "Crop progress, conditions, récoltes" },
+  { name: "GIE AGSI", type: "key", env: "GIE_AGSI_API_KEY", desc: "Stockage gaz européen" },
+  { name: "Open-Meteo", type: "free", desc: "Météo 16 zones agricoles critiques" },
+  { name: "yfinance", type: "free", desc: "Prix temps réel, options flow, fallback market data" },
+  { name: "CFTC COT", type: "free", desc: "Positionnement commerciaux vs spéculateurs" },
+  { name: "NASA EONET", type: "free", desc: "Événements naturels (tempêtes, feux, volcans)" },
+  { name: "NASA POWER", type: "free", desc: "Données satellite stress végétatif" },
+  { name: "WOAH/OIE", type: "free", desc: "Surveillance maladies animales mondiales" },
+  { name: "CME FedWatch", type: "free", desc: "Taux implicites Fed Funds futures (via yfinance)" },
+  { name: "SHFE/LME Proxy", type: "free", desc: "Proxy inventaires métaux (via yfinance)" },
+  { name: "Freight Index", type: "free", desc: "Baltic Dry Index via ETF BDRY" },
+  { name: "Chokepoint Monitor", type: "free", desc: "Proxy tankers pour disruptions maritimes" },
+  { name: "Dark Pool Signals", type: "free", desc: "Divergence volume/prix sur ETFs majeurs" },
+  { name: "Options Flow", type: "free", desc: "Put/call ratio, IV skew (via yfinance)" },
+  { name: "RSS Feeds (25)", type: "free", desc: "USDA, NOAA, NHC, FAO, gCaptain, ECB, Fed, BoE, Caixin..." },
+];
 
 function AdminPage({ isActive }) {
   const [dbStats, setDbStats] = useState(null);
@@ -16,6 +33,15 @@ function AdminPage({ isActive }) {
   const [priceArchiveStats, setPriceArchiveStats] = useState(null);
   const [loading, setLoading] = useState({});
   const [error, setError] = useState(null);
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("theme") || "dark"; } catch { return "dark"; }
+  });
+
+  // Apply theme on mount and change
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("theme", theme); } catch { /* */ }
+  }, [theme]);
 
   const fetchWithState = useCallback(async (key, url, setter, method = "GET") => {
     setLoading((prev) => ({ ...prev, [key]: true }));
@@ -38,15 +64,55 @@ function AdminPage({ isActive }) {
   return (
     <div>
       <div className="page-header">
-        <h2>Administration</h2>
-        <p className="page-subtitle">Infrastructure, base de données, maintenance</p>
+        <h2>Réglages</h2>
+        <p className="page-subtitle">Apparence, APIs, infrastructure, maintenance</p>
       </div>
 
       {error && <div className="disconnect-banner">{error}</div>}
 
-      {/* Action buttons */}
+      {/* Theme toggle */}
       <div className="section-card">
-        <h3>Actions</h3>
+        <h3>Apparence</h3>
+        <div style={{ marginTop: 12 }}>
+          <div className="theme-toggle">
+            <button
+              className={`theme-toggle-btn ${theme === "light" ? "active" : ""}`}
+              onClick={() => setTheme("light")}
+            >
+              Light
+            </button>
+            <button
+              className={`theme-toggle-btn ${theme === "dark" ? "active" : ""}`}
+              onClick={() => setTheme("dark")}
+            >
+              Dark
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* API list */}
+      <div className="section-card">
+        <h3>APIs utilisées</h3>
+        <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
+          {API_LIST.filter((a) => a.type === "key").length} APIs avec clé &middot; {API_LIST.filter((a) => a.type === "free").length} APIs gratuites
+        </p>
+        <div className="api-list">
+          {API_LIST.map((api) => (
+            <div className="api-item" key={api.name}>
+              <span className="api-item-name">{api.name}</span>
+              <span className={`api-item-type ${api.type}`}>
+                {api.type === "free" ? "GRATUIT" : api.env}
+              </span>
+              <span className="api-item-desc">{api.desc}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Infrastructure actions */}
+      <div className="section-card">
+        <h3>Infrastructure</h3>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
           <button
             className="trigger-btn"

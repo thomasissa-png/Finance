@@ -68,10 +68,10 @@ function getHeaderStatus() {
 const NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard" },
   { id: "equipes", label: "Équipes", matchIds: ["equipes", "team1", "team2", "team3", "team4"] },
-  { id: "news", label: "News" },
   { id: "performance", label: "Performance" },
-  { id: "auditor", label: "Audit" },
-  { id: "admin", label: "Admin" },
+  { id: "news", label: "Gestion des news" },
+  { id: "auditor", label: "Audit des agents" },
+  { id: "admin", label: "Réglages" },
 ];
 
 /* SVG bell icon — matches flat fintech style */
@@ -81,6 +81,14 @@ const BellIcon = () => (
     <path d="M13 6A5 5 0 0 0 3 6c0 3.5-1.5 5-1.5 5h13S13 9.5 13 6z" />
   </svg>
 );
+
+// Apply saved theme on load
+(() => {
+  try {
+    const t = localStorage.getItem("theme");
+    if (t) document.documentElement.setAttribute("data-theme", t);
+  } catch { /* */ }
+})();
 
 export default function App() {
   const [activePage, setActivePage] = useState(getPageFromHash);
