@@ -812,6 +812,7 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
 .agent-logs-empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
 .agent-loading { padding: 20px; text-align: center; color: var(--text-muted); font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .agent-error-banner { padding: 10px 16px; margin-bottom: 12px; background: var(--red-dim); border: 1px solid rgba(239,68,68,0.3); border-radius: var(--radius); font-size: 13px; color: var(--red); }
+.agent-success-banner { padding: 10px 16px; margin-bottom: 12px; background: var(--green-dim); border: 1px solid rgba(16,185,129,0.3); border-radius: var(--radius); font-size: 13px; color: var(--green); }
 
 /* ══════════════════════════════════════════════════════════════
    TOAST NOTIFICATIONS
@@ -1061,20 +1062,96 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
 
 .audit-trigger-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 
-.audit-score-circle {
+.audit-trigger-row {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+}
+
+.audit-trigger-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-primary); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all var(--transition);
+}
+.audit-trigger-btn:hover { background: var(--bg-card-hover); border-color: var(--accent); }
+.audit-trigger-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.score-circle, .audit-score-circle {
   width: 48px; height: 48px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-family: var(--font-mono); font-size: 16px; font-weight: 700;
   border: 3px solid var(--border); flex-shrink: 0;
 }
+.score-circle-label { font-size: 9px; font-weight: 400; color: var(--text-muted); }
 
 .audit-report-card {
-  background: var(--bg-surface); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 14px; margin-bottom: 8px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0; margin-bottom: 8px;
+  overflow: hidden;
 }
-.audit-report-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.audit-report-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px; cursor: pointer; transition: background var(--transition);
+}
+.audit-report-header:hover { background: var(--bg-card-hover); }
+.audit-report-meta { flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .audit-report-agent { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .audit-report-date { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+
+.audit-report-detail {
+  padding: 0 14px 14px; border-top: 1px solid var(--border);
+  animation: slideDown 0.2s ease-out;
+}
+
+.audit-section { margin-top: 14px; }
+.audit-section h4 {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.audit-section ul { list-style: none; padding: 0; }
+.audit-section li {
+  padding: 5px 0; font-size: 12px; color: var(--text-primary);
+  line-height: 1.5; border-bottom: 1px solid var(--border-light);
+}
+.audit-section li::before { content: "→ "; color: var(--accent); }
+
+.audit-checks-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 8px; margin-top: 8px;
+}
+.audit-check {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 10px; background: var(--bg-surface);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.audit-check-name {
+  font-size: 12px; color: var(--text-primary); font-weight: 500;
+  text-transform: capitalize; flex: 1;
+}
+.audit-check-status {
+  font-size: 10px; font-weight: 700; padding: 2px 8px;
+  border-radius: 3px; text-transform: uppercase; font-family: var(--font-mono);
+}
+.audit-check-status.pass, .audit-check-status.OK { background: var(--green-dim); color: var(--green); }
+.audit-check-status.fail, .audit-check-status.FAIL { background: var(--red-dim); color: var(--red); }
+.audit-check-status.warn, .audit-check-status.WARN { background: var(--yellow-dim); color: var(--yellow); }
+.audit-check-msg {
+  width: 100%; font-size: 11px; color: var(--text-muted);
+  line-height: 1.4; margin-top: 2px;
+}
+
+.audit-trend {
+  font-size: 11px; font-weight: 600; font-family: var(--font-mono);
+  padding: 2px 8px; border-radius: 3px;
+}
+.audit-trend.improving { background: var(--green-dim); color: var(--green); }
+.audit-trend.declining { background: var(--red-dim); color: var(--red); }
+.audit-trend.stable { background: var(--bg-surface); color: var(--text-muted); }
+
+.expand-icon {
+  font-size: 12px; color: var(--text-muted); min-width: 16px; text-align: center;
+}
+
 .audit-findings { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
 .audit-findings li { margin-bottom: 4px; }
 
@@ -1143,6 +1220,11 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
   .notif-panel { width: 100vw; }
   .toast-container { left: 12px; right: 12px; bottom: 12px; }
   .toast { max-width: none; }
+
+  .audit-trigger-row { gap: 6px; }
+  .audit-trigger-btn { padding: 6px 10px; font-size: 11px; }
+  .audit-checks-grid { grid-template-columns: 1fr; }
+  .score-circle, .audit-score-circle { width: 40px; height: 40px; font-size: 14px; }
 }
 
 /* ── Breakpoint: Small phone (480px) ────────────────────────── */

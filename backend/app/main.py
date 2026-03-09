@@ -1577,7 +1577,7 @@ def get_tech_positions():
     """Get current technical positions for Trader 3."""
     agent = get_agent("trader_3")
     if not agent:
-        return []
+        return {"active": [], "closed": []}
     return agent.get_positions()
 
 
@@ -1680,7 +1680,7 @@ def get_meta_positions():
     """Get current meta positions for Trader 4."""
     agent = get_agent("trader_4")
     if not agent:
-        return []
+        return {}
     return agent.get_positions()
 
 

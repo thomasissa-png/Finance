@@ -10,9 +10,9 @@ function CollectedNewsList({ items }) {
         {items.length} news collectées :
       </div>
       {items.map((n, i) => (
-        <div key={i} style={{ fontSize: 11, padding: "3px 0", color: "var(--text-secondary)", display: "flex", gap: 8 }}>
-          <span style={{ color: "var(--text-muted)", minWidth: 80, flexShrink: 0 }}>{n.source}</span>
-          <span>{n.title}</span>
+        <div key={i} style={{ fontSize: 11, padding: "4px 0", color: "var(--text-secondary)", display: "flex", gap: 8, alignItems: "baseline", borderBottom: "1px solid var(--border-light)" }}>
+          <span style={{ color: "var(--accent)", minWidth: 70, flexShrink: 0, fontFamily: "var(--font-mono)", fontSize: 10 }}>{n.source}</span>
+          <span style={{ flex: 1 }}>{n.title}</span>
         </div>
       ))}
     </div>
@@ -196,7 +196,7 @@ export default function NewsPage({ isActive }) {
         <div className="agent-logs compact-logs">
           {logs.length === 0 ? (
             <div className="agent-logs-empty">Aucun log</div>
-          ) : logs.slice(0, 20).map((log, i) => {
+          ) : [...logs].reverse().slice(0, 30).map((log, i) => {
             const hasNewsItems = log.details?.news_items && Array.isArray(log.details.news_items) && log.details.news_items.length > 0;
             const isExpanded = expandedLog === i;
             const isClickable = hasNewsItems;

@@ -964,9 +964,6 @@ function OverviewSection({ teamId, agents }) {
           <AgentStatusCard key={name} agent={agentMap[name]} />
         ))}
       </div>
-
-      {/* Logs for trader agent (most relevant) */}
-      <LogSection agentName={config.agents.trader} logFilter={logFilter} setLogFilter={setLogFilter} />
     </div>
   );
 }
