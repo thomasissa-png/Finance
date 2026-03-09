@@ -341,6 +341,91 @@ function TeamSummaryCards({ report, positions }) {
   );
 }
 
+function ResetSection({ addToast, onResetDone }) {
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const doReset = async () => {
+    setResetting(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/infrastructure/reset", { method: "POST" });
+      const data = await res.json();
+      setResult(data);
+      if (data.status === "ok") {
+        addToast("Reset complet ! Base de données réinitialisée.", "success");
+        setShowConfirm(false);
+        if (onResetDone) setTimeout(onResetDone, 500);
+      } else {
+        addToast("Reset partiel — voir les détails ci-dessous", "error");
+      }
+    } catch (err) {
+      addToast(`Reset échoué : ${err.message}`, "error");
+    }
+    setResetting(false);
+  };
+
+  return (
+    <div className="section-card" style={{ marginTop: 24, borderColor: "var(--red)", borderWidth: 1, borderStyle: "solid" }}>
+      <div className="section-header">
+        <span className="section-title" style={{ color: "var(--red)" }}>Zone dangereuse</span>
+      </div>
+      <div style={{ padding: "12px 16px" }}>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--text-secondary)" }}>
+          Réinitialise toutes les données : trades, journal, positions (Éq. 1-4), scan history, learning configs, logs agents.
+        </p>
+        {!showConfirm ? (
+          <button
+            className="trigger-btn"
+            style={{ background: "var(--red)", color: "#fff", border: "none" }}
+            onClick={() => setShowConfirm(true)}
+          >
+            Réinitialiser toutes les données
+          </button>
+        ) : (
+          <div style={{ background: "rgba(239,68,68,0.08)", borderRadius: 8, padding: 16 }}>
+            <p style={{ margin: "0 0 12px", fontWeight: 600, color: "var(--red)" }}>
+              Confirmer la réinitialisation complète ?
+            </p>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--text-secondary)" }}>
+              Cette action va SUPPRIMER toutes les données de trading (PG + JSON) pour les 4 équipes.
+              Les tables seront vidées, les fichiers JSON remis à zéro, les configs learning supprimées.
+              <strong> Cette action est irréversible.</strong>
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                className="trigger-btn"
+                style={{ background: "var(--red)", color: "#fff", border: "none", opacity: resetting ? 0.6 : 1 }}
+                onClick={doReset}
+                disabled={resetting}
+              >
+                {resetting ? "Réinitialisation en cours..." : "Oui, tout supprimer"}
+              </button>
+              <button
+                className="trigger-btn"
+                style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}
+                onClick={() => { setShowConfirm(false); setResult(null); }}
+                disabled={resetting}
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
+        )}
+        {result && (
+          <details style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)" }}>
+            <summary style={{ cursor: "pointer" }}>Détails du reset</summary>
+            <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, background: "var(--bg-secondary)", padding: 8, borderRadius: 6, maxHeight: 200, overflow: "auto" }}>
+              {JSON.stringify(result.results, null, 2)}
+            </pre>
+          </details>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage({ isActive, agents }) {
   const [scans, setScans] = useState({});
   const [loading, setLoading] = useState({});
@@ -602,6 +687,9 @@ export default function DashboardPage({ isActive, agents }) {
           return <TradeCard key={s.key} scan={scan} label={s.label} />;
         })}
       </div>
+
+      {/* Reset section */}
+      <ResetSection addToast={addToast} onResetDone={fetchAllData} />
 
       {/* Toasts */}
       {toasts.length > 0 && (

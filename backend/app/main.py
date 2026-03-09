@@ -672,30 +672,29 @@ def _one_time_cleanup() -> None:
     logger.info("=" * 60)
 
     data_dir = Path(os.getenv("DATA_DIR", "data"))
-    pg_ok = True
     json_ok = True
 
-    # 1. Clear PG tables (TRUNCATE is fastest, CASCADE handles FK)
+    # 1. Clear PG tables — per-table to avoid one missing table blocking everything
     if is_pg_enabled():
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    tables = [
-                        "trades", "journal_entries", "scan_history", "last_scans",
-                        "trend_positions", "trend_journal_entries",
-                        "tech_positions", "tech_journal_entries",
-                        "meta_positions", "meta_journal_entries",
-                        "agent_messages", "agent_logs", "audit_reports",
-                        "performance_data", "source_health",
-                    ]
-                    for table in tables:
-                        cur.execute(f"TRUNCATE TABLE {table} CASCADE")
-                        logger.info("  Truncated PG table: %s", table)
-                conn.commit()
-            logger.info("PG cleanup complete")
-        except Exception as exc:
-            pg_ok = False
-            logger.error("PG cleanup FAILED: %s", exc)
+        tables = [
+            "trades", "journal_entries", "scan_history", "last_scans",
+            "price_archive",
+            "trend_positions", "trend_journal_entries",
+            "tech_positions", "tech_journal_entries",
+            "meta_positions", "meta_journal_entries",
+            "agent_messages", "agent_logs", "audit_reports",
+            "performance_data", "source_health",
+        ]
+        for table in tables:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(f"TRUNCATE TABLE IF EXISTS {table} CASCADE")
+                    conn.commit()
+                logger.info("  Truncated PG table: %s", table)
+            except Exception as exc:
+                logger.warning("  Failed to truncate PG table %s: %s", table, exc)
+        logger.info("PG cleanup complete")
 
     # 2. Reset JSON files to empty state (always — agents fall back to JSON when PG pool exhausted)
     json_files_to_reset = [
@@ -728,9 +727,8 @@ def _one_time_cleanup() -> None:
             except Exception as exc:
                 logger.error("  Failed to delete learning config %s: %s", fname, exc)
 
-    # 4. Write sentinel ONLY if both PG and JSON cleanup succeeded
-    # If either failed, we must retry on next startup to ensure clean state
-    if pg_ok and json_ok:
+    # 4. Write sentinel ONLY if JSON cleanup succeeded
+    if json_ok:
         _CLEANUP_SENTINEL.parent.mkdir(parents=True, exist_ok=True)
         _CLEANUP_SENTINEL.write_text(f"Cleanup performed at {datetime.now(timezone.utc).isoformat()}\n")
         logger.info("=" * 60)
@@ -738,7 +736,7 @@ def _one_time_cleanup() -> None:
         logger.info("=" * 60)
     else:
         logger.warning("=" * 60)
-        logger.warning("ONE-TIME CLEANUP INCOMPLETE — pg_ok=%s json_ok=%s — will retry on next startup", pg_ok, json_ok)
+        logger.warning("ONE-TIME CLEANUP INCOMPLETE — json_ok=%s — will retry on next startup", json_ok)
         logger.warning("=" * 60)
 
 
@@ -1471,38 +1469,69 @@ def reset_all_data():
     """Reset ALL trading data for a fresh start.
 
     Truncates all PG tables and resets JSON fallback files.
-    Call this before testing the full multi-team architecture from scratch.
+    Removes cleanup sentinel so _one_time_cleanup won't block.
     """
-    from .database import pg_full_reset, is_pg_enabled
-    import json
-    from pathlib import Path
+    results: dict = {"pg_tables": {}, "json_files": {}, "learning_configs": {}}
 
-    results = {"pg": {}, "json": {}}
-
-    # 1. Reset PostgreSQL tables
+    # 1. PG tables — per-table, IF EXISTS to avoid crash on missing table
     if is_pg_enabled():
-        results["pg"] = pg_full_reset()
+        tables = [
+            "trades", "journal_entries", "scan_history", "last_scans",
+            "price_archive",
+            "trend_positions", "trend_journal_entries",
+            "tech_positions", "tech_journal_entries",
+            "meta_positions", "meta_journal_entries",
+            "agent_messages", "agent_logs", "audit_reports",
+            "performance_data", "source_health",
+        ]
+        for table in tables:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(f"TRUNCATE TABLE IF EXISTS {table} CASCADE")
+                    conn.commit()
+                results["pg_tables"][table] = "truncated"
+            except Exception as exc:
+                results["pg_tables"][table] = f"error: {exc}"
 
-    # 2. Reset JSON fallback files
+    # 2. JSON files
+    data_dir = Path(os.getenv("DATA_DIR", "data"))
     json_files = [
-        "data/trades.json", "data/journal.json",
-        "data/scan_history.json", "data/last_scans.json",
-        "data/audit_reports.json", "data/source_health.json",
-        "data/trend_positions.json", "data/trend_journal.json",
-        "data/tech_positions.json", "data/tech_journal_entries.json",
-        "data/meta_positions.json", "data/meta_journal_entries.json",
+        "trades.json", "journal.json", "scan_history.json", "last_scans.json",
+        "trend_positions.json", "trend_journal.json",
+        "tech_positions.json", "tech_journal.json",
+        "meta_positions.json", "meta_journal.json",
+        "audit_reports.json", "source_health.json",
     ]
-    for fpath in json_files:
+    for fname in json_files:
+        fpath = data_dir / fname
         try:
-            p = Path(fpath)
-            if p.exists():
-                p.write_text("[]")
-                results["json"][fpath] = "reset"
-            else:
-                results["json"][fpath] = "not_found"
+            empty = "{}" if "last_scans" in fname else "[]"
+            fpath.parent.mkdir(parents=True, exist_ok=True)
+            fpath.write_text(empty)
+            results["json_files"][fname] = "reset"
         except Exception as exc:
-            results["json"][fpath] = f"error: {exc}"
+            results["json_files"][fname] = f"error: {exc}"
 
+    # 3. Learning configs
+    for fname in ["learning3_config_history.json", "learning4_config_history.json",
+                   "learning3_weekly_config.json", "learning4_weekly_config.json"]:
+        fpath = data_dir / fname
+        try:
+            if fpath.exists():
+                fpath.unlink()
+                results["learning_configs"][fname] = "deleted"
+            else:
+                results["learning_configs"][fname] = "not_found"
+        except Exception as exc:
+            results["learning_configs"][fname] = f"error: {exc}"
+
+    # 4. Remove cleanup sentinel so next deploy won't skip
+    if _CLEANUP_SENTINEL.exists():
+        _CLEANUP_SENTINEL.unlink()
+        results["sentinel"] = "removed"
+
+    logger.info("MANUAL RESET via API — results: %s", results)
     return {"status": "ok", "results": results}
 
 
