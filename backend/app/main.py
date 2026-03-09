@@ -213,6 +213,12 @@ def _recover_pending_trades_on_startup() -> None:
                 logger.info(
                     "Startup recovery: journal created %d entries", len(new_entries),
                 )
+                # Invalidate learning cache so next scan uses fresh data
+                try:
+                    run_learning_update()
+                    logger.info("Startup recovery: learning update completed")
+                except Exception as exc:
+                    logger.warning("Startup recovery: learning update failed: %s", exc)
                 # Clear stale scan cache after recovery
                 with _scans_lock:
                     global _last_scans

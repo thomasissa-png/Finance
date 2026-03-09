@@ -156,6 +156,12 @@ class AgentJournal(BaseAgent):
                 self.log_decision("Startup recovery complete", {
                     "recovered": len(entries),
                 })
+            # Publish journal_complete so Learning is notified
+            self.publish("journal_complete", {
+                "trades_closed": len(entries),
+                "source": "startup_recovery",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
             self._set_status(AgentStatus.IDLE, f"Recovered {len(entries)} trades")
             return {"entries": entries, "diagnostic": {}}
         except Exception as exc:

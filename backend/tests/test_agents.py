@@ -2259,3 +2259,28 @@ class TestAuditorChecksOutsideExcept:
         """Auditor version should be 8.2 after fixes."""
         from backend.app.agents.agent_auditor import AgentAuditor
         assert AgentAuditor.version == "8.2"
+
+
+class TestStartupRecoveryLearning:
+    """MEDIUM: Startup recovery must trigger learning update."""
+
+    def test_startup_recovery_calls_learning_update(self):
+        """main.py startup recovery should call run_learning_update after journal."""
+        main_path = Path(__file__).resolve().parent.parent / "app" / "main.py"
+        source = main_path.read_text()
+        # Find the recovery function
+        recovery_start = source.find("_recover_pending_trades_on_startup")
+        recovery_end = source.find("\n    thread = threading.Thread", recovery_start)
+        recovery_source = source[recovery_start:recovery_end]
+        assert "run_learning_update" in recovery_source, \
+            "Startup recovery must call run_learning_update after closing pending trades"
+
+    def test_journal_recover_publishes_bus_event(self):
+        """agent_journal.py recover_pending should publish journal_complete."""
+        journal_path = Path(__file__).resolve().parent.parent / "app" / "agents" / "agent_journal.py"
+        source = journal_path.read_text()
+        method_start = source.find("def recover_pending")
+        method_end = source.find("\n    def ", method_start + 1)
+        method_source = source[method_start:method_end]
+        assert "journal_complete" in method_source, \
+            "recover_pending must publish journal_complete to message bus"
