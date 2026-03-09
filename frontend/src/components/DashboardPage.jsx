@@ -550,31 +550,54 @@ export default function DashboardPage({ isActive, agents }) {
         </div>
       </div>
 
-      {/* Global KPI Cards */}
-      {perf && (
-        <div className="kpi-row">
-          <KpiCard value={perf.total_trades || 0} label="Trades total" />
-          <KpiCard
-            value={`${(perf.win_rate || 0).toFixed(1)}%`}
-            label="Win rate (Éq. 1)"
-            color={(perf.win_rate || 0) >= 50 ? "var(--green)" : "var(--red)"}
-            sparkData={wrSpark}
-            sparkColor={(perf.win_rate || 0) >= 50 ? "#10B981" : "#EF4444"}
-          />
-          <KpiCard
-            value={perf.total_pnl_pct != null ? `${perf.total_pnl_pct > 0 ? "+" : ""}${perf.total_pnl_pct.toFixed(2)}%` : "--"}
-            label="P&L (Éq. 1)"
-            color={pnlColor(perf.total_pnl_pct)}
-            sparkData={pnlSpark}
-            sparkColor={(perf.total_pnl_pct || 0) >= 0 ? "#10B981" : "#EF4444"}
-          />
-          <KpiCard
-            value={totalOpen}
-            label="Positions ouvertes"
-            color={totalOpen > 0 ? "var(--accent)" : undefined}
-          />
-        </div>
-      )}
+      {/* Consolidated KPI Cards — all teams */}
+      {(() => {
+        const t1 = report?.trader_1 || {};
+        const t2 = report?.trader_2 || {};
+        const t3 = report?.trader_3 || {};
+        const t4 = report?.trader_4 || {};
+        // Aggregate trades count
+        const totalTrades = (t1.total_trades || 0) + (t2.total_flips || 0) + (t3.total_trades || 0) + (t4.total_trades || 0);
+        // Weighted win rate across teams with trades
+        const teamWrs = [
+          { wr: t1.win_rate, n: t1.total_trades || 0 },
+          { wr: t2.flip_win_rate, n: t2.total_flips || 0 },
+          { wr: t3.win_rate, n: t3.total_trades || 0 },
+          { wr: t4.win_rate, n: t4.total_trades || 0 },
+        ].filter((x) => x.wr != null && x.n > 0);
+        const totalN = teamWrs.reduce((s, x) => s + x.n, 0);
+        const consolidatedWr = totalN > 0
+          ? teamWrs.reduce((s, x) => s + x.wr * x.n, 0) / totalN
+          : (perf?.win_rate || 0);
+        // Sum P&L across teams
+        const totalPnl = (t1.total_pnl != null ? t1.total_pnl : (perf?.total_pnl_pct || 0))
+          + (t2.realized_pnl || 0) + (t3.pnl_total || 0) + (t4.pnl_total || 0);
+        const displayTrades = totalTrades || (perf?.total_trades || 0);
+        return (
+          <div className="kpi-row">
+            <KpiCard value={displayTrades} label="Trades total" />
+            <KpiCard
+              value={`${consolidatedWr.toFixed(1)}%`}
+              label="Win rate consolidé"
+              color={consolidatedWr >= 50 ? "var(--green)" : "var(--red)"}
+              sparkData={wrSpark}
+              sparkColor={consolidatedWr >= 50 ? "#10B981" : "#EF4444"}
+            />
+            <KpiCard
+              value={`${totalPnl > 0 ? "+" : ""}${totalPnl.toFixed(2)}%`}
+              label="P&L consolidé"
+              color={pnlColor(totalPnl)}
+              sparkData={pnlSpark}
+              sparkColor={totalPnl >= 0 ? "#10B981" : "#EF4444"}
+            />
+            <KpiCard
+              value={totalOpen}
+              label="Positions ouvertes"
+              color={totalOpen > 0 ? "var(--accent)" : undefined}
+            />
+          </div>
+        );
+      })()}
 
       {/* Per-team summary */}
       <TeamSummaryCards report={report} positions={positions} />
