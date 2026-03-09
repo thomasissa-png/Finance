@@ -1625,53 +1625,110 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
   color: #fff;
 }
 
-/* ── API List (Réglages) ─────────────────────────────────── */
+/* ── Admin / Réglages Page ────────────────────────────────── */
 
-.api-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 10px;
-}
+.admin-page .section-card + .section-card { margin-top: 16px; }
 
-.api-item {
+.admin-theme-section {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: 16px;
+  margin-top: 4px;
+}
+.admin-theme-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.admin-api-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.admin-api-header h3 { margin-bottom: 0; }
+.admin-api-counts { display: flex; gap: 8px; }
+.admin-api-count {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.admin-api-count.key { background: var(--yellow-dim); color: var(--yellow); }
+.admin-api-count.free { background: var(--green-dim); color: var(--green); }
+
+.admin-api-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.admin-api-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.admin-api-card {
+  padding: 10px 12px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color var(--transition);
 }
+.admin-api-card:hover { border-color: var(--border-light); }
 
-.api-item-name {
+.admin-api-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.admin-api-card-name {
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
-  min-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.api-item-type {
-  font-size: 11px;
-  padding: 2px 7px;
+.admin-api-badge {
+  font-size: 10px;
+  padding: 1px 6px;
   border-radius: 3px;
   font-family: var(--font-mono);
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
+.admin-api-badge.free { background: var(--green-dim); color: var(--green); }
+.admin-api-badge.key { background: var(--yellow-dim); color: var(--yellow); }
 
-.api-item-type.free {
-  background: var(--green-dim);
-  color: var(--green);
-}
-
-.api-item-type.key {
-  background: var(--yellow-dim);
-  color: var(--yellow);
-}
-
-.api-item-desc {
-  color: var(--text-muted);
+.admin-api-card-desc {
   font-size: 12px;
-  flex: 1;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.admin-infra-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+@media (max-width: 600px) {
+  .admin-api-grid { grid-template-columns: 1fr; }
+  .admin-api-header { flex-direction: column; align-items: flex-start; }
 }
 
 /* ── Dashboard: update status ── */

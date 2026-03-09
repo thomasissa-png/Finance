@@ -61,8 +61,11 @@ function AdminPage({ isActive }) {
 
   if (!isActive) return null;
 
+  const apiKeyed = API_LIST.filter((a) => a.type === "key");
+  const apiFree = API_LIST.filter((a) => a.type === "free");
+
   return (
-    <div>
+    <div className="admin-page">
       <div className="page-header">
         <h2>Réglages</h2>
         <p className="page-subtitle">Apparence, APIs, infrastructure, maintenance</p>
@@ -73,19 +76,20 @@ function AdminPage({ isActive }) {
       {/* Theme toggle */}
       <div className="section-card">
         <h3>Apparence</h3>
-        <div style={{ marginTop: 12 }}>
+        <div className="admin-theme-section">
+          <span className="admin-theme-label">Thème</span>
           <div className="theme-toggle">
             <button
               className={`theme-toggle-btn ${theme === "light" ? "active" : ""}`}
               onClick={() => setTheme("light")}
             >
-              Light
+              &#9788; Light
             </button>
             <button
               className={`theme-toggle-btn ${theme === "dark" ? "active" : ""}`}
               onClick={() => setTheme("dark")}
             >
-              Dark
+              &#9790; Dark
             </button>
           </div>
         </div>
@@ -93,18 +97,38 @@ function AdminPage({ isActive }) {
 
       {/* API list */}
       <div className="section-card">
-        <h3>APIs utilisées</h3>
-        <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 12 }}>
-          {API_LIST.filter((a) => a.type === "key").length} APIs avec clé &middot; {API_LIST.filter((a) => a.type === "free").length} APIs gratuites
-        </p>
-        <div className="api-list">
-          {API_LIST.map((api) => (
-            <div className="api-item" key={api.name}>
-              <span className="api-item-name">{api.name}</span>
-              <span className={`api-item-type ${api.type}`}>
-                {api.type === "free" ? "GRATUIT" : api.env}
-              </span>
-              <span className="api-item-desc">{api.desc}</span>
+        <div className="admin-api-header">
+          <h3>APIs utilisées</h3>
+          <span className="admin-api-counts">
+            <span className="admin-api-count key">{apiKeyed.length} avec clé</span>
+            <span className="admin-api-count free">{apiFree.length} gratuites</span>
+          </span>
+        </div>
+
+        {/* Keyed APIs */}
+        <div className="admin-api-group-label">Clé requise</div>
+        <div className="admin-api-grid">
+          {apiKeyed.map((api) => (
+            <div className="admin-api-card" key={api.name}>
+              <div className="admin-api-card-top">
+                <span className="admin-api-card-name">{api.name}</span>
+                <span className="admin-api-badge key">{api.env}</span>
+              </div>
+              <div className="admin-api-card-desc">{api.desc}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Free APIs */}
+        <div className="admin-api-group-label" style={{ marginTop: 16 }}>Gratuites</div>
+        <div className="admin-api-grid">
+          {apiFree.map((api) => (
+            <div className="admin-api-card" key={api.name}>
+              <div className="admin-api-card-top">
+                <span className="admin-api-card-name">{api.name}</span>
+                <span className="admin-api-badge free">GRATUIT</span>
+              </div>
+              <div className="admin-api-card-desc">{api.desc}</div>
             </div>
           ))}
         </div>
@@ -113,7 +137,7 @@ function AdminPage({ isActive }) {
       {/* Infrastructure actions */}
       <div className="section-card">
         <h3>Infrastructure</h3>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        <div className="admin-infra-actions">
           <button
             className="trigger-btn"
             disabled={loading.health}
