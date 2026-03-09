@@ -247,29 +247,37 @@ class AgentLogger:
             with self._lock:
                 self._memory_logs.append(entry)
 
-    def get_logs(self, limit: int = 50, level: str | None = None) -> list[dict]:
-        """Retrieve recent logs for this agent."""
+    def get_logs(self, limit: int = 50, level: str | None = None, since_hours: float | None = None) -> list[dict]:
+        """Retrieve recent logs for this agent.
+
+        Args:
+            limit: Max number of logs to return.
+            level: Filter by level(s). Supports comma-separated values (e.g. "WARN,ERROR").
+            since_hours: If set, only return logs from the last N hours.
+        """
+        levels = [l.strip() for l in level.split(",")] if level else []
         if self._use_pg():
             try:
                 from ..database import get_conn
                 with get_conn() as conn:
                     with conn.cursor() as cur:
-                        if level:
-                            cur.execute("""
-                                SELECT timestamp, level, action, details, duration_ms
-                                FROM agent_logs
-                                WHERE agent_name = %s AND level = %s
-                                ORDER BY timestamp DESC
-                                LIMIT %s
-                            """, (self.agent_name, level, limit))
-                        else:
-                            cur.execute("""
-                                SELECT timestamp, level, action, details, duration_ms
-                                FROM agent_logs
-                                WHERE agent_name = %s
-                                ORDER BY timestamp DESC
-                                LIMIT %s
-                            """, (self.agent_name, limit))
+                        conditions = ["agent_name = %s"]
+                        params: list = [self.agent_name]
+                        if levels:
+                            placeholders = ",".join(["%s"] * len(levels))
+                            conditions.append(f"level IN ({placeholders})")
+                            params.extend(levels)
+                        if since_hours is not None:
+                            conditions.append("timestamp >= NOW() - INTERVAL '%s hours'")
+                            params.append(since_hours)
+                        where = " AND ".join(conditions)
+                        cur.execute(f"""
+                            SELECT timestamp, level, action, details, duration_ms
+                            FROM agent_logs
+                            WHERE {where}
+                            ORDER BY timestamp DESC
+                            LIMIT %s
+                        """, (*params, limit))
                         rows = cur.fetchall()
                         return [
                             {
@@ -286,8 +294,13 @@ class AgentLogger:
 
         with self._lock:
             logs = list(self._memory_logs)
-            if level:
-                logs = [l for l in logs if l["level"] == level]
+            if levels:
+                logs = [l for l in logs if l["level"] in levels]
+            if since_hours is not None:
+                from datetime import datetime, timezone, timedelta
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+                cutoff_str = cutoff.isoformat()
+                logs = [l for l in logs if (l.get("timestamp", "") or "") >= cutoff_str]
             return logs[-limit:]
 
 

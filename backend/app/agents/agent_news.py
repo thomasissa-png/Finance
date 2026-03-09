@@ -119,11 +119,20 @@ class AgentNews(BaseAgent):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
+            # Include collected news headlines in the log for frontend display
+            news_summary = [
+                {
+                    "title": getattr(item, "title", "")[:120],
+                    "source": getattr(item, "source", ""),
+                }
+                for item in news_items[:50]
+            ]
             self.log_decision("News collection complete", {
                 "total": len(news_items),
                 "dedup_filtered": filtered,
                 "sources_ok": not bool(self._last_source_errors),
                 "duration_ms": duration_ms,
+                "news_items": news_summary,
             })
 
             self._set_status(AgentStatus.IDLE, f"Collected {len(news_items)} news")
@@ -167,7 +176,10 @@ class AgentNews(BaseAgent):
 
             self.log_decision("Event signal detected", {
                 "trigger_count": len(triggers),
-                "triggers": [t[:100] for t in triggers[:5]],
+                "triggers": [
+                    {"title": t.get("title", "")[:100], "categories": t.get("categories", [])}
+                    for t in triggers[:5]
+                ],
                 "scan_type": determine_scan_type(),
             })
 

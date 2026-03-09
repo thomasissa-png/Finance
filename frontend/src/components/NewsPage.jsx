@@ -2,6 +2,23 @@ import React, { useState, useEffect, useCallback } from "react";
 
 const LEVEL_ICONS = { INFO: "i", WARN: "!", ERROR: "x", DECISION: ">" };
 
+function CollectedNewsList({ items }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="collected-news-list" style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
+        {items.length} news collectées :
+      </div>
+      {items.map((n, i) => (
+        <div key={i} style={{ fontSize: 11, padding: "3px 0", color: "var(--text-secondary)", display: "flex", gap: 8 }}>
+          <span style={{ color: "var(--text-muted)", minWidth: 80, flexShrink: 0 }}>{n.source}</span>
+          <span>{n.title}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function HealthBar({ rate }) {
   const pct = Math.max(0, Math.min(100, (rate || 0) * 100));
   const color = pct >= 80 ? "var(--green)" : pct >= 50 ? "var(--yellow)" : "var(--red)";
@@ -19,6 +36,7 @@ export default function NewsPage({ isActive }) {
   const [logFilter, setLogFilter] = useState("ALL");
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
+  const [expandedLog, setExpandedLog] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -178,30 +196,42 @@ export default function NewsPage({ isActive }) {
         <div className="agent-logs compact-logs">
           {logs.length === 0 ? (
             <div className="agent-logs-empty">Aucun log</div>
-          ) : logs.slice(0, 20).map((log, i) => (
-            <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
-              <div className="agent-log-header">
-                <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
-                <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
-                  {log.action}
-                </span>
-                <span className="agent-log-time">
-                  {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-                </span>
-                {log.duration_ms != null && <span className="agent-log-duration">{log.duration_ms}ms</span>}
-              </div>
-              {log.details && Object.keys(log.details).length > 0 && (
-                <div className="agent-log-details">
-                  {Object.entries(log.details).slice(0, 4).map(([k, v]) => (
-                    <span key={k} className="agent-log-detail">
-                      <span className="agent-log-detail-key">{k}:</span>{" "}
-                      {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
-                    </span>
-                  ))}
+          ) : logs.slice(0, 20).map((log, i) => {
+            const hasNewsItems = log.details?.news_items && Array.isArray(log.details.news_items) && log.details.news_items.length > 0;
+            const isExpanded = expandedLog === i;
+            const isClickable = hasNewsItems;
+            return (
+              <div
+                key={`${log.timestamp}-${i}`}
+                className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}
+                onClick={isClickable ? () => setExpandedLog(isExpanded ? null : i) : undefined}
+                style={isClickable ? { cursor: "pointer" } : undefined}
+              >
+                <div className="agent-log-header">
+                  <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
+                  <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
+                    {log.action}
+                  </span>
+                  <span className="agent-log-time">
+                    {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
+                  </span>
+                  {log.duration_ms != null && <span className="agent-log-duration">{log.duration_ms}ms</span>}
+                  {hasNewsItems && <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 6 }}>{isExpanded ? "▲" : "▼"}</span>}
                 </div>
-              )}
-            </div>
-          ))}
+                {log.details && Object.keys(log.details).length > 0 && (
+                  <div className="agent-log-details">
+                    {Object.entries(log.details).filter(([k]) => k !== "news_items").slice(0, 4).map(([k, v]) => (
+                      <span key={k} className="agent-log-detail">
+                        <span className="agent-log-detail-key">{k}:</span>{" "}
+                        {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {isExpanded && hasNewsItems && <CollectedNewsList items={log.details.news_items} />}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

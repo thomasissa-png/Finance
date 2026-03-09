@@ -39,6 +39,7 @@ const TEAMS = [
 
 export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
   const [report, setReport] = useState(null);
+  const [activeTrades, setActiveTrades] = useState({});
 
   const fetchReport = useCallback(async () => {
     try {
@@ -47,13 +48,31 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
     } catch { /* */ }
   }, []);
 
+  const fetchActiveTrades = useCallback(async () => {
+    try {
+      const [t1, t2, t3, t4] = await Promise.all([
+        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/agents/trader_3/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/agents/trader_4/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+      ]);
+      const pending1 = Array.isArray(t1) ? t1.filter((t) => t.result === "PENDING") : [];
+      const active2 = Array.isArray(t2) ? t2.filter((t) => t.direction && t.direction !== "FLAT") : [];
+      const active3 = Array.isArray(t3?.positions || []) ? (t3.positions || []) : [];
+      const active4 = Array.isArray(t4?.positions || []) ? (t4.positions || []) : [];
+      setActiveTrades({ "1": pending1, "2": active2, "3": active3, "4": active4 });
+    } catch { /* */ }
+  }, []);
+
   useEffect(() => {
     fetchReport();
-    const id = setInterval(fetchReport, 120_000);
-    return () => clearInterval(id);
-  }, [fetchReport]);
+    fetchActiveTrades();
+    const id1 = setInterval(fetchReport, 120_000);
+    const id2 = setInterval(fetchActiveTrades, 30_000);
+    return () => { clearInterval(id1); clearInterval(id2); };
+  }, [fetchReport, fetchActiveTrades]);
 
-  useEffect(() => { if (isActive) fetchReport(); }, [isActive, fetchReport]);
+  useEffect(() => { if (isActive) { fetchReport(); fetchActiveTrades(); } }, [isActive, fetchReport, fetchActiveTrades]);
 
   const agentMap = useMemo(() => {
     const m = {};
@@ -162,7 +181,40 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
                   <span className="team-overview-kpi-value">{trades}</span>
                   <span className="team-overview-kpi-label">Trades</span>
                 </div>
+                <div className="team-overview-kpi">
+                  <span className="team-overview-kpi-value" style={{ color: (activeTrades[team.id] || []).length > 0 ? "var(--accent)" : "var(--text-muted)" }}>
+                    {(activeTrades[team.id] || []).length}
+                  </span>
+                  <span className="team-overview-kpi-label">En cours</span>
+                </div>
               </div>
+
+              {/* Active positions mini-list */}
+              {(activeTrades[team.id] || []).length > 0 && (
+                <div style={{ margin: "8px 0 4px", borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                  {(activeTrades[team.id] || []).slice(0, 4).map((t, ti) => (
+                    <div key={ti} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, padding: "2px 0", color: "var(--text-secondary)" }}>
+                      <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{t.ticker}</span>
+                      <span className={`direction-badge ${(t.direction || "").toLowerCase()}`} style={{ fontSize: 9, padding: "1px 6px" }}>{t.direction}</span>
+                      {t.pnl_pct != null && (
+                        <span style={{ color: pnlColor(t.pnl_pct), fontWeight: 600 }}>
+                          {t.pnl_pct > 0 ? "+" : ""}{t.pnl_pct.toFixed(2)}%
+                        </span>
+                      )}
+                      {t.unrealized_pnl != null && (
+                        <span style={{ color: pnlColor(t.unrealized_pnl), fontWeight: 600 }}>
+                          {t.unrealized_pnl > 0 ? "+" : ""}{t.unrealized_pnl.toFixed(2)}%
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                  {(activeTrades[team.id] || []).length > 4 && (
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", textAlign: "center", marginTop: 4 }}>
+                      +{(activeTrades[team.id] || []).length - 4} autres positions
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="team-overview-agents">
                 {team.agents.map((name) => {

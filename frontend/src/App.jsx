@@ -113,7 +113,7 @@ export default function App() {
     const knownAgents = (agents || []).map((a) => a.name).filter(Boolean);
     if (knownAgents.length === 0) return;
     const requests = knownAgents.map((name) =>
-      fetch(`/api/agents/${name}/logs?limit=15&level=WARN,ERROR`)
+      fetch(`/api/agents/${name}/logs?limit=15&level=WARN,ERROR&since_hours=48`)
         .then((r) => r.ok ? r.json() : [])
         .then((logs) => (Array.isArray(logs) ? logs.map((l) => ({ ...l, agent: name })) : []))
         .catch(() => [])

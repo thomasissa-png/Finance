@@ -309,6 +309,17 @@ def _run_scheduled_scan(scan_key: str) -> None:
     Solution: spawn a daemon thread and return immediately. The scheduler
     thread stays free, health checks keep responding, Replit stays happy.
     """
+    # Night guard: never run scans outside trading hours (7h-20h CET)
+    # Protects against APScheduler misfire edge cases on Replit restarts
+    now_paris = datetime.now(PARIS_TZ)
+    if now_paris.hour < 7 or now_paris.hour >= 20:
+        logger.warning("Scheduled scan '%s' blocked — outside trading hours (%02d:%02d CET)",
+                        scan_key, now_paris.hour, now_paris.minute)
+        return
+    if now_paris.weekday() >= 5:  # Saturday=5, Sunday=6
+        logger.warning("Scheduled scan '%s' blocked — weekend", scan_key)
+        return
+
     def _scan_worker():
         with _running_scans_lock:
             if scan_key in _running_scans:
@@ -688,7 +699,7 @@ async def lifespan(app: FastAPI):
     # v2.0: Team 4 weekly strategy config — Sunday 20:45 CET (after Team 3, before Monday)
     bg_scheduler.add_job(_run_team4_weekly_config, CronTrigger(hour=20, minute=45, day_of_week="sun", timezone="Europe/Paris"), id="team4_weekly_config", misfire_grace_time=3600)
     # v7.5: Infrastructure health check every 15 min, maintenance daily at 23h, report weekly Sun 21h
-    bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
+    bg_scheduler.add_job(_run_infra_health_check, CronTrigger(minute="*/15", hour="7-22", day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_health_check", misfire_grace_time=60)
     bg_scheduler.add_job(_run_infra_maintenance, CronTrigger(hour=23, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="infra_maintenance", misfire_grace_time=3600)
     bg_scheduler.add_job(_run_infra_report, CronTrigger(hour=21, minute=0, day_of_week="sun", timezone="Europe/Paris"), id="infra_report", misfire_grace_time=3600)
     # v8.0: Performance agent — hourly snapshot, daily report 22h30, weekly trends Sun 21h30
@@ -1265,15 +1276,20 @@ def list_agents():
 
 
 @app.get("/api/agents/{agent_name}/logs")
-def agent_logs(agent_name: str, limit: int = 50, level: str | None = None):
-    """Get structured logs for a specific agent."""
+def agent_logs(agent_name: str, limit: int = 50, level: str | None = None, since_hours: float | None = None):
+    """Get structured logs for a specific agent.
+
+    Args:
+        level: Filter by level(s), comma-separated (e.g. "WARN,ERROR").
+        since_hours: Only return logs from the last N hours.
+    """
     agent = get_agent(agent_name)
     if not agent:
         # UX agent is virtual — no logs
         if agent_name == "ux":
             return []
         raise HTTPException(404, f"Agent '{agent_name}' not found")
-    return agent.logger.get_logs(limit=limit, level=level)
+    return agent.logger.get_logs(limit=limit, level=level, since_hours=since_hours)
 
 
 @app.get("/api/agents/{agent_name}/status")
