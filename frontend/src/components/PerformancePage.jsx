@@ -29,12 +29,6 @@ export default function PerformancePage({ isActive, agents }) {
 
   useEffect(() => { if (isActive) fetchData(); }, [isActive, fetchData]);
 
-  const agentMap = useMemo(() => {
-    const m = {};
-    (agents || []).forEach((a) => { m[a.name] = a; });
-    return m;
-  }, [agents]);
-
   const workingCount = (agents || []).filter((a) => a.status === "working").length;
   const errorCount = (agents || []).filter((a) => a.status === "error").length;
 
@@ -207,32 +201,6 @@ export default function PerformancePage({ isActive, agents }) {
               {report?.trader_4?.total_trades || 0} trades | Objectif 80% WR
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Agent status overview */}
-      <div className="section-card">
-        <h3>Statut des agents ({(agents || []).length})</h3>
-        <div className="agent-cards-row">
-          {(agents || []).map((agent) => {
-            const statusColor = agent.status === "working" ? "var(--accent)" : agent.status === "error" ? "var(--red)" : "var(--text-muted)";
-            return (
-              <div key={agent.name} className="agent-mini-card">
-                <div className="agent-mini-card-header">
-                  <span className="agent-mini-name">
-                    {agent.name?.replace(/_/g, " ")}
-                    {agent.version && <span className="agent-mini-version">v{agent.version}</span>}
-                  </span>
-                  <span className="agent-mini-status" style={{ backgroundColor: statusColor }} />
-                </div>
-                {agent.last_action && (
-                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
-                    {agent.last_action.slice(0, 50)}
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
       </div>
 
