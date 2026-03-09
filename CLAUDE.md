@@ -44,23 +44,23 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 |-------|---------|-------------------|
 | News | 7.5 | 10 news pipeline fixes |
 | Scoring | 7.4 | 9 fixes, token tracking |
-| Scoring 2 | 7.3 | 13 fixes, category mults |
+| Scoring 2 | 7.4 | Word-boundary regex for structural keywords |
 | Scoring 3 | 2.0 | Multi-timeframe, SMA 200, stochastic strategy, regime filter, configurable params |
 | Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
 | Trader 1 | 6.5 | Timeout audit, trailing stop |
-| Trader 2 | 7.2 | 16 fixes, flip history |
+| Trader 2 | 7.3 | News dedup set-based, null price guard in _make_change |
 | Trader 3 | 2.0 | Correlation check, trailing per-strategy, regime filter, agent_versions, weekly config |
-| Trader 4 | 2.0 | TP/SL/trailing, correlation groups, agent_versions, 72h hold, activation date |
+| Trader 4 | 2.1 | Always-save after monitor, stale stop_price fix |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
-| Journal 2 | 7.1 | 17 fixes, daily bars |
-| Journal 3 | 2.0 | PG fix, weekly summary, R/R réalisé, Sharpe ratio, dedup fix |
-| Journal 4 | 2.0 | Weekly summary, Sharpe per combo, duration category, close_type tracking |
+| Journal 2 | 7.2 | Atomic single-write (PG vs JSON branch), no triple write |
+| Journal 3 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
+| Journal 4 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
 | Learning 1 | 5.2 | 6 dims, granular commodities |
-| Learning 2 | 7.1 | 4 dims trend, churning |
-| Learning 3 | 2.0 | Weekly config generation, Sharpe ranking, AB-test as dimension, param tracking |
-| Learning 4 | 2.0 | 5 dims, weekly config, AB testing, target 80% WR, duration learning |
+| Learning 2 | 7.2 | Snapshot contamination filter, recalculation tracking on cache miss |
+| Learning 3 | 2.1 | Weekly config disk persistence (survives restart) |
+| Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
 | Infrastructure | 7.5 | Health check, VACUUM 9 tables |
-| Performance | 8.1 | PG persistence, version-aware, Teams 3/4 KPIs |
+| Performance | 8.3 | Cascade-safe daily report (individual try/except per KPI section) |
 | Auditor | 8.1 | Dict dispatch, 22 profiles (Teams 3/4 added) |
 
 ## Architecture v7.0 — Multi-Agent par Équipes
@@ -555,6 +555,23 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **AuditorPage** : trigger audit par agent, rapports (score /10 circle, tendances improving/declining, constats, améliorations, détail checks), logs agent
 - **NotificationCenter** : panneau slide-in (overlay + animation), alertes WARN/ERROR de tous les agents, filtres agent/niveau, clic → navigation vers page agent
 - **CSS** : ~500 lignes ajoutées (KPI cards, section cards, compact tables, learning grid, scoring dimension bars, health bars, notification panel, audit report cards, score circles, mobile responsive)
+
+#### 24. Infrastructure Audit v8.3 — 15 fixes across 12 agents
+- **CRITICAL P1** : `agent_trader_4.py` — `run_position_monitor()` always saves positions (trailing stop updates on open positions were lost between cycles)
+- **CRITICAL P2** : `agent_trader_4.py` — `_check_tp_sl_trailing()` used stale `stop_price` capture before trailing update; now reads `pos.get("stop_price")` AFTER trailing adjusts it
+- **CRITICAL P3** : `agent_journal_2.py` — triple write (new → all → snapshots) replaced with single atomic write branching on `is_pg_enabled()`
+- **CRITICAL P4** : `agent_journal_3.py` — double write replaced with single atomic write (PG vs JSON branch)
+- **CRITICAL P5** : `agent_journal_4.py` — same pattern as Journal 3, single atomic write with try/except fallback
+- **HIGH P6** : `agent_trader_2.py` — news double-counting (direct + chain_reactions) fixed with set-based dedup
+- **HIGH P7** : `agent_trader_2.py` — `_make_change()` null price guard, returns `None` instead of crash
+- **HIGH P8** : `agent_learning_2.py` — snapshot entries (`entry_type == "snapshot"`) filtered out of learning data in both `run()` and `get_adjustments()`
+- **HIGH P9** : `agent_learning_2.py` — `get_adjustments()` now updates `_total_recalculations` and `_last_run_time` on cache miss
+- **HIGH P10** : `agent_learning_3.py` — weekly config now persisted to disk (`data/learning3_weekly_config.json`), survives restart
+- **HIGH P11** : `agent_learning_4.py` — same disk persistence pattern for weekly config
+- **HIGH P12** : `agent_performance.py` — daily report uses individual try/except per KPI section (one failure no longer aborts all)
+- **MEDIUM P13** : `agent_scoring_2.py` — word-boundary regex for structural keywords (was substring match: "ban" matched "banana")
+- **MEDIUM P14** : `main.py` — dead import `invalidate_learning_2_cache` removed
+- **25+ tests** added in `test_agents.py` covering all fixes
 
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
