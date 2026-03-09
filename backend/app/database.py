@@ -154,11 +154,36 @@ def get_conn():
     M1: Conditional pre-ping — only pings if connection idle > 300s.
     M5: Logs query duration for slow query detection.
     H5: Retries on transient PG errors with exponential backoff.
+    P1 (v7.7): Retry on PoolError with backoff — handles startup thundering herd.
     Auto-commits on success, rolls back on exception.
     """
     global _last_conn_use
     pool = _get_pool()
-    conn = pool.getconn()
+
+    # P1 (v7.7): Retry getconn() with backoff on pool exhaustion
+    # At startup, 13+ agents can simultaneously request connections,
+    # exhausting the pool before any connection is returned.
+    conn = None
+    _POOL_RETRY_BACKOFF = [0.5, 1.0, 2.0, 4.0]
+    for attempt in range(len(_POOL_RETRY_BACKOFF) + 1):
+        try:
+            conn = pool.getconn()
+            break
+        except Exception as exc:
+            exc_name = type(exc).__name__
+            is_pool_error = "PoolError" in exc_name or "pool" in str(exc).lower()
+            if is_pool_error and attempt < len(_POOL_RETRY_BACKOFF):
+                wait = _POOL_RETRY_BACKOFF[attempt]
+                logger.warning(
+                    "PG pool exhausted (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1, len(_POOL_RETRY_BACKOFF), wait, exc,
+                )
+                time.sleep(wait)
+                continue
+            raise  # Non-pool error or all retries exhausted
+    if conn is None:
+        raise RuntimeError("Failed to acquire PG connection after retries")
+
     start_time = time.monotonic()
     try:
         # M1: Pre-ping if connection has been idle — detect dead connections

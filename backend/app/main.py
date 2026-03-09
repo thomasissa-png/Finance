@@ -664,6 +664,7 @@ def _one_time_cleanup() -> None:
     from both PG and JSON. Uses a sentinel file so it only runs once.
     """
     if _CLEANUP_SENTINEL.exists():
+        logger.info("One-time cleanup: sentinel found (%s), skipping", _CLEANUP_SENTINEL.name)
         return
 
     logger.info("=" * 60)
