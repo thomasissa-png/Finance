@@ -654,7 +654,7 @@ def _run_infra_report() -> None:
     thread.start()
 
 
-_CLEANUP_SENTINEL = Path(os.getenv("DATA_DIR", "data")) / ".cleanup_done_2026_03_09"
+_CLEANUP_SENTINEL = Path(os.getenv("DATA_DIR", "data")) / ".cleanup_done_2026_03_09b"
 
 
 def _one_time_cleanup() -> None:
