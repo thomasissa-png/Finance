@@ -62,7 +62,7 @@ _pool = None
 
 # M1: Track last connection use time for conditional pre-ping
 _last_conn_use: float = 0.0
-_PRE_PING_IDLE_THRESHOLD = 300.0  # 5 minutes — only pre-ping if idle longer than this
+_PRE_PING_IDLE_THRESHOLD = 60.0  # 1 minute — reduced from 300s to catch stale connections faster
 
 # M6: Guard against repeated auto-migration attempts
 _migration_attempted: dict[str, bool] = {}
@@ -114,14 +114,22 @@ def _get_pool():
         # H4: Append statement_timeout to DSN options
         dsn = DATABASE_URL
         options = f"-c statement_timeout={_STATEMENT_TIMEOUT_S * 1000}"
+        # TCP keepalive: detect dead connections before they cause errors
+        # keepalives_idle=60: start probing after 60s idle
+        # keepalives_interval=15: probe every 15s
+        # keepalives_count=4: give up after 4 failed probes (total ~2min)
         _pool = psycopg2.pool.ThreadedConnectionPool(
             minconn=_PG_POOL_MIN,
             maxconn=_PG_POOL_MAX,
             dsn=dsn,
             options=options,
+            keepalives=1,
+            keepalives_idle=60,
+            keepalives_interval=15,
+            keepalives_count=4,
         )
         logger.info(
-            "PostgreSQL connection pool created (min=%d, max=%d, statement_timeout=%ds)",
+            "PostgreSQL connection pool created (min=%d, max=%d, statement_timeout=%ds, keepalive=60s)",
             _PG_POOL_MIN, _PG_POOL_MAX, _STATEMENT_TIMEOUT_S,
         )
     return _pool
@@ -153,11 +161,14 @@ def get_conn():
     conn = pool.getconn()
     start_time = time.monotonic()
     try:
-        # M1: Only pre-ping if connection has been idle for a while
+        # M1: Pre-ping if connection has been idle — detect dead connections
         now = time.monotonic()
-        if (now - _last_conn_use) > _PRE_PING_IDLE_THRESHOLD:
+        if (now - _last_conn_use) > _PRE_PING_IDLE_THRESHOLD or conn.closed:
             try:
+                if conn.closed:
+                    raise Exception("connection already closed")
                 conn.cursor().execute("SELECT 1")
+                conn.rollback()  # Don't leave the pre-ping in a transaction
             except Exception:
                 logger.warning("Stale PG connection detected (idle %.0fs), replacing",
                                now - _last_conn_use)
@@ -170,15 +181,22 @@ def get_conn():
         yield conn
         conn.commit()
         _last_conn_use = time.monotonic()
-    except Exception:
-        conn.rollback()
+    except Exception as exc:
+        # Handle "connection already closed" — rollback would also fail
+        try:
+            conn.rollback()
+        except Exception:
+            logger.warning("Rollback failed (connection may be dead): %s", exc)
         raise
     finally:
         elapsed = time.monotonic() - start_time
         # M5: Log slow queries (>2s)
         if elapsed > 2.0:
             logger.warning("Slow PG operation: %.2fs", elapsed)
-        pool.putconn(conn)
+        try:
+            pool.putconn(conn)
+        except Exception:
+            pass  # Connection already closed — pool will create a new one
 
 
 def _pg_retry(func, *args, **kwargs):
@@ -698,6 +716,10 @@ def init_db() -> None:
                     ALTER TABLE tech_positions ADD CONSTRAINT tech_positions_ticker_key UNIQUE (ticker);
                 EXCEPTION WHEN duplicate_table OR duplicate_object THEN NULL;
                 END $$
+            """)
+            # v8.2: Fix NULL strategy rows (migration for tables created before DEFAULT '')
+            cur.execute("""
+                UPDATE tech_positions SET strategy = '' WHERE strategy IS NULL
             """)
 
             # v8.0: Tech journal entries for Agent Journal 3 (Équipe 3)

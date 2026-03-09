@@ -155,14 +155,14 @@ def _pg_save_positions(positions: dict):
     """Save positions to PostgreSQL (single row with full state)."""
     try:
         from ..database import get_conn
+        data_json = json.dumps(positions, default=str)
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO tech_positions (ticker, data, updated_at)
-                    VALUES ('_state_', %s, NOW())
+                    INSERT INTO tech_positions (ticker, strategy, data, updated_at)
+                    VALUES ('_state_', '', %s, NOW())
                     ON CONFLICT (ticker) DO UPDATE SET data = %s, updated_at = NOW()
-                """, (json.dumps(positions, default=str),
-                      json.dumps(positions, default=str)))
+                """, (data_json, data_json))
     except Exception as exc:
         logger.warning("PG save tech_positions failed: %s — fallback JSON", exc)
         _ensure_positions_file()

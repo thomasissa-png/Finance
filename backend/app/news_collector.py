@@ -140,7 +140,7 @@ def collect_yfinance_news() -> list[NewsItem]:
 
     items: list[NewsItem] = []
     start = time.monotonic()
-    timeout_secs = 45
+    timeout_secs = 75  # Increased from 45s — sequential 15 tickers need more time
     completed = 0
 
     # Build a lookup for asset metadata
@@ -252,27 +252,25 @@ def collect_rss_news() -> list[NewsItem]:
     """Fetch news from configured RSS feeds in parallel."""
     items: list[NewsItem] = []
 
-    executor = ThreadPoolExecutor(max_workers=3)
+    executor = ThreadPoolExecutor(max_workers=5)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
     completed_count = 0
     try:
-        for future in as_completed(futures, timeout=45):
+        for future in as_completed(futures, timeout=60):
             url = futures[future]
             try:
-                result = future.result(timeout=20)
+                result = future.result(timeout=25)
                 items.extend(result)
                 completed_count += 1
             except TimeoutError:
-                logger.warning("RSS feed TIMEOUT (20s) for %s", url)
+                logger.warning("RSS feed TIMEOUT (25s) for %s", url)
             except Exception as exc:
                 logger.warning("RSS feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("RSS collection global TIMEOUT (45s), %d/%d feeds completed",
+        logger.warning("RSS collection global TIMEOUT (60s), %d/%d feeds completed",
                        completed_count, len(RSS_FEEDS))
     finally:
-        # wait=True: ensure all threads are joined before returning,
-        # so the next source doesn't overlap with zombie threads.
-        executor.shutdown(wait=True, cancel_futures=True)
+        executor.shutdown(wait=False, cancel_futures=True)
 
     if not items and RSS_FEEDS:
         logger.warning("RSS collection returned 0 items from %d feeds", len(RSS_FEEDS))
@@ -288,27 +286,28 @@ def collect_early_signal_news() -> list[NewsItem]:
     """
     items: list[NewsItem] = []
 
-    executor = ThreadPoolExecutor(max_workers=3)
+    # Workers increased to 5 (from 3), global timeout 90s (from 45s)
+    # 25 feeds / 5 workers = 5 rounds max, plenty of time for DNS cold-starts
+    executor = ThreadPoolExecutor(max_workers=5)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
     try:
-        for future in as_completed(futures, timeout=45):
+        for future in as_completed(futures, timeout=90):
             url = futures[future]
             try:
-                result = future.result(timeout=20)
+                result = future.result(timeout=25)
                 if result:
                     items.extend(result)
                 completed_count += 1
             except TimeoutError:
-                logger.warning("Early-signal feed TIMEOUT (20s) for %s", url)
+                logger.warning("Early-signal feed TIMEOUT (25s) for %s", url)
             except Exception as exc:
                 logger.warning("Early-signal feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("Early-signal collection global TIMEOUT (45s), %d/%d feeds completed",
+        logger.warning("Early-signal collection global TIMEOUT (90s), %d/%d feeds completed",
                        completed_count, len(EARLY_SIGNAL_FEEDS))
     finally:
-        # wait=True: ensure all threads are joined before returning.
-        executor.shutdown(wait=True, cancel_futures=True)
+        executor.shutdown(wait=False, cancel_futures=True)
 
     if items:
         logger.info("Collected %d early-signal news items", len(items))

@@ -711,7 +711,26 @@ def select_trades(
 
     candidates.sort(key=lambda x: x[1], reverse=True)
 
+    # Log score filtering summary — diagnose why scans produce no trades
+    score_rejections = [r for r in rejection_log if "< seuil" in r.get("reason", "")]
+    neutral_rejections = [r for r in rejection_log if r.get("reason") == "Direction NEUTRAL"]
+    if score_rejections:
+        top_rejected = max(score_rejections, key=lambda r: r.get("score", 0))
+        logger.info(
+            "Score filtering: %d/%d rejected (score < %d), %d NEUTRAL. "
+            "Top rejected score: %.1f ('%s')",
+            len(score_rejections), len(scored_news), MIN_SCORE_THRESHOLD,
+            len(neutral_rejections), top_rejected["score"],
+            top_rejected["title"][:60],
+        )
+
     if not candidates:
+        logger.warning(
+            "No candidates after filtering %d scored news: %d low score, "
+            "%d NEUTRAL, %d no eligible ticker — skipping trade selection",
+            len(scored_news), len(score_rejections), len(neutral_rejections),
+            len(rejection_log) - len(score_rejections) - len(neutral_rejections),
+        )
         return ScanResult(
             scan_type=scan_type,
             timestamp=now,

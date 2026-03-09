@@ -205,25 +205,26 @@ def scan_feeds_for_triggers() -> list[dict]:
         # Snapshot seen headlines for thread-safe read (writes happen after)
         seen_snapshot = set(_seen_headlines)
 
-    # max_workers=3: Replit kills process on too many concurrent threads.
+    # Workers increased to 5 (from 3) — 25 feeds / 5 workers = 5 rounds max
+    # Global timeout increased to 60s (from 30s) — allows more feeds to complete
     # N6: Collect all results first, then update _seen_headlines under lock
     all_results: list[dict] = []
-    executor = ThreadPoolExecutor(max_workers=3)
+    executor = ThreadPoolExecutor(max_workers=5)
     futures = {executor.submit(_fetch_feed_triggers, url, seen_snapshot): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
     try:
-        for future in as_completed(futures, timeout=30):
+        for future in as_completed(futures, timeout=60):
             url = futures[future]
             try:
-                results = future.result(timeout=15)
+                results = future.result(timeout=20)
                 completed_count += 1
                 all_results.extend(results)
             except TimeoutError:
-                logger.warning("Event scan: feed timeout (15s) for %s", url)
+                logger.warning("Event scan: feed timeout (20s) for %s", url)
             except Exception as exc:
                 logger.warning("Event scan: feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("Event scan: global timeout (30s), %d/%d feeds completed",
+        logger.warning("Event scan: global timeout (60s), %d/%d feeds completed",
                        completed_count, len(futures))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
