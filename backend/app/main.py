@@ -1153,6 +1153,160 @@ def get_learning():
     return compute_learning_adjustments()
 
 
+@app.get("/api/newscat-performance/{team}")
+def get_newscat_performance(team: int = 1):
+    """Get per-newscat combo performance stats (zone+intensity+source+ticker).
+
+    Returns aggregated WR/PnL/count for each newscat combination,
+    plus the individual trades for drill-down.
+    Team 1 = day trading, Team 2 = trend following.
+    """
+    combos: dict[str, dict] = {}
+
+    if team == 1:
+        trades = load_trades()
+        closed = [t for t in trades
+                  if t.result != TradeResult.PENDING and t.pnl_pct is not None]
+        for t in closed:
+            nc = t.news_category or "other"
+            zone = getattr(t, "news_zone", "") or ""
+            mag = getattr(t, "expected_magnitude", None)
+            intensity = ""
+            if mag is not None:
+                if mag <= 33:
+                    intensity = "low"
+                elif mag >= 67:
+                    intensity = "high"
+            sources = getattr(t, "news_sources", []) or []
+            source_str = sources[0] if sources else "unknown"
+
+            # Build combo key: category+zone+intensity+ticker
+            parts = [nc]
+            if zone:
+                parts.append(zone)
+            if intensity:
+                parts.append(intensity)
+            parts.append(t.ticker)
+            combo_key = "+".join(parts)
+
+            if combo_key not in combos:
+                combos[combo_key] = {
+                    "key": combo_key, "category": nc, "zone": zone,
+                    "intensity": intensity, "ticker": t.ticker,
+                    "wins": 0, "losses": 0, "expired": 0,
+                    "pnls": [], "sources": {}, "trades": [],
+                }
+            c = combos[combo_key]
+            if t.result == TradeResult.TP_HIT:
+                c["wins"] += 1
+            elif t.result == TradeResult.SL_HIT:
+                c["losses"] += 1
+            else:
+                c["expired"] += 1
+            c["pnls"].append(t.pnl_pct)
+            c["sources"][source_str] = c["sources"].get(source_str, 0) + 1
+            c["trades"].append({
+                "timestamp": t.timestamp.isoformat(),
+                "ticker": t.ticker,
+                "direction": t.direction.value if hasattr(t.direction, "value") else str(t.direction),
+                "result": t.result.value if hasattr(t.result, "value") else str(t.result),
+                "pnl_pct": t.pnl_pct,
+                "news_headline": t.news_headline,
+                "source": source_str,
+                "zone": zone,
+                "intensity": intensity,
+                "magnitude": mag,
+            })
+
+    elif team == 2:
+        agent = get_agent("trader_2")
+        if agent:
+            positions = agent._load_positions()
+            for ticker, pos in positions.items():
+                for h in pos.get("history", []):
+                    pnl = h.get("pnl_pct", 0)
+                    if pnl is None:
+                        continue
+                    zones = h.get("news_zones", [])
+                    zone = zones[0] if zones else ""
+                    intensity_val = h.get("intensity", "")
+                    cats = []
+                    for n in h.get("key_news", []):
+                        cat = n.get("category", "other")
+                        if cat not in cats:
+                            cats.append(cat)
+                    primary_cat = cats[0] if cats else "other"
+                    source_str = "trend_signal"
+                    for n in h.get("key_news", []):
+                        if n.get("source"):
+                            source_str = n["source"]
+                            break
+
+                    parts = [primary_cat]
+                    if zone:
+                        parts.append(zone)
+                    if intensity_val:
+                        parts.append(intensity_val)
+                    parts.append(ticker)
+                    combo_key = "+".join(parts)
+
+                    if combo_key not in combos:
+                        combos[combo_key] = {
+                            "key": combo_key, "category": primary_cat, "zone": zone,
+                            "intensity": intensity_val, "ticker": ticker,
+                            "wins": 0, "losses": 0, "expired": 0,
+                            "pnls": [], "sources": {}, "trades": [],
+                        }
+                    c = combos[combo_key]
+                    if pnl > 0:
+                        c["wins"] += 1
+                    else:
+                        c["losses"] += 1
+                    c["pnls"].append(pnl)
+                    c["sources"][source_str] = c["sources"].get(source_str, 0) + 1
+                    c["trades"].append({
+                        "timestamp": h.get("time", ""),
+                        "ticker": ticker,
+                        "direction": h.get("to_direction", ""),
+                        "result": "WIN" if pnl > 0 else "LOSS",
+                        "pnl_pct": pnl,
+                        "news_headline": h.get("reason", ""),
+                        "source": source_str,
+                        "zone": zone,
+                        "intensity": intensity_val,
+                        "magnitude": None,
+                    })
+    else:
+        raise HTTPException(400, f"Team {team} not supported for newscat performance")
+
+    # Compute stats
+    result = []
+    for c in combos.values():
+        total = c["wins"] + c["losses"] + c["expired"]
+        wr = c["wins"] / total * 100 if total > 0 else 0
+        avg_pnl = sum(c["pnls"]) / len(c["pnls"]) if c["pnls"] else 0
+        result.append({
+            "key": c["key"],
+            "category": c["category"],
+            "zone": c["zone"],
+            "intensity": c["intensity"],
+            "ticker": c["ticker"],
+            "total": total,
+            "wins": c["wins"],
+            "losses": c["losses"],
+            "expired": c["expired"],
+            "win_rate": round(wr, 1),
+            "avg_pnl": round(avg_pnl, 3),
+            "total_pnl": round(sum(c["pnls"]), 3),
+            "sources": c["sources"],
+            "trades": sorted(c["trades"], key=lambda x: x["timestamp"], reverse=True),
+        })
+
+    # Sort by total trades desc
+    result.sort(key=lambda x: x["total"], reverse=True)
+    return result
+
+
 @app.get("/api/journal")
 def get_journal():
     """Get all journal entries."""

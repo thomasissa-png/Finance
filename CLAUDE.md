@@ -55,7 +55,7 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | Journal 2 | 7.2 | Atomic single-write (PG vs JSON branch), no triple write |
 | Journal 3 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
 | Journal 4 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
-| Learning 1 | 5.4 | Zone+intensity-aware newscat cross-dimension |
+| Learning 1 | 5.5 | Per-source performance tracking in Claude feedback |
 | Learning 2 | 7.4 | Zone+intensity-aware newscat cross-dimension |
 | Learning 3 | 2.1 | Weekly config disk persistence (survives restart) |
 | Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
@@ -198,7 +198,7 @@ News → Scoring → [Learning 1 cache] → Trader 1
 - **Persistence** : Table PG `trend_positions` (ticker VARCHAR PK, data JSONB, updated_at) + fallback JSON `data/trend_positions.json`
 - **Pipeline** : Exécuté dans `run_scan_pipeline()` après Trader 1, non-bloquant (erreur Trader 2 n'affecte pas Trader 1)
 - **API** : `GET /api/trader2/positions`, `GET /api/trader2/positions/{ticker}/history`
-- **Frontend** : `Trader2Page.jsx` — KPIs, cards positions, historique flips, logs DECISION, Learning 2 context
+- **Frontend** : `Trader2Page.jsx` — KPIs, cards positions, historique flips, logs DECISION, Learning 2 context, **newscat performance** (zone+intensity+source drill-down v5.5)
 - **Audit** : Profil `trader_2` dans l'auditeur — 8 checks
 - **v7.5** : Zone+intensity-aware learning lookup (newscat+zone+intensity+ticker priority), news_zone and intensity tier stored in flip records for geographic and magnitude traceability
 - **Tests** : 27 tests dans `test_agent_trader_2.py`
@@ -614,7 +614,8 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `frontend/src/components/AgentSidebar.jsx` : v7.0, navigation principale (Dashboard + 6 agents + Alertes), status dots, notification badge
 - `frontend/src/components/AgentOverview.jsx` : 7 cards métriques live sur dashboard
 - `frontend/src/components/DashboardPage.jsx` : v7.0, KPIs globaux (trades, win rate, P&L, pending), agent overview cards, scan triggers, progress, toasts
-- `frontend/src/components/TraderPage.jsx` : v7.0, KPIs trader, positions en cours, historique trades (filtres résultat/direction/catégorie, pagination), ajustements learning (per-ticker, session, direction, delay bias), logs DECISION
+- `frontend/src/components/TraderPage.jsx` : v7.0, KPIs trader, positions en cours, historique trades (filtres résultat/direction/catégorie, pagination), ajustements learning (per-ticker, session, direction, delay bias), **newscat performance** (zone+intensity+source drill-down v5.5), logs DECISION
+- `frontend/src/components/NewscatPerformance.jsx` : v5.5, composant partagé Trader 1/2 — performance par combo newscat (zone+intensity+ticker), filtres (catégorie, zone, intensité, ticker, source, tri), drill-down trades, breakdown sources
 - `frontend/src/components/ScoringPage.jsx` : v7.0, historique scans (news scorées, dimensions barres, rejets), ajustements newscat learning, logs agent
 - `frontend/src/components/Scoring2Page.jsx` : v7.0, KPIs trend scoring, accumulation directionnelle par ticker (barres LONG/SHORT), news re-pondérées, logs agent scoring_2
 - `frontend/src/components/JournalPage.jsx` : v7.0, wrapper Journal existant + contexte learning injecté + logs agent journal
@@ -1093,9 +1094,10 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - **E3: signal_reliability precision** — alerte si low-rel WR > high-rel WR
   - **B2: magnitude_accuracy** — alerte si surestimation/sous-estimation systématique
   - **B3: slippage vs spread** — alerte si slippage > 2x spread estimé
+  - **v5.5: Per-source performance** — outliers par source (WR < 30% ou > 75%), Claude ajuste signal_reliability
   - Streaks négatifs actifs (>= 3)
   - Derniers 10 trades (compact)
-  - Instructions scoring compactes
+  - Instructions scoring compactes (incl. guidance per-source v5.5)
 - **Score decomposition**: chaque trade stocke `raw_claude_score` et `learning_multiplier`
 - **Decomposition par dimension**: logs détaillent `ticker_mult`, `cat_mult`, `session_mult`, `newscat_mult`, `regime_mult`, `dir_mult`, `delay_bias_adj`
 - **learning_helped tracking**: chaque trade tracke si le learning a boosté ou pénalisé la sélection

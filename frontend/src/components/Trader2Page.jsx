@@ -3,6 +3,7 @@ import { DIR_COLORS, DIR_ARROWS, POLL_FAST } from "../utils/constants";
 import { apiFetch } from "../utils/api";
 import { pnlColor } from "../utils/format";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
+import NewscatPerformance from "./NewscatPerformance";
 
 export default function Trader2Page({ isActive }) {
   const [positions, setPositions] = useState({});
@@ -203,6 +204,9 @@ export default function Trader2Page({ isActive }) {
           )}
         </div>
       </div>
+
+      {/* Newscat Performance */}
+      <NewscatPerformance team={2} isActive={isActive} />
 
       {/* Decision Logs */}
       <LogSection logs={filteredLogs} logFilter={logFilter} setLogFilter={setLogFilter} />

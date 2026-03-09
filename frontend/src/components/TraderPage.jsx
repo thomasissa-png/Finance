@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { formatDate, formatTime, pnlColor, RESULT_LABELS, CATEGORY_COLORS, scanLabel, paginate, totalPages, PAGE_SIZE } from "../utils/format";
+import NewscatPerformance from "./NewscatPerformance";
 
 const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
 const LEVEL_COLORS = { INFO: "var(--text-secondary)", WARN: "var(--yellow)", ERROR: "var(--red)", DECISION: "var(--cyan)" };
@@ -297,6 +298,9 @@ export default function TraderPage({ isActive }) {
           </div>
         </div>
       )}
+
+      {/* Newscat Performance */}
+      <NewscatPerformance team={1} isActive={isActive} />
 
       {/* Agent logs */}
       <div className="section-card">
