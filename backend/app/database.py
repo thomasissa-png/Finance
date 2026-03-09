@@ -331,7 +331,9 @@ CREATE TABLE IF NOT EXISTS trades (
     convergence_count INTEGER,
     convergence_boost DOUBLE PRECISION,
     news_url TEXT DEFAULT '',
-    news_description TEXT DEFAULT ''
+    news_description TEXT DEFAULT '',
+    news_zone VARCHAR(60) DEFAULT '',
+    agent_versions JSONB
 )
 """
 
@@ -392,7 +394,9 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     expected_magnitude INTEGER,
     volume_confirmed BOOLEAN,
     volume_ratio DOUBLE PRECISION,
-    position_size_pct DOUBLE PRECISION
+    position_size_pct DOUBLE PRECISION,
+    news_zone VARCHAR(60) DEFAULT '',
+    agent_versions JSONB
 )
 """
 
@@ -697,6 +701,8 @@ def init_db() -> None:
                 ("news_url", "TEXT DEFAULT ''"),
                 ("news_description", "TEXT DEFAULT ''"),
                 ("agent_versions", "JSONB"),
+                # v7.6: Geographic zone tracking
+                ("news_zone", "VARCHAR(60) DEFAULT ''"),
             ]:
                 cur.execute(f"""
                     DO $$ BEGIN
@@ -732,6 +738,8 @@ def init_db() -> None:
                 ("position_size_pct", "DOUBLE PRECISION"),
                 # P2.5: Agent version tracking
                 ("agent_versions", "JSONB"),
+                # v7.6: Geographic zone tracking
+                ("news_zone", "VARCHAR(60) DEFAULT ''"),
             ]:
                 cur.execute(f"""
                     DO $$ BEGIN
@@ -888,6 +896,8 @@ _TRADE_COLUMNS = [
     "surprise", "directional_clarity", "signal_reliability", "expected_magnitude",
     "position_size_pct", "convergence_count", "convergence_boost",
     "news_url", "news_description",
+    # v7.6: Geographic zone tracking
+    "news_zone",
     # v8.2: Agent version tracking
     "agent_versions",
 ]
@@ -1048,6 +1058,8 @@ _JOURNAL_COLUMNS = [
     "surprise", "directional_clarity", "market_awareness",
     "signal_reliability", "expected_magnitude",
     "volume_confirmed", "volume_ratio", "position_size_pct",
+    # v7.6: Geographic zone tracking
+    "news_zone",
 ]
 
 _JOURNAL_JSONB_COLS = {"all_scored_news", "rejection_log", "learning_state"}
