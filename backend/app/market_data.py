@@ -12,6 +12,7 @@ Caching and rate limiting are built in to stay within free tier limits
 """
 
 import logging
+import math
 import os
 import threading
 import time
@@ -654,7 +655,7 @@ _PRICE_RANGES: dict[str, tuple[float, float]] = {
     "SI=F": (10, 250),          # Silver (yf ~90)
     "PL=F": (400, 5000),        # Platinum (yf ~2215)
     "PA=F": (300, 5000),        # Palladium (yf ~1688)
-    "SB=F": (3, 50),            # Sugar cents/lb (yf ~14)
+    "SB=F": (3, 50),            # Sugar cents/lb (yf ~14) — Smartbroker AG (~12€) overlaps, type=commodities required
     "CT=F": (20, 200),          # Cotton cents/lb (yf ~65)
     "OJ=F": (50, 800),          # Orange Juice (yf ~189)
     "LE=F": (80, 500),          # Live Cattle (yf ~233)
@@ -704,7 +705,7 @@ def validate_price(ticker: str, price: float | None) -> tuple[bool, str]:
     - If no reference exists, the price is accepted and becomes the reference.
     - If deviation exceeds _MAX_PRICE_DEVIATION (50%), price is rejected.
     """
-    if price is None or price <= 0:
+    if price is None or not math.isfinite(price) or price <= 0:
         return False, f"Invalid price: {price}"
 
     # Check hardcoded range first (catches wrong-unit/instrument on first fetch)
