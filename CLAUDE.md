@@ -1239,3 +1239,56 @@ Groupes d'actifs correles pour eviter les doubles expositions :
   - **test_agents.py** (7) : trailing_stop_before_sl_check, trailing_stop_calls_persist, update_trade_stop_exists, update_trade_stop_json_fallback, pg_update_trade_stop_function_exists, journal_no_getattr_on_trade, learning_no_getattr_on_trade
 - **27 tests trader_2** (`test_agent_trader_2.py`) : init (4), tickers (1), persistence JSON (5), news filtering (5), direction evaluation (4), P&L tracking (3), agent run (2), registration (2), database DDL (1)
 - **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data
+
+## Environnement de développement local (Claude Code)
+
+### Setup obligatoire en début de session
+L'environnement Claude Code n'a **pas** les mêmes dépendances que Replit. Avant de tester ou lancer quoi que ce soit, exécuter :
+
+```bash
+pip install pytz multitasking==0.0.11 platformdirs --no-deps --quiet 2>/dev/null
+pip install "curl_cffi>=0.7,<0.14" protobuf websockets --quiet 2>/dev/null
+```
+
+**Pourquoi** : yfinance 1.2.0 est installé dans cet env (au lieu de <1.0 comme sur Replit) et nécessite ces dépendances supplémentaires. Sans elles, `fetch_price()` retourne `None` pour TOUS les tickers car le fallback yfinance crash sur `ModuleNotFoundError`.
+
+### Différences clés avec Replit
+| | Replit (production) | Claude Code (dev) |
+|---|---|---|
+| `TWELVE_DATA_API_KEY` | Configuré dans secrets | **Non disponible** |
+| `DATABASE_URL` (PostgreSQL) | Configuré | **Non disponible** → fallback JSON |
+| `ANTHROPIC_API_KEY` | Configuré | **Non disponible** |
+| yfinance version | < 1.0 (requirements.txt) | 1.2.0 (incompatible, nécessite deps supplémentaires) |
+| Prix en temps réel | Twelve Data (primary) + yfinance (fallback) | yfinance only |
+
+### Tests — notes
+- Exécuter les tests depuis la **racine du projet** : `cd /home/user/Finance && python -m pytest backend/tests/ -q`
+- **Tests flaky par date** : certains tests échouent certains jours à cause du calendrier économique (USDA WASDE, FOMC, etc.) qui bloque les trades dans `trade_selector.py`. C'est normal, pas un bug.
+- **Test pre-existing failure** : `test_run_initializes_positions` (direction NEUTRAL vs LONG) — échec pré-existant non lié aux changements courants.
+- Les données de test n'utilisent **pas** les fichiers `data/*.json` de production.
+
+### Validation des prix après changements
+Pour vérifier que les prix fonctionnent dans l'environnement local :
+```bash
+python3 -c "
+from backend.app.market_data import fetch_price
+for t in ['HG=F', 'KC=F', 'CC=F', 'ZW=F', 'EURUSD=X', 'GC=F', 'BNP.PA']:
+    print(f'{t}: {fetch_price(t)}')
+"
+```
+Tous les prix doivent retourner un `float > 0`, jamais `None`.
+
+## Validation des prix (v8.4)
+
+### Couche de protection anti-anomalies
+Le système maintient un cache de "prix de référence" (dernier prix valide connu par ticker). Chaque nouveau prix est comparé à cette référence avant d'être accepté.
+
+- **`validate_price(ticker, price)`** : rejette si déviation > 50% de la référence
+- **`fetch_price_validated(ticker)`** : fetch + validation + cross-check yfinance si anomalie
+- **`seed_price_references()`** : initialise les références au démarrage (41 tickers en parallèle)
+- **Guards** dans les 4 traders : validation avant stockage de `entry_price` et `current_price`
+
+### Admin API pour corrections
+- `POST /api/admin/fix-entry-price` — corrige un entry_price erroné + recalcule P&L
+  - Body : `{"team": 2, "ticker": "HG=F", "correct_price": 5.93}`
+- `GET /api/admin/price-references` — affiche le cache de référence (debug)
