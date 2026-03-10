@@ -291,17 +291,25 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - Module unifie : Twelve Data (primary) + yfinance (fallback)
 - Rate limiter thread-safe : 7 req/min (free tier = 8)
 - TTL cache 3 niveaux : 2min (quotes), 10min (daily), 30min (intraday)
-- Mapping complet des 39 tickers yfinance → Twelve Data, verifie via API :
-  - **Indices** : ^FCHI→FCHI, ^GDAXI→GDAXI, ^FTSE→FTSE, ^N225→N225
-  - **US indices blacklistes** : ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX → yfinance only (licences S&P)
-  - **Forex** : EURUSD=X→EUR/USD, USDJPY=X→USD/JPY, etc.
-  - **Paris stocks** : TTE.PA→TTE (mic_code=XPAR), MC.PA→MC, etc.
-  - **Energie** : CL=F→CL1, BZ=F→CO1, NG=F→NG/USD
-  - **Metaux** : GC=F→XAU/USD, SI=F→XAG/USD, HG=F→HG1, PL=F→XPT/USD, PA=F→XPD/USD
-  - **Agriculture** : ZC=F→C_1, ZW=F→W_1, ZS=F→S_1, KC=F→KC1, SB=F→SB1, CC=F→CC1, CT=F→CT1, OJ=F→JO1
-  - **Livestock** : LE=F→LC1, HE=F→LH1
+- Mapping complet des 41 tickers yfinance → Twelve Data, verifie via API :
+  - **Indices** : TOUS blacklistés → yfinance only (^FCHI, ^GDAXI, ^FTSE, ^N225 = 404 sur TD; ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX = non dispo free tier)
+  - **Forex** : EURUSD=X→EUR/USD, USDJPY=X→USD/JPY, GBPUSD=X→GBP/USD, USDCHF=X→USD/CHF, EURJPY=X→EUR/JPY, AUDUSD=X→AUD/USD, USDCNH=X→USD/CNH (pas de collision, pas de `type` nécessaire)
+  - **Paris stocks** : TTE.PA→TTE, MC.PA→MC, BNP.PA→BNP, etc. (mic_code=XPAR)
+  - **Energie** : CL=F→CL1, BZ=F→CO1, NG=F→NG/USD (pas de collision)
+  - **Metaux précieux** : GC=F→XAU/USD, SI=F→XAG/USD, PL=F→XPT/USD, PA=F→XPD/USD (forex-style, pas de collision)
+  - **Base metals** : HG=F→HG1 (**avec `type=commodities`** — sans ça, TD retourne Homag Group AG ~25€ au lieu du cuivre ~5.90$)
+  - **Agriculture sans collision** : ZC=F→C_1, ZW=F→W_1, ZS=F→S_1, CT=F→CT1
+  - **Agriculture AVEC collision** (nécessitent **`type=commodities`**) :
+    - CC=F→CC1 (sans type: Amundi MSCI China Tech ETF ~287€, avec type: Cocoa ~3425$)
+    - KC=F→KC1 (sans type: stock inconnu ~0.01$, avec type: Coffee ~296$)
+    - SB=F→SB1 (sans type: Smartbroker Holding AG ~12€, avec type: Sugar ~14$)
+    - OJ=F→JO1 (sans type: John B. Sanfilippo & Son ~64$, avec type: OJ ~189$)
+  - **Livestock** (nécessitent **`type=commodities`**) :
+    - LE=F→LC1 (sans type: The Marzetti Company ~140$, avec type: Live Cattle ~233$)
+    - HE=F→LH1 (sans type: Lifetime Brands Inc. ~3.38$, avec type: Lean Hogs ~96$)
+- **REGLE CRITIQUE `type=commodities`** : Les symboles TD de futures (CC1, KC1, SB1, HG1, JO1, LC1, LH1) collisionnent avec des actions/ETFs. Sans le paramètre `type=commodities` dans la requête, TD retourne le prix de l'action au lieu du future. Le mapping utilise `{"type": "commodities"}` dans les extra params pour ces 7 tickers. Les symboles sans collision (CL1, CO1, C_1, W_1, S_1, CT1, XAU/USD, etc.) n'ont pas besoin de ce paramètre.
 - Fonctions : `fetch_price()`, `fetch_history()`, `fetch_history_range()`, `fetch_intraday()`
-- Secret optionnel : `TWELVE_DATA_API_KEY` (free tier 800 credits/jour)
+- Secret : `TWELVE_DATA_API_KEY` = `57627ad733b24fa78ac40652078c18fc` (free tier 800 credits/jour, 8 req/min)
 
 #### 3. Fixes Journal (4 root causes corrigees — commit 389b649)
 - **misfire_grace_time** : 60s → 3600s pour le job journal 22h (pas de risque crash loop — pur data processing)
@@ -1147,7 +1155,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - **Requis** : `ANTHROPIC_API_KEY`
 - **Auto** : `DATABASE_URL` (cree automatiquement par Replit quand on ajoute PostgreSQL)
 - **Optionnels** (gratuits, ameliorent la couverture) :
-  - `TWELVE_DATA_API_KEY` : market data rapide (https://twelvedata.com/ — free tier 800 credits/jour, 8 req/min)
+  - `TWELVE_DATA_API_KEY` : `57627ad733b24fa78ac40652078c18fc` — market data rapide (https://twelvedata.com/ — free tier 800 credits/jour, 8 req/min). **ATTENTION** : les futures commodities nécessitent `type=commodities` dans les params (voir section Market Data ci-dessus)
   - `EIA_API_KEY` : donnees energie EIA (https://www.eia.gov/opendata/register.php)
   - `GNEWS_API_KEY` : recherche news ciblee — 28 queries avec rotation (https://gnews.io/)
   - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
@@ -1255,11 +1263,11 @@ pip install "curl_cffi>=0.7,<0.14" protobuf websockets --quiet 2>/dev/null
 ### Différences clés avec Replit
 | | Replit (production) | Claude Code (dev) |
 |---|---|---|
-| `TWELVE_DATA_API_KEY` | Configuré dans secrets | **Non disponible** |
+| `TWELVE_DATA_API_KEY` | `57627ad733b24fa78ac40652078c18fc` | **Même clé dispo** — `export TWELVE_DATA_API_KEY=57627ad733b24fa78ac40652078c18fc` |
 | `DATABASE_URL` (PostgreSQL) | Configuré | **Non disponible** → fallback JSON |
 | `ANTHROPIC_API_KEY` | Configuré | **Non disponible** |
 | yfinance version | < 1.0 (requirements.txt) | 1.2.0 (incompatible, nécessite deps supplémentaires) |
-| Prix en temps réel | Twelve Data (primary) + yfinance (fallback) | yfinance only |
+| Prix en temps réel | Twelve Data (primary) + yfinance (fallback) | Twelve Data (avec export de la clé) ou yfinance only |
 
 ### Tests — notes
 - Exécuter les tests depuis la **racine du projet** : `cd /home/user/Finance && python -m pytest backend/tests/ -q`
