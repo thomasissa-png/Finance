@@ -1074,7 +1074,7 @@ class TestMarketDataModule:
         from backend.app.market_data import _TICKER_MAP
         assert "CL=F" in _TICKER_MAP
         assert "GC=F" in _TICKER_MAP
-        # ZW=F blacklisted from TD (unit mismatch) — uses yfinance fallback
+        assert "ZW=F" in _TICKER_MAP  # W_1 verified real futures on TD
         assert "EURUSD=X" in _TICKER_MAP
 
     def test_fetch_functions_exist(self):

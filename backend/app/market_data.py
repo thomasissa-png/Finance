@@ -100,11 +100,19 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "SI=F": ("XAG/USD", {}),    # Silver
     "PL=F": ("XPT/USD", {}),    # Platinum
     "PA=F": ("XPD/USD", {}),    # Palladium
-    # Base metals — HG=F REMOVED: TD HG1 returns $/lb (~25) vs yfinance $/cwt (~5.93)
-    # Agriculture — REMOVED: TD returns wrong units/contracts for most agri futures
-    # CC=F→CC1: 287 vs 3425 (-92%), KC=F→KC1: 0.01 vs 296 (-100%),
-    # ZW=F→W_1: 9.68 vs 590 (-98%). All agri/livestock use yfinance fallback.
-    # SB=F, CT=F, OJ=F, ZC=F, ZS=F, LE=F, HE=F also removed (same risk).
+    # Base metals — HG=F REMOVED: TD "HG1" = Homag Group AG (stock), not copper futures
+    # Agriculture — verified 2026-03 with API key:
+    #   W_1/C_1/S_1/CT1 = real futures (correct prices, <5% vs yfinance)
+    #   CC1 = Amundi MSCI China Tech ETF (287€, not cocoa 3425$)
+    #   KC1 = unknown stock (0.01, not coffee 296)
+    #   SB1 = Smartbroker Holding AG (12€, not sugar 14$)
+    #   JO1 = John B. Sanfilippo & Son (64$, not OJ 189$)
+    #   LC1 = The Marzetti Company (140$, not live cattle 232$)
+    #   LH1 = Lifetime Brands Inc. (3.38$, not lean hogs 96$)
+    "ZW=F": ("W_1", {}),        # Wheat Futures (verified real)
+    "ZC=F": ("C_1", {}),        # Corn Futures (verified real)
+    "ZS=F": ("S_1", {}),        # Soybeans Futures (verified real)
+    "CT=F": ("CT1", {}),        # Cotton Futures (verified real)
     # ETFs — standard US equity symbols, work as-is on TD
     "SPY": ("SPY", {}), "QQQ": ("QQQ", {}),
     "USO": ("USO", {}), "GLD": ("GLD", {}),
@@ -115,19 +123,24 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
 }
 
 # Tickers known to not work on Twelve Data — skip to yfinance directly.
-# US indices: not available on TD free tier.
-# EU/JP indices: TD returns ETF prices not index values.
-# Agri/metals futures: TD returns wrong units (cents vs dollars, $/lb vs $/cwt).
+# Verified 2026-03 with actual API key: TD resolves these symbols as stocks/ETFs,
+# not the expected futures contracts.
 _td_blacklist: set[str] = {
-    # Indices — all use yfinance
+    # Indices — not available on TD free tier, or resolve to ETFs
     "ZQ=F", "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX",
-    "^FCHI", "^GDAXI", "^FTSE", "^N225",
-    # Agriculture — TD unit mismatch (CC1=287 vs yf CC=F=3425, etc.)
-    "CC=F", "KC=F", "ZW=F", "ZC=F", "ZS=F", "SB=F", "CT=F", "OJ=F",
-    # Base metals — TD HG1=25.40$/lb vs yf HG=F=5.93$/cwt
-    "HG=F",
-    # Livestock — same risk as agri (unit mismatch)
-    "LE=F", "HE=F",
+    "^FCHI", "^GDAXI",  # 404 on TD
+    "^FTSE",             # TD returns ETF (~14$) not index (~10400)
+    "^N225",             # 404 on TD
+    # Agriculture — TD symbol resolves to stock/ETF, not futures
+    "CC=F",   # CC1 = Amundi China Tech ETF (287€), not cocoa (3425$)
+    "KC=F",   # KC1 = unknown stock (0.01$), not coffee (296$)
+    "SB=F",   # SB1 = Smartbroker Holding AG (12€), not sugar (14$)
+    "OJ=F",   # JO1 = John B. Sanfilippo & Son (64$), not OJ (189$)
+    # Base metals — TD resolves to German stock
+    "HG=F",   # HG1 = Homag Group AG (25€), not copper (5.93$)
+    # Livestock — TD resolves to US stocks
+    "LE=F",   # LC1 = The Marzetti Company (140$), not cattle (232$)
+    "HE=F",   # LH1 = Lifetime Brands Inc. (3.38$), not lean hogs (96$)
 }
 _blacklist_lock = threading.Lock()
 
