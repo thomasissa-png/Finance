@@ -1134,7 +1134,7 @@ class TestTeam3V2Scoring3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_scoring_3 import AgentScoring3
-        assert AgentScoring3.version == "2.1"
+        assert AgentScoring3.version == "2.2"
 
     def test_stochastic_reversal_detector(self):
         """T3: Stochastic reversal should detect oversold conditions."""
@@ -2175,7 +2175,7 @@ class TestScoring2WordBoundary:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_scoring_2 import AgentScoring2
-        assert AgentScoring2.version == "8.0"
+        assert AgentScoring2.version == "8.1"
 
 
 class TestMainDeadImport:

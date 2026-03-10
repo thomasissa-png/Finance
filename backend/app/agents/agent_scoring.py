@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 class AgentScoring(BaseAgent):
     name = "scoring"
     description = "Notation expert des news — edge & impact"
-    version = "7.4"  # v7.4: 9 fixes, token tracking, cache hits, duration tracking
+    version = "7.5"  # v7.5: Audit fixes (C1 dedup, C2 thread-safe, C3 LRU cache, C4 cross-batch, C5-C7)
 
     def __init__(self):
         super().__init__()

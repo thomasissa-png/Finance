@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 # accumulate rather than be deduped. A drought worsening over 3 days = stronger signal.
 _signal_accumulator: dict[str, dict] = {}  # key: (category, ticker_set_key) -> {count, first_seen, last_seen}
 _signal_accumulator_lock = threading.Lock()  # A4: Thread safety for concurrent scans
+_signal_accumulator_seen_this_scan: set[str] = set()  # C1: Dedup within a single scan
 ACCUMULATION_CATEGORIES = {"weather", "supply_chain", "commodity"}
 ACCUMULATION_BOOST_PER_DAY = 0.1  # +10% per additional day the signal persists
 ACCUMULATION_MAX_BOOST = 1.5      # Cap at 50% boost
@@ -73,6 +74,17 @@ def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[st
     now = datetime.now(timezone.utc)
 
     with _signal_accumulator_lock:
+        # C1: Skip if already processed this key in this scan (avoids artificial boost
+        # when the same signal appears in multiple batches or retries within a scan)
+        if key in _signal_accumulator_seen_this_scan:
+            entry = _signal_accumulator.get(key)
+            if entry:
+                days_active = (now - entry["first_seen"]).total_seconds() / 86400
+                return min(ACCUMULATION_MAX_BOOST, 1.0 + days_active * ACCUMULATION_BOOST_PER_DAY)
+            return 1.0
+
+        _signal_accumulator_seen_this_scan.add(key)
+
         # A5: Always prune stale entries (> 7 days) — not just on new key insertion
         cutoff = now - timedelta(days=7)
         stale = [k for k, v in _signal_accumulator.items() if v["last_seen"] < cutoff]
@@ -126,6 +138,7 @@ def _get_model() -> str:
 _score_cache: dict[str, tuple[dict, float]] = {}  # hash -> (score_entry, timestamp)
 _score_cache_lock = threading.Lock()
 SCORE_CACHE_TTL_SECONDS = 4 * 3600  # 4 hours
+SCORE_CACHE_MAX_SIZE = 500  # C3: Cap cache size to prevent unbounded memory growth
 
 
 def _get_cache_key(title: str, description: str | None) -> str:
@@ -146,7 +159,7 @@ def _get_cached_score(key: str) -> dict | None:
 
 
 def _set_cached_score(key: str, score_entry: dict) -> None:
-    """Store a score in the cache."""
+    """Store a score in the cache. C3: LRU eviction when cache exceeds max size."""
     with _score_cache_lock:
         _score_cache[key] = (score_entry, time.time())
         # Prune old entries
@@ -155,15 +168,22 @@ def _set_cached_score(key: str, score_entry: dict) -> None:
                  if now - ts > SCORE_CACHE_TTL_SECONDS]
         for k in stale:
             del _score_cache[k]
+        # C3: If still over max size, evict oldest entries (LRU)
+        if len(_score_cache) > SCORE_CACHE_MAX_SIZE:
+            sorted_keys = sorted(_score_cache.keys(), key=lambda k: _score_cache[k][1])
+            for k in sorted_keys[:len(_score_cache) - SCORE_CACHE_MAX_SIZE]:
+                del _score_cache[k]
 
 
 # ── v4.3 F4: Token usage tracking ───────────────────────────────
 _scan_token_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "scans": 0}
+_token_usage_lock = threading.Lock()  # C2: Thread-safe token tracking
 
 
 def get_token_usage() -> dict:
     """Return cumulative token usage stats."""
-    return dict(_scan_token_usage)
+    with _token_usage_lock:
+        return dict(_scan_token_usage)
 
 
 # ── v4.3 B6: Prompt version hash ────────────────────────────────
@@ -364,17 +384,25 @@ SCORING_TOOL = {
 
 # ── D1: Pre-filter categories with zero edge ────────────────────
 # These categories are ALWAYS zero-edge — skip Claude entirely.
+# C7: Expanded zero-edge keywords (multi-language, more patterns)
 ZERO_EDGE_KEYWORDS = {
     "earnings": [
         "earnings report", "quarterly results", "revenue beat", "eps beat",
         "profit rises", "profit falls", "quarterly profit", "annual results",
         "reports q1", "reports q2", "reports q3", "reports q4",
         "fiscal year results", "earnings surprise",
+        "beats estimates", "misses estimates", "earnings miss",
+        "profit soars", "profit plunges", "revenue miss",
+        "résultats trimestriels", "bénéfice par action", "chiffre d'affaires",
+        "résultats annuels", "bénéfice net", "résultats du trimestre",
     ],
     "macro": [
         "nonfarm payroll", "jobs report", "cpi data", "inflation data",
         "gdp growth", "unemployment rate", "retail sales data",
         "consumer confidence index",
+        "non-farm payroll", "cpi rose", "cpi fell", "inflation rate",
+        "gdp grew", "gdp contracted", "jobless claims",
+        "pmi data", "ism manufacturing", "ism services",
     ],
 }
 
@@ -541,7 +569,8 @@ def _build_system_messages() -> list[dict]:
     return messages
 
 
-def _call_claude_with_retry(client, headlines, session_context, max_retries=3):
+def _call_claude_with_retry(client, headlines, session_context, max_retries=3,
+                            system_messages=None):
     """Call Claude API with tool_use (#9) for structured output.
 
     v4.3 changes:
@@ -572,7 +601,9 @@ Headlines :
     dynamic_max_tokens = max(4096, min(16384, len(headlines) * 350))
 
     # v4.3 B3/E1/F3: Structured system prompt with caching
-    system_messages = _build_system_messages()
+    # C6: Use pre-built system messages if provided (avoids rebuilding per batch)
+    if system_messages is None:
+        system_messages = _build_system_messages()
 
     model = _get_model()
 
@@ -600,9 +631,11 @@ Headlines :
                     continue
 
             # v5.0 N4: Track token usage only on final successful response (not retries)
+            # C2: Thread-safe writes to shared token counter
             if hasattr(response, "usage"):
-                _scan_token_usage["input_tokens"] += getattr(response.usage, "input_tokens", 0)
-                _scan_token_usage["output_tokens"] += getattr(response.usage, "output_tokens", 0)
+                with _token_usage_lock:
+                    _scan_token_usage["input_tokens"] += getattr(response.usage, "input_tokens", 0)
+                    _scan_token_usage["output_tokens"] += getattr(response.usage, "output_tokens", 0)
                 # Log cache performance if available
                 cache_read = getattr(response.usage, "cache_read_input_tokens", 0)
                 cache_creation = getattr(response.usage, "cache_creation_input_tokens", 0)
@@ -619,14 +652,20 @@ Headlines :
                                        attempt + 1, response.stop_reason)
                     return scores
 
-            # S5: Fallback — try text-based JSON parsing if tool_use somehow not used
+            # S5/C5: Fallback — try text-based JSON parsing if tool_use somehow not used
+            # C5: Only parse arrays that look like score arrays (contain "index" key)
             for block in response.content:
                 if hasattr(block, "text") and block.text:
                     raw_text = block.text.strip()
                     try:
                         arr_start = raw_text.index("[")
                         arr_end = raw_text.rindex("]") + 1
-                        return json.loads(raw_text[arr_start:arr_end])
+                        parsed = json.loads(raw_text[arr_start:arr_end])
+                        # C5: Validate it's actually a scores array, not a stray JSON list
+                        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and "index" in parsed[0]:
+                            return parsed
+                        logger.warning("Fallback JSON parse found array but not scores format: %s...",
+                                       raw_text[:100])
                     except (ValueError, json.JSONDecodeError):
                         logger.warning("Fallback JSON parse failed for text block: %s...",
                                        raw_text[:100])
@@ -689,6 +728,11 @@ def score_news_batch(
     """
     if not news_items:
         return [], {}
+
+    # C1: Reset per-scan dedup set for signal accumulation
+    global _signal_accumulator_seen_this_scan
+    with _signal_accumulator_lock:
+        _signal_accumulator_seen_this_scan = set()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -792,6 +836,9 @@ def score_news_batch(
     # Score remaining items via Claude
     claude_scored: list[ScoredNews] = []
     if items_to_score:
+        # C6: Build system messages once per scan (not per batch)
+        system_messages = _build_system_messages()
+
         # Split into batches if needed
         if len(items_to_score) > SCORING_BATCH_SIZE:
             logger.info("Splitting %d items into batches of %d for Claude scoring",
@@ -799,11 +846,16 @@ def score_news_batch(
 
         for batch_start in range(0, len(items_to_score), SCORING_BATCH_SIZE):
             batch_items = items_to_score[batch_start:batch_start + SCORING_BATCH_SIZE]
-            batch_scored = _score_batch(client, batch_items, session_context, batch_start)
+            # C4: Pass all items (not just batch) for cross-batch convergence detection
+            batch_scored = _score_batch(client, batch_items, session_context, batch_start,
+                                        all_scan_items=items_to_score,
+                                        system_messages=system_messages)
             claude_scored.extend(batch_scored)
 
         # v5.0 N5: Increment scan counter once per score_news_batch call (not per batch)
-        _scan_token_usage["scans"] += 1
+        # C2: Thread-safe increment
+        with _token_usage_lock:
+            _scan_token_usage["scans"] += 1
 
     # Combine all sources
     all_scored = pre_filtered_scored + cached_scored + claude_scored
@@ -828,11 +880,15 @@ def _score_batch(
     batch_items: list[NewsItem],
     session_context: str,
     index_offset: int = 0,
+    all_scan_items: list[NewsItem] | None = None,
+    system_messages: list[dict] | None = None,
 ) -> list[ScoredNews]:
     """Score a single batch of news items via Claude API.
 
     index_offset is the position of this batch within the full list
     (used to map scores back to the correct NewsItem).
+    all_scan_items: C4 — full list of items in this scan for cross-batch convergence.
+    system_messages: C6 — pre-built system messages (avoids rebuilding per batch).
     """
     # Build the headlines payload — include description when available for more context
     # v5.0 O6: Sanitize titles/descriptions to mitigate prompt injection from RSS feeds
@@ -850,7 +906,8 @@ def _score_batch(
             safe_desc = f" | {re.sub(r'<[^>]+>', '', item.description)[:300]}"
         headlines.append(f"{i+1}. {safe_title}{safe_desc}{tickers_str}{age_str}")
 
-    scores = _call_claude_with_retry(client, headlines, session_context)
+    scores = _call_claude_with_retry(client, headlines, session_context,
+                                     system_messages=system_messages)
 
     if not scores:
         return []
@@ -1011,7 +1068,9 @@ def _score_batch(
         # v3.6: Count independent sources confirming same signal (convergence)
         # v4.0: Pass scored directions to validate direction consistency
         # v5.0 O5: Pass scored_tickers for symmetric convergence detection
-        convergence_count = _count_convergence(item, impacted, direction, batch_items, scored_directions, scored_tickers)
+        # C4: Use all_scan_items for cross-batch convergence when available
+        convergence_items = all_scan_items if all_scan_items else batch_items
+        convergence_count = _count_convergence(item, impacted, direction, convergence_items, scored_directions, scored_tickers)
 
         scored.append(ScoredNews(
             news=item,

@@ -119,6 +119,9 @@ MIN_TREND_SCORE = 8.0
 # Chain reaction discount (consistent with Trader 2 fallback 0.7 factor)
 CHAIN_DISCOUNT = 0.7
 
+# H1: Max items per Claude batch (consistent with Scoring 1's SCORING_BATCH_SIZE)
+TREND_SCORING_BATCH_SIZE = 40
+
 # Categories relevant to commodity trends (pre-filter for Claude)
 RELEVANT_CATEGORIES_KEYWORDS = [
     "drought", "frost", "freeze", "hurricane", "typhoon", "flood",
@@ -199,7 +202,7 @@ Exemples de signaux FAIBLES (bruit) :
 </role>
 
 <scoring_dimensions>
-Pour chaque news, evalue ces 8 dimensions :
+Pour chaque news, evalue ces 9 dimensions :
 
 1. structural_impact (0-100) : A quel point cet evenement change l'equilibre offre/demande ?
    0=aucun impact structurel | 30=impact mineur/temporaire | 50=impact modere |
@@ -368,7 +371,13 @@ def _is_trend_relevant(title: str, description: str = "",
 
     Returns True if the news should be sent to Claude for trend scoring.
     This is a cheap pre-filter to avoid wasting API tokens on irrelevant news.
+    C1: Now uses news_category to reject earnings/macro/m_a (zero trend relevance).
     """
+    # C1: Reject categories with zero trend relevance (even if keywords match)
+    ZERO_TREND_CATEGORIES = {"earnings", "macro", "m_a", "central_bank_subtle"}
+    if news_category in ZERO_TREND_CATEGORIES:
+        return False
+
     # Always include known commodity categories
     if news_category in ALWAYS_RELEVANT_CATEGORIES:
         return True
@@ -440,9 +449,9 @@ Headlines :
                 timeout=45.0,
             )
 
-            # Handle truncation
+            # Handle truncation — H3: raise cap to 16384 (was 8192, same retry just re-truncated)
             if response.stop_reason == "max_tokens":
-                dynamic_max_tokens = min(8192, int(dynamic_max_tokens * 1.5))
+                dynamic_max_tokens = min(16384, int(dynamic_max_tokens * 1.5))
                 logger.warning("Trend scoring truncated (attempt %d, raising max_tokens to %d)",
                                attempt + 1, dynamic_max_tokens)
                 if attempt < max_retries:
@@ -530,7 +539,9 @@ def score_news_for_trend(news_items: list) -> dict:
 
     for item in news_items:
         # Pre-filter: skip obviously irrelevant news
-        if not _is_trend_relevant(item.title, item.description):
+        # C1: Pass news_category to filter earnings/macro before Claude
+        item_category = getattr(item, "news_category", "")
+        if not _is_trend_relevant(item.title, item.description, item_category):
             continue
 
         # Check cache
@@ -565,7 +576,16 @@ def score_news_for_trend(news_items: list) -> dict:
         logger.info("Trend scoring: sending %d items to Claude (prompt_version=%s)",
                      len(headlines), TREND_PROMPT_VERSION)
 
-        raw_scores = _call_claude_for_trend(headlines)
+        # H1: Batch items to avoid truncation on large sets
+        raw_scores = []
+        for batch_start in range(0, len(headlines), TREND_SCORING_BATCH_SIZE):
+            batch = headlines[batch_start:batch_start + TREND_SCORING_BATCH_SIZE]
+            batch_scores = _call_claude_for_trend(batch)
+            # Adjust indices for items in subsequent batches
+            for entry in batch_scores:
+                entry["index"] = entry.get("index", 0) + batch_start
+            raw_scores.extend(batch_scores)
+
         result["claude_scored_count"] = len(items_to_score)
         _trend_token_usage["scans"] += 1
 
@@ -582,10 +602,12 @@ def score_news_for_trend(news_items: list) -> dict:
             structural_impact = max(0, min(100, entry.get("structural_impact", 0)))
             if direction == "NEUTRAL" or structural_impact == 0:
                 # Cache the zero result to avoid re-scoring
+                # H4: Preserve news_zone even for NEUTRAL (Learning 2 zone-aware lookup)
                 cache_key = _get_trend_cache_key(item.title, item.description)
                 _set_cached_trend_score(cache_key, {
                     "direction": "NEUTRAL", "structural_impact": 0,
                     "impacted_tickers": [], "trend_score": 0,
+                    "news_zone": getattr(item, "news_zone", ""),
                 })
                 continue
 
@@ -599,6 +621,20 @@ def score_news_for_trend(news_items: list) -> dict:
 
             # Filter tickers to only our TREND_TICKERS
             impacted = [t for t in impacted if t in TREND_TICKERS]
+
+            # M3: Check chain reactions for trend tickers
+            # e.g. a coffee frost (KC=F) may also impact CC=F (tropical soft group)
+            if not impacted:
+                # Before giving up, check if any impacted ticker chains to a trend ticker
+                raw_impacted = entry.get("impacted_tickers", [])
+                from ..config import CHAIN_REACTIONS
+                for src_ticker in raw_impacted:
+                    for chain in CHAIN_REACTIONS.get(src_ticker, []):
+                        if chain["ticker"] in TREND_TICKERS and chain["ticker"] not in impacted:
+                            impacted.append(chain["ticker"])
+                            logger.info("M3: Chain reaction %s→%s for trend scoring",
+                                       src_ticker, chain["ticker"])
+
             if not impacted:
                 continue
 
@@ -723,7 +759,7 @@ class AgentScoring2(BaseAgent):
 
     name = "scoring_2"
     description = "Scoring tendance — Claude dédié pour commodities"
-    version = "8.0"  # v8.0: Dedicated Claude API call
+    version = "8.1"  # v8.1: Audit fixes (C1 prefilter categories, C2 prompt dims, H1 batching, H3 retry, H4 news_zone, M3 chain reactions)
 
     def __init__(self):
         super().__init__()

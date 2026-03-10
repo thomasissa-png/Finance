@@ -336,7 +336,7 @@ class TestMacdMaCombo:
 
 class TestVersion:
     def test_version_bumped(self):
-        assert AgentScoring3.version == "2.1"
+        assert AgentScoring3.version == "2.2"
 
 
 # ── Detector Map in score_technical_setups ────────────────────────

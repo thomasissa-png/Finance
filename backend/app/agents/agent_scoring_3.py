@@ -215,6 +215,36 @@ def _compute_rsi(closes: list[float], period: int = 14) -> float | None:
     return round(100.0 - (100.0 / (1.0 + rs)), 2)
 
 
+def _compute_rsi_series(closes: list[float], period: int = 14) -> list[float]:
+    """F3: Compute full RSI series (not just last value) for divergence detection."""
+    if len(closes) < period + 1:
+        return []
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [max(d, 0) for d in deltas]
+    losses = [abs(min(d, 0)) for d in deltas]
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    rsi_values = []
+    if avg_loss == 0:
+        rsi_values.append(100.0)
+    else:
+        rs = avg_gain / avg_loss
+        rsi_values.append(round(100.0 - (100.0 / (1.0 + rs)), 2))
+
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        if avg_loss == 0:
+            rsi_values.append(100.0)
+        else:
+            rs = avg_gain / avg_loss
+            rsi_values.append(round(100.0 - (100.0 / (1.0 + rs)), 2))
+
+    return rsi_values
+
+
 def _compute_macd(closes: list[float]) -> dict | None:
     """MACD line, signal line, histogram (last values)."""
     ema_fast = _compute_ema(closes, MACD_FAST)
@@ -336,12 +366,15 @@ def _compute_adx(highs: list[float], lows: list[float],
         plus_di_smooth = (plus_di_smooth * (period - 1) + plus_dm[i]) / period
         minus_di_smooth = (minus_di_smooth * (period - 1) + minus_dm[i]) / period
 
+        # F8: Use DX=0 instead of skipping bars to maintain consistent array length
         if atr == 0:
+            dx_values.append(0.0)
             continue
         plus_di = (plus_di_smooth / atr) * 100
         minus_di = (minus_di_smooth / atr) * 100
         di_sum = plus_di + minus_di
         if di_sum == 0:
+            dx_values.append(0.0)
             continue
         dx = abs(plus_di - minus_di) / di_sum * 100
         dx_values.append(dx)
@@ -358,7 +391,7 @@ def _compute_adx(highs: list[float], lows: list[float],
 
 def _compute_atr(highs: list[float], lows: list[float],
                   closes: list[float], period: int = 14) -> float | None:
-    """Average True Range."""
+    """Average True Range — F7: uses Wilder smoothing (standard convention)."""
     if len(closes) < period + 1:
         return None
 
@@ -374,7 +407,12 @@ def _compute_atr(highs: list[float], lows: list[float],
     if len(tr_list) < period:
         return None
 
-    atr = sum(tr_list[-period:]) / period
+    # F7: Wilder smoothing instead of simple average
+    # First ATR = simple average of first N true ranges
+    atr = sum(tr_list[:period]) / period
+    # Subsequent values use exponential smoothing: ATR = (prev_ATR * (n-1) + TR) / n
+    for i in range(period, len(tr_list)):
+        atr = (atr * (period - 1) + tr_list[i]) / period
     return round(atr, 4)
 
 
@@ -389,25 +427,30 @@ def _detect_rsi_reversal(indicators: dict) -> dict | None:
     if rsi_14 is None:
         return None
 
+    # F4: Read configurable thresholds from weekly config
+    params = indicators.get("_params", {})
+    rsi_oversold = params.get("rsi_oversold", RSI_OVERSOLD)
+    rsi_overbought = params.get("rsi_overbought", RSI_OVERBOUGHT)
+
     score = 0
     direction = None
 
     # Oversold reversal (LONG)
-    if rsi_14 < RSI_OVERSOLD:
-        score = 50 + (RSI_OVERSOLD - rsi_14) * 2  # Deeper oversold = higher score
+    if rsi_14 < rsi_oversold:
+        score = 50 + (rsi_oversold - rsi_14) * 2  # Deeper oversold = higher score
         direction = "LONG"
         # Confirmation: RSI 21 also oversold
-        if rsi_21 is not None and rsi_21 < RSI_OVERSOLD + 5:
+        if rsi_21 is not None and rsi_21 < rsi_oversold + 5:
             score += 15
         # ADX confirmation: ranging market better for reversal
         if adx is not None and adx < ADX_TREND_THRESHOLD:
             score += 10
 
     # Overbought reversal (SHORT)
-    elif rsi_14 > RSI_OVERBOUGHT:
-        score = 50 + (rsi_14 - RSI_OVERBOUGHT) * 2
+    elif rsi_14 > rsi_overbought:
+        score = 50 + (rsi_14 - rsi_overbought) * 2
         direction = "SHORT"
-        if rsi_21 is not None and rsi_21 > RSI_OVERBOUGHT - 5:
+        if rsi_21 is not None and rsi_21 > rsi_overbought - 5:
             score += 15
         if adx is not None and adx < ADX_TREND_THRESHOLD:
             score += 10
@@ -489,12 +532,25 @@ def _detect_bollinger_squeeze(indicators: dict) -> dict | None:
     if bb is None or last_close is None:
         return None
 
+    # F4/F9: Read configurable squeeze threshold from weekly config
+    params = indicators.get("_params", {})
+    base_squeeze = params.get("bb_squeeze_threshold", 3.0)
+    # F9: Per-category squeeze thresholds — forex has much tighter bandwidth
+    category = indicators.get("_category", "")
+    CATEGORY_SQUEEZE_DEFAULTS = {
+        "forex": 1.5,       # Forex bandwidth is typically 1-2%
+        "indices": 2.5,     # Indices are moderately volatile
+        "equities": 3.0,    # Equities standard
+        "commodities": 4.0, # Commodities have wider bands
+    }
+    squeeze_threshold = CATEGORY_SQUEEZE_DEFAULTS.get(category, base_squeeze)
+
     score = 0
     direction = None
 
-    # Squeeze: bandwidth is narrow (< 3% for most assets)
+    # Squeeze: bandwidth is narrow
     # Breakout: price near or outside bands
-    if bb["bandwidth"] < 3.0:
+    if bb["bandwidth"] < squeeze_threshold:
         # Breakout above upper band
         if bb["pct_b"] > 0.95:
             direction = "LONG"
@@ -611,49 +667,114 @@ def _detect_ma_trend(indicators: dict) -> dict | None:
 def _detect_momentum_divergence(indicators: dict) -> dict | None:
     """Detect price/RSI divergence setups.
 
-    Bullish divergence: price makes lower low, RSI makes higher low.
-    Bearish divergence: price makes higher high, RSI makes lower high.
-    Simplified: compare current vs recent levels.
+    F3: Proper two-swing divergence detection.
+    Bullish divergence: price makes lower low (swing2 < swing1), RSI makes higher low.
+    Bearish divergence: price makes higher high (swing2 > swing1), RSI makes lower high.
+    Requires two distinct swing points to avoid false positives.
     """
     rsi_14 = indicators.get("rsi_14")
-    rsi_prev = indicators.get("rsi_prev")
     last_close = indicators.get("last_close")
-    prev_close = indicators.get("prev_close")
     macd = indicators.get("macd")
+    closes = indicators.get("_closes")  # F3: Need full closes array
+    rsi_series = indicators.get("_rsi_series")  # F3: Need full RSI series
 
-    if rsi_14 is None or rsi_prev is None or last_close is None or prev_close is None:
+    if rsi_14 is None or last_close is None:
         return None
 
+    # F3: Need closes and RSI series for two-swing detection
+    if not closes or not rsi_series or len(closes) < 30 or len(rsi_series) < 20:
+        # Fallback to simple single-pivot detection if series not available
+        rsi_prev = indicators.get("rsi_prev")
+        prev_close = indicators.get("prev_close")
+        if rsi_prev is None or prev_close is None:
+            return None
+        # Simple version (less reliable, reduced score)
+        score = 0
+        direction = None
+        if last_close < prev_close and rsi_14 > rsi_prev:
+            direction = "LONG"
+            price_drop = (prev_close - last_close) / prev_close * 100 if prev_close > 0 else 0
+            rsi_rise = rsi_14 - rsi_prev
+            score = 30 + price_drop * 4 + rsi_rise * 1.5  # Reduced vs two-swing
+            if macd and macd["histogram"] > macd["prev_histogram"]:
+                score += 10
+            if rsi_14 < 40:
+                score += 10
+        elif last_close > prev_close and rsi_14 < rsi_prev:
+            direction = "SHORT"
+            price_rise = (last_close - prev_close) / prev_close * 100 if prev_close > 0 else 0
+            rsi_drop = rsi_prev - rsi_14
+            score = 30 + price_rise * 4 + rsi_drop * 1.5
+            if macd and macd["histogram"] < macd["prev_histogram"]:
+                score += 10
+            if rsi_14 > 60:
+                score += 10
+        if direction is None or score < MIN_SETUP_SCORE:
+            return None
+        return {
+            "strategy": "momentum_divergence",
+            "direction": direction,
+            "score": min(100, round(score, 1)),
+            "signals": {"rsi_14": rsi_14, "method": "single_pivot"},
+        }
+
+    # F3: Two-swing divergence detection
+    # Find two recent swing lows (for bullish) or swing highs (for bearish)
     score = 0
     direction = None
 
-    # Bullish divergence: price lower, RSI higher
-    if last_close < prev_close and rsi_14 > rsi_prev:
-        direction = "LONG"
-        price_drop = (prev_close - last_close) / prev_close * 100 if prev_close > 0 else 0
-        rsi_rise = rsi_14 - rsi_prev
-        score = 35 + price_drop * 5 + rsi_rise * 2
+    # Find swing lows in price
+    swing_lows = []
+    for i in range(len(closes) - 3, max(0, len(closes) - 40), -1):
+        if i >= 1 and closes[i] <= closes[i - 1] and closes[i] <= closes[i + 1]:
+            swing_lows.append(i)
+            if len(swing_lows) >= 2:
+                break
 
-        # MACD histogram also diverging
-        if macd and macd["histogram"] > macd["prev_histogram"]:
-            score += 15
+    # Find swing highs in price
+    swing_highs = []
+    for i in range(len(closes) - 3, max(0, len(closes) - 40), -1):
+        if i >= 1 and closes[i] >= closes[i - 1] and closes[i] >= closes[i + 1]:
+            swing_highs.append(i)
+            if len(swing_highs) >= 2:
+                break
 
-        # RSI in oversold zone amplifies
-        if rsi_14 < 40:
-            score += 10
+    # Bullish divergence: price lower low + RSI higher low
+    if len(swing_lows) >= 2:
+        recent_idx, older_idx = swing_lows[0], swing_lows[1]
+        if closes[recent_idx] < closes[older_idx]:  # Lower low in price
+            # Get RSI at these swing points
+            rsi_offset = len(closes) - len(rsi_series)
+            recent_rsi_idx = recent_idx - rsi_offset
+            older_rsi_idx = older_idx - rsi_offset
+            if 0 <= recent_rsi_idx < len(rsi_series) and 0 <= older_rsi_idx < len(rsi_series):
+                if rsi_series[recent_rsi_idx] > rsi_series[older_rsi_idx]:  # Higher low in RSI
+                    direction = "LONG"
+                    price_drop = abs(closes[older_idx] - closes[recent_idx]) / closes[older_idx] * 100
+                    rsi_rise = rsi_series[recent_rsi_idx] - rsi_series[older_rsi_idx]
+                    score = 40 + price_drop * 5 + rsi_rise * 2
+                    if macd and macd["histogram"] > macd["prev_histogram"]:
+                        score += 15
+                    if rsi_14 < 40:
+                        score += 10
 
-    # Bearish divergence: price higher, RSI lower
-    elif last_close > prev_close and rsi_14 < rsi_prev:
-        direction = "SHORT"
-        price_rise = (last_close - prev_close) / prev_close * 100 if prev_close > 0 else 0
-        rsi_drop = rsi_prev - rsi_14
-        score = 35 + price_rise * 5 + rsi_drop * 2
-
-        if macd and macd["histogram"] < macd["prev_histogram"]:
-            score += 15
-
-        if rsi_14 > 60:
-            score += 10
+    # Bearish divergence: price higher high + RSI lower high
+    if direction is None and len(swing_highs) >= 2:
+        recent_idx, older_idx = swing_highs[0], swing_highs[1]
+        if closes[recent_idx] > closes[older_idx]:  # Higher high in price
+            rsi_offset = len(closes) - len(rsi_series)
+            recent_rsi_idx = recent_idx - rsi_offset
+            older_rsi_idx = older_idx - rsi_offset
+            if 0 <= recent_rsi_idx < len(rsi_series) and 0 <= older_rsi_idx < len(rsi_series):
+                if rsi_series[recent_rsi_idx] < rsi_series[older_rsi_idx]:  # Lower high in RSI
+                    direction = "SHORT"
+                    price_rise = abs(closes[recent_idx] - closes[older_idx]) / closes[older_idx] * 100
+                    rsi_drop = rsi_series[older_rsi_idx] - rsi_series[recent_rsi_idx]
+                    score = 40 + price_rise * 5 + rsi_drop * 2
+                    if macd and macd["histogram"] < macd["prev_histogram"]:
+                        score += 15
+                    if rsi_14 > 60:
+                        score += 10
 
     if direction is None or score < MIN_SETUP_SCORE:
         return None
@@ -664,11 +785,8 @@ def _detect_momentum_divergence(indicators: dict) -> dict | None:
         "score": min(100, round(score, 1)),
         "signals": {
             "rsi_14": rsi_14,
-            "rsi_prev": rsi_prev,
-            "price_change_pct": round(
-                (last_close - prev_close) / prev_close * 100, 2
-            ) if prev_close > 0 else 0,
             "macd_histogram": round(macd["histogram"], 4) if macd else None,
+            "method": "two_swing",
         },
     }
 
@@ -990,11 +1108,15 @@ def _detect_macd_ma_combo(indicators: dict) -> dict | None:
     score = 0
     direction = None
 
-    # Bullish: MACD cross up + MA alignment
+    # Precompute crossover/momentum flags for both directions
     macd_bull_cross = (macd["prev_macd"] <= macd["prev_signal"]
                        and macd["macd"] > macd["signal"])
     macd_bull_momentum = macd["histogram"] > macd["prev_histogram"] and macd["histogram"] > 0
+    macd_bear_cross = (macd["prev_macd"] >= macd["prev_signal"]
+                       and macd["macd"] < macd["signal"])
+    macd_bear_momentum = macd["histogram"] < macd["prev_histogram"] and macd["histogram"] < 0
 
+    # Bullish: MACD cross up + MA alignment
     if (macd_bull_cross or macd_bull_momentum) and last_close > sma_20 > sma_50:
         direction = "LONG"
         score = 58
@@ -1005,12 +1127,8 @@ def _detect_macd_ma_combo(indicators: dict) -> dict | None:
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 10
 
-    # Bearish: MACD cross down + MA alignment
-    macd_bear_cross = (macd["prev_macd"] >= macd["prev_signal"]
-                       and macd["macd"] < macd["signal"])
-    macd_bear_momentum = macd["histogram"] < macd["prev_histogram"] and macd["histogram"] < 0
-
-    if (macd_bear_cross or macd_bear_momentum) and last_close < sma_20 < sma_50:
+    # F5: elif prevents potential double-match
+    elif (macd_bear_cross or macd_bear_momentum) and last_close < sma_20 < sma_50:
         direction = "SHORT"
         score = 58
         if macd_bear_cross:
@@ -1063,11 +1181,14 @@ REGIME_MISMATCH_PENALTY = 0.80  # -20% score if regime doesn't match
 # ── Pivot detection helper (C7) ──────────────────────────────────
 
 def _find_recent_pivot(closes: list[float], min_lookback: int = 3,
-                       max_lookback: int = 20) -> int | None:
+                       max_lookback: int = 20,
+                       pivot_type: str = "any") -> int | None:
     """Find the index of the most recent swing pivot in closes.
 
-    A swing low is a bar lower than both neighbors.
-    A swing high is a bar higher than both neighbors.
+    F13: Now distinguishes swing high from swing low via pivot_type parameter.
+    Args:
+        pivot_type: "low" for swing lows only, "high" for swing highs only, "any" for either.
+
     Returns the index of the most recent pivot within [min_lookback, max_lookback]
     bars from the end. Returns None if no pivot found.
     """
@@ -1079,11 +1200,15 @@ def _find_recent_pivot(closes: list[float], min_lookback: int = 3,
     search_end = end - min_lookback
 
     for i in range(search_end, search_start - 1, -1):
-        # Swing low
-        if closes[i] <= closes[i - 1] and closes[i] <= closes[i + 1]:
+        # F13: Filter by pivot_type
+        is_low = closes[i] <= closes[i - 1] and closes[i] <= closes[i + 1]
+        is_high = closes[i] >= closes[i - 1] and closes[i] >= closes[i + 1]
+
+        if pivot_type == "low" and is_low:
             return i
-        # Swing high
-        if closes[i] >= closes[i - 1] and closes[i] >= closes[i + 1]:
+        elif pivot_type == "high" and is_high:
+            return i
+        elif pivot_type == "any" and (is_low or is_high):
             return i
 
     return None
@@ -1133,7 +1258,8 @@ def _fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> dict
         from ..market_data import fetch_history
 
         # Map yfinance-style period to days
-        period_map = {"1mo": 30, "2mo": 60, "3mo": 90, "6mo": 180}
+        # F2: Added 1y mapping (365 days) for SMA 200 computation
+        period_map = {"1mo": 30, "2mo": 60, "3mo": 90, "6mo": 180, "1y": 365}
         period_days = period_map.get(period, 90)
 
         # Map yfinance-style interval to Twelve Data format
@@ -1143,6 +1269,33 @@ def _fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> dict
         h = fetch_history(ticker, period_days=period_days, interval=td_interval)
         if h is None or h.empty or len(h) < 30:
             return None
+
+        # F1: Validate no NaN/Inf in OHLCV data — a single NaN propagates
+        # through ALL indicator computations producing garbage signals
+        for col in ["Open", "High", "Low", "Close"]:
+            if col in h.columns:
+                col_data = h[col]
+                nan_count = col_data.isna().sum()
+                if nan_count > 0:
+                    logger.warning("F1: %s has %d NaN values in %s — dropping rows",
+                                   ticker, nan_count, col)
+                    h = h.dropna(subset=["Open", "High", "Low", "Close"])
+                    break
+
+        if len(h) < 30:
+            return None
+
+        # F1: Check for Inf values
+        for col in ["Open", "High", "Low", "Close"]:
+            if col in h.columns:
+                inf_mask = h[col].apply(lambda x: not math.isfinite(x))
+                if inf_mask.any():
+                    logger.warning("F1: %s has Inf values in %s — dropping rows", ticker, col)
+                    h = h[~inf_mask]
+
+        if len(h) < 30:
+            return None
+
         return {
             "open": list(h["Open"]),
             "high": list(h["High"]),
@@ -1215,6 +1368,10 @@ def _compute_all_indicators(ohlcv: dict) -> dict:
     else:
         indicators["volume_ratio"] = 1.0
 
+    # F3: Store raw series for two-swing divergence detection
+    indicators["_closes"] = closes
+    indicators["_rsi_series"] = _compute_rsi_series(closes, 14)
+
     return indicators
 
 
@@ -1277,27 +1434,42 @@ def score_technical_setups(tickers: dict | None = None,
         if name in enabled
     ]
 
-    # Fetch OHLCV data in parallel for all tickers
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    ohlcv_data: dict[str, dict | None] = {}
+    # F6: Use fetch_history_batch for efficient parallel fetching (fewer API calls)
     ticker_list = list(target_tickers.keys())
+    ohlcv_data: dict[str, dict | None] = {}
     try:
-        with ThreadPoolExecutor(max_workers=min(len(ticker_list), 5)) as executor:
-            futures = {
-                executor.submit(_fetch_ohlcv, t, "6mo", "1d"): t
-                for t in ticker_list
-            }
-            for future in as_completed(futures, timeout=PER_FETCH_TIMEOUT_S * len(ticker_list)):
-                ticker = futures[future]
-                try:
-                    ohlcv_data[ticker] = future.result(timeout=PER_FETCH_TIMEOUT_S)
-                except Exception:
+        from ..market_data import fetch_history_batch
+        batch_data = fetch_history_batch(ticker_list, period_days=365, interval="1day")
+        for ticker in ticker_list:
+            df = batch_data.get(ticker)
+            if df is not None and not df.empty and len(df) >= 30:
+                # F1: Validate no NaN/Inf
+                for col in ["Open", "High", "Low", "Close"]:
+                    if col in df.columns and df[col].isna().any():
+                        df = df.dropna(subset=["Open", "High", "Low", "Close"])
+                        break
+                for col in ["Open", "High", "Low", "Close"]:
+                    if col in df.columns:
+                        inf_mask = df[col].apply(lambda x: not math.isfinite(x))
+                        if inf_mask.any():
+                            df = df[~inf_mask]
+                if len(df) >= 30:
+                    ohlcv_data[ticker] = {
+                        "open": list(df["Open"]),
+                        "high": list(df["High"]),
+                        "low": list(df["Low"]),
+                        "close": list(df["Close"]),
+                        "volume": list(df["Volume"]) if "Volume" in df.columns else [],
+                    }
+                else:
                     ohlcv_data[ticker] = None
-    except Exception:
-        # Fallback: sequential
+            else:
+                ohlcv_data[ticker] = None
+    except Exception as exc:
+        logger.warning("F6: fetch_history_batch failed, falling back to per-ticker: %s", exc)
         for t in ticker_list:
             if t not in ohlcv_data:
-                ohlcv_data[t] = _fetch_ohlcv(t, "6mo", "1d")
+                ohlcv_data[t] = _fetch_ohlcv(t, "1y", "1d")
 
     all_setups = []
 
@@ -1309,6 +1481,8 @@ def score_technical_setups(tickers: dict | None = None,
         indicators = _compute_all_indicators(ohlcv)
         # Inject configurable thresholds into indicators for detectors
         indicators["_params"] = params
+        # F9: Inject ticker category for per-category squeeze thresholds
+        indicators["_category"] = info.get("category", "")
         atr = indicators.get("atr")
         last_close = indicators.get("last_close")
 
@@ -1361,16 +1535,19 @@ def score_technical_setups(tickers: dict | None = None,
                 target_pct = round(atr_pct * 1.5 * atr_mult, 2)
                 stop_pct = round(atr_pct * 1.0 * atr_mult, 2)
 
-            # P4: Confidence = signal quality, not just score * 0.9
-            # Based on: number of confirming signals + regime match + volume
+            # P4/F10: Confidence = signal quality, not just score * 0.9
+            # F10: Normalize signal count by strategy type to avoid combo bias
             signal_count = sum(1 for v in setup.get("signals", {}).values()
                                if v is not None)
+            # F10: Cap effective signal count at 4 to normalize combos vs singles
+            # Combos naturally have more signals but that doesn't mean higher quality
+            effective_signal_count = min(signal_count, 4)
             regime_conf = 1.0 if (not preferred_regime or preferred_regime == regime) else 0.8
             vol_conf = min(1.2, vol_ratio / 1.5) if vol_ratio > 1.0 else 0.8
             confidence = min(100, int(
-                (signal_count / 4 * 40) +  # Signal richness (max 40)
-                (regime_conf * 30) +         # Regime match (max 30)
-                (vol_conf * 30)              # Volume confirmation (max 30)
+                (effective_signal_count / 4 * 40) +  # Signal richness (max 40)
+                (regime_conf * 30) +                   # Regime match (max 30)
+                (vol_conf * 30)                        # Volume confirmation (max 30)
             ))
 
             entry = {
@@ -1469,7 +1646,7 @@ class AgentScoring3(BaseAgent):
 
     name = "scoring_3"
     description = "Technical indicators scoring — multi-strategy, multi-timeframe"
-    version = "2.1"  # v2.1: 5 combo strategies (multi-indicator confluence)
+    version = "2.2"  # v2.2: Audit fixes (F1 NaN, F2 SMA200, F3 divergence, F4 weekly_config, F5-F13)
 
     def __init__(self):
         super().__init__()
