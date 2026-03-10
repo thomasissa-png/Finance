@@ -676,9 +676,27 @@ class AgentTrader3(BaseAgent):
                         entry_price = live_price
                     else:
                         logger.error("T3: rejected live price for %s — %s", ticker, reason)
-                        entry_price = scoring_price
+                        # Validate scoring fallback too
+                        if scoring_price and scoring_price > 0:
+                            is_valid_s, reason_s = validate_price(ticker, scoring_price)
+                            if is_valid_s:
+                                entry_price = scoring_price
+                            else:
+                                logger.error("T3: scoring price also invalid for %s — %s, skipping", ticker, reason_s)
+                                continue
+                        else:
+                            continue
                 else:
-                    entry_price = scoring_price
+                    # Validate scoring fallback
+                    if scoring_price and scoring_price > 0:
+                        is_valid_s, reason_s = validate_price(ticker, scoring_price)
+                        if is_valid_s:
+                            entry_price = scoring_price
+                        else:
+                            logger.error("T3: scoring price invalid for %s — %s, skipping", ticker, reason_s)
+                            continue
+                    else:
+                        continue
             except Exception:
                 entry_price = scoring_price
 

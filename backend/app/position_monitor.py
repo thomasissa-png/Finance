@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 from .learning import load_trades, update_trade_result, update_trade_stop
-from .market_data import fetch_history
+from .market_data import fetch_history, validate_price
 from .models import Direction, TradeRecommendation, TradeResult
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,11 @@ def _get_current_price(ticker: str) -> float | None:
         from .market_data import fetch_price
         price = fetch_price(ticker)
         if price is not None and math.isfinite(price):
-            return price
+            is_valid, reason = validate_price(ticker, price)
+            if is_valid:
+                return price
+            else:
+                logger.warning("Position monitor: rejected price for %s — %s", ticker, reason)
     except Exception as exc:
         logger.debug("fetch_price failed for %s: %s — falling back to daily bars", ticker, exc)
     # Fallback to daily bars

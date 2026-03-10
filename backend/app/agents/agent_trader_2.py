@@ -283,6 +283,13 @@ class AgentTrader2(BaseAgent):
                 for ticker in TREND_TICKERS:
                     pos = positions[ticker]
                     price = pos.get("entry_price") or _fetch_current_price(ticker)
+                    # Validate fresh start price
+                    if price is not None:
+                        is_valid, reason = validate_price(ticker, price)
+                        if not is_valid:
+                            self.log("Fresh start price rejected for %s: %s" % (ticker, reason),
+                                     level="WARN")
+                            price = None
                     pos["direction"] = "LONG"
                     pos["entry_price"] = price
                     pos["current_price"] = price

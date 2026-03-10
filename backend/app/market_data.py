@@ -675,6 +675,24 @@ _PRICE_RANGES: dict[str, tuple[float, float]] = {
     "USDCHF=X": (0.6, 1.4),     # (yf ~0.88)
     "AUDUSD=X": (0.4, 1.1),     # (yf ~0.63)
     "USDCNH=X": (5.0, 10.0),    # (yf ~7.24)
+    "EURJPY=X": (80, 250),       # (yf ~161)
+    # Actions Euronext Paris
+    "MC.PA": (200, 2000),         # LVMH (yf ~670)
+    "OR.PA": (100, 1000),         # L'Oréal (yf ~370)
+    "AI.PA": (50, 500),           # Air Liquide (yf ~170)
+    "SAN.PA": (30, 300),          # Sanofi (yf ~97)
+    "BNP.PA": (20, 200),          # BNP Paribas (yf ~76)
+    "TTE.PA": (20, 200),          # TotalEnergies (yf ~56)
+    "RMS.PA": (500, 5000),        # Hermès (yf ~2400)
+    # US Stocks
+    "AAPL": (50, 500),            # Apple (yf ~237)
+    "MSFT": (100, 1000),          # Microsoft (yf ~400)
+    "TSLA": (50, 1500),           # Tesla (yf ~275)
+    "AMZN": (50, 500),            # Amazon (yf ~204)
+    # ETF
+    "URA": (5, 100),              # Uranium ETF (yf ~22)
+    # VIX
+    "^VIX": (5, 100),             # VIX (yf ~23)
 }
 
 
@@ -780,7 +798,7 @@ def seed_price_references() -> None:
     # Get all known tickers from config
     try:
         from .config import ASSETS
-        tickers = [a["ticker"] for a in ASSETS]
+        tickers = [a.ticker for a in ASSETS]
     except Exception:
         logger.warning("Could not load ASSETS for price seeding")
         return

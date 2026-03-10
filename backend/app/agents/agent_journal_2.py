@@ -164,18 +164,18 @@ def _fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> tuple[list
     # P3.10: Try 1h bars first for finer MAE/MFE resolution
     try:
         from ..market_data import fetch_intraday
-        bars_1h = fetch_intraday(ticker, interval="1h", outputsize=500)
-        if bars_1h:
-            # Filter to date range
+        df_1h = fetch_intraday(ticker, period="30d", interval="1h")
+        if df_1h is not None and not df_1h.empty:
+            # Convert DataFrame to list of dicts
             result = []
-            for bar in bars_1h:
-                bar_date = bar.get("date", "")
-                if isinstance(bar_date, datetime):
-                    bar_date = bar_date.strftime("%Y-%m-%d")
-                elif isinstance(bar_date, str) and len(bar_date) > 10:
-                    bar_date = bar_date[:10]
+            for idx, row in df_1h.iterrows():
+                bar_date = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
                 if start_date <= bar_date <= end_date:
-                    result.append(bar)
+                    result.append({
+                        "date": idx.strftime("%Y-%m-%d %H:%M") if hasattr(idx, "strftime") else str(idx),
+                        "high": row["High"], "low": row["Low"],
+                        "open": row["Open"], "close": row["Close"],
+                    })
             if result:
                 logger.info("P3.10: Using 1h bars for %s (%d bars)", ticker, len(result))
                 return result, "1h"
@@ -185,18 +185,19 @@ def _fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> tuple[list
     # Fallback: daily bars
     try:
         from ..market_data import fetch_history
-        bars = fetch_history(ticker, period="3mo")
-        if not bars:
+        df_daily = fetch_history(ticker, period_days=90)
+        if df_daily is None or df_daily.empty:
             logger.warning("fetch_history returned empty for %s (%s→%s)", ticker, start_date, end_date)
             return [], "1day"
-        # Filter to date range
+        # Convert DataFrame to list of dicts, filter to date range
         result = []
-        for bar in bars:
-            bar_date = bar.get("date", "")
-            if isinstance(bar_date, datetime):
-                bar_date = bar_date.strftime("%Y-%m-%d")
+        for idx, row in df_daily.iterrows():
+            bar_date = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
             if start_date <= bar_date <= end_date:
-                result.append(bar)
+                result.append({
+                    "date": bar_date, "high": row["High"], "low": row["Low"],
+                    "open": row["Open"], "close": row["Close"],
+                })
         return result, "1day"
     except Exception as exc:
         logger.warning("Twelve Data fetch failed for %s: %s — trying yfinance", ticker, exc)

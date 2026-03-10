@@ -150,18 +150,19 @@ def _fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> list[dict]
     """Fetch daily OHLCV bars for MAE/MFE computation."""
     try:
         from ..market_data import fetch_history
-        bars = fetch_history(ticker, period="3mo")
-        if not bars:
+        df = fetch_history(ticker, period_days=90)
+        if df is None or df.empty:
             logger.warning("fetch_history returned empty for %s (%s->%s)",
                            ticker, start_date, end_date)
             return []
         result = []
-        for bar in bars:
-            bar_date = bar.get("date", "")
-            if isinstance(bar_date, datetime):
-                bar_date = bar_date.strftime("%Y-%m-%d")
+        for idx, row in df.iterrows():
+            bar_date = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
             if start_date <= bar_date <= end_date:
-                result.append(bar)
+                result.append({
+                    "date": bar_date, "high": row["High"], "low": row["Low"],
+                    "open": row["Open"], "close": row["Close"],
+                })
         return result
     except Exception as exc:
         logger.warning("Twelve Data fetch failed for %s: %s — trying yfinance",
