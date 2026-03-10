@@ -69,10 +69,8 @@ def td_available() -> bool:
 # ── Ticker mapping: yfinance format → (td_symbol, extra_params) ──
 # Verified against TD /indices, /forex_pairs, /commodities endpoints (2026-03).
 _TICKER_MAP: dict[str, tuple[str, dict]] = {
-    # Indices — ^FCHI/^GDAXI REMOVED: TD returns ETF prices (~46/44) not index
-    # (CAC=8000+, DAX=24000+). ^FTSE/^N225 also removed (same risk).
-    # All EU/JP indices use yfinance fallback (reliable).
-    # Note: ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX are NOT on TD — blacklisted below
+    # Indices — all blacklisted (404 or ETF collision on TD free tier).
+    # ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX, ^FCHI, ^GDAXI, ^FTSE, ^N225 → yfinance.
     # Forex — all verified correct via /forex_pairs endpoint
     "EURUSD=X": ("EUR/USD", {}),
     "USDJPY=X": ("USD/JPY", {}),
@@ -90,29 +88,32 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "AI.PA": ("AI", {"mic_code": "XPAR"}),
     "OR.PA": ("OR", {"mic_code": "XPAR"}),
     "RMS.PA": ("RMS", {"mic_code": "XPAR"}),
-    # Commodities / Futures — verified via /commodities endpoint
-    # Energy
+    # Commodities / Futures — verified 2026-03 with actual API key.
+    # IMPORTANT: Many commodity symbols (CC1, KC1, SB1, HG1, etc.) collide with
+    # stock/ETF tickers on TD. Without type=commodities, TD returns the stock price.
+    # Energy — no collision, work without type param
     "CL=F": ("CL1", {}),        # WTI Crude (front month)
     "BZ=F": ("CO1", {}),        # Brent Crude (front month)
     "NG=F": ("NG/USD", {}),     # Natural Gas
-    # Precious metals — TD uses forex-style symbols
+    # Precious metals — forex-style symbols, no collision
     "GC=F": ("XAU/USD", {}),    # Gold
     "SI=F": ("XAG/USD", {}),    # Silver
     "PL=F": ("XPT/USD", {}),    # Platinum
     "PA=F": ("XPD/USD", {}),    # Palladium
-    # Base metals — HG=F REMOVED: TD "HG1" = Homag Group AG (stock), not copper futures
-    # Agriculture — verified 2026-03 with API key:
-    #   W_1/C_1/S_1/CT1 = real futures (correct prices, <5% vs yfinance)
-    #   CC1 = Amundi MSCI China Tech ETF (287€, not cocoa 3425$)
-    #   KC1 = unknown stock (0.01, not coffee 296)
-    #   SB1 = Smartbroker Holding AG (12€, not sugar 14$)
-    #   JO1 = John B. Sanfilippo & Son (64$, not OJ 189$)
-    #   LC1 = The Marzetti Company (140$, not live cattle 232$)
-    #   LH1 = Lifetime Brands Inc. (3.38$, not lean hogs 96$)
-    "ZW=F": ("W_1", {}),        # Wheat Futures (verified real)
-    "ZC=F": ("C_1", {}),        # Corn Futures (verified real)
-    "ZS=F": ("S_1", {}),        # Soybeans Futures (verified real)
-    "CT=F": ("CT1", {}),        # Cotton Futures (verified real)
+    # Base metals — HG1 collides with Homag Group AG → need type=commodities
+    "HG=F": ("HG1", {"type": "commodities"}),   # Copper
+    # Agriculture — symbols with stock collisions need type=commodities
+    "ZW=F": ("W_1", {}),        # Wheat (no collision)
+    "ZC=F": ("C_1", {}),        # Corn (no collision)
+    "ZS=F": ("S_1", {}),        # Soybeans (no collision)
+    "CT=F": ("CT1", {}),        # Cotton (no collision)
+    "CC=F": ("CC1", {"type": "commodities"}),    # Cocoa (collides with Amundi ETF)
+    "KC=F": ("KC1", {"type": "commodities"}),    # Coffee (collides with stock)
+    "SB=F": ("SB1", {"type": "commodities"}),    # Sugar (collides with Smartbroker AG)
+    "OJ=F": ("JO1", {"type": "commodities"}),    # Orange Juice (collides with Sanfilippo)
+    # Livestock — same collision issue
+    "LE=F": ("LC1", {"type": "commodities"}),    # Live Cattle (collides with Marzetti Co)
+    "HE=F": ("LH1", {"type": "commodities"}),    # Lean Hogs (collides with Lifetime Brands)
     # ETFs — standard US equity symbols, work as-is on TD
     "SPY": ("SPY", {}), "QQQ": ("QQQ", {}),
     "USO": ("USO", {}), "GLD": ("GLD", {}),
@@ -123,24 +124,12 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
 }
 
 # Tickers known to not work on Twelve Data — skip to yfinance directly.
-# Verified 2026-03 with actual API key: TD resolves these symbols as stocks/ETFs,
-# not the expected futures contracts.
+# Indices are not available on TD free tier (404 or resolve to ETFs).
 _td_blacklist: set[str] = {
-    # Indices — not available on TD free tier, or resolve to ETFs
-    "ZQ=F", "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX",
-    "^FCHI", "^GDAXI",  # 404 on TD
-    "^FTSE",             # TD returns ETF (~14$) not index (~10400)
-    "^N225",             # 404 on TD
-    # Agriculture — TD symbol resolves to stock/ETF, not futures
-    "CC=F",   # CC1 = Amundi China Tech ETF (287€), not cocoa (3425$)
-    "KC=F",   # KC1 = unknown stock (0.01$), not coffee (296$)
-    "SB=F",   # SB1 = Smartbroker Holding AG (12€), not sugar (14$)
-    "OJ=F",   # JO1 = John B. Sanfilippo & Son (64$), not OJ (189$)
-    # Base metals — TD resolves to German stock
-    "HG=F",   # HG1 = Homag Group AG (25€), not copper (5.93$)
-    # Livestock — TD resolves to US stocks
-    "LE=F",   # LC1 = The Marzetti Company (140$), not cattle (232$)
-    "HE=F",   # LH1 = Lifetime Brands Inc. (3.38$), not lean hogs (96$)
+    "ZQ=F",                                      # Fed Funds futures — not on TD
+    "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX",  # US indices — not on TD free tier
+    "^FCHI", "^GDAXI", "^N225",                  # EU/JP indices — 404 on TD
+    "^FTSE",                                      # FTSE — resolves to ETF (~14$)
 }
 _blacklist_lock = threading.Lock()
 
