@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { formatDate, formatTime, pnlColor, RESULT_LABELS, CATEGORY_COLORS, scanLabel, tickerName, paginate, totalPages, replaceTickersInText } from "../utils/format";
+import { formatDate, formatTime, pnlColor, RESULT_LABELS, CATEGORY_COLORS, scanLabel, tickerName, paginate, totalPages, replaceTickersInText, formatPrice } from "../utils/format";
 
 const TEAM_CONFIG = {
   "1": {
@@ -81,15 +81,6 @@ function parseTradesResponse(data, format) {
   // Default: array (Team 1)
   if (Array.isArray(data)) return data.map((t) => ({ ...t, _isActive: t.result === "PENDING" }));
   return [];
-}
-
-/* Smart price formatting: auto-detect decimals based on price magnitude */
-function formatPrice(price) {
-  if (price == null) return "\u2014";
-  if (price >= 1000) return price.toFixed(0);
-  if (price >= 100) return price.toFixed(1);
-  if (price >= 1) return price.toFixed(2);
-  return price.toFixed(4); // forex pairs
 }
 
 const DIM_LABELS = {
@@ -355,6 +346,7 @@ function MobileTradeCard({ t, res }) {
 function TraderSection({ teamId }) {
   const [trades, setTrades] = useState([]);
   const [perf, setPerf] = useState(null);
+  const [livePrices, setLivePrices] = useState({});
   const [filterResult, setFilterResult] = useState("");
   const [page, setPage] = useState(1);
   const [logFilter, setLogFilter] = useState("DECISION");
@@ -379,6 +371,29 @@ function TraderSection({ teamId }) {
 
   const active = trades.filter((t) => t._isActive);
   const history = trades.filter((t) => !t._isActive);
+
+  // Fetch live prices for active positions
+  const fetchLivePrices = useCallback(async () => {
+    const tickers = [...new Set(active.map((p) => p.ticker).filter(Boolean))];
+    if (tickers.length === 0) return;
+    try {
+      const res = await fetch(`/api/prices/current?tickers=${encodeURIComponent(tickers.join(","))}`);
+      if (res.ok) setLivePrices(await res.json());
+    } catch { /* silent */ }
+  }, [active]);
+
+  useEffect(() => {
+    if (active.length === 0) return;
+    fetchLivePrices();
+    const id = setInterval(fetchLivePrices, 60_000);
+    return () => clearInterval(id);
+  }, [fetchLivePrices, active.length]);
+
+  function computeLivePnl(entry_price, current_price, direction) {
+    if (!entry_price || current_price == null) return null;
+    const pct = ((current_price - entry_price) / entry_price) * 100;
+    return direction === "SHORT" ? -pct : pct;
+  }
 
   const filteredHistory = useMemo(() => {
     let list = [...history].sort((a, b) => new Date(b.timestamp || b.entry_time || b.time || 0) - new Date(a.timestamp || a.entry_time || a.time || 0));
@@ -425,8 +440,11 @@ function TraderSection({ teamId }) {
         {active.length > 0 ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {active.map((t, i) => {
-              const pnl = t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
+              const curPrice = livePrices[t.ticker] ?? t.current_price ?? null;
+              const livePnl = computeLivePnl(t.entry_price, curPrice, t.direction);
+              const displayPnl = livePnl ?? t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
               const isExpanded = expandedTrade === `${t.ticker}-${i}`;
+              const entryTime = t.timestamp || t.entry_time || t.last_change_time;
               return (
                 <div key={`${t.ticker}-${t.strategy || ""}-${i}`} className="section-card" style={{ padding: "10px 14px", cursor: "pointer", margin: 0 }}
                   onClick={() => setExpandedTrade(isExpanded ? null : `${t.ticker}-${i}`)}
@@ -437,12 +455,13 @@ function TraderSection({ teamId }) {
                       <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
                       {t.strategy && <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "rgba(139,157,195,0.12)", color: "var(--text-secondary)" }}>{t.strategy}</span>}
                       {t.confluence_level && <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "rgba(236,72,153,0.12)", color: "#EC4899" }}>Confluence {t.confluence_level}/3</span>}
+                      {entryTime && <span style={{ fontSize: 10, color: "var(--text-muted)" }}>{formatDate(entryTime)} {formatTime(entryTime)}</span>}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
-                      <span>Entrée: {formatPrice(t.entry_price)}</span>
-                      <span>Actuel: {formatPrice(t.current_price)}</span>
-                      <span style={{ color: pnlColor(pnl), fontWeight: 700 }}>
-                        {pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%` : "\u2014"}
+                      <span>Entrée: {formatPrice(t.entry_price, t.ticker)}</span>
+                      <span style={{ fontWeight: 500, color: curPrice ? "var(--text-primary)" : "var(--text-muted)" }}>Actuel: {formatPrice(curPrice, t.ticker)}</span>
+                      <span style={{ color: pnlColor(displayPnl), fontWeight: 700 }}>
+                        {displayPnl != null ? `${displayPnl > 0 ? "+" : ""}${displayPnl.toFixed(2)}%` : "\u2014"}
                       </span>
                       <span style={{ color: "var(--text-muted)", fontSize: 10 }}>{isExpanded ? "▲" : "▼"}</span>
                     </div>
@@ -488,8 +507,8 @@ function TraderSection({ teamId }) {
 
                       {/* Shared: pricing details */}
                       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 6 }}>
-                        {t.target_price != null && <span style={{ color: "var(--green)" }}>TP: {formatPrice(t.target_price)}</span>}
-                        {t.stop_price != null && <span style={{ color: "var(--red)" }}>SL: {formatPrice(t.stop_price)}</span>}
+                        {t.target_price != null && <span style={{ color: "var(--green)" }}>TP: {formatPrice(t.target_price, t.ticker)}</span>}
+                        {t.stop_price != null && <span style={{ color: "var(--red)" }}>SL: {formatPrice(t.stop_price, t.ticker)}</span>}
                         {t.risk_reward != null && <span>R/R: {t.risk_reward.toFixed(2)}</span>}
                         {t.raw_claude_score != null && <span>Score: {t.raw_claude_score.toFixed(0)}</span>}
                         {t.confidence != null && <span>Confiance: {t.confidence}%</span>}
@@ -543,7 +562,7 @@ function TraderSection({ teamId }) {
                       <td className="ticker-cell">{tickerName(t.ticker)}</td>
                       <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
                       <td style={{ fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>{reason || "\u2014"}</td>
-                      <td>{formatPrice(t.entry_price)}</td>
+                      <td>{formatPrice(t.entry_price, t.ticker)}</td>
                       <td><span className={`result-badge ${res.cls}`}>{res.label}</span></td>
                       <td style={{ color: pnlColor(t.pnl_pct), fontWeight: 600 }}>
                         {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%` : ""}
@@ -884,6 +903,7 @@ function OverviewSection({ teamId, agents }) {
   const config = TEAM_CONFIG[teamId];
   const [trades, setTrades] = useState([]);
   const [perf, setPerf] = useState(null);
+  const [livePrices, setLivePrices] = useState({});
 
   const agentMap = {};
   (agents || []).forEach((a) => { agentMap[a.name] = a; });
@@ -907,6 +927,30 @@ function OverviewSection({ teamId, agents }) {
   const active = trades.filter((t) => t._isActive);
   const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";
   const pnlField = teamId === "2" ? "realized_pnl" : "pnl_total";
+
+  // Fetch live prices for active positions
+  const fetchLivePrices = useCallback(async () => {
+    const tickers = [...new Set(active.map((p) => p.ticker).filter(Boolean))];
+    if (tickers.length === 0) return;
+    try {
+      const res = await fetch(`/api/prices/current?tickers=${encodeURIComponent(tickers.join(","))}`);
+      if (res.ok) setLivePrices(await res.json());
+    } catch { /* silent */ }
+  }, [active]);
+
+  useEffect(() => {
+    if (active.length === 0) return;
+    fetchLivePrices();
+    const id = setInterval(fetchLivePrices, 60_000);
+    return () => clearInterval(id);
+  }, [fetchLivePrices, active.length]);
+
+  // Compute live P&L
+  function computeLivePnl(entry_price, current_price, direction) {
+    if (!entry_price || current_price == null) return null;
+    const pct = ((current_price - entry_price) / entry_price) * 100;
+    return direction === "SHORT" ? -pct : pct;
+  }
 
   return (
     <div>
@@ -949,6 +993,7 @@ function OverviewSection({ teamId, agents }) {
                   <th>Entrée</th>
                   <th>Actuel</th>
                   <th>P&L</th>
+                  <th>Ouvert depuis</th>
                   {teamId === "1" && <th>Raison</th>}
                   {teamId === "2" && <th>Catalyseurs</th>}
                   {teamId === "3" && <th>Stratégie</th>}
@@ -957,18 +1002,24 @@ function OverviewSection({ teamId, agents }) {
               </thead>
               <tbody>
                 {active.map((t, i) => {
-                  const pnl = t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
+                  const curPrice = livePrices[t.ticker] ?? t.current_price ?? null;
+                  const livePnl = computeLivePnl(t.entry_price, curPrice, t.direction);
+                  const displayPnl = livePnl ?? t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
                   const reason = t.news_headline || t.catalyst || t.reasoning || t.strategy || "";
+                  const entryTime = t.timestamp || t.entry_time || t.last_change_time;
                   return (
                     <tr key={`${t.ticker}-${t.strategy || ""}-${i}`}>
                       <td className="ticker-cell">{tickerName(t.ticker)}</td>
                       <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-                      <td>{formatPrice(t.entry_price)}</td>
-                      <td>{formatPrice(t.current_price)}</td>
-                      <td style={{ color: pnlColor(pnl), fontWeight: 600 }}>
-                        {pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%` : "\u2014"}
+                      <td>{formatPrice(t.entry_price, t.ticker)}</td>
+                      <td style={{ fontWeight: 500, color: curPrice ? "var(--text-primary)" : "var(--text-muted)" }}>{formatPrice(curPrice, t.ticker)}</td>
+                      <td style={{ color: pnlColor(displayPnl), fontWeight: 600 }}>
+                        {displayPnl != null ? `${displayPnl > 0 ? "+" : ""}${displayPnl.toFixed(2)}%` : "\u2014"}
                       </td>
-                      <td style={{ fontSize: 11, maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>
+                      <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                        {entryTime ? formatDate(entryTime) + " " + formatTime(entryTime) : "\u2014"}
+                      </td>
+                      <td style={{ fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>
                         {reason || "\u2014"}
                       </td>
                     </tr>

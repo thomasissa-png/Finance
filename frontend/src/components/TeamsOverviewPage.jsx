@@ -89,7 +89,7 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
       return {
         name: team.name.replace("Équipe ", "Éq. "),
         "Win Rate": team.id === "2" ? (d.flip_win_rate ?? 0) : (d.win_rate ?? 0),
-        "P&L": team.id === "2" ? (d.realized_pnl ?? 0) : (d.pnl_total ?? 0),
+        "P&L": team.id === "1" ? (d.total_pnl ?? 0) : (d.total_realized_pnl ?? 0),
       };
     });
   }, [report]);
@@ -123,8 +123,8 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
         {TEAMS.map((team) => {
           const perfData = report?.[team.perfKey] || {};
           const wr = team.id === "2" ? perfData.flip_win_rate : perfData.win_rate;
-          const pnl = team.id === "2" ? perfData.realized_pnl : perfData.pnl_total;
-          const trades = team.id === "2" ? (perfData.total_flips || 0) : (perfData.total_trades || 0);
+          const pnl = team.id === "1" ? perfData.total_pnl : (team.id === "2" ? perfData.total_realized_pnl : perfData.total_realized_pnl);
+          const trades = team.id === "2" ? (perfData.flip_count || 0) : (perfData.total_trades || 0);
 
           const teamAgents = team.agents.map((n) => agentMap[n]).filter(Boolean);
           const working = teamAgents.filter((a) => a.status === "working").length;

@@ -1,15 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { timeAgo, pnlColor, tickerName, formatDate, formatTime } from "../utils/format";
+import { timeAgo, pnlColor, tickerName, formatDate, formatTime, formatPrice } from "../utils/format";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
-
-/* Smart price formatting based on magnitude */
-function formatPrice(price) {
-  if (price == null) return "--";
-  if (price >= 1000) return price.toFixed(0);
-  if (price >= 100) return price.toFixed(1);
-  if (price >= 1) return price.toFixed(2);
-  return price.toFixed(4);
-}
 
 function useToasts() {
   const [toasts, setToasts] = useState([]);
@@ -238,9 +229,9 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
         </td>
         <td className="ticker-cell">{tickerName(t.ticker)}</td>
         <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-        <td>{formatPrice(t.entry_price)}</td>
+        <td>{formatPrice(t.entry_price, t.ticker)}</td>
         <td style={{ fontWeight: 500, color: t._currentPrice ? "var(--text-primary)" : "var(--text-muted)" }}>
-          {formatPrice(t._currentPrice)}
+          {formatPrice(t._currentPrice, t.ticker)}
         </td>
         <td style={{ color: pnlColor(t._displayPnl), fontWeight: 600 }}>
           {t._displayPnl != null ? `${t._displayPnl > 0 ? "+" : ""}${t._displayPnl.toFixed(2)}%` : "--"}
@@ -308,10 +299,10 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
 /* Per-team summary cards */
 function TeamSummaryCards({ report, positions }) {
   const teams = [
-    { id: "1", name: "Éq. 1 — Day Trading", perfKey: "trader_1", wrKey: "win_rate", pnlKey: "pnl_total", tradesKey: "total_trades" },
-    { id: "2", name: "Éq. 2 — Tendance", perfKey: "trader_2", wrKey: "flip_win_rate", pnlKey: "realized_pnl", tradesKey: "total_flips" },
-    { id: "3", name: "Éq. 3 — Technique", perfKey: "trader_3", wrKey: "win_rate", pnlKey: "pnl_total", tradesKey: "total_trades" },
-    { id: "4", name: "Éq. 4 — Meta", perfKey: "trader_4", wrKey: "win_rate", pnlKey: "pnl_total", tradesKey: "total_trades" },
+    { id: "1", name: "Éq. 1 — Day Trading", perfKey: "trader_1", wrKey: "win_rate", pnlKey: "total_pnl", tradesKey: "total_trades" },
+    { id: "2", name: "Éq. 2 — Tendance", perfKey: "trader_2", wrKey: "flip_win_rate", pnlKey: "total_realized_pnl", tradesKey: "flip_count" },
+    { id: "3", name: "Éq. 3 — Technique", perfKey: "trader_3", wrKey: "win_rate", pnlKey: "total_realized_pnl", tradesKey: "total_trades" },
+    { id: "4", name: "Éq. 4 — Meta", perfKey: "trader_4", wrKey: "win_rate", pnlKey: "total_realized_pnl", tradesKey: "total_trades" },
   ];
 
   return (
@@ -529,11 +520,11 @@ export default function DashboardPage({ isActive, agents }) {
         const t3 = report?.trader_3 || {};
         const t4 = report?.trader_4 || {};
         // Aggregate trades count
-        const totalTrades = (t1.total_trades || 0) + (t2.total_flips || 0) + (t3.total_trades || 0) + (t4.total_trades || 0);
+        const totalTrades = (t1.total_trades || 0) + (t2.flip_count || 0) + (t3.total_trades || 0) + (t4.total_trades || 0);
         // Weighted win rate across teams with trades
         const teamWrs = [
           { wr: t1.win_rate, n: t1.total_trades || 0 },
-          { wr: t2.flip_win_rate, n: t2.total_flips || 0 },
+          { wr: t2.flip_win_rate, n: t2.flip_count || 0 },
           { wr: t3.win_rate, n: t3.total_trades || 0 },
           { wr: t4.win_rate, n: t4.total_trades || 0 },
         ].filter((x) => x.wr != null && x.n > 0);
@@ -542,8 +533,8 @@ export default function DashboardPage({ isActive, agents }) {
           ? teamWrs.reduce((s, x) => s + x.wr * x.n, 0) / totalN
           : (perf?.win_rate || 0);
         // Sum P&L across teams
-        const totalPnl = (t1.total_pnl != null ? t1.total_pnl : (perf?.total_pnl_pct || 0))
-          + (t2.realized_pnl || 0) + (t3.pnl_total || 0) + (t4.pnl_total || 0);
+        const totalPnl = (t1.total_pnl ?? (perf?.total_pnl_pct || 0))
+          + (t2.total_realized_pnl || 0) + (t3.total_realized_pnl || 0) + (t4.total_realized_pnl || 0);
         const displayTrades = totalTrades || (perf?.total_trades || 0);
         return (
           <div className="kpi-row">
@@ -638,7 +629,9 @@ export default function DashboardPage({ isActive, agents }) {
 
             // Team 1 summary
             const t1Count = recs.length || (scan?.has_trade ? 1 : 0);
-            const t1Ticker = scan?.recommendation?.ticker;
+            const t1Tickers = recs.length > 0
+              ? [...new Set(recs.map((r) => r.ticker).filter(Boolean))].map(tickerName).join(", ")
+              : (scan?.recommendation?.ticker ? tickerName(scan.recommendation.ticker) : "");
 
             return (
               <div key={s.key} className="scan-summary-slot">
@@ -646,7 +639,7 @@ export default function DashboardPage({ isActive, agents }) {
                   <span className="scan-summary-label">{s.btn}</span>
                   {scan ? (
                     <span className="scan-summary-time">
-                      {scan.timestamp ? formatTime(scan.timestamp) : ""}
+                      {scan.timestamp ? formatTime(scan.timestamp) : (scan.scan_time ? formatTime(scan.scan_time) : "")}
                     </span>
                   ) : (
                     <span className="scan-summary-time muted">—</span>
@@ -662,7 +655,7 @@ export default function DashboardPage({ isActive, agents }) {
                       <span className="scan-summary-team-name">Éq. 1</span>
                       {t1Count > 0 ? (
                         <span className="scan-summary-activity active">
-                          {t1Count} trade{t1Count > 1 ? "s" : ""}{t1Ticker ? ` — ${tickerName(t1Ticker)}` : ""}
+                          {t1Count} trade{t1Count > 1 ? "s" : ""}{t1Tickers ? ` — ${t1Tickers}` : ""}
                         </span>
                       ) : (
                         <span className="scan-summary-activity idle">Pas de trade</span>

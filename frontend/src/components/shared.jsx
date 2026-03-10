@@ -72,7 +72,10 @@ export function LogEntry({ log, expandable, expanded, onToggle }) {
   const icon = LEVEL_ICONS[log.level] || "i";
   const color = LEVEL_COLORS[log.level] || "var(--text-secondary)";
   const details = formatLogDetails(log.details);
-  const hasExpandable = expandable && log.details?.news_items?.length > 0;
+  // Expandable if has news_items OR if details have more than 4 fields (truncated)
+  const detailCount = log.details ? Object.keys(log.details).filter((k) => k !== "news_items").length : 0;
+  const hasNewsItems = expandable && log.details?.news_items?.length > 0;
+  const hasExpandable = hasNewsItems || (expandable && detailCount > 4);
 
   return (
     <div
@@ -89,6 +92,11 @@ export function LogEntry({ log, expandable, expanded, onToggle }) {
         <span className="agent-log-action" style={{ color }}>
           {replaceTickersInText(log.action)}
         </span>
+        {hasNewsItems && (
+          <span style={{ fontSize: 9, color: "var(--accent)", marginLeft: 4, fontWeight: 600 }}>
+            {log.details.news_items.length} news
+          </span>
+        )}
         <span className="agent-log-time">
           {log.timestamp
             ? new Date(log.timestamp).toLocaleTimeString("fr-FR", {
@@ -107,7 +115,7 @@ export function LogEntry({ log, expandable, expanded, onToggle }) {
       </div>
       {details && details.length > 0 && (
         <div className="agent-log-details">
-          {details.slice(0, 4).map((d) => (
+          {details.slice(0, expanded ? 20 : 4).map((d) => (
             <span key={d.key} className="agent-log-detail">
               <span className="agent-log-detail-key">{d.key}:</span> {d.value}
             </span>
