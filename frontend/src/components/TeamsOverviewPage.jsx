@@ -51,12 +51,12 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
   const fetchActiveTrades = useCallback(async () => {
     try {
       const [t1, t2, t3, t4] = await Promise.all([
-        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trades/pending").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
-      const pending1 = Array.isArray(t1) ? t1.filter((t) => t.result === "PENDING") : [];
+      const pending1 = Array.isArray(t1) ? t1 : [];
       const active2 = t2 && typeof t2 === "object" && !Array.isArray(t2) ? Object.values(t2).filter((t) => t.direction && t.direction !== "FLAT") : [];
       const active3 = Array.isArray(t3?.active) ? t3.active : [];
       const t4Values = t4 && typeof t4 === "object" && !Array.isArray(t4) ? Object.values(t4) : [];
@@ -184,14 +184,12 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
                   {(activeTrades[team.id] || []).slice(0, 4).map((t, ti) => {
                     const pnl = t.unrealized_pnl_pct ?? t.pnl_pct ?? t.unrealized_pnl ?? null;
                     return (
-                      <div key={ti} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, padding: "2px 0", color: "var(--text-secondary)" }}>
-                        <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{tickerName(t.ticker)}</span>
-                        <span className={`direction-badge ${(t.direction || "").toLowerCase()}`} style={{ fontSize: 9, padding: "1px 6px" }}>{t.direction}</span>
-                        {pnl != null && (
-                          <span style={{ color: pnlColor(pnl), fontWeight: 600 }}>
-                            {pnl > 0 ? "+" : ""}{pnl.toFixed(2)}%
-                          </span>
-                        )}
+                      <div key={ti} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", fontSize: 11, padding: "2px 0", color: "var(--text-secondary)" }}>
+                        <span style={{ fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tickerName(t.ticker)}</span>
+                        <span className={`direction-badge ${(t.direction || "").toLowerCase()}`} style={{ fontSize: 9, padding: "1px 6px", minWidth: 42, textAlign: "center" }}>{t.direction}</span>
+                        <span style={{ color: pnl != null ? pnlColor(pnl) : "var(--text-muted)", fontWeight: 600, minWidth: 52, textAlign: "right" }}>
+                          {pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%` : "--"}
+                        </span>
                       </div>
                     );
                   })}
