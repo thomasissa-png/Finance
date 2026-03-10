@@ -90,11 +90,23 @@ def _save_journal_entries(entries: list[dict]):
 
 
 def _save_entries_json(entries: list[dict]):
+    """Save entries atomically via temp-file + os.replace().
+
+    v8.4 fix: Previous version truncated file before lock acquisition.
+    """
+    import tempfile
     _ensure_journal_file()
-    with open(JOURNAL_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(entries, f, indent=2, default=str)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(JOURNAL_FILE.parent), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(entries, f, indent=2, default=str)
+        os.replace(tmp_path, str(JOURNAL_FILE))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _pg_load_entries() -> list[dict]:

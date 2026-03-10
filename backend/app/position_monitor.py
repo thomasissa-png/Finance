@@ -41,7 +41,22 @@ TIME_STOP_HOURS_HARD = 5.0
 
 
 def _get_current_price(ticker: str) -> float | None:
-    """Fetch the most recent price for a ticker."""
+    """Fetch the most recent price for a ticker.
+
+    v8.4 fix P17-E1: Try fetch_price() first for live/recent quotes,
+    fall back to daily bars. Previous version only used daily bars which
+    return previous day's close during trading hours, causing stale
+    trailing stop decisions.
+    """
+    # Try live quote first via market_data module
+    try:
+        from .market_data import fetch_price
+        price = fetch_price(ticker)
+        if price is not None and math.isfinite(price):
+            return price
+    except Exception as exc:
+        logger.debug("fetch_price failed for %s: %s — falling back to daily bars", ticker, exc)
+    # Fallback to daily bars
     try:
         data = fetch_history(ticker, period_days=2, interval="1day")
         if data is not None and not data.empty:

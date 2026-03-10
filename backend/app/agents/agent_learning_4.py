@@ -489,6 +489,7 @@ class AgentLearning4(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        self._cache_lock = __import__("threading").Lock()  # v8.4 fix: thread-safe cache
         self._last_run_time = None  # P3.13: stale cache monitoring
         # Weekly config (persisted to survive restarts)
         self._weekly_config: dict | None = _load_persisted_weekly_config()
@@ -523,10 +524,11 @@ class AgentLearning4(BaseAgent):
                 entries,
             )
 
-            self._cached_adjustments = learning_data
-            self._last_run_time = datetime.now(timezone.utc)  # P3.13
-            self._cache_valid = True
-            self._total_recalculations += 1
+            with self._cache_lock:
+                self._cached_adjustments = learning_data
+                self._last_run_time = datetime.now(timezone.utc)  # P3.13
+                self._cache_valid = True
+                self._total_recalculations += 1
 
             # Step 3: Process results
             combo_adj = learning_data.get("combo_adj", {})
@@ -781,17 +783,23 @@ class AgentLearning4(BaseAgent):
         """Get cached meta learning adjustments (used by Trader 4 and Scoring 4).
 
         Recalculates if cache is invalid.
+        v8.4 fix: Thread-safe cache access via lock.
         """
-        if not self._cache_valid or self._cached_adjustments is None:
-            from .agent_journal_4 import _load_journal_entries
-            entries = _filter_by_current_versions(_load_journal_entries())
-            self._cached_adjustments = compute_meta_learning(entries)
-            self._cache_valid = True
-        return self._cached_adjustments
+        with self._cache_lock:
+            if not self._cache_valid or self._cached_adjustments is None:
+                from .agent_journal_4 import _load_journal_entries
+                entries = _filter_by_current_versions(_load_journal_entries())
+                self._cached_adjustments = compute_meta_learning(entries)
+                self._cache_valid = True
+            return self._cached_adjustments
 
     def invalidate_cache(self):
-        """Invalidate the learning cache (called after journal 4)."""
-        self._cache_valid = False
+        """Invalidate the learning cache (called after journal 4).
+
+        v8.4 fix: Thread-safe cache invalidation via lock.
+        """
+        with self._cache_lock:
+            self._cache_valid = False
         self.log("Meta learning cache invalidated")
 
     def get_metrics(self) -> dict:

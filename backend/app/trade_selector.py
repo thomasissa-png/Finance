@@ -50,21 +50,27 @@ logger = logging.getLogger(__name__)
 
 # T1-P5: Per-scan trade cache to avoid repeated load_trades() calls
 # Reset at the start of each select_trade() call
-_cached_trades: list | None = None
+# v8.4 fix P3-E1: Thread-safe cache via threading.local() instead of module-level global.
+# Concurrent scans (event scanner + scheduled) could corrupt a shared global cache.
+import threading as _ts_threading
+_ts_local = _ts_threading.local()
 
 
 def _get_trades_cached() -> list:
-    """Return cached trades list (loaded once per select_trade call)."""
-    global _cached_trades
-    if _cached_trades is not None:
-        return _cached_trades
+    """Return cached trades list (loaded once per select_trade call).
+
+    v8.4 fix P3-E1: Uses thread-local storage to prevent concurrent scan corruption.
+    """
+    cached = getattr(_ts_local, "cached_trades", None)
+    if cached is not None:
+        return cached
     try:
         from .learning import load_trades
-        _cached_trades = load_trades()
+        _ts_local.cached_trades = load_trades()
     except Exception as exc:
         logger.warning("Failed to load trades: %s", exc)
-        _cached_trades = []
-    return _cached_trades
+        _ts_local.cached_trades = []
+    return _ts_local.cached_trades
 
 
 # Cross-day dedup: don't trade the same ticker within this many days
@@ -247,6 +253,7 @@ import threading as _corr_threading
 _corr_cache: dict[str, tuple[float | None, float]] = {}  # key -> (correlation, timestamp)
 _corr_cache_lock = _corr_threading.Lock()  # T1-P9: Thread safety for concurrent scans
 _CORR_CACHE_TTL = 3600  # 1 hour
+_CORR_CACHE_MAX_SIZE = 1000  # v8.4 fix P13-E1: evict oldest entries to prevent unbounded growth
 
 
 def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20) -> float | None:
@@ -298,6 +305,10 @@ def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20)
         result = round(corr, 3) if corr == corr else None  # NaN check
         with _corr_cache_lock:
             _corr_cache[cache_key] = (result, _time.time())
+            # v8.4 fix P13-E1: evict oldest entries if cache exceeds max size
+            if len(_corr_cache) > _CORR_CACHE_MAX_SIZE:
+                oldest_key = min(_corr_cache, key=lambda k: _corr_cache[k][1])
+                del _corr_cache[oldest_key]
         return result
     except Exception:
         return None
@@ -568,8 +579,8 @@ def select_trades(
         ScanResult with recommendations list (0..N trades).
     """
     # T1-P5: Reset per-scan trade cache (avoids loading trades N times per scan)
-    global _cached_trades
-    _cached_trades = None
+    # v8.4 fix P3-E1: Thread-local instead of global — safe for concurrent scans
+    _ts_local.cached_trades = None
 
     now = datetime.now(timezone.utc)
 

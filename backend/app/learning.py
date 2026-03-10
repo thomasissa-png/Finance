@@ -59,6 +59,11 @@ _trades_cache_source: str = ""  # "pg" or path string — invalidate if source c
 _trades_cache_lock = threading.Lock()
 _TRADES_CACHE_TTL = 60.0  # seconds
 
+# v8.4 fix P2-E1: RMW lock for JSON read-modify-write operations.
+# Prevents lost updates when concurrent writers (position monitor trailing stop,
+# new scan trade save, journal trade result update) modify trades.json.
+_json_rmw_lock = threading.Lock()
+
 # (#30) Adaptive decay: gradual transition from 45 to 30 days
 DECAY_HALF_LIFE_DAYS_LOW = 45.0   # When few trades
 DECAY_HALF_LIFE_DAYS_HIGH = 30.0  # When many trades
@@ -91,14 +96,26 @@ def _read_json_locked(path: Path) -> list:
 
 
 def _write_json_locked(path: Path, data: list) -> None:
-    """Write JSON file with exclusive lock."""
+    """Write JSON file atomically via temp-file + os.replace().
+
+    v8.4 fix P1-E1: Previous version opened with "w" (truncating) BEFORE acquiring
+    the lock, creating a race where concurrent readers could see an empty file.
+    Now writes to a temp file and atomically renames.
+    """
+    import os as _os
+    import tempfile
     _ensure_data_dir()
-    with open(path, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with _os.fdopen(tmp_fd, "w") as f:
             json.dump(data, f, indent=2, default=str)
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+        _os.replace(tmp_path, str(path))
+    except Exception:
+        try:
+            _os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _parse_trades(raw: list, source: str) -> list[TradeRecommendation]:
@@ -193,16 +210,24 @@ def _load_trades_uncached() -> list[TradeRecommendation]:
 
 
 def save_trade(trade: TradeRecommendation) -> None:
-    """Append a new trade to the history."""
+    """Append a new trade to the history.
+
+    v8.4 fix P2-E1: JSON path now holds an exclusive lock across the entire
+    read-modify-write cycle to prevent lost updates from concurrent writers
+    (e.g., position monitor trailing stop + new scan trade save).
+    """
     if is_pg_enabled():
         from .database import pg_save_trade
         pg_save_trade(trade.model_dump(mode="json"))
         logger.info("Saved trade: %s %s %s", trade.direction, trade.ticker, trade.catalyst[:50])
         _invalidate_trades_cache()  # H2
         return
-    trades = _load_trades_uncached()  # bypass cache to get fresh data for append
-    trades.append(trade)
-    _write_trades(trades)
+    # JSON path: lock across entire read-modify-write cycle
+    _ensure_data_dir()
+    with _json_rmw_lock:
+        trades = _load_trades_uncached()  # bypass cache to get fresh data for append
+        trades.append(trade)
+        _write_trades(trades)
     _invalidate_trades_cache()  # H2
     logger.info("Saved trade: %s %s %s", trade.direction, trade.ticker, trade.catalyst[:50])
 
@@ -212,6 +237,7 @@ def update_trade_stop(timestamp: datetime, ticker: str, new_stop: float) -> None
 
     Called by position_monitor when the trailing stop is tightened.
     H2: Invalidates trades cache after update.
+    v8.4 fix P2-E1: JSON path holds RMW lock.
     """
     if is_pg_enabled():
         from .database import pg_update_trade_stop
@@ -223,14 +249,15 @@ def update_trade_stop(timestamp: datetime, ticker: str, new_stop: float) -> None
             logger.warning("Trade not found for stop update: %s %s", ticker, timestamp)
         return
 
-    trades = _load_trades_uncached()
-    for trade in trades:
-        if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
-            trade.stop_price = new_stop
-            _write_trades(trades)
-            _invalidate_trades_cache()
-            logger.info("Trailing stop updated %s: new_stop=%.4f", ticker, new_stop)
-            return
+    with _json_rmw_lock:
+        trades = _load_trades_uncached()
+        for trade in trades:
+            if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
+                trade.stop_price = new_stop
+                _write_trades(trades)
+                _invalidate_trades_cache()
+                logger.info("Trailing stop updated %s: new_stop=%.4f", ticker, new_stop)
+                return
 
     logger.warning("Trade not found for stop update: %s %s", ticker, timestamp)
 
@@ -265,29 +292,31 @@ def update_trade_result(
             logger.warning("Trade not found for update: %s %s", ticker, timestamp)
         return
 
-    trades = _load_trades_uncached()  # bypass cache for fresh data
-    for trade in trades:
-        if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
-            trade.result = result
-            trade.exit_price = exit_price
-            trade.closed_at = datetime.now(timezone.utc)
+    # v8.4 fix P2-E1: JSON path holds RMW lock
+    with _json_rmw_lock:
+        trades = _load_trades_uncached()  # bypass cache for fresh data
+        for trade in trades:
+            if trade.ticker == ticker and trade.timestamp == timestamp and trade.result == TradeResult.PENDING:
+                trade.result = result
+                trade.exit_price = exit_price
+                trade.closed_at = datetime.now(timezone.utc)
 
-            # L3: Use shared PnL calculation
-            from .database import compute_pnl
-            pnl = compute_pnl(trade.direction.value, trade.entry_price, exit_price)
-            trade.pnl_pct = pnl if pnl is not None else 0.0
+                # L3: Use shared PnL calculation
+                from .database import compute_pnl
+                pnl = compute_pnl(trade.direction.value, trade.entry_price, exit_price)
+                trade.pnl_pct = pnl if pnl is not None else 0.0
 
-            # P1-#6: Store transmission delay accuracy on the trade
-            if actual_pricing_time_hours is not None:
-                trade.actual_pricing_time_hours = actual_pricing_time_hours
-            if delay_accuracy is not None:
-                trade.delay_accuracy = delay_accuracy
+                # P1-#6: Store transmission delay accuracy on the trade
+                if actual_pricing_time_hours is not None:
+                    trade.actual_pricing_time_hours = actual_pricing_time_hours
+                if delay_accuracy is not None:
+                    trade.delay_accuracy = delay_accuracy
 
-            _write_trades(trades)
-            _invalidate_trades_cache()  # H2
-            logger.info("Updated trade %s %s: %s (PnL: %s%%)", ticker, timestamp, result, trade.pnl_pct)
-            _signal_learning_cache_invalidation()
-            return
+                _write_trades(trades)
+                _invalidate_trades_cache()  # H2
+                logger.info("Updated trade %s %s: %s (PnL: %s%%)", ticker, timestamp, result, trade.pnl_pct)
+                _signal_learning_cache_invalidation()
+                return
 
     logger.warning("Trade not found for update: %s %s", ticker, timestamp)
 
@@ -880,12 +909,14 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
 
 # ── Cached performance summary (invalidated with learning cache) ────
 _cached_perf_summary: str | None = None
+_perf_summary_lock = threading.Lock()  # v8.4 fix P10-E1: thread-safe perf summary cache
 
 
 def invalidate_perf_summary_cache() -> None:
     """Invalidate the performance summary cache. Called after daily journal."""
     global _cached_perf_summary
-    _cached_perf_summary = None
+    with _perf_summary_lock:
+        _cached_perf_summary = None
 
 
 def _extract_recent_review_insights(closed_trades: list[TradeRecommendation],
@@ -980,8 +1011,9 @@ def build_performance_summary(max_recent: int = 15,
     Returns empty string if not enough data.
     """
     global _cached_perf_summary
-    if _cached_perf_summary is not None:
-        return _cached_perf_summary
+    with _perf_summary_lock:
+        if _cached_perf_summary is not None:
+            return _cached_perf_summary
 
     try:
         if trades is None:
@@ -1322,7 +1354,8 @@ def build_performance_summary(max_recent: int = 15,
     ])
 
     result = "\n".join(parts)
-    _cached_perf_summary = result
+    with _perf_summary_lock:
+        _cached_perf_summary = result
     return result
 
 

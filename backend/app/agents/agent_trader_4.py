@@ -150,12 +150,23 @@ def _load_positions_json_only() -> dict:
 
 
 def _save_positions_json(positions: dict):
-    """JSON-only save (fallback)."""
+    """JSON-only save (fallback) — atomic via temp-file + os.replace().
+
+    v8.4 fix: Previous version truncated file before lock acquisition.
+    """
+    import tempfile
     _ensure_positions_file()
-    with open(POSITIONS_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(positions, f, indent=2, default=str)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(POSITIONS_FILE.parent), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(positions, f, indent=2, default=str)
+        os.replace(tmp_path, str(POSITIONS_FILE))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _pg_load_positions() -> dict:

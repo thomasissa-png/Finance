@@ -487,6 +487,7 @@ class AgentLearning3(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        self._cache_lock = __import__("threading").Lock()  # v8.4 fix: thread-safe cache
         self._last_run_time = None  # P3.13: stale cache monitoring
         self._weekly_config: dict | None = _load_persisted_weekly_config()  # C3: weekly strategy config (persisted)
         self._config_history: list[dict] = _load_config_history()  # L2: track config changes (persisted)
@@ -521,10 +522,11 @@ class AgentLearning3(BaseAgent):
                 entries,
             )
 
-            self._cached_adjustments = learning_data
-            self._cache_valid = True
-            self._last_run_time = datetime.now(timezone.utc)  # P3.13
-            self._total_recalculations += 1
+            with self._cache_lock:
+                self._cached_adjustments = learning_data
+                self._cache_valid = True
+                self._last_run_time = datetime.now(timezone.utc)  # P3.13
+                self._total_recalculations += 1
 
             # Step 3: Process results
             strategy_adj = learning_data.get("strategy_adj", {})
@@ -620,19 +622,25 @@ class AgentLearning3(BaseAgent):
         """Get cached tech learning adjustments (used by Trader 3).
 
         Recalculates if cache is invalid.
+        v8.4 fix: Thread-safe cache access via lock.
         """
-        if not self._cache_valid or self._cached_adjustments is None:
-            from .agent_journal_3 import _load_journal_entries
-            entries = _filter_by_current_versions(_load_journal_entries())
-            self._cached_adjustments = compute_tech_learning(entries)
-            self._cache_valid = True
-            self._total_recalculations += 1
-            self._last_run_time = datetime.now(timezone.utc)
-        return self._cached_adjustments
+        with self._cache_lock:
+            if not self._cache_valid or self._cached_adjustments is None:
+                from .agent_journal_3 import _load_journal_entries
+                entries = _filter_by_current_versions(_load_journal_entries())
+                self._cached_adjustments = compute_tech_learning(entries)
+                self._cache_valid = True
+                self._total_recalculations += 1
+                self._last_run_time = datetime.now(timezone.utc)
+            return self._cached_adjustments
 
     def invalidate_cache(self):
-        """Invalidate the learning cache (called after journal 3)."""
-        self._cache_valid = False
+        """Invalidate the learning cache (called after journal 3).
+
+        v8.4 fix: Thread-safe cache invalidation via lock.
+        """
+        with self._cache_lock:
+            self._cache_valid = False
         self.log("Tech learning cache invalidated")
 
     def get_ab_report(self) -> dict:

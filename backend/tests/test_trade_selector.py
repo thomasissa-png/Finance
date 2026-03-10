@@ -220,13 +220,13 @@ def _make_trade(ticker: str, days_ago: int = 0) -> TradeRecommendation:
 def test_get_recently_traded_tickers_returns_recent(mock_load):
     """Tickers traded within cooldown window should be returned."""
     import backend.app.trade_selector as _ts
-    _ts._cached_trades = None  # Reset per-scan cache
+    _ts._ts_local.cached_trades = None  # Reset per-scan cache (thread-local v8.4)
     mock_load.return_value = [
         _make_trade("ZW=F", days_ago=1),  # wheat yesterday
         _make_trade("MC.PA", days_ago=0),  # today
     ]
     result = _get_recently_traded_tickers(cooldown_days=3)
-    _ts._cached_trades = None
+    _ts._ts_local.cached_trades = None
     assert "ZW=F" in result
     assert "MC.PA" in result
 
@@ -235,13 +235,13 @@ def test_get_recently_traded_tickers_returns_recent(mock_load):
 def test_get_recently_traded_tickers_excludes_old(mock_load):
     """Tickers traded before cooldown window should NOT be returned."""
     import backend.app.trade_selector as _ts
-    _ts._cached_trades = None  # Reset per-scan cache
+    _ts._ts_local.cached_trades = None  # Reset per-scan cache (thread-local v8.4)
     mock_load.return_value = [
         _make_trade("ZW=F", days_ago=5),  # 5 days ago — outside 3-day window
         _make_trade("MC.PA", days_ago=1),  # yesterday — within window
     ]
     result = _get_recently_traded_tickers(cooldown_days=3)
-    _ts._cached_trades = None
+    _ts._ts_local.cached_trades = None
     assert "ZW=F" not in result
     assert "MC.PA" in result
 
@@ -250,10 +250,10 @@ def test_get_recently_traded_tickers_excludes_old(mock_load):
 def test_get_recently_traded_tickers_empty_on_error(mock_load):
     """Should return empty set if load_trades fails."""
     import backend.app.trade_selector as _ts
-    _ts._cached_trades = None  # Reset per-scan cache
+    _ts._ts_local.cached_trades = None  # Reset per-scan cache (thread-local v8.4)
     mock_load.side_effect = Exception("DB error")
     result = _get_recently_traded_tickers()
-    _ts._cached_trades = None
+    _ts._ts_local.cached_trades = None
     assert result == set()
 
 

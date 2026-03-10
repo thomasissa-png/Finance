@@ -21,6 +21,7 @@ Expertise incarnée :
 - Détection des anomalies (streaks, drawdown, skewness)
 """
 
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -40,6 +41,7 @@ class AgentLearning(BaseAgent):
         self._total_recalculations: int = 0
         self._cached_adjustments: dict | None = None
         self._cache_valid: bool = False
+        self._cache_lock = threading.Lock()  # v8.4 fix P8-E1: thread-safe cache access
         self._last_run_time: datetime | None = None  # P3.13: stale cache monitoring
 
     def run(self, **kwargs) -> dict:
@@ -67,10 +69,11 @@ class AgentLearning(BaseAgent):
                 self._compute_adjustments,
             )
 
-            self._cached_adjustments = learning_data
-            self._cache_valid = True
-            self._total_recalculations += 1
-            self._last_run_time = datetime.now(timezone.utc)  # P3.13
+            with self._cache_lock:
+                self._cached_adjustments = learning_data
+                self._cache_valid = True
+                self._total_recalculations += 1
+                self._last_run_time = datetime.now(timezone.utc)  # P3.13
 
             # Step 2: Log each dimension
             if isinstance(learning_data, dict):
@@ -166,17 +169,23 @@ class AgentLearning(BaseAgent):
         """Get cached learning adjustments (used by Agent Trader).
 
         Recalculates if cache is invalid (after journal).
+        v8.4 fix P8-E1: Thread-safe cache access via lock.
         """
-        if not self._cache_valid or self._cached_adjustments is None:
-            self._cached_adjustments = self._compute_adjustments()
-            self._cache_valid = True
-            self._total_recalculations += 1
-            self._last_run_time = datetime.now(timezone.utc)
-        return self._cached_adjustments
+        with self._cache_lock:
+            if not self._cache_valid or self._cached_adjustments is None:
+                self._cached_adjustments = self._compute_adjustments()
+                self._cache_valid = True
+                self._total_recalculations += 1
+                self._last_run_time = datetime.now(timezone.utc)
+            return self._cached_adjustments
 
     def invalidate_cache(self):
-        """Invalidate the learning cache and perf summary cache (called after journal)."""
-        self._cache_valid = False
+        """Invalidate the learning cache and perf summary cache (called after journal).
+
+        v8.4 fix P8-E1: Thread-safe cache invalidation via lock.
+        """
+        with self._cache_lock:
+            self._cache_valid = False
         # P3+P7: Also invalidate the performance summary cache so next scan gets fresh data
         perf_ok = True
         try:

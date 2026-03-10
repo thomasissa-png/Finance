@@ -59,6 +59,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
 
 _pool = None
+_pool_lock = __import__("threading").Lock()  # v8.4 fix P7-E1: thread-safe pool creation
 
 # M1: Track last connection use time for conditional pre-ping
 _last_conn_use: float = 0.0
@@ -109,9 +110,15 @@ def _get_pool():
 
     M8: Pool size configurable via PG_POOL_MIN/PG_POOL_MAX env vars.
     H4: Statement timeout applied via DSN options.
+    v8.4 fix P7-E1: Double-checked locking to prevent multiple pools at startup
+    when 21 agents initialize concurrently.
     """
     global _pool
-    if _pool is None:
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        if _pool is not None:  # double-check after acquiring lock
+            return _pool
         if not is_pg_enabled():
             raise RuntimeError("PostgreSQL is not configured (DATABASE_URL not set)")
         # H4: Append statement_timeout to DSN options
@@ -139,15 +146,21 @@ def _get_pool():
 
 
 def close_pool():
-    """Close the connection pool on shutdown to release all connections."""
-    global _pool
-    if _pool is not None:
-        try:
-            _pool.closeall()
-            logger.info("PostgreSQL connection pool closed")
-        except Exception as exc:
-            logger.warning("Error closing PostgreSQL pool: %s", exc)
-        _pool = None
+    """Close the connection pool on shutdown to release all connections.
+
+    v8.4 fix P16-E1: Also resets _last_conn_use to prevent stale pre-ping checks
+    after pool recreation.
+    """
+    global _pool, _last_conn_use
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.closeall()
+                logger.info("PostgreSQL connection pool closed")
+            except Exception as exc:
+                logger.warning("Error closing PostgreSQL pool: %s", exc)
+            _pool = None
+            _last_conn_use = 0.0
 
 
 @contextmanager
@@ -195,7 +208,9 @@ def get_conn():
             try:
                 if conn.closed:
                     raise Exception("connection already closed")
-                conn.cursor().execute("SELECT 1")
+                # v8.4 fix P12-E1: close cursor explicitly to avoid resource leak
+                with conn.cursor() as _ping_cur:
+                    _ping_cur.execute("SELECT 1")
                 conn.rollback()  # Don't leave the pre-ping in a transaction
             except Exception:
                 logger.warning("Stale PG connection detected (idle %.0fs), replacing",
@@ -249,6 +264,12 @@ def _pg_retry(func, *args, **kwargs):
 
     Retries up to _PG_MAX_RETRIES times on OperationalError (connection issues).
     Does NOT retry on ProgrammingError, IntegrityError, etc. (logic bugs).
+
+    v8.4 fix P6-E1: No longer destroys the entire pool on transient errors.
+    Previous behavior called _pool.closeall() which killed ALL connections including
+    those in use by other threads, causing a thundering herd cascade. Now just retries
+    with a fresh connection from the pool (get_conn handles dead connections via
+    putconn(close=True)). Only destroys pool as last resort after all retries exhausted.
     """
     last_exc = None
     for attempt in range(_PG_MAX_RETRIES + 1):
@@ -265,17 +286,20 @@ def _pg_retry(func, *args, **kwargs):
                         attempt + 1, _PG_MAX_RETRIES, wait, exc,
                     )
                     time.sleep(wait)
-                    # Reset pool to force fresh connections
-                    global _pool
-                    if _pool is not None:
-                        try:
-                            _pool.closeall()
-                        except Exception:
-                            pass
-                        _pool = None
+                    # v8.4: Don't destroy entire pool — let get_conn handle bad connections.
+                    # Only destroy pool after ALL retries are exhausted (see below).
                     continue
             raise  # Non-transient error — raise immediately
-    raise last_exc  # All retries exhausted
+    # All retries exhausted — destroy pool as last resort so next call creates a fresh one
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+            _pool = None
+    raise last_exc
 
 
 # ── Table Definitions ────────────────────────────────────────────────
@@ -1027,15 +1051,27 @@ def pg_update_trade_stop(ticker: str, timestamp, new_stop: float) -> bool:
 
     Called by position_monitor when trailing stop is tightened.
     Returns True if the trade was found and updated.
+
+    v8.4 fix P11-E1: Added SELECT FOR UPDATE row lock (matching pg_update_trade_result
+    pattern) to prevent concurrent modification by journal and position monitor.
     """
     def _update():
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # Lock the row first (matches pg_update_trade_result pattern)
+                cur.execute("""
+                    SELECT id FROM trades
+                    WHERE ticker = %s AND timestamp = %s AND result = 'PENDING'
+                    FOR UPDATE
+                """, (ticker, timestamp))
+                row = cur.fetchone()
+                if not row:
+                    return False
                 cur.execute("""
                     UPDATE trades SET stop_price = %s
-                    WHERE ticker = %s AND timestamp = %s AND result = 'PENDING'
-                """, (new_stop, ticker, timestamp))
-                return cur.rowcount > 0
+                    WHERE id = %s
+                """, (new_stop, row[0]))
+                return True
     return _pg_retry(_update)
 
 

@@ -140,15 +140,27 @@ def load_journal() -> list[JournalEntry]:
 
 
 def _save_journal(entries: list[JournalEntry]) -> None:
-    """Save journal entries with file locking (A1 fix)."""
+    """Save journal entries atomically via temp-file + os.replace().
+
+    v8.4 fix P1-E1: Previous version opened with "w" (truncating) BEFORE acquiring
+    the lock — concurrent readers could see an empty file. Now writes to a temp file
+    and atomically renames (safe on POSIX).
+    """
+    import os as _os
+    import tempfile
     _ensure_journal_file()
     data = json.dumps([e.model_dump(mode="json") for e in entries], indent=2, default=str)
-    with open(JOURNAL_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(JOURNAL_FILE.parent), suffix=".tmp")
+    try:
+        with _os.fdopen(tmp_fd, "w") as f:
             f.write(data)
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+        _os.replace(tmp_path, str(JOURNAL_FILE))
+    except Exception:
+        try:
+            _os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _fetch_intraday_prices(
@@ -736,12 +748,29 @@ def _archive_daily_prices(trades: list[TradeRecommendation]) -> None:
         logger.warning("v5.1: Price archiving failed (non-critical): %s", exc)
 
 
+_journal_running_lock = __import__("threading").Lock()
+
+
 def run_daily_journal() -> list[dict]:
     """Main job: close all pending trades, generate journal entries for today.
 
     Called at 22:00 CET by the scheduler.
     Returns the list of new journal entries as dicts.
+
+    v8.4 fix P15-E1: Re-entrancy guard prevents concurrent journal runs
+    (scheduled 22h + manual trigger) from processing the same trades.
     """
+    if not _journal_running_lock.acquire(blocking=False):
+        logger.warning("Journal already running, skipping concurrent invocation")
+        return []
+    try:
+        return _run_daily_journal_impl()
+    finally:
+        _journal_running_lock.release()
+
+
+def _run_daily_journal_impl() -> list[dict]:
+    """Internal implementation of run_daily_journal()."""
     journal_start = time.monotonic()
     today = datetime.now(PARIS_TZ).strftime("%Y-%m-%d")
     logger.info("=== Daily journal for %s ===", today)

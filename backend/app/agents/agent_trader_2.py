@@ -167,8 +167,21 @@ def _pg_save_positions(positions: dict):
                     """, (ticker, data_json, data_json))
     except Exception as exc:
         logger.warning("PG save trend_positions failed: %s — fallback JSON", exc)
-        # T2-P2: Atomic write for fallback too
-        _save_positions(positions)
+        # v8.4 fix C1-E2: Call JSON-only save directly to avoid infinite recursion.
+        # Previously called _save_positions() which re-enters _pg_save_positions on PG path.
+        import tempfile
+        _ensure_positions_file()
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(POSITIONS_FILE), suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(positions, f, indent=2, default=str)
+            os.replace(tmp_path, POSITIONS_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def _fetch_current_price(ticker: str) -> float | None:
