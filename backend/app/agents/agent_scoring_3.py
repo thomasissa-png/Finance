@@ -96,6 +96,34 @@ STRATEGIES = {
         "weight": 0.9,
         "preferred_regime": "ranging",  # T3: better in ranging markets
     },
+    # ── Combo strategies (v2.1) — multi-indicator confluence ──
+    "rsi_macd_combo": {
+        "name": "RSI + MACD",
+        "description": "RSI extreme + MACD crossover/momentum confluence",
+        "weight": 1.1,
+    },
+    "bollinger_stoch_combo": {
+        "name": "Bollinger + Stochastic",
+        "description": "Bollinger Band touch + Stochastic extreme confluence",
+        "weight": 1.1,
+        "preferred_regime": "ranging",
+    },
+    "ma_rsi_macd_combo": {
+        "name": "MA + RSI + MACD",
+        "description": "Triple confluence: MA trend + RSI + MACD agreement",
+        "weight": 1.2,
+    },
+    "rsi_bollinger_combo": {
+        "name": "RSI + Bollinger",
+        "description": "RSI extreme + Bollinger Band touch — mean reversion",
+        "weight": 1.1,
+        "preferred_regime": "ranging",
+    },
+    "macd_ma_combo": {
+        "name": "MACD + MA",
+        "description": "MACD crossover + MA trend alignment — trend continuation",
+        "weight": 1.1,
+    },
 }
 
 # ── Default indicator parameters (overridable via weekly_config) ──
@@ -698,6 +726,319 @@ def _detect_stochastic_reversal(indicators: dict) -> dict | None:
     }
 
 
+# ── Combo strategy detectors (v2.1) ─────────────────────────────
+# Multi-indicator combinations — require 2-3 indicators to agree
+# Higher base scores because confluence = higher conviction
+
+def _detect_rsi_macd_combo(indicators: dict) -> dict | None:
+    """RSI extreme + MACD crossover confirmation.
+
+    LONG: RSI oversold + MACD bullish crossover (or histogram turning up)
+    SHORT: RSI overbought + MACD bearish crossover (or histogram turning down)
+    """
+    rsi_14 = indicators.get("rsi_14")
+    macd = indicators.get("macd")
+    adx = indicators.get("adx")
+
+    if rsi_14 is None or macd is None:
+        return None
+
+    score = 0
+    direction = None
+
+    # Bullish: RSI oversold + MACD turning up
+    if rsi_14 < 35:
+        macd_bullish = (
+            (macd["prev_macd"] <= macd["prev_signal"] and macd["macd"] > macd["signal"])
+            or macd["histogram"] > macd["prev_histogram"]
+        )
+        if macd_bullish:
+            direction = "LONG"
+            score = 60 + (35 - rsi_14) * 1.5
+            if macd["macd"] > macd["signal"]:
+                score += 10  # Full crossover vs just histogram
+            if adx is not None and adx < 30:
+                score += 5
+
+    # Bearish: RSI overbought + MACD turning down
+    elif rsi_14 > 65:
+        macd_bearish = (
+            (macd["prev_macd"] >= macd["prev_signal"] and macd["macd"] < macd["signal"])
+            or macd["histogram"] < macd["prev_histogram"]
+        )
+        if macd_bearish:
+            direction = "SHORT"
+            score = 60 + (rsi_14 - 65) * 1.5
+            if macd["macd"] < macd["signal"]:
+                score += 10
+            if adx is not None and adx < 30:
+                score += 5
+
+    if direction is None or score < MIN_SETUP_SCORE:
+        return None
+
+    return {
+        "strategy": "rsi_macd_combo",
+        "direction": direction,
+        "score": min(100, round(score, 1)),
+        "signals": {
+            "rsi_14": rsi_14,
+            "macd_line": round(macd["macd"], 4),
+            "macd_signal": round(macd["signal"], 4),
+            "histogram": round(macd["histogram"], 4),
+            "adx": adx,
+        },
+    }
+
+
+def _detect_bollinger_stoch_combo(indicators: dict) -> dict | None:
+    """Bollinger Band touch/breakout + Stochastic extreme confirmation.
+
+    LONG: Price near/below lower BB + Stochastic oversold (K<25)
+    SHORT: Price near/above upper BB + Stochastic overbought (K>75)
+    Both indicators must agree on direction.
+    """
+    bb = indicators.get("bollinger")
+    stoch = indicators.get("stochastic")
+    adx = indicators.get("adx")
+
+    if bb is None or stoch is None:
+        return None
+
+    k = stoch["k"]
+    d = stoch["d"]
+    score = 0
+    direction = None
+
+    # Bullish: price at lower Bollinger + stochastic oversold
+    if bb["pct_b"] < 0.15 and k < 25:
+        direction = "LONG"
+        score = 55 + (0.15 - bb["pct_b"]) * 100 + (25 - k) * 0.5
+        if k > d:  # K crossing above D = momentum turning
+            score += 10
+        if bb["bandwidth"] < 3.0:  # Squeeze adds conviction
+            score += 10
+        if adx is not None and adx < 25:
+            score += 5
+
+    # Bearish: price at upper Bollinger + stochastic overbought
+    elif bb["pct_b"] > 0.85 and k > 75:
+        direction = "SHORT"
+        score = 55 + (bb["pct_b"] - 0.85) * 100 + (k - 75) * 0.5
+        if k < d:  # K crossing below D
+            score += 10
+        if bb["bandwidth"] < 3.0:
+            score += 10
+        if adx is not None and adx < 25:
+            score += 5
+
+    if direction is None or score < MIN_SETUP_SCORE:
+        return None
+
+    return {
+        "strategy": "bollinger_stoch_combo",
+        "direction": direction,
+        "score": min(100, round(score, 1)),
+        "signals": {
+            "pct_b": bb["pct_b"],
+            "bandwidth": bb["bandwidth"],
+            "stoch_k": k,
+            "stoch_d": d,
+            "adx": adx,
+        },
+    }
+
+
+def _detect_ma_rsi_macd_combo(indicators: dict) -> dict | None:
+    """Triple confluence: MA trend alignment + RSI confirmation + MACD confirmation.
+
+    LONG: price > SMA20 > SMA50 + RSI > 50 + MACD > signal
+    SHORT: price < SMA20 < SMA50 + RSI < 50 + MACD < signal
+    All three must agree — highest conviction setup.
+    """
+    sma_20 = indicators.get("sma_20")
+    sma_50 = indicators.get("sma_50")
+    ema_20 = indicators.get("ema_20")
+    rsi_14 = indicators.get("rsi_14")
+    macd = indicators.get("macd")
+    adx = indicators.get("adx")
+    last_close = indicators.get("last_close")
+
+    if any(v is None for v in (sma_20, sma_50, rsi_14, macd, last_close)):
+        return None
+
+    score = 0
+    direction = None
+
+    # Bullish triple confluence
+    if last_close > sma_20 > sma_50 and rsi_14 > 50 and macd["macd"] > macd["signal"]:
+        direction = "LONG"
+        score = 65
+        # Stronger RSI
+        if rsi_14 > 55 and rsi_14 < 75:  # Not overbought
+            score += 5
+        # MACD histogram growing
+        if macd["histogram"] > macd["prev_histogram"]:
+            score += 10
+        # EMA confirms
+        if ema_20 is not None and last_close > ema_20:
+            score += 5
+        # ADX confirms trend
+        if adx is not None and adx > ADX_TREND_THRESHOLD:
+            score += 10
+
+    # Bearish triple confluence
+    elif last_close < sma_20 < sma_50 and rsi_14 < 50 and macd["macd"] < macd["signal"]:
+        direction = "SHORT"
+        score = 65
+        if rsi_14 < 45 and rsi_14 > 25:
+            score += 5
+        if macd["histogram"] < macd["prev_histogram"]:
+            score += 10
+        if ema_20 is not None and last_close < ema_20:
+            score += 5
+        if adx is not None and adx > ADX_TREND_THRESHOLD:
+            score += 10
+
+    if direction is None or score < MIN_SETUP_SCORE:
+        return None
+
+    return {
+        "strategy": "ma_rsi_macd_combo",
+        "direction": direction,
+        "score": min(100, round(score, 1)),
+        "signals": {
+            "sma_20": round(sma_20, 4),
+            "sma_50": round(sma_50, 4),
+            "rsi_14": rsi_14,
+            "macd_line": round(macd["macd"], 4),
+            "macd_signal": round(macd["signal"], 4),
+            "histogram": round(macd["histogram"], 4),
+            "adx": adx,
+            "close": round(last_close, 4),
+        },
+    }
+
+
+def _detect_rsi_bollinger_combo(indicators: dict) -> dict | None:
+    """RSI extreme + Bollinger Band touch — mean reversion setup.
+
+    LONG: RSI < 35 + price below lower BB (pct_b < 0.10)
+    SHORT: RSI > 65 + price above upper BB (pct_b > 0.90)
+    Strong mean-reversion signal in ranging markets.
+    """
+    rsi_14 = indicators.get("rsi_14")
+    bb = indicators.get("bollinger")
+    adx = indicators.get("adx")
+
+    if rsi_14 is None or bb is None:
+        return None
+
+    score = 0
+    direction = None
+
+    # Bullish: RSI oversold + price at/below lower BB
+    if rsi_14 < 35 and bb["pct_b"] < 0.10:
+        direction = "LONG"
+        score = 60 + (35 - rsi_14) + (0.10 - bb["pct_b"]) * 100
+        if adx is not None and adx < 25:  # Ranging = mean reversion works
+            score += 10
+        if bb["bandwidth"] > 3.0:  # Wide bands = more room to revert
+            score += 5
+
+    # Bearish: RSI overbought + price at/above upper BB
+    elif rsi_14 > 65 and bb["pct_b"] > 0.90:
+        direction = "SHORT"
+        score = 60 + (rsi_14 - 65) + (bb["pct_b"] - 0.90) * 100
+        if adx is not None and adx < 25:
+            score += 10
+        if bb["bandwidth"] > 3.0:
+            score += 5
+
+    if direction is None or score < MIN_SETUP_SCORE:
+        return None
+
+    return {
+        "strategy": "rsi_bollinger_combo",
+        "direction": direction,
+        "score": min(100, round(score, 1)),
+        "signals": {
+            "rsi_14": rsi_14,
+            "pct_b": bb["pct_b"],
+            "bandwidth": bb["bandwidth"],
+            "adx": adx,
+        },
+    }
+
+
+def _detect_macd_ma_combo(indicators: dict) -> dict | None:
+    """MACD crossover + MA trend alignment — trend continuation setup.
+
+    LONG: MACD bullish cross + price above SMA20 > SMA50
+    SHORT: MACD bearish cross + price below SMA20 < SMA50
+    Confirms trend direction with momentum.
+    """
+    macd = indicators.get("macd")
+    sma_20 = indicators.get("sma_20")
+    sma_50 = indicators.get("sma_50")
+    adx = indicators.get("adx")
+    last_close = indicators.get("last_close")
+
+    if any(v is None for v in (macd, sma_20, sma_50, last_close)):
+        return None
+
+    score = 0
+    direction = None
+
+    # Bullish: MACD cross up + MA alignment
+    macd_bull_cross = (macd["prev_macd"] <= macd["prev_signal"]
+                       and macd["macd"] > macd["signal"])
+    macd_bull_momentum = macd["histogram"] > macd["prev_histogram"] and macd["histogram"] > 0
+
+    if (macd_bull_cross or macd_bull_momentum) and last_close > sma_20 > sma_50:
+        direction = "LONG"
+        score = 58
+        if macd_bull_cross:
+            score += 10  # Full cross > just momentum
+        if macd["histogram"] > macd["prev_histogram"]:
+            score += 5
+        if adx is not None and adx > ADX_TREND_THRESHOLD:
+            score += 10
+
+    # Bearish: MACD cross down + MA alignment
+    macd_bear_cross = (macd["prev_macd"] >= macd["prev_signal"]
+                       and macd["macd"] < macd["signal"])
+    macd_bear_momentum = macd["histogram"] < macd["prev_histogram"] and macd["histogram"] < 0
+
+    if (macd_bear_cross or macd_bear_momentum) and last_close < sma_20 < sma_50:
+        direction = "SHORT"
+        score = 58
+        if macd_bear_cross:
+            score += 10
+        if macd["histogram"] < macd["prev_histogram"]:
+            score += 5
+        if adx is not None and adx > ADX_TREND_THRESHOLD:
+            score += 10
+
+    if direction is None or score < MIN_SETUP_SCORE:
+        return None
+
+    return {
+        "strategy": "macd_ma_combo",
+        "direction": direction,
+        "score": min(100, round(score, 1)),
+        "signals": {
+            "macd_line": round(macd["macd"], 4),
+            "macd_signal": round(macd["signal"], 4),
+            "histogram": round(macd["histogram"], 4),
+            "sma_20": round(sma_20, 4),
+            "sma_50": round(sma_50, 4),
+            "adx": adx,
+            "close": round(last_close, 4),
+        },
+    }
+
+
 # ── Regime-strategy compatibility (J3) ──────────────────────────
 # Some strategies work better in trending markets, others in ranging
 STRATEGY_REGIME_PREFERENCE = {
@@ -707,6 +1048,12 @@ STRATEGY_REGIME_PREFERENCE = {
     "ma_trend": "trending",          # Trend alignment
     "momentum_divergence": None,     # Works in both
     "stochastic_reversal": "ranging",  # Oscillator = ranging
+    # Combo strategies
+    "rsi_macd_combo": None,          # Works in both (reversal + momentum)
+    "bollinger_stoch_combo": "ranging",  # Both are ranging indicators
+    "ma_rsi_macd_combo": "trending", # MA alignment = trending
+    "rsi_bollinger_combo": "ranging",  # Mean reversion = ranging
+    "macd_ma_combo": "trending",     # Trend continuation = trending
 }
 
 # Regime mismatch penalty
@@ -918,6 +1265,12 @@ def score_technical_setups(tickers: dict | None = None,
         "ma_trend": _detect_ma_trend,
         "momentum_divergence": _detect_momentum_divergence,
         "stochastic_reversal": _detect_stochastic_reversal,
+        # Combo strategies (v2.1)
+        "rsi_macd_combo": _detect_rsi_macd_combo,
+        "bollinger_stoch_combo": _detect_bollinger_stoch_combo,
+        "ma_rsi_macd_combo": _detect_ma_rsi_macd_combo,
+        "rsi_bollinger_combo": _detect_rsi_bollinger_combo,
+        "macd_ma_combo": _detect_macd_ma_combo,
     }
     strategy_detectors = [
         (name, fn) for name, fn in detector_map.items()
@@ -1116,7 +1469,7 @@ class AgentScoring3(BaseAgent):
 
     name = "scoring_3"
     description = "Technical indicators scoring — multi-strategy, multi-timeframe"
-    version = "2.0"
+    version = "2.1"  # v2.1: 5 combo strategies (multi-indicator confluence)
 
     def __init__(self):
         super().__init__()

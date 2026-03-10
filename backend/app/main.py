@@ -2042,7 +2042,7 @@ def get_tech_strategies():
     agent = get_agent("trader_3")
     if not agent:
         return {}
-    return agent.get_strategy_stats()
+    return agent.get_strategy_performance()
 
 
 @app.get("/api/journal3/entries")

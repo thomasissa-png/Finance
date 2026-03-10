@@ -45,7 +45,7 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | News | 7.7 | news_zone on EIA/USDA/SHFE sources |
 | Scoring | 7.4 | 9 fixes, token tracking |
 | Scoring 2 | 7.5 | Structural freshness exempt, +5 keywords, decouple from intraday scoring |
-| Scoring 3 | 2.0 | Multi-timeframe, SMA 200, stochastic strategy, regime filter, configurable params |
+| Scoring 3 | 2.1 | 5 combo strategies (multi-indicator confluence: RSI+MACD, BB+Stoch, MA+RSI+MACD, RSI+BB, MACD+MA) |
 | Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
 | Trader 1 | 6.5 | Timeout audit, trailing stop |
 | Trader 2 | 7.6 | Remove total_score pre-filter (decouple from intraday edge) |
@@ -110,8 +110,8 @@ Le framework est conçu pour ajouter facilement de nouvelles équipes : créer u
 - **Boucle** : Journal 2 → Learning 2 → cache invalidé → Trader 2 utilise au prochain scan
 - **Feedback loop** : Learning 2 ajuste les poids de signal par ticker/newscat/direction + seuil de flip adaptatif (base 20, ×threshold_adj)
 
-### Équipe 3 — Technical Indicators Trading (v2.0)
-- **Scoring 3** (v2.0) : indicateurs techniques (RSI 14/21, MACD 12/26/9, Bollinger 20/2, SMA/EMA 20/50/200, Stochastic 14/3, ADX 14) sur 20 tickers liquides. NE rappelle PAS Claude — pur calcul. Utilise market_data.py (Twelve Data + yfinance fallback). **6 stratégies** : rsi_reversal, macd_crossover, bollinger_squeeze, ma_trend, momentum_divergence, **stochastic_reversal** (v2.0). Multi-timeframe (daily primary + 1h confirmation). Paramètres configurables via weekly_config de Learning 3. Filtre de régime trending/ranging par stratégie. Confidence basée sur signal count + régime + volume (pas score * 0.9). Pivot-based momentum divergence (pas closes[-5] fixe).
+### Équipe 3 — Technical Indicators Trading (v2.1)
+- **Scoring 3** (v2.1) : indicateurs techniques (RSI 14/21, MACD 12/26/9, Bollinger 20/2, SMA/EMA 20/50/200, Stochastic 14/3, ADX 14) sur 20 tickers liquides. NE rappelle PAS Claude — pur calcul. Utilise market_data.py (Twelve Data + yfinance fallback). **11 stratégies** : 6 simples (rsi_reversal, macd_crossover, bollinger_squeeze, ma_trend, momentum_divergence, stochastic_reversal) + **5 combos** (rsi_macd_combo, bollinger_stoch_combo, ma_rsi_macd_combo, rsi_bollinger_combo, macd_ma_combo). Multi-timeframe (daily primary + 1h confirmation). Paramètres configurables via weekly_config de Learning 3. Filtre de régime trending/ranging par stratégie. Confidence basée sur signal count + régime + volume (pas score * 0.9). Pivot-based momentum divergence (pas closes[-5] fixe). **Combos** : scores de base plus élevés (60-65 vs 35-50) car confluence = conviction plus forte. Combos A/B testés comme les singles via Learning 3.
 - **Trader 3** (v2.0) : positions multiples (max 10), holding 1-3 jours, TP/SL/trailing stop **per-strategy** (J2), A/B testing des stratégies. Consomme Learning 3 (strategy_adj, ticker_adj, timeframe_adj) + **weekly_config** (enabled strategies, budgets). **Correlation check** (P8) entre positions dans le même groupe. **agent_versions** (P6) stamped sur chaque position. **Dynamic MAX_PER_STRATEGY** (J4) : strategies validées obtiennent plus de budget (6 vs 4). **strategy_version** (J1) pour tracking des paramètres.
 - **Journal 3** (v2.0) : journalise les positions fermées, MAE/MFE, **R/R réalisé** (L4), **Sharpe ratio** par stratégie (L5), **weekly summary** (L1/C5), regime match tracking. Dedup par (ticker, strategy, entry_time) — **corrigé PG ON CONFLICT** (était ticker+entry_time, ne matchait pas UNIQUE constraint). Persistence PG (tech_journal_entries) + JSON.
 - **Learning 3** (v2.0) : 5 dimensions (per-strategy, per-ticker, per-timeframe, per-regime, **AB-test → ajustements réels**). **Weekly config generation** (C3) : validation dimanche soir, enable/disable stratégies, poids par stratégie, budgets dynamiques. AB-test ranking basé sur WR 30% + avg_pnl 40% + **Sharpe 30%** (L5). **Parameter change tracking** (L2). Anomaly detection (overtrading, consecutive losses, MAE). Bounds [0.6, 1.4], decay 30j.
@@ -594,7 +594,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
 - `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
-- `backend/app/agents/agent_scoring_3.py` : Équipe 3, indicateurs techniques (RSI, MACD, Bollinger, SMA/EMA, Stochastic, ADX) sur 20 tickers, 5 stratégies, market_data.py pour OHLCV
+- `backend/app/agents/agent_scoring_3.py` : Équipe 3, indicateurs techniques (RSI, MACD, Bollinger, SMA/EMA, Stochastic, ADX) sur 20 tickers, 11 stratégies (6 simples + 5 combos), market_data.py pour OHLCV. v2.1: combo strategies (rsi_macd_combo, bollinger_stoch_combo, ma_rsi_macd_combo, rsi_bollinger_combo, macd_ma_combo)
 - `backend/app/agents/agent_trader_3.py` : Équipe 3, multi-position (max 10), holding 1-3j, A/B testing stratégies, persistence PG (tech_positions) + JSON
 - `backend/app/agents/agent_journal_3.py` : Équipe 3, journal positions techniques, analyse par stratégie, MAE/MFE, persistence PG (tech_journal_entries) + JSON
 - `backend/app/agents/agent_learning_3.py` : Équipe 3, 3 dims (strategy, ticker, timeframe), ranking stratégies, anomaly detection
@@ -631,7 +631,8 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `frontend/src/components/LearningPage.jsx` : v7.0, 6 dimensions learning (per-ticker, session, newscat, régime VIX, direction, delay bias), KPIs (boosts/pénalités), descriptions, logs agent
 - `frontend/src/components/AuditorPage.jsx` : v7.0, trigger audit par agent (22 targets incl. Teams 3/4), rapports, logs agent
 - `frontend/src/components/Scoring3Page.jsx` : Équipe 3, KPIs technique, setups par stratégie, distribution par ticker, logs
-- `frontend/src/components/Trader3Page.jsx` : Équipe 3, KPIs trader, positions actives, A/B stratégies, historique, logs
+- `frontend/src/components/Trader3Page.jsx` : Équipe 3, KPIs trader, positions actives, **StrategyPerformance** (remplace A/B basique), historique, logs
+- `frontend/src/components/StrategyPerformance.jsx` : v2.1, composant partagé performance par stratégie (single + combo) — filtres type/statut/tri, drill-down trades, WR/P&L/Sharpe/learning adj, résultat breakdown bar
 - `frontend/src/components/Journal3Page.jsx` : Équipe 3, KPIs journal, analyse par stratégie, historique entries, logs
 - `frontend/src/components/Learning3Page.jsx` : Équipe 3, 3 dimensions (strategy, ticker, timeframe), anomalies, logs
 - `frontend/src/components/Scoring4Page.jsx` : Équipe 4, KPIs meta-scoring, confluence summary, signaux top, logs

@@ -3,12 +3,10 @@ import { DIR_COLORS, DIR_ARROWS, POLL_FAST } from "../utils/constants";
 import { apiFetch } from "../utils/api";
 import { pnlColor } from "../utils/format";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
-
-const STATUS_COLORS = { active: "var(--green)", paused: "var(--yellow)", stopped: "var(--red)" };
+import StrategyPerformance from "./StrategyPerformance";
 
 export default function Trader3Page({ isActive }) {
   const [positions, setPositions] = useState([]);
-  const [strategies, setStrategies] = useState([]);
   const [learningAdj, setLearningAdj] = useState(null);
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
@@ -21,14 +19,12 @@ export default function Trader3Page({ isActive }) {
 
   const fetchData = useCallback(async () => {
     try {
-      const [posRes, stratRes, adjRes, logRes] = await Promise.all([
+      const [posRes, adjRes, logRes] = await Promise.all([
         apiFetch("/api/trader3/positions", {}, []),
-        apiFetch("/api/trader3/strategies", {}, []),
         apiFetch("/api/learning3/adjustments", {}, null),
         apiFetch("/api/agents/trader_3/logs?limit=50", {}, []),
       ]);
       setPositions(Array.isArray(posRes?.active) ? posRes.active : Array.isArray(posRes) ? posRes : []);
-      setStrategies(Array.isArray(stratRes) ? stratRes : []);
       setLearningAdj(adjRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
       setError(null);
@@ -173,42 +169,8 @@ export default function Trader3Page({ isActive }) {
         )}
       </div>
 
-      {/* A/B Testing */}
-      <div className="section-card">
-        <h3>A/B Testing &mdash; Comparaison des stratégies</h3>
-        {strategies.length > 0 ? (
-          <table className="compact-table">
-            <thead>
-              <tr>
-                <th>Stratégie</th>
-                <th>Trades</th>
-                <th>Win Rate</th>
-                <th>P&L Moy.</th>
-                <th>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {strategies.map((s, i) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{s.strategy_name}</td>
-                  <td>{s.trades_count || 0}</td>
-                  <td>{s.win_rate != null ? `${s.win_rate.toFixed(1)}%` : "\u2014"}</td>
-                  <td style={{ color: pnlColor(s.avg_pnl) }}>
-                    {(s.avg_pnl || 0) >= 0 ? "+" : ""}{(s.avg_pnl || 0).toFixed(2)}%
-                  </td>
-                  <td>
-                    <span style={{ color: STATUS_COLORS[s.status] || "var(--text-secondary)", fontWeight: 600 }}>
-                      {s.status || "active"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          !loading && <EmptyState message="Aucune stratégie enregistrée" detail="Les données seront disponibles après les premiers trades" />
-        )}
-      </div>
+      {/* Strategy Performance — full drill-down */}
+      <StrategyPerformance isActive={isActive} />
 
       {/* Trade history */}
       <div className="section-card">

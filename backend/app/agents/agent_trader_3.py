@@ -488,6 +488,12 @@ class AgentTrader3(BaseAgent):
             "ma_trend": 0.35,           # Strong trend: trail tight
             "momentum_divergence": 0.50,
             "stochastic_reversal": 0.55,
+            # Combo strategies — tighter trailing (higher conviction)
+            "rsi_macd_combo": 0.45,
+            "bollinger_stoch_combo": 0.50,
+            "ma_rsi_macd_combo": 0.35,  # Triple confluence: trail tight
+            "rsi_bollinger_combo": 0.55,
+            "macd_ma_combo": 0.40,
         }
         return defaults.get(strategy, 0.50)
 
@@ -673,8 +679,14 @@ class AgentTrader3(BaseAgent):
         closed = state.get("closed", [])
         return closed[-limit:]
 
-    def get_strategy_performance(self) -> dict:
-        """Compute A/B performance per strategy from closed trades."""
+    def get_strategy_performance(self) -> list[dict]:
+        """Compute A/B performance per strategy from closed trades.
+
+        Returns a list of strategy performance dicts, sorted by trade count desc.
+        Each entry includes aggregated stats and the underlying trades.
+        """
+        from .agent_scoring_3 import STRATEGIES
+
         state = _load_positions()
         closed = state.get("closed", [])
 
@@ -682,28 +694,80 @@ class AgentTrader3(BaseAgent):
         for trade in closed:
             strategy = trade.get("strategy", "unknown")
             if strategy not in perf:
+                strat_info = STRATEGIES.get(strategy, {})
                 perf[strategy] = {
-                    "trades": 0, "wins": 0, "total_pnl": 0.0,
-                    "avg_holding_hours": 0.0, "total_holding": 0.0,
+                    "strategy": strategy,
+                    "strategy_name": strat_info.get("name", strategy),
+                    "is_combo": "combo" in strategy,
+                    "trades_count": 0, "wins": 0, "losses": 0,
+                    "expired": 0, "total_pnl": 0.0, "total_holding": 0.0,
+                    "pnl_list": [], "trades": [],
                 }
             p = perf[strategy]
-            p["trades"] += 1
+            p["trades_count"] += 1
             pnl = trade.get("pnl_pct", 0)
             p["total_pnl"] += pnl
-            if pnl > 0:
+            p["pnl_list"].append(pnl)
+            result = trade.get("result", "")
+            if result == "TP_HIT":
                 p["wins"] += 1
+            elif result == "SL_HIT":
+                p["losses"] += 1
+            elif result == "EXPIRED":
+                p["expired"] += 1
             p["total_holding"] += trade.get("holding_hours", 0)
+            # Compact trade for frontend drill-down
+            p["trades"].append({
+                "ticker": trade.get("ticker", ""),
+                "direction": trade.get("direction", ""),
+                "result": result,
+                "pnl_pct": round(pnl, 2),
+                "entry_time": trade.get("entry_time", ""),
+                "close_time": trade.get("close_time", ""),
+                "holding_hours": round(trade.get("holding_hours", 0), 1),
+                "score": trade.get("score", 0),
+                "regime": trade.get("regime_at_entry", ""),
+            })
 
-        # Compute averages
+        # Compute stats and convert to list
+        result_list = []
         for strategy, p in perf.items():
-            n = p["trades"]
+            n = p["trades_count"]
             p["win_rate"] = round(p["wins"] / n * 100, 1) if n > 0 else 0
             p["avg_pnl"] = round(p["total_pnl"] / n, 2) if n > 0 else 0
             p["avg_holding_hours"] = round(p["total_holding"] / n, 1) if n > 0 else 0
             p["total_pnl"] = round(p["total_pnl"], 2)
+            # Sharpe ratio
+            if len(p["pnl_list"]) >= 3:
+                import statistics
+                mean_pnl = statistics.mean(p["pnl_list"])
+                std_pnl = statistics.stdev(p["pnl_list"])
+                p["sharpe"] = round(mean_pnl / std_pnl, 2) if std_pnl > 0 else 0
+            else:
+                p["sharpe"] = None
+            # Learning adjustment
+            adj = self._current_learning.get("strategy_adj", {})
+            p["learning_adj"] = adj.get(strategy, 1.0)
+            # Status from weekly config
+            if self._weekly_config:
+                if strategy in self._weekly_config.get("validated_strategies", []):
+                    p["status"] = "validated"
+                elif strategy in self._weekly_config.get("disabled_strategies", []):
+                    p["status"] = "disabled"
+                else:
+                    p["status"] = "active"
+            else:
+                p["status"] = "active"
+            # Clean up internal fields
             del p["total_holding"]
+            del p["pnl_list"]
+            # Sort trades by entry_time desc
+            p["trades"].sort(key=lambda t: t.get("entry_time", ""), reverse=True)
+            result_list.append(p)
 
-        return perf
+        # Sort by trades count desc
+        result_list.sort(key=lambda s: s["trades_count"], reverse=True)
+        return result_list
 
     def get_metrics(self) -> dict:
         """Metrics for frontend overview."""
