@@ -1130,15 +1130,23 @@ def trigger_scan(scan_type: str):
 @app.get("/api/trades")
 def get_trades():
     """Get all historical trades."""
-    trades = load_trades()
-    return [t.model_dump(mode="json") for t in trades]
+    try:
+        trades = load_trades()
+        return [t.model_dump(mode="json") for t in trades]
+    except Exception as exc:
+        logger.error("GET /api/trades failed: %s", exc)
+        return []
 
 
 @app.get("/api/trades/pending")
 def get_pending_trades():
     """Get trades awaiting resolution."""
-    trades = load_trades()
-    return [t.model_dump(mode="json") for t in trades if t.result == TradeResult.PENDING]
+    try:
+        trades = load_trades()
+        return [t.model_dump(mode="json") for t in trades if t.result == TradeResult.PENDING]
+    except Exception as exc:
+        logger.error("GET /api/trades/pending failed: %s", exc)
+        return []
 
 
 @app.post("/api/trades/close")

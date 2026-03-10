@@ -311,10 +311,8 @@ function TeamSummaryCards({ report, positions }) {
         const perf = report?.[team.perfKey] || {};
         const wr = perf[team.wrKey];
         const pnl = perf[team.pnlKey];
-        const closedCount = perf[team.tradesKey] || 0;
+        const trades = perf[team.tradesKey] || 0;
         const openCount = (positions[team.id] || []).length;
-        // Show total trades (closed + currently open) for accurate count
-        const trades = closedCount + openCount;
 
         return (
           <div key={team.id} className="team-summary-card" style={{ borderLeftColor: TEAM_COLORS[team.id] }}>
@@ -377,7 +375,7 @@ export default function DashboardPage({ isActive, agents }) {
         fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch("/api/performance/report").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch("/api/performance/history?limit=30").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trades/pending").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
@@ -392,8 +390,8 @@ export default function DashboardPage({ isActive, agents }) {
       if (Array.isArray(histRes)) setHistory(histRes);
 
       // Normalize positions for all teams
-      // Team 1: trades array, filter PENDING
-      const pending1 = Array.isArray(t1Res) ? t1Res.filter((t) => t.result === "PENDING") : [];
+      // Team 1: /api/trades/pending returns only PENDING trades (server-side filter)
+      const pending1 = Array.isArray(t1Res) ? t1Res : [];
       // Team 2: dict {ticker: posData} — convert to array, filter non-FLAT
       const t2Values = t2Res && typeof t2Res === "object" && !Array.isArray(t2Res) ? Object.values(t2Res) : [];
       const active2 = t2Values.filter((t) => t.direction && t.direction !== "FLAT");
@@ -412,12 +410,12 @@ export default function DashboardPage({ isActive, agents }) {
     setPosLoading(true);
     try {
       const [t1Res, t2Res, t3Res, t4Res] = await Promise.all([
-        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trades/pending").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
-      const pending1 = Array.isArray(t1Res) ? t1Res.filter((t) => t.result === "PENDING") : [];
+      const pending1 = Array.isArray(t1Res) ? t1Res : [];
       const t2Values = t2Res && typeof t2Res === "object" && !Array.isArray(t2Res) ? Object.values(t2Res) : [];
       const active2 = t2Values.filter((t) => t.direction && t.direction !== "FLAT");
       const active3 = Array.isArray(t3Res?.active) ? t3Res.active : [];
