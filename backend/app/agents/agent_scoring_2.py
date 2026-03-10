@@ -82,15 +82,18 @@ STRUCTURAL_KEYWORDS = {
     "el nino": 1.3, "la nina": 1.3, "secheresse": 1.5,
     # Team 2 audit: copper-specific keywords
     "smelter": 1.4, "concentrate": 1.3, "treatment charges": 1.3,
-    "mine closure": 1.5, "mine shutdown": 1.5,
+    "mine closure": 1.5, "mine shutdown": 1.5, "tc/rc": 1.3,
     # Team 2 audit: cocoa-specific keywords
     "swollen shoot": 1.5, "black pod": 1.4, "harmattan": 1.3,
     "main crop": 1.1, "mid-crop": 1.1, "grindings": 1.3,
     "certified stocks": 1.4, "warehouse stocks": 1.4,
     # Team 2 audit: coffee-specific keywords
     "robusta": 1.2, "arabica": 1.2, "coffee rust": 1.4,
-    "leaf rust": 1.4, "roya": 1.4,  # Spanish name for coffee leaf rust
+    "leaf rust": 1.4, "ferrugem": 1.4,  # Portuguese for coffee leaf rust
+    "roya": 1.4,  # Spanish name for coffee leaf rust
+    "black frost": 1.6, "geada negra": 1.6,  # More severe than regular frost
     "safrinha": 1.2,  # Brazil second crop
+    "conab": 1.3,  # Brazilian crop agency, breaks estimates before USDA
     # Team 2 audit: wheat-specific keywords
     "wheat rust": 1.4, "stem rust": 1.4, "karnal bunt": 1.3,
     "vomitoxin": 1.3, "fusarium": 1.3,
@@ -280,9 +283,14 @@ def score_for_trend(scored_news_list: list) -> dict:
         trend_scores.append(trend_score)
 
         # T3: Compute freshness weight — recent news weighted more in accumulation
-        # News < 2h = weight 1.0, news 8h = weight 0.5, older = 0.3 floor
+        # v7.5: Structural categories (weather, supply_chain, commodity) use weight=1.0
+        # regardless of age — a drought from 6h ago is structurally identical to one
+        # from 30min ago. Only non-structural categories decay over time.
+        STRUCTURAL_CATS = {"weather", "supply_chain", "commodity",
+                           "commodities_energy", "commodities_agri",
+                           "commodities_soft", "commodities_industrial"}
         freshness_weight = 1.0
-        if sn.news.published:
+        if sn.news_category not in STRUCTURAL_CATS and sn.news.published:
             try:
                 age_hours = (now - sn.news.published).total_seconds() / 3600
                 freshness_weight = max(0.3, 1.0 - age_hours / 16.0)
@@ -349,7 +357,7 @@ class AgentScoring2(BaseAgent):
 
     name = "scoring_2"
     description = "Scoring tendance — re-pondération pour commodities"
-    version = "7.5"  # v7.5: +25 structural keywords (copper, cocoa, coffee, wheat specifics)
+    version = "7.5"  # v7.5: no freshness penalty for structural categories, +keywords
 
     def __init__(self):
         super().__init__()

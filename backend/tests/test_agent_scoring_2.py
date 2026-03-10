@@ -457,7 +457,29 @@ class TestAuditFixesV73:
 
     # T3: Freshness weight in accumulation
     def test_t3_fresh_news_weighted_more(self):
-        """Recent news should accumulate more weight than old news."""
+        """Recent non-structural news should accumulate more weight than old news.
+
+        v7.5: Structural categories (weather, commodity, supply_chain) no longer
+        get freshness penalty — a drought from 6h ago is still fully relevant for
+        trend following. Use 'geopolitical' to test freshness decay still works.
+        """
+        now = datetime.now(timezone.utc)
+        sn_fresh = _make_scored_news("HG=F", surprise=90, category="geopolitical",
+                                      title="Sanctions copper mine",
+                                      published=now - timedelta(minutes=30))
+        sn_old = _make_scored_news("HG=F", surprise=90, category="geopolitical",
+                                    title="Sanctions copper mine",
+                                    published=now - timedelta(hours=10))
+        r_fresh = score_for_trend([sn_fresh])
+        r_old = score_for_trend([sn_old])
+        acc_fresh = r_fresh["accumulation"].get("HG=F", {}).get("long", 0)
+        acc_old = r_old["accumulation"].get("HG=F", {}).get("long", 0)
+        # Fresh non-structural news should have higher accumulation weight
+        if acc_fresh > 0 and acc_old > 0:
+            assert acc_fresh > acc_old
+
+    def test_t3_structural_category_no_freshness_penalty(self):
+        """Structural categories should NOT be penalized for age (v7.5)."""
         now = datetime.now(timezone.utc)
         sn_fresh = _make_scored_news("HG=F", surprise=90, category="weather",
                                       title="Drought copper mine",
@@ -469,9 +491,9 @@ class TestAuditFixesV73:
         r_old = score_for_trend([sn_old])
         acc_fresh = r_fresh["accumulation"].get("HG=F", {}).get("long", 0)
         acc_old = r_old["accumulation"].get("HG=F", {}).get("long", 0)
-        # Fresh news should have higher accumulation weight
+        # Structural categories: no freshness penalty, weights should be equal
         if acc_fresh > 0 and acc_old > 0:
-            assert acc_fresh > acc_old
+            assert acc_fresh == acc_old
 
     # T4: Description in trend_scored items
     def test_t4_description_in_items(self):

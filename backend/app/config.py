@@ -22,6 +22,12 @@ SCAN_KEY_TO_TYPE: dict[str, str] = {
 TARGET_PERCENT = 0.5  # Objectif minimum de mouvement en % (baisse de 1.0 — adapte levier 5-10x, 0.5% x 10x = 5%)
 MIN_RISK_REWARD = 1.2  # Ratio risque/rendement minimum (ex 1.3 — 1.2 plus realiste en intraday)
 NEWS_MAX_AGE_HOURS = 8  # Ignorer les news de plus de 8h (ex 6h — elargi pour capter overnight US au scan Europe 07:50)
+# v7.7: Extended window for structured data sources (EIA, USDA, NOAA, etc.)
+# These publish at fixed schedules — a USDA report at 22:00 UTC is still relevant at 07:50 CET
+STRUCTURED_SOURCE_MAX_AGE_HOURS = 18
+# Sources that use the extended window
+STRUCTURED_SOURCES = {"EIA", "USDA", "USDA FAS", "NOAA", "Open-Meteo", "CFTC", "GIE_AGSI",
+                      "NASA_EONET", "NASA_POWER", "WOAH", "SHFE", "FedWatch", "GNEWS"}
 NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h
 MIN_SCORE_THRESHOLD = 20  # Score minimum pour recommander un trade (ex 25 — capte les signaux mid-range)
 

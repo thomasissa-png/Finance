@@ -200,7 +200,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "7.5"  # v7.5: zone+intensity-aware learning lookup
+    version = "7.6"  # v7.6: remove total_score pre-filter (was using intraday edge_factor, penalising trend signals)
 
     def __init__(self):
         super().__init__()
@@ -278,19 +278,15 @@ class AgentTrader2(BaseAgent):
             # Diagnostic: log why news were filtered out
             total_relevant = sum(len(v) for v in relevant_news.values())
             if total_relevant == 0 and all_scored:
-                # Count filter stages for diagnosis
-                low_score = sum(1 for sn in all_scored if sn.total_score < MIN_NEWS_SCORE)
+                # Count filter stages for diagnosis (v7.5: no total_score filter)
                 wrong_cat = sum(1 for sn in all_scored
-                                if sn.total_score >= MIN_NEWS_SCORE
-                                and sn.news_category not in RELEVANT_CATEGORIES)
+                                if sn.news_category not in RELEVANT_CATEGORIES)
                 neutral = sum(1 for sn in all_scored
-                              if sn.total_score >= MIN_NEWS_SCORE
-                              and sn.news_category in RELEVANT_CATEGORIES
+                              if sn.news_category in RELEVANT_CATEGORIES
                               and sn.direction.value == "NEUTRAL")
-                no_ticker = len(all_scored) - low_score - wrong_cat - neutral
+                no_ticker = len(all_scored) - wrong_cat - neutral
                 self.log("No relevant news for trend tickers", {
                     "total_scored": len(all_scored),
-                    "filtered_low_score": low_score,
                     "filtered_wrong_category": wrong_cat,
                     "filtered_neutral": neutral,
                     "filtered_no_trend_ticker": no_ticker,
@@ -472,9 +468,10 @@ class AgentTrader2(BaseAgent):
         result: dict[str, list] = {}
 
         for sn in scored_news:
-            # Skip low-score or irrelevant categories
-            if sn.total_score < MIN_NEWS_SCORE:
-                continue
+            # v7.5: Do NOT filter by total_score here — Scoring 1's total_score
+            # includes edge_factor (transmission_delay * market_awareness) designed
+            # for intraday edge, which penalises signals still valid for trend
+            # following. Scoring 2's MIN_TREND_SCORE is the proper quality gate.
             if sn.news_category not in RELEVANT_CATEGORIES:
                 continue
             if sn.direction.value == "NEUTRAL":

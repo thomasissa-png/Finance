@@ -9,7 +9,9 @@ import feedparser
 import requests
 import yfinance as yf  # Keep yfinance for news — Twelve Data has no news endpoint
 
-from .config import ASSETS, DEFAULT_SOURCE_WEIGHT, EARLY_SIGNAL_FEEDS, NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS
+from .config import (ASSETS, DEFAULT_SOURCE_WEIGHT, EARLY_SIGNAL_FEEDS,
+                      NEWS_MAX_AGE_HOURS, RSS_FEEDS, SOURCE_WEIGHTS,
+                      STRUCTURED_SOURCE_MAX_AGE_HOURS, STRUCTURED_SOURCES)
 from .data_apis import collect_structured_data
 from .models import NewsItem
 
@@ -328,17 +330,25 @@ def _jaccard_similarity(a: str, b: str) -> float:
 
 
 def _filter_old_news(items: list[NewsItem]) -> list[NewsItem]:
-    """Pre-filter news older than max age BEFORE sending to Claude (#1)."""
+    """Pre-filter news older than max age BEFORE sending to Claude (#1).
+
+    v7.7: Structured data sources (EIA, USDA, NOAA, etc.) use an extended
+    window (18h) because they publish at fixed schedules — a USDA report at
+    22:00 UTC is still relevant at the 07:50 CET scan the next morning.
+    """
     now = datetime.now(timezone.utc)
     filtered = []
     for item in items:
         if item.published is not None:
             age_hours = (now - item.published).total_seconds() / 3600
-            if age_hours > NEWS_MAX_AGE_HOURS:
+            max_age = (STRUCTURED_SOURCE_MAX_AGE_HOURS
+                       if item.source in STRUCTURED_SOURCES
+                       else NEWS_MAX_AGE_HOURS)
+            if age_hours > max_age:
                 continue
         filtered.append(item)
     if len(items) != len(filtered):
-        logger.info("Pre-filtered %d old news (>%dh)", len(items) - len(filtered), NEWS_MAX_AGE_HOURS)
+        logger.info("Pre-filtered %d old news (>max age)", len(items) - len(filtered))
     return filtered
 
 
