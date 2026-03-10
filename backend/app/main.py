@@ -2056,6 +2056,15 @@ def get_tech_positions():
     return agent.get_positions()
 
 
+@app.get("/api/trader3/history")
+def get_tech_trade_history():
+    """Get closed trade history for Trader 3."""
+    agent = get_agent("trader_3")
+    if not agent:
+        return []
+    return agent.get_closed_positions(limit=200)
+
+
 @app.get("/api/trader3/strategies")
 def get_tech_strategies():
     """Get strategy A/B test results for Trader 3."""

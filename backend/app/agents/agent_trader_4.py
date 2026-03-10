@@ -919,6 +919,25 @@ class AgentTrader4(BaseAgent):
         pos = positions.get(ticker, {})
         return pos.get("history", [])
 
+    def get_trade_history(self) -> list:
+        """Get all closed trade history across all tickers (for API/frontend)."""
+        positions = _load_positions()
+        all_history = []
+        for ticker, pos in positions.items():
+            if not isinstance(pos, dict):
+                continue
+            for h in pos.get("history", []):
+                entry = dict(h)
+                entry["ticker"] = ticker
+                # Add contributing_teams from source_details
+                sd = entry.get("source_details", {})
+                if sd and "contributing_teams" not in entry:
+                    entry["contributing_teams"] = list(sd.keys())
+                all_history.append(entry)
+        # Sort by time descending
+        all_history.sort(key=lambda h: h.get("time", ""), reverse=True)
+        return all_history
+
     def get_metrics(self) -> dict:
         """Metrics for frontend overview."""
         positions = _load_positions()

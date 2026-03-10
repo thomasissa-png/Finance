@@ -7,6 +7,8 @@ import StrategyPerformance from "./StrategyPerformance";
 
 export default function Trader3Page({ isActive }) {
   const [positions, setPositions] = useState([]);
+  const [closedPositions, setClosedPositions] = useState([]);
+  const [journalEntries, setJournalEntries] = useState([]);
   const [learningAdj, setLearningAdj] = useState(null);
   const [logs, setLogs] = useState([]);
   const [logFilter, setLogFilter] = useState("ALL");
@@ -19,12 +21,15 @@ export default function Trader3Page({ isActive }) {
 
   const fetchData = useCallback(async () => {
     try {
-      const [posRes, adjRes, logRes] = await Promise.all([
+      const [posRes, adjRes, logRes, journalRes] = await Promise.all([
         apiFetch("/api/trader3/positions", {}, []),
         apiFetch("/api/learning3/adjustments", {}, null),
         apiFetch("/api/agents/trader_3/logs?limit=50", {}, []),
+        apiFetch("/api/journal3/entries", {}, []),
       ]);
       setPositions(Array.isArray(posRes?.active) ? posRes.active : Array.isArray(posRes) ? posRes : []);
+      setClosedPositions(Array.isArray(posRes?.closed) ? posRes.closed : []);
+      setJournalEntries(Array.isArray(journalRes) ? journalRes : []);
       setLearningAdj(adjRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
       setError(null);
@@ -42,17 +47,38 @@ export default function Trader3Page({ isActive }) {
     return () => clearInterval(id);
   }, [isActive, fetchData]);
 
-  // KPIs
+  // KPIs — use journal entries (source of truth for closed trades) + closed positions as fallback
   const activePositions = positions.filter((p) => p.status === "PENDING" || p.status === "active");
-  const allTrades = positions;
-  const realizedPnl = allTrades.filter((t) => t.pnl_pct != null).reduce((s, t) => s + (t.pnl_pct || 0), 0);
+  // Journal entries are the authoritative source for closed trade stats
+  const journalWithPnl = journalEntries.filter((e) => e.pnl_pct != null);
+  // Fallback: closed positions from trader state (if journal hasn't run yet)
+  const closedWithPnl = closedPositions.filter((c) => c.pnl_pct != null);
+  // Use whichever has more data (journal is preferred when available)
+  const completedTrades = journalWithPnl.length >= closedWithPnl.length ? journalWithPnl : closedWithPnl;
+  const totalTrades = completedTrades.length;
+  const wins = completedTrades.filter((t) => (t.pnl_pct || 0) > 0).length;
+  const winRate = totalTrades > 0 ? (wins / totalTrades * 100).toFixed(1) : null;
+  const realizedPnl = completedTrades.reduce((s, t) => s + (t.pnl_pct || 0), 0);
   const latentPnl = activePositions.reduce((s, p) => s + (p.unrealized_pnl_pct || 0), 0);
   const byStrategy = {};
-  allTrades.forEach((t) => { const s = t.strategy || "?"; byStrategy[s] = (byStrategy[s] || 0) + 1; });
+  completedTrades.forEach((t) => { const s = t.strategy || "?"; byStrategy[s] = (byStrategy[s] || 0) + 1; });
   const topStrategy = Object.entries(byStrategy).sort((a, b) => b[1] - a[1])[0];
 
-  // Filter history
-  const history = allTrades.filter((t) => t.result && t.result !== "PENDING");
+  // History: merge closed positions + journal entries, dedup by ticker+entry_time
+  const historyMap = new Map();
+  closedPositions.forEach((c) => {
+    if (c.result && c.result !== "PENDING") {
+      const key = `${c.ticker}-${c.entry_time || c.timestamp || ""}`;
+      historyMap.set(key, c);
+    }
+  });
+  journalEntries.forEach((e) => {
+    const key = `${e.ticker}-${e.entry_time || e.timestamp || ""}`;
+    historyMap.set(key, { ...e, result: e.close_type || e.result || "CLOSED" });
+  });
+  const history = Array.from(historyMap.values()).sort(
+    (a, b) => (b.close_time || b.entry_time || "").localeCompare(a.close_time || a.entry_time || "")
+  );
   const filteredHistory = history.filter((t) => {
     if (filterResult && t.result !== filterResult) return false;
     if (filterDirection && t.direction !== filterDirection) return false;
@@ -83,6 +109,16 @@ export default function Trader3Page({ isActive }) {
         <div className="kpi-card">
           <div className="kpi-value">{activePositions.length}</div>
           <div className="kpi-label">Positions actives</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-value">{totalTrades}</div>
+          <div className="kpi-label">Trades clôturés</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-value" style={{ color: winRate != null && winRate >= 50 ? "var(--green)" : winRate != null ? "var(--red)" : "var(--text-muted)" }}>
+            {winRate != null ? `${winRate}%` : "N/A"}
+          </div>
+          <div className="kpi-label">Win Rate</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value" style={{ color: pnlColor(realizedPnl) }}>
@@ -206,7 +242,7 @@ export default function Trader3Page({ isActive }) {
               <tbody>
                 {pagedHistory.map((t, i) => (
                   <tr key={i}>
-                    <td>{t.timestamp ? new Date(t.timestamp).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) : "\u2014"}</td>
+                    <td>{(t.close_time || t.entry_time || t.timestamp) ? new Date(t.close_time || t.entry_time || t.timestamp).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) : "\u2014"}</td>
                     <td style={{ fontWeight: 600 }}>{t.ticker}</td>
                     <td>{t.strategy || "\u2014"}</td>
                     <td style={{ color: DIR_COLORS[t.direction] }}>{t.direction}</td>

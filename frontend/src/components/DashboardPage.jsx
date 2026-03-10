@@ -297,7 +297,7 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
 }
 
 /* Per-team summary cards */
-function TeamSummaryCards({ report, positions }) {
+function TeamSummaryCards({ report, positions, journalStats }) {
   const teams = [
     { id: "1", name: "Éq. 1 — Day Trading", perfKey: "trader_1", wrKey: "win_rate", pnlKey: "total_pnl", tradesKey: "total_trades" },
     { id: "2", name: "Éq. 2 — Tendance", perfKey: "trader_2", wrKey: "flip_win_rate", pnlKey: "total_realized_pnl", tradesKey: "flip_count" },
@@ -309,9 +309,11 @@ function TeamSummaryCards({ report, positions }) {
     <div className="teams-summary-row">
       {teams.map((team) => {
         const perf = report?.[team.perfKey] || {};
-        const wr = perf[team.wrKey];
-        const pnl = perf[team.pnlKey];
-        const trades = perf[team.tradesKey] || 0;
+        // Use performance report data, with journal stats as real-time fallback
+        const jStats = journalStats?.[team.id];
+        const wr = perf[team.wrKey] ?? jStats?.win_rate ?? null;
+        const pnl = perf[team.pnlKey] ?? jStats?.total_realized_pnl ?? null;
+        const trades = perf[team.tradesKey] || jStats?.total_trades || 0;
         const openCount = (positions[team.id] || []).length;
 
         return (
@@ -359,6 +361,7 @@ export default function DashboardPage({ isActive, agents }) {
   const [report, setReport] = useState(null);
   const [history, setHistory] = useState([]);
   const [positions, setPositions] = useState({});
+  const [journalStats, setJournalStats] = useState({});
   const [posLoading, setPosLoading] = useState(false);
   const { toasts, addToast, dismissToast } = useToasts();
   const fetchCountRef = useRef(0);
@@ -370,7 +373,7 @@ export default function DashboardPage({ isActive, agents }) {
     if (document.hidden) return;
     const fetchId = ++fetchCountRef.current;
     try {
-      const [scanRes, perfRes, reportRes, histRes, t1Res, t2Res, t3Res, t4Res] = await Promise.all([
+      const [scanRes, perfRes, reportRes, histRes, t1Res, t2Res, t3Res, t4Res, j3Res, j4Res] = await Promise.all([
         fetch("/api/scan/latest").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch("/api/performance/report").then((r) => r.ok ? r.json() : null).catch(() => null),
@@ -379,6 +382,8 @@ export default function DashboardPage({ isActive, agents }) {
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/journal3/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/journal4/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
       ]);
 
       // Only apply if this is still the most recent fetch
@@ -388,6 +393,21 @@ export default function DashboardPage({ isActive, agents }) {
       if (perfRes) setPerf(perfRes);
       if (reportRes) setReport(reportRes);
       if (Array.isArray(histRes)) setHistory(histRes);
+
+      // Compute live journal stats for teams 3 & 4 (fallback when report unavailable)
+      const computeJournalStats = (entries) => {
+        const arr = Array.isArray(entries) ? entries : [];
+        const withPnl = arr.filter((e) => e.pnl_pct != null);
+        if (!withPnl.length) return null;
+        const wins = withPnl.filter((e) => (e.pnl_pct || 0) > 0).length;
+        const totalPnl = withPnl.reduce((s, e) => s + (e.pnl_pct || 0), 0);
+        return {
+          win_rate: Math.round(wins / withPnl.length * 1000) / 10,
+          total_realized_pnl: Math.round(totalPnl * 100) / 100,
+          total_trades: withPnl.length,
+        };
+      };
+      setJournalStats({ "3": computeJournalStats(j3Res), "4": computeJournalStats(j4Res) });
 
       // Normalize positions for all teams
       // Team 1: /api/trades/pending returns only PENDING trades (server-side filter)
@@ -564,7 +584,7 @@ export default function DashboardPage({ isActive, agents }) {
       })()}
 
       {/* Per-team summary */}
-      <TeamSummaryCards report={report} positions={positions} />
+      <TeamSummaryCards report={report} positions={positions} journalStats={journalStats} />
 
       {/* All teams open positions */}
       <AllTeamsPositions positions={positions} onRefresh={refreshPositions} loading={posLoading} />

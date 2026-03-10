@@ -17,14 +17,31 @@ export default function Trader4Page({ isActive }) {
 
   const fetchData = useCallback(async () => {
     try {
-      const [posRes, histRes, adjRes, logRes] = await Promise.all([
+      const [posRes, histRes, adjRes, logRes, journalRes] = await Promise.all([
         apiFetch("/api/trader4/positions", {}, []),
         apiFetch("/api/trader4/history", {}, []),
         apiFetch("/api/learning4/adjustments", {}, null),
         apiFetch("/api/agents/trader_4/logs?limit=50", {}, []),
+        apiFetch("/api/journal4/entries", {}, []),
       ]);
       setPositions(Array.isArray(posRes?.active) ? posRes.active : Array.isArray(posRes) ? posRes : []);
-      setHistory(Array.isArray(histRes) ? histRes : []);
+      // Merge trader history + journal entries, preferring journal (more complete data)
+      const traderHist = Array.isArray(histRes) ? histRes : [];
+      const journalHist = Array.isArray(journalRes) ? journalRes : [];
+      // Build merged history: journal entries take priority (have enriched data)
+      const histMap = new Map();
+      traderHist.forEach((h) => {
+        const key = `${h.ticker}-${h.entry_time || h.time || ""}`;
+        histMap.set(key, h);
+      });
+      journalHist.forEach((e) => {
+        const key = `${e.ticker}-${e.entry_time || ""}`;
+        histMap.set(key, { ...e, contributing_teams: e.contributing_teams || Object.keys(e.source_details || {}) });
+      });
+      const merged = Array.from(histMap.values()).sort(
+        (a, b) => (b.time || b.close_time || "").localeCompare(a.time || a.close_time || "")
+      );
+      setHistory(merged);
       setLearningAdj(adjRes);
       setLogs(Array.isArray(logRes) ? logRes : []);
       setError(null);
@@ -44,8 +61,12 @@ export default function Trader4Page({ isActive }) {
 
   // KPIs
   const activePositions = positions.filter((p) => p.status === "PENDING" || p.status === "active");
+  const historyWithPnl = history.filter((t) => t.pnl_pct != null);
+  const totalTrades = historyWithPnl.length;
+  const wins = historyWithPnl.filter((t) => (t.pnl_pct || 0) > 0).length;
+  const winRate = totalTrades > 0 ? (wins / totalTrades * 100).toFixed(1) : null;
   const confluenceTrades = history.filter((t) => (t.confluence_level || 0) >= 2).length;
-  const realizedPnl = history.reduce((s, t) => s + (t.pnl_pct || 0), 0);
+  const realizedPnl = historyWithPnl.reduce((s, t) => s + (t.pnl_pct || 0), 0);
   const byCombo = {};
   history.forEach((t) => {
     const combo = (t.contributing_teams || []).sort().join("+") || "?";
@@ -111,6 +132,16 @@ export default function Trader4Page({ isActive }) {
         <div className="kpi-card">
           <div className="kpi-value">{activePositions.length}</div>
           <div className="kpi-label">Positions actives</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-value">{totalTrades}</div>
+          <div className="kpi-label">Trades clôturés</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-value" style={{ color: winRate != null && winRate >= 50 ? "var(--green)" : winRate != null ? "var(--red)" : "var(--text-muted)" }}>
+            {winRate != null ? `${winRate}%` : "N/A"}
+          </div>
+          <div className="kpi-label">Win Rate</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value">{confluenceTrades}</div>
