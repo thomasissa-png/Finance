@@ -151,7 +151,11 @@ class AgentTrader(BaseAgent):
             return result_dict
 
         except Exception as exc:
-            self.log("Trade selection failed", {"error": str(exc)}, level="ERROR")
+            import traceback
+            self.log("Trade selection failed", {
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            }, level="ERROR")
             self._set_status(AgentStatus.ERROR, str(exc))
             raise
 

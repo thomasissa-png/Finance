@@ -311,8 +311,10 @@ function TeamSummaryCards({ report, positions }) {
         const perf = report?.[team.perfKey] || {};
         const wr = perf[team.wrKey];
         const pnl = perf[team.pnlKey];
-        const trades = perf[team.tradesKey] || 0;
+        const closedCount = perf[team.tradesKey] || 0;
         const openCount = (positions[team.id] || []).length;
+        // Show total trades (closed + currently open) for accurate count
+        const trades = closedCount + openCount;
 
         return (
           <div key={team.id} className="team-summary-card" style={{ borderLeftColor: TEAM_COLORS[team.id] }}>
@@ -519,8 +521,8 @@ export default function DashboardPage({ isActive, agents }) {
         const t2 = report?.trader_2 || {};
         const t3 = report?.trader_3 || {};
         const t4 = report?.trader_4 || {};
-        // Aggregate trades count
-        const totalTrades = (t1.total_trades || 0) + (t2.flip_count || 0) + (t3.total_trades || 0) + (t4.total_trades || 0);
+        // Aggregate trades: closed (from report) + currently open (from positions)
+        const closedTrades = (t1.total_trades || 0) + (t2.flip_count || 0) + (t3.total_trades || 0) + (t4.total_trades || 0);
         // Weighted win rate across teams with trades
         const teamWrs = [
           { wr: t1.win_rate, n: t1.total_trades || 0 },
@@ -535,7 +537,8 @@ export default function DashboardPage({ isActive, agents }) {
         // Sum P&L across teams
         const totalPnl = (t1.total_pnl ?? (perf?.total_pnl_pct || 0))
           + (t2.total_realized_pnl || 0) + (t3.total_realized_pnl || 0) + (t4.total_realized_pnl || 0);
-        const displayTrades = totalTrades || (perf?.total_trades || 0);
+        // Include open positions in total count for accurate display
+        const displayTrades = (closedTrades + totalOpen) || (perf?.total_trades || 0);
         return (
           <div className="kpi-row">
             <KpiCard value={displayTrades} label="Trades total" />
