@@ -43,13 +43,13 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | Agent | Version | Dernier changement |
 |-------|---------|-------------------|
 | News | 7.7 | news_zone on EIA/USDA/SHFE sources |
-| Scoring | 7.4 | 9 fixes, token tracking |
-| Scoring 2 | 7.5 | Structural freshness exempt, +5 keywords, decouple from intraday scoring |
-| Scoring 3 | 2.1 | 5 combo strategies (multi-indicator confluence: RSI+MACD, BB+Stoch, MA+RSI+MACD, RSI+BB, MACD+MA) |
+| Scoring | 7.6 | S1-P2 signal accumulator race fix, S1-P4 fallback validation |
+| Scoring 2 | 8.2 | Thread-safe tokens, LRU cache cap, dead code cleanup, fallback validation |
+| Scoring 3 | 2.3 | Configurable params, parallel intraday, pivot_type fix, log exceptions |
 | Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
-| Trader 1 | 6.5 | Timeout audit, trailing stop |
-| Trader 2 | 7.6 | Remove total_score pre-filter (decouple from intraday edge) |
-| Trader 3 | 2.0 | Correlation check, trailing per-strategy, regime filter, agent_versions, weekly config |
+| Trader 1 | 6.7 | Enhanced logging (max_score, top_headline), save_trade error handling |
+| Trader 2 | 7.7 | Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once |
+| Trader 3 | 2.2 | Market hours validation, live entry price fetch, price cross-validation |
 | Trader 4 | 2.1 | Always-save after monitor, stale stop_price fix |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
 | Journal 2 | 7.2 | Atomic single-write (PG vs JSON branch), no triple write |
@@ -59,7 +59,7 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | Learning 2 | 7.4 | Zone+intensity-aware newscat cross-dimension |
 | Learning 3 | 2.1 | Weekly config disk persistence (survives restart) |
 | Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
-| Infrastructure | 7.5 | Health check, VACUUM 9 tables |
+| Infrastructure | 7.7 | Suppress transient SSL errors (INFO instead of WARN) |
 | Performance | 8.3 | Cascade-safe daily report (individual try/except per KPI section) |
 | Auditor | 8.2 | Fix audit checks in except blocks, timedelta import, safe defaults |
 
@@ -590,27 +590,50 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **LOW Fix G** : `agent_scoring_2.py` — added 5 structural keywords: `ferrugem` (1.4, Brazilian coffee rust), `black frost` (1.6), `geada negra` (1.6), `conab` (1.3, Brazilian crop agency), `tc/rc` (1.3, copper smelting terms)
 - **Tests** : 61/61 pass. Updated `test_t3_fresh_news_weighted_more` (geopolitical instead of weather), added `test_t3_structural_category_no_freshness_penalty`
 
+#### 26. Twelve Data Price Validation & Commodity Fix — 4 commits
+- **Fix 1** : `market_data.py` — Blacklisted 21 tickers with unit mismatches between Twelve Data and yfinance (indices, some futures) to prevent garbage price data. Added `_TD_BLACKLIST` set + `TD_PRICE_RANGES` sanity check dict
+- **Fix 2** : `market_data.py` — Refined blacklist: un-blacklisted 4 verified futures (CL1, CO1, NG/USD, XAU/USD) after confirming correct prices, documented all symbol resolution decisions
+- **Fix 3 (CRITICAL)** : `market_data.py` — Added `type=commodities` to 7 TD symbol mappings (CC1, KC1, SB1, HG1, JO1, LC1, LH1) that collided with stocks/ETFs. Without this param, TD returns wrong prices (e.g., CC1 = Amundi ETF ~287€ instead of Cocoa ~3435$)
+- **CLAUDE.md** : Documented TD `type=commodities` requirement, local dev setup, price validation helpers
+
+#### 27. Audit Scoring 3 — Technical Indicators Review (session courante)
+- **Revue complète** du pipeline de calcul des indicateurs techniques de l'Équipe 3
+- **Indicateurs validés** (tous corrects mathématiquement) :
+  - RSI (Wilder smoothing) — vérifié vs calcul manuel, match exact
+  - EMA (seed SMA + exponential) — vérifié avec données connues
+  - Bollinger Bands (écart-type population, convention Bollinger) — pct_b correct
+  - Stochastic %K/%D — vérifié avec cas simple (K=70, D=56.67)
+  - ATR (Wilder smoothing) — constant range → ATR exact
+  - ADX — 0 pour marché plat, 100 pour trend pur
+  - SMA — trivial, correct
+  - MACD — EMA fast - EMA slow, signal line correct
+- **Source des données** : `fetch_history_batch()` dans `market_data.py` (365j daily), passe correctement `type=commodities` via `**extra` params. Batch groupé par param_key (tickers avec même extra params ensemble)
+- **Validation NaN/Inf** (F1) : droppés avant calcul d'indicateurs
+- **11 stratégies** (6 simples + 5 combos) : logique de détection correcte, scoring cohérent
+- **Multi-timeframe** : intraday 1h en parallèle (5 threads, timeout 30s) pour les top 10 setups
+- **Mise à jour CLAUDE.md** : versions agents synchronisées avec le code (6 agents avaient évolué)
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 21 singletons (4 équipes + infra + perf + audit), run_scan_pipeline (News→Scoring→per-team branches), helpers pour toutes les équipes
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
-- `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
-- `backend/app/agents/agent_scoring_2.py` : Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored. v7.5: structural categories (weather, supply_chain, commodity) exempt from freshness_weight decay, +5 keywords (ferrugem, black frost, geada negra, conab, tc/rc)
-- `backend/app/agents/agent_trader.py` : v6.4, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
-- `backend/app/agents/agent_trader_2.py` : v7.6, trend following 4 commodities, consomme Learning 2 (ticker_adj, newscat_adj, direction_adj, threshold_adj), flip history, persistence PG/JSON. v7.6: removed total_score pre-filter (decoupled from intraday edge scoring)
+- `backend/app/agents/agent_scoring.py` : v7.6, score Claude API, zero-edge filter, chain reactions, token tracking, signal accumulator race fix, fallback validation
+- `backend/app/agents/agent_scoring_2.py` : v8.2, Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored. Thread-safe tokens, LRU cache cap, dead code cleanup, fallback validation. Structural categories exempt from freshness_weight decay, +5 keywords (ferrugem, black frost, geada negra, conab, tc/rc)
+- `backend/app/agents/agent_trader.py` : v6.7, décision trade, position monitor, multi-trader ready, daily counters. Enhanced logging (max_score, top_headline), save_trade error handling
+- `backend/app/agents/agent_trader_2.py` : v7.7, trend following 4 commodities, consomme Learning 2 (ticker_adj, newscat_adj, direction_adj, threshold_adj), flip history, persistence PG/JSON. Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once
 - `backend/app/agents/agent_journal.py` : Équipe 1, clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
 - `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
 - `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
-- `backend/app/agents/agent_scoring_3.py` : Équipe 3, indicateurs techniques (RSI, MACD, Bollinger, SMA/EMA, Stochastic, ADX) sur 20 tickers, 11 stratégies (6 simples + 5 combos), market_data.py pour OHLCV. v2.1: combo strategies (rsi_macd_combo, bollinger_stoch_combo, ma_rsi_macd_combo, rsi_bollinger_combo, macd_ma_combo)
-- `backend/app/agents/agent_trader_3.py` : Équipe 3, multi-position (max 10), holding 1-3j, A/B testing stratégies, persistence PG (tech_positions) + JSON
+- `backend/app/agents/agent_scoring_3.py` : v2.3, Équipe 3, indicateurs techniques (RSI, MACD, Bollinger, SMA/EMA, Stochastic, ADX) sur 20 tickers, 11 stratégies (6 simples + 5 combos), market_data.py pour OHLCV. Configurable params via weekly_config, parallel intraday confirmation, pivot_type fix, per-category squeeze thresholds, NaN/Inf validation, batch OHLCV fetch
+- `backend/app/agents/agent_trader_3.py` : v2.2, Équipe 3, multi-position (max 10), holding 1-3j, A/B testing stratégies, persistence PG (tech_positions) + JSON. Market hours validation, live entry price fetch, price cross-validation
 - `backend/app/agents/agent_journal_3.py` : Équipe 3, journal positions techniques, analyse par stratégie, MAE/MFE, persistence PG (tech_journal_entries) + JSON
 - `backend/app/agents/agent_learning_3.py` : Équipe 3, 3 dims (strategy, ticker, timeframe), ranking stratégies, anomaly detection
 - `backend/app/agents/agent_scoring_4.py` : Équipe 4, meta-scorer combinant Teams 1+2+3, poids configurables, confluence detection (boost 1.2x-1.5x)
 - `backend/app/agents/agent_trader_4.py` : Équipe 4, confluence-driven (min level 2), sizing par confluence, max 6 positions, expiry 48h, persistence PG (meta_positions) + JSON
 - `backend/app/agents/agent_journal_4.py` : Équipe 4, journal meta positions, tracking par combinaison de sources, persistence PG (meta_journal_entries) + JSON
 - `backend/app/agents/agent_learning_4.py` : Équipe 4, optimisation poids (news/trend/tech), ajustements par combinaison/ticker/confluence, bounds [0.6, 1.4]
-- `backend/app/agents/agent_infrastructure.py` : v7.5, health check 15min (PG, pool, pending, fallbacks), maintenance 23h (VACUUM, pruning, stats), rapport hebdomadaire dim 21h, détection divergence JSON/PG
+- `backend/app/agents/agent_infrastructure.py` : v7.7, health check 15min (PG, pool, pending, fallbacks), maintenance 23h (VACUUM, pruning, stats), rapport hebdomadaire dim 21h, détection divergence JSON/PG, suppress transient SSL errors
 - `backend/app/agents/agent_performance.py` : KPIs tous agents (incl. Teams 3/4), 3 actions (snapshot horaire, daily report 22h30, weekly trends dim 21h30), ranking, alertes, tendances
 - `backend/app/agents/agent_auditor.py` : audit profondeur, 22 profils d'expertise (incl. Teams 3/4), note /10, persistance rapports, trend tracking, log analysis
 - `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
