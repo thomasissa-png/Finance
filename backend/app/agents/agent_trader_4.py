@@ -422,54 +422,60 @@ class AgentTrader4(BaseAgent):
             # Save
             _save_positions(positions)
 
-            # Publish to bus
-            self._evaluations_today += 1
-            self.publish("meta_trade_update", {
-                "changes": [
-                    {"ticker": c["ticker"], "action": c["action"],
-                     "direction": c.get("direction")}
-                    for c in changes
-                ],
-                "open_positions": sum(
-                    1 for p in positions.values() if p.get("status") == "OPEN"
-                ),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            # Build result BEFORE publish/log — an exception in publish/log
+            # must never prevent the result from being returned to the pipeline.
+            duration_ms = int((time.monotonic() - start) * 1000)
+            result = {
+                "positions": positions,
+                "changes": changes,
+                "signals_evaluated": len(meta_items),
+                "duration_ms": duration_ms,
+            }
 
-            # Log changes
-            for c in changes:
-                self.log_decision(f"META {c['action']} {c['ticker']}", {
-                    "ticker": c["ticker"],
-                    "action": c["action"],
-                    "direction": c.get("direction"),
-                    "confluence_level": c.get("confluence_level"),
-                    "meta_score": c.get("meta_score"),
-                    "reason": c.get("reason", ""),
-                    "pnl_pct": c.get("close_pnl"),
-                    "close_type": c.get("close_type"),
-                })
-
-            if not changes:
-                self.log("Meta evaluation complete — no changes", {
-                    "signals_evaluated": len(meta_items),
+            # Publish + Log (best-effort, never blocks result)
+            try:
+                self._evaluations_today += 1
+                self.publish("meta_trade_update", {
+                    "changes": [
+                        {"ticker": c["ticker"], "action": c["action"],
+                         "direction": c.get("direction")}
+                        for c in changes
+                    ],
                     "open_positions": sum(
                         1 for p in positions.values() if p.get("status") == "OPEN"
                     ),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
 
-            duration_ms = int((time.monotonic() - start) * 1000)
+                for c in changes:
+                    self.log_decision(f"META {c['action']} {c['ticker']}", {
+                        "ticker": c["ticker"],
+                        "action": c["action"],
+                        "direction": c.get("direction"),
+                        "confluence_level": c.get("confluence_level"),
+                        "meta_score": c.get("meta_score"),
+                        "reason": c.get("reason", ""),
+                        "pnl_pct": c.get("close_pnl"),
+                        "close_type": c.get("close_type"),
+                    })
+
+                if not changes:
+                    self.log("Meta evaluation complete — no changes", {
+                        "signals_evaluated": len(meta_items),
+                        "open_positions": sum(
+                            1 for p in positions.values() if p.get("status") == "OPEN"
+                        ),
+                    })
+            except Exception as log_exc:
+                logger.warning("Trader 4 publish/log failed (positions saved OK): %s", log_exc)
+
             self._set_status(
                 AgentStatus.IDLE,
                 f"{len(changes)} changes, "
                 f"{sum(1 for p in positions.values() if p.get('status') == 'OPEN')} open"
             )
 
-            return {
-                "positions": positions,
-                "changes": changes,
-                "signals_evaluated": len(meta_items),
-                "duration_ms": duration_ms,
-            }
+            return result
 
         except Exception as exc:
             self.log("Meta evaluation failed", {"error": str(exc)}, level="ERROR")

@@ -358,42 +358,48 @@ class AgentTrader2(BaseAgent):
             # Save
             _save_positions(positions)
 
-            # Publish to bus
-            self._evaluations_today += 1
-            self.publish("trend_update", {
-                "changes": changes,
-                "positions_count": len(positions),
-                "scan_type": scan_type.value if scan_type else None,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-            # Log changes
-            if changes:
-                for c in changes:
-                    self.log_decision("POSITION CHANGED", {
-                        "ticker": c["ticker"],
-                        "from": c["old_direction"],
-                        "to": c["new_direction"],
-                        "reason": c["reason"],
-                        "key_news": c.get("key_news", [])[:3],
-                    })
-            else:
-                self.log("Trend evaluation complete — no changes", {
-                    "news_evaluated": sum(len(v) for v in relevant_news.values()),
-                    "tickers_with_news": len(relevant_news),
-                })
-
+            # Build result BEFORE publish/log — an exception in publish/log
+            # must never prevent the result from being returned to the pipeline.
             duration_ms = int((time.monotonic() - start) * 1000)
-            action = (f"Changed: {', '.join(c['ticker'] for c in changes)}"
-                      if changes else "No trend changes")
-            self._set_status(AgentStatus.IDLE, action)
-
-            return {
+            result = {
                 "positions": positions,
                 "changes": changes,
                 "news_evaluated": sum(len(v) for v in relevant_news.values()),
                 "duration_ms": duration_ms,
             }
+
+            # Publish + Log (best-effort, never blocks result)
+            try:
+                self._evaluations_today += 1
+                self.publish("trend_update", {
+                    "changes": changes,
+                    "positions_count": len(positions),
+                    "scan_type": scan_type.value if scan_type else None,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+
+                if changes:
+                    for c in changes:
+                        self.log_decision("POSITION CHANGED", {
+                            "ticker": c["ticker"],
+                            "from": c["old_direction"],
+                            "to": c["new_direction"],
+                            "reason": c["reason"],
+                            "key_news": c.get("key_news", [])[:3],
+                        })
+                else:
+                    self.log("Trend evaluation complete — no changes", {
+                        "news_evaluated": sum(len(v) for v in relevant_news.values()),
+                        "tickers_with_news": len(relevant_news),
+                    })
+            except Exception as log_exc:
+                logger.warning("Trader 2 publish/log failed (positions saved OK): %s", log_exc)
+
+            action = (f"Changed: {', '.join(c['ticker'] for c in changes)}"
+                      if changes else "No trend changes")
+            self._set_status(AgentStatus.IDLE, action)
+
+            return result
 
         except Exception as exc:
             self.log("Trend evaluation failed", {"error": str(exc)}, level="ERROR")

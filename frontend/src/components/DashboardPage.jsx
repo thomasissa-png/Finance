@@ -683,40 +683,28 @@ export default function DashboardPage({ isActive, agents }) {
                       {(() => {
                         const np = t3?.new_positions?.length || 0;
                         const cp = t3?.closed_positions?.length || 0;
-                        const ac = t3?.active_count || 0;
                         if (np > 0 || cp > 0) {
                           const parts = [];
                           if (np > 0) parts.push(`+${np} ouv.`);
                           if (cp > 0) parts.push(`-${cp} ferm.`);
-                          if (ac > 0) parts.push(`${ac} actives`);
                           return <span className="scan-summary-activity active">{parts.join(" / ")}</span>;
                         }
-                        if (ac > 0) {
-                          return <span className="scan-summary-activity active">{ac} position{ac > 1 ? "s" : ""} active{ac > 1 ? "s" : ""}</span>;
-                        }
-                        return <span className="scan-summary-activity idle">Pas de signal</span>;
+                        return <span className="scan-summary-activity idle">Pas de changement{t3?.active_count ? ` (${t3.active_count} actives)` : ""}</span>;
                       })()}
                     </div>
 
                     {/* Team 4 */}
                     <div className="scan-summary-team" style={{ borderLeftColor: TEAM_COLORS["4"] }}>
                       <span className="scan-summary-team-name">Éq. 4</span>
-                      {(() => {
-                        const nc = t4?.changes?.length || 0;
-                        const op = t4?.open_positions || 0;
-                        if (nc > 0) {
-                          return (
-                            <span className="scan-summary-activity active">
-                              {nc} action{nc > 1 ? "s" : ""} — {t4.changes.map((c) => tickerName(c.ticker)).join(", ")}
-                              {op > 0 ? ` / ${op} ouvertes` : ""}
-                            </span>
-                          );
-                        }
-                        if (op > 0) {
-                          return <span className="scan-summary-activity active">{op} position{op > 1 ? "s" : ""} ouverte{op > 1 ? "s" : ""}</span>;
-                        }
-                        return <span className="scan-summary-activity idle">Pas de signal</span>;
-                      })()}
+                      {t4?.changes?.length > 0 ? (
+                        <span className="scan-summary-activity active">
+                          {t4.changes.length} action{t4.changes.length > 1 ? "s" : ""} — {t4.changes.map((c) => tickerName(c.ticker)).join(", ")}
+                        </span>
+                      ) : (
+                        <span className="scan-summary-activity idle">
+                          Pas de changement{t4?.open_positions ? ` (${t4.open_positions} ouvertes)` : ""}
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}

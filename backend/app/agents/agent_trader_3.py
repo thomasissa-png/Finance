@@ -283,59 +283,65 @@ class AgentTrader3(BaseAgent):
             state = {"active": all_active, "closed": closed}
             _save_positions(state)
 
-            # Step 4: Publish
-            self._evaluations_today += 1
-            self.publish("tech_update", {
-                "active_count": len(all_active),
-                "new_opened": len(new_positions),
-                "newly_closed": len(newly_closed),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-
-            # Log
-            if new_positions:
-                for pos in new_positions:
-                    self.log_decision("POSITION OPENED", {
-                        "ticker": pos["ticker"],
-                        "strategy": pos["strategy"],
-                        "direction": pos["direction"],
-                        "entry_price": pos["entry_price"],
-                        "score": pos["score"],
-                        "target_pct": pos["target_pct"],
-                        "stop_pct": pos["stop_pct"],
-                    })
-
-            if newly_closed:
-                for pos in newly_closed:
-                    self.log_decision("POSITION CLOSED", {
-                        "ticker": pos["ticker"],
-                        "strategy": pos["strategy"],
-                        "direction": pos["direction"],
-                        "result": pos.get("result"),
-                        "pnl_pct": pos.get("pnl_pct"),
-                        "holding_hours": pos.get("holding_hours"),
-                    })
-
-            self.log("Tech trader evaluation complete", {
-                "active": len(all_active),
-                "new_opened": len(new_positions),
-                "newly_closed": len(newly_closed),
-                "setups_evaluated": len(tech_scoring.get("setups", [])) if tech_scoring else 0,
-            })
-
+            # Build result BEFORE publish/log — an exception in publish/log
+            # must never prevent the result from being returned to the pipeline.
             duration_ms = int((time.monotonic() - start) * 1000)
+            result = {
+                "active": all_active,
+                "new_opened": new_positions,
+                "newly_closed": newly_closed,
+                "duration_ms": duration_ms,
+            }
+
+            # Step 4: Publish + Log (best-effort, never blocks result)
+            try:
+                self._evaluations_today += 1
+                self.publish("tech_update", {
+                    "active_count": len(all_active),
+                    "new_opened": len(new_positions),
+                    "newly_closed": len(newly_closed),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+
+                if new_positions:
+                    for pos in new_positions:
+                        self.log_decision("POSITION OPENED", {
+                            "ticker": pos["ticker"],
+                            "strategy": pos["strategy"],
+                            "direction": pos["direction"],
+                            "entry_price": pos["entry_price"],
+                            "score": pos["score"],
+                            "target_pct": pos["target_pct"],
+                            "stop_pct": pos["stop_pct"],
+                        })
+
+                if newly_closed:
+                    for pos in newly_closed:
+                        self.log_decision("POSITION CLOSED", {
+                            "ticker": pos["ticker"],
+                            "strategy": pos["strategy"],
+                            "direction": pos["direction"],
+                            "result": pos.get("result"),
+                            "pnl_pct": pos.get("pnl_pct"),
+                            "holding_hours": pos.get("holding_hours"),
+                        })
+
+                self.log("Tech trader evaluation complete", {
+                    "active": len(all_active),
+                    "new_opened": len(new_positions),
+                    "newly_closed": len(newly_closed),
+                    "setups_evaluated": len(tech_scoring.get("setups", [])) if tech_scoring else 0,
+                })
+            except Exception as log_exc:
+                logger.warning("Trader 3 publish/log failed (positions saved OK): %s", log_exc)
+
             self._set_status(
                 AgentStatus.IDLE,
                 f"{len(all_active)} active, +{len(new_positions)} opened, "
                 f"-{len(newly_closed)} closed"
             )
 
-            return {
-                "active": all_active,
-                "new_opened": new_positions,
-                "newly_closed": newly_closed,
-                "duration_ms": duration_ms,
-            }
+            return result
 
         except Exception as exc:
             self.log("Tech trader failed", {"error": str(exc)}, level="ERROR")
