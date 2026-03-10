@@ -380,12 +380,19 @@ class AgentTrader2(BaseAgent):
 
                 if changes:
                     for c in changes:
-                        self.log_decision("POSITION CHANGED", {
+                        top_headline = ""
+                        if c.get("key_news"):
+                            top_headline = c["key_news"][0].get("title", "") if c["key_news"] else ""
+                        self.log_decision(f"POSITION CHANGED — {TREND_TICKERS.get(c['ticker'], {}).get('name', c['ticker'])}", {
                             "ticker": c["ticker"],
                             "from": c["old_direction"],
                             "to": c["new_direction"],
                             "reason": c["reason"],
-                            "key_news": c.get("key_news", [])[:3],
+                            "close_pnl": c.get("close_pnl"),
+                            "key_news": [
+                                f"{n.get('title', '?')} [{n.get('category', '')}{'/' + n.get('zone') if n.get('zone') else ''}] (score:{n.get('score', '?')})"
+                                for n in c.get("key_news", [])[:3]
+                            ],
                         })
                 else:
                     self.log("Trend evaluation complete — no changes", {

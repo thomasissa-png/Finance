@@ -659,6 +659,7 @@ function JournalSection({ teamId }) {
   const [entries, setEntries] = useState([]);
   const [page, setPage] = useState(1);
   const [logFilter, setLogFilter] = useState("DECISION");
+  const [expandedEntry, setExpandedEntry] = useState(null);
   const config = TEAM_CONFIG[teamId];
 
   useEffect(() => {
@@ -691,67 +692,128 @@ function JournalSection({ teamId }) {
       ) : (
         <div className="section-card">
           <h3>Journal des trades ({sorted.length} entrées)</h3>
-          <div className="compact-table desktop-only">
+          <div className="compact-table">
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
                   <th>Actif</th>
-                  <th>Direction</th>
+                  <th>Dir</th>
+                  <th>Signal</th>
                   <th>Résultat</th>
                   <th>P&L</th>
-                  <th>MAE</th>
-                  <th>MFE</th>
+                  <th>MAE/MFE</th>
                 </tr>
               </thead>
               <tbody>
                 {paged.map((e, i) => {
                   const res = RESULT_LABELS[e.result] || { label: e.result || "", cls: "" };
+                  const entryKey = `${e.entry_time}-${e.ticker}-${i}`;
+                  const isExpanded = expandedEntry === entryKey;
+                  // Build signal label: category + zone for Team 1/2, strategy for Team 3, combo for Team 4
+                  const signalParts = [];
+                  if (e.news_category) signalParts.push(e.news_category);
+                  if (e.news_zone) signalParts.push(e.news_zone);
+                  if (e.strategy) signalParts.push(e.strategy);
+                  if (e.team_combination) signalParts.push(e.team_combination);
                   return (
-                    <tr key={`${e.entry_time}-${e.ticker}-${i}`}>
-                      <td>{formatDate(e.entry_time || e.timestamp)}</td>
-                      <td className="ticker-cell">{tickerName(e.ticker)}</td>
-                      <td><span className={`direction-badge ${(e.direction || "").toLowerCase()}`}>{e.direction}</span></td>
-                      <td><span className={`result-badge ${res.cls}`}>{res.label}</span></td>
-                      <td style={{ color: pnlColor(e.pnl_pct), fontWeight: 600 }}>
-                        {e.pnl_pct != null ? `${e.pnl_pct > 0 ? "+" : ""}${e.pnl_pct.toFixed(2)}%` : ""}
-                      </td>
-                      <td style={{ color: "var(--red)" }}>{e.mae != null ? `${e.mae.toFixed(2)}%` : ""}</td>
-                      <td style={{ color: "var(--green)" }}>{e.mfe != null ? `${e.mfe.toFixed(2)}%` : ""}</td>
-                    </tr>
+                    <React.Fragment key={entryKey}>
+                      <tr style={{ cursor: "pointer" }} onClick={() => setExpandedEntry(isExpanded ? null : entryKey)}>
+                        <td>{formatDate(e.entry_time || e.timestamp)}</td>
+                        <td className="ticker-cell">{tickerName(e.ticker)}</td>
+                        <td><span className={`direction-badge ${(e.direction || "").toLowerCase()}`}>{e.direction}</span></td>
+                        <td style={{ fontSize: 11 }}>
+                          <div style={{ display: "flex", gap: 3, alignItems: "center", flexWrap: "wrap" }}>
+                            {signalParts.map((s, si) => (
+                              <span key={si} style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: CATEGORY_COLORS[s] ? `${CATEGORY_COLORS[s]}22` : "rgba(139,157,195,0.12)", color: CATEGORY_COLORS[s] || "var(--text-secondary)", fontWeight: 600 }}>{s}</span>
+                            ))}
+                            <span style={{ color: "var(--text-muted)", fontSize: 9 }}>{isExpanded ? "▲" : "▼"}</span>
+                          </div>
+                        </td>
+                        <td><span className={`result-badge ${res.cls}`}>{res.label}</span></td>
+                        <td style={{ color: pnlColor(e.pnl_pct), fontWeight: 600 }}>
+                          {e.pnl_pct != null ? `${e.pnl_pct > 0 ? "+" : ""}${e.pnl_pct.toFixed(2)}%` : ""}
+                        </td>
+                        <td style={{ fontSize: 11 }}>
+                          {e.mae != null || e.max_adverse_excursion != null ? (
+                            <span style={{ color: "var(--red)" }}>{((e.mae ?? e.max_adverse_excursion) || 0).toFixed(2)}%</span>
+                          ) : ""}
+                          {(e.mae != null || e.max_adverse_excursion != null) && (e.mfe != null || e.max_favorable_excursion != null) ? " / " : ""}
+                          {e.mfe != null || e.max_favorable_excursion != null ? (
+                            <span style={{ color: "var(--green)" }}>{((e.mfe ?? e.max_favorable_excursion) || 0).toFixed(2)}%</span>
+                          ) : ""}
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan="7" style={{ padding: "8px 12px", background: "rgba(139,157,195,0.04)", borderTop: "none" }}>
+                            <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.8 }}>
+                              {/* News headline & description */}
+                              {(e.news_title || e.news_headline) && (
+                                <div><strong>News :</strong> {e.news_title || e.news_headline}
+                                  {e.news_url && <a href={e.news_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", marginLeft: 6, fontSize: 11 }}>[source]</a>}
+                                </div>
+                              )}
+                              {e.news_description && <div style={{ color: "var(--text-muted)", fontSize: 11, marginBottom: 4 }}>{e.news_description}</div>}
+
+                              {/* Reasoning */}
+                              {e.reasoning && <div style={{ marginBottom: 4 }}><strong>Raisonnement :</strong> {e.reasoning}</div>}
+                              {e.decision_summary && <div style={{ marginBottom: 4 }}><strong>Décision :</strong> {e.decision_summary}</div>}
+
+                              {/* Signal details: category + zone + source */}
+                              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
+                                {e.news_category && <span><strong>Catégorie :</strong> {e.news_category}</span>}
+                                {e.news_zone && <span><strong>Zone :</strong> {e.news_zone}</span>}
+                                {e.news_source && <span><strong>Source :</strong> {e.news_source}</span>}
+                                {e.scan_type && <span><strong>Scan :</strong> {scanLabel(e.scan_type)}</span>}
+                              </div>
+
+                              {/* Scoring dimensions */}
+                              {(e.surprise != null || e.signal_reliability != null) && (
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                                  {e.surprise != null && <span style={{ fontSize: 11, padding: "1px 5px", borderRadius: 3, background: "rgba(139,157,195,0.08)" }}>Surprise: {e.surprise}</span>}
+                                  {e.directional_clarity != null && <span style={{ fontSize: 11, padding: "1px 5px", borderRadius: 3, background: "rgba(139,157,195,0.08)" }}>Clarté: {e.directional_clarity}</span>}
+                                  {e.signal_reliability != null && <span style={{ fontSize: 11, padding: "1px 5px", borderRadius: 3, background: "rgba(139,157,195,0.08)" }}>Fiabilité: {e.signal_reliability}</span>}
+                                  {e.expected_magnitude != null && <span style={{ fontSize: 11, padding: "1px 5px", borderRadius: 3, background: "rgba(139,157,195,0.08)" }}>Magnitude: {e.expected_magnitude}</span>}
+                                  {e.market_awareness != null && <span style={{ fontSize: 11, padding: "1px 5px", borderRadius: 3, background: "rgba(139,157,195,0.08)" }}>Awareness: {e.market_awareness}</span>}
+                                </div>
+                              )}
+
+                              {/* Pricing & execution */}
+                              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
+                                {e.entry_price != null && <span><strong>Entrée :</strong> {formatPrice(e.entry_price, e.ticker)}</span>}
+                                {e.exit_price != null && <span><strong>Sortie :</strong> {formatPrice(e.exit_price, e.ticker)}</span>}
+                                {e.target_price != null && <span style={{ color: "var(--green)" }}>TP: {formatPrice(e.target_price, e.ticker)}</span>}
+                                {e.stop_price != null && <span style={{ color: "var(--red)" }}>SL: {formatPrice(e.stop_price, e.ticker)}</span>}
+                                {e.risk_reward != null && <span>R/R prévu: {e.risk_reward.toFixed(2)}</span>}
+                                {e.realized_rr != null && <span>R/R réalisé: {e.realized_rr.toFixed(2)}</span>}
+                              </div>
+
+                              {/* Learning context */}
+                              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                                {e.raw_claude_score != null && <span><strong>Score brut :</strong> {typeof e.raw_claude_score === "number" ? e.raw_claude_score.toFixed(1) : e.raw_claude_score}</span>}
+                                {e.score != null && <span><strong>Score final :</strong> {typeof e.score === "number" ? e.score.toFixed(1) : e.score}</span>}
+                                {e.learning_multiplier != null && <span><strong>Learn.x :</strong> {typeof e.learning_multiplier === "number" ? e.learning_multiplier.toFixed(3) : e.learning_multiplier}</span>}
+                                {e.slippage_pct != null && <span><strong>Slippage :</strong> {e.slippage_pct.toFixed(3)}%</span>}
+                                {e.bar_coverage != null && <span><strong>Bars :</strong> {e.bar_coverage} ({e.bar_interval || "?"})</span>}
+                                {e.market_regime && <span><strong>Régime :</strong> {e.market_regime}</span>}
+                                {e.vix_at_trade != null && <span><strong>VIX :</strong> {e.vix_at_trade.toFixed(1)}</span>}
+                              </div>
+
+                              {/* Strategy (Team 3) */}
+                              {e.strategy && <div style={{ marginTop: 4 }}><strong>Stratégie :</strong> {e.strategy}</div>}
+                              {/* Confluence (Team 4) */}
+                              {e.confluence_level != null && <div style={{ marginTop: 4 }}><strong>Confluence :</strong> {e.confluence_level}/3 — {e.team_combination || ""}</div>}
+                              {e.close_type && <div><strong>Type fermeture :</strong> {e.close_type}</div>}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-
-          {/* Mobile journal cards with expandable details */}
-          <div className="mobile-only">
-            {paged.map((e, i) => {
-              const res = RESULT_LABELS[e.result] || { label: e.result || "", cls: "" };
-              return (
-                <div key={`m-${e.entry_time}-${i}`} className="trade-mobile-card">
-                  <div className="trade-mobile-header">
-                    <span className="ticker-cell">{tickerName(e.ticker)}</span>
-                    <span className={`direction-badge ${(e.direction || "").toLowerCase()}`}>{e.direction}</span>
-                    <span className={`result-badge ${res.cls}`}>{res.label}</span>
-                  </div>
-                  <div className="trade-mobile-body">
-                    <span>{formatDate(e.entry_time || e.timestamp)}</span>
-                    <span style={{ color: pnlColor(e.pnl_pct), fontWeight: 600 }}>
-                      {e.pnl_pct != null ? `${e.pnl_pct > 0 ? "+" : ""}${e.pnl_pct.toFixed(2)}%` : ""}
-                    </span>
-                  </div>
-                  {(e.mae != null || e.mfe != null) && (
-                    <div style={{ display: "flex", gap: 12, marginTop: 6, fontSize: 11, color: "var(--text-muted)" }}>
-                      {e.mae != null && <span>MAE: <span style={{ color: "var(--red)" }}>{e.mae.toFixed(2)}%</span></span>}
-                      {e.mfe != null && <span>MFE: <span style={{ color: "var(--green)" }}>{e.mfe.toFixed(2)}%</span></span>}
-                      {e.realized_rr != null && <span>R/R: {e.realized_rr.toFixed(2)}</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
           </div>
 
           {tp > 1 && (
