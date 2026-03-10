@@ -464,7 +464,7 @@ class TestAgentScoring2:
     def test_init(self):
         agent = AgentScoring2()
         assert agent.name == "scoring_2"
-        assert agent.version == "8.1"
+        assert agent.version == "8.2"
 
     def test_description_mentions_claude(self):
         agent = AgentScoring2()

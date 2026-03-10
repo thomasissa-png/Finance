@@ -16,7 +16,7 @@ Key differences vs Scoring 1:
 - Scoring 2: evaluates structural trend impact (persistence, magnitude, supply/demand)
 - Scoring 1 prompt: "speculateur expert en news trading"
 - Scoring 2 prompt: "expert en tendances commodities physiques"
-- Scoring 2 tool schema: 8 dimensions (no transmission_delay/market_awareness)
+- Scoring 2 tool schema: 9 dimensions (no transmission_delay/market_awareness)
 - Scoring 2 formula: surprise × clarity × magnitude × reliability × persistence × category × source_weight
 
 Expertise incarnée :
@@ -35,6 +35,7 @@ import time
 from datetime import datetime, timezone
 
 from .base import BaseAgent, AgentStatus
+from ..config import CHAIN_REACTIONS  # S2-P4: Top-level import (was inside loop)
 
 logger = logging.getLogger(__name__)
 
@@ -115,9 +116,6 @@ TREND_TICKER_INFO = {
 
 # Minimum trend score threshold
 MIN_TREND_SCORE = 8.0
-
-# Chain reaction discount (consistent with Trader 2 fallback 0.7 factor)
-CHAIN_DISCOUNT = 0.7
 
 # H1: Max items per Claude batch (consistent with Scoring 1's SCORING_BATCH_SIZE)
 TREND_SCORING_BATCH_SIZE = 40
@@ -344,6 +342,9 @@ def _get_cached_trend_score(key: str) -> dict | None:
     return None
 
 
+TREND_CACHE_MAX_SIZE = 500  # S2-P2: LRU cap (consistent with Scoring 1)
+
+
 def _set_cached_trend_score(key: str, entry: dict) -> None:
     with _trend_cache_lock:
         _trend_score_cache[key] = (entry, time.time())
@@ -352,15 +353,23 @@ def _set_cached_trend_score(key: str, entry: dict) -> None:
                  if now - ts > TREND_CACHE_TTL]
         for k in stale:
             del _trend_score_cache[k]
+        # S2-P2: LRU eviction if cache exceeds max size
+        if len(_trend_score_cache) > TREND_CACHE_MAX_SIZE:
+            sorted_keys = sorted(_trend_score_cache.keys(),
+                                 key=lambda k: _trend_score_cache[k][1])
+            for k in sorted_keys[:len(_trend_score_cache) - TREND_CACHE_MAX_SIZE]:
+                del _trend_score_cache[k]
 
 
 # ── Token tracking for Scoring 2 ────────────────────────────────
 _trend_token_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "scans": 0}
+_trend_token_lock = threading.Lock()  # S2-P1: Thread safety (consistent with Scoring 1)
 
 
 def get_trend_token_usage() -> dict:
     """Return cumulative trend scoring token usage."""
-    return dict(_trend_token_usage)
+    with _trend_token_lock:
+        return dict(_trend_token_usage)
 
 
 # ── Pre-filter: is the news relevant to commodity trends? ────────
@@ -398,7 +407,7 @@ def _call_claude_for_trend(headlines: list[str], max_retries: int = 2) -> list[d
 
     Similar to Scoring 1's _call_claude_with_retry but with:
     - Trend-specific system prompt (structural impact, not edge detection)
-    - Trend-specific tool schema (8 dimensions, not 11)
+    - Trend-specific tool schema (9 dimensions, not 11)
     - Smaller batches (trend-relevant news is pre-filtered, typically <20 items)
 
     Returns parsed scores list, or empty list on failure.
@@ -458,10 +467,11 @@ Headlines :
                     time.sleep(2 ** attempt)
                     continue
 
-            # Track token usage
+            # Track token usage (S2-P1: thread-safe)
             if hasattr(response, "usage"):
-                _trend_token_usage["input_tokens"] += getattr(response.usage, "input_tokens", 0)
-                _trend_token_usage["output_tokens"] += getattr(response.usage, "output_tokens", 0)
+                with _trend_token_lock:
+                    _trend_token_usage["input_tokens"] += getattr(response.usage, "input_tokens", 0)
+                    _trend_token_usage["output_tokens"] += getattr(response.usage, "output_tokens", 0)
 
             # Extract tool_use response
             for block in response.content:
@@ -476,7 +486,14 @@ Headlines :
                     try:
                         start = raw.index("[")
                         end = raw.rindex("]") + 1
-                        return json.loads(raw[start:end])
+                        parsed = json.loads(raw[start:end])
+                        # S2-P8: Validate format (consistent with Scoring 1 C5)
+                        if (isinstance(parsed, list) and parsed
+                                and isinstance(parsed[0], dict)
+                                and "index" in parsed[0]
+                                and isinstance(parsed[0]["index"], int)):
+                            return parsed
+                        logger.warning("Trend fallback JSON parse: array not in expected format")
                     except (ValueError, json.JSONDecodeError):
                         continue
 
@@ -587,7 +604,8 @@ def score_news_for_trend(news_items: list) -> dict:
             raw_scores.extend(batch_scores)
 
         result["claude_scored_count"] = len(items_to_score)
-        _trend_token_usage["scans"] += 1
+        with _trend_token_lock:
+            _trend_token_usage["scans"] += 1
 
         # Map scores back to items
         for entry in raw_scores:
@@ -627,7 +645,6 @@ def score_news_for_trend(news_items: list) -> dict:
             if not impacted:
                 # Before giving up, check if any impacted ticker chains to a trend ticker
                 raw_impacted = entry.get("impacted_tickers", [])
-                from ..config import CHAIN_REACTIONS
                 for src_ticker in raw_impacted:
                     for chain in CHAIN_REACTIONS.get(src_ticker, []):
                         if chain["ticker"] in TREND_TICKERS and chain["ticker"] not in impacted:
@@ -704,22 +721,14 @@ def score_news_for_trend(news_items: list) -> dict:
         result["trend_scored"].append(scored_item)
         trend_scores.append(trend_score)
 
-        # Freshness weight for accumulation
-        # Structural categories don't decay
-        STRUCTURAL_CATS = {"weather", "supply_chain", "commodity",
-                           "commodities_energy", "commodities_agri",
-                           "commodities_soft", "commodities_industrial"}
-        freshness_weight = 1.0
-        news_cat = scored_item.get("news_category", "other")
-        # Note: we don't have published time on cached entries, so default to 1.0
-        # This is acceptable because trend signals are structural (age matters less)
-
+        # S2-P6: Freshness weight is always 1.0 for trend scoring
+        # (structural signals don't decay, and we don't have publish time on cached entries)
         for ticker in impacted:
             if ticker not in TREND_TICKERS:
                 continue
             result["by_ticker"][ticker].append(scored_item)
 
-            weight = trend_score * (reliability / 100) * freshness_weight
+            weight = trend_score * (reliability / 100)
             if direction == "LONG":
                 result["accumulation"][ticker]["long"] += weight
             elif direction == "SHORT":
@@ -759,7 +768,7 @@ class AgentScoring2(BaseAgent):
 
     name = "scoring_2"
     description = "Scoring tendance — Claude dédié pour commodities"
-    version = "8.1"  # v8.1: Audit fixes (C1 prefilter categories, C2 prompt dims, H1 batching, H3 retry, H4 news_zone, M3 chain reactions)
+    version = "8.2"  # v8.2: Thread-safe tokens, LRU cache cap, dead code cleanup, fallback validation
 
     def __init__(self):
         super().__init__()

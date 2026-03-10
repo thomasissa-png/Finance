@@ -52,18 +52,23 @@ logger = logging.getLogger(__name__)
 # accumulate rather than be deduped. A drought worsening over 3 days = stronger signal.
 _signal_accumulator: dict[str, dict] = {}  # key: (category, ticker_set_key) -> {count, first_seen, last_seen}
 _signal_accumulator_lock = threading.Lock()  # A4: Thread safety for concurrent scans
-_signal_accumulator_seen_this_scan: set[str] = set()  # C1: Dedup within a single scan
+# S1-P2: Removed global _signal_accumulator_seen_this_scan — now a local set
+# passed through score_news_batch → _score_batch → _get_signal_accumulation_boost
+# to avoid race conditions when two scans run concurrently.
 ACCUMULATION_CATEGORIES = {"weather", "supply_chain", "commodity"}
 ACCUMULATION_BOOST_PER_DAY = 0.1  # +10% per additional day the signal persists
 ACCUMULATION_MAX_BOOST = 1.5      # Cap at 50% boost
 
 
-def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[str]) -> float:
+def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[str],
+                                    seen_this_scan: set[str] | None = None) -> float:
     """Check if this signal has been seen on previous days and compute boost.
 
     Returns a multiplier >= 1.0 (1.0 = no boost, up to ACCUMULATION_MAX_BOOST).
     A4: Thread-safe — event scanner can trigger concurrent scoring.
     A5: Pruning always runs (not just on new keys).
+    S1-P2: seen_this_scan is now a local set passed from score_news_batch,
+    not a global — avoids race conditions between concurrent scans.
     """
     if news_category not in ACCUMULATION_CATEGORIES:
         return 1.0
@@ -76,14 +81,15 @@ def _get_signal_accumulation_boost(news_category: str, impacted_tickers: list[st
     with _signal_accumulator_lock:
         # C1: Skip if already processed this key in this scan (avoids artificial boost
         # when the same signal appears in multiple batches or retries within a scan)
-        if key in _signal_accumulator_seen_this_scan:
+        if seen_this_scan is not None and key in seen_this_scan:
             entry = _signal_accumulator.get(key)
             if entry:
                 days_active = (now - entry["first_seen"]).total_seconds() / 86400
                 return min(ACCUMULATION_MAX_BOOST, 1.0 + days_active * ACCUMULATION_BOOST_PER_DAY)
             return 1.0
 
-        _signal_accumulator_seen_this_scan.add(key)
+        if seen_this_scan is not None:
+            seen_this_scan.add(key)
 
         # A5: Always prune stale entries (> 7 days) — not just on new key insertion
         cutoff = now - timedelta(days=7)
@@ -662,7 +668,9 @@ Headlines :
                         arr_end = raw_text.rindex("]") + 1
                         parsed = json.loads(raw_text[arr_start:arr_end])
                         # C5: Validate it's actually a scores array, not a stray JSON list
-                        if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) and "index" in parsed[0]:
+                        # S1-P4: Also validate that "index" is an int (not a string or nested obj)
+                        if (isinstance(parsed, list) and parsed and isinstance(parsed[0], dict)
+                                and "index" in parsed[0] and isinstance(parsed[0]["index"], int)):
                             return parsed
                         logger.warning("Fallback JSON parse found array but not scores format: %s...",
                                        raw_text[:100])
@@ -729,10 +737,8 @@ def score_news_batch(
     if not news_items:
         return [], {}
 
-    # C1: Reset per-scan dedup set for signal accumulation
-    global _signal_accumulator_seen_this_scan
-    with _signal_accumulator_lock:
-        _signal_accumulator_seen_this_scan = set()
+    # S1-P2: Local per-scan dedup set (was global, caused race conditions)
+    scan_seen_signals: set[str] = set()
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -849,7 +855,8 @@ def score_news_batch(
             # C4: Pass all items (not just batch) for cross-batch convergence detection
             batch_scored = _score_batch(client, batch_items, session_context, batch_start,
                                         all_scan_items=items_to_score,
-                                        system_messages=system_messages)
+                                        system_messages=system_messages,
+                                        scan_seen_signals=scan_seen_signals)
             claude_scored.extend(batch_scored)
 
         # v5.0 N5: Increment scan counter once per score_news_batch call (not per batch)
@@ -882,6 +889,7 @@ def _score_batch(
     index_offset: int = 0,
     all_scan_items: list[NewsItem] | None = None,
     system_messages: list[dict] | None = None,
+    scan_seen_signals: set[str] | None = None,
 ) -> list[ScoredNews]:
     """Score a single batch of news items via Claude API.
 
@@ -1056,7 +1064,7 @@ def _score_batch(
         impacted = entry.get("impacted_tickers", [])
 
         # v3.6 (N): Cross-day signal accumulation boost for persistent physical signals
-        accum_boost = _get_signal_accumulation_boost(news_cat, impacted)
+        accum_boost = _get_signal_accumulation_boost(news_cat, impacted, scan_seen_signals)
         if accum_boost > 1.0:
             cat_mult *= accum_boost
         chain_reactions = _detect_chain_reactions(impacted, direction)
