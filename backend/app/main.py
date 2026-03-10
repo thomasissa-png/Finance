@@ -917,10 +917,13 @@ async def lifespan(app: FastAPI):
     # if the app crashes mid-scan, a 10 min window would re-trigger the scan
     # immediately on restart, causing another crash. 60s is enough for normal
     # cold-start delays without re-triggering after a crash.
-    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=60)
-    bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=60)
-    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=60)
-    bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=60)
+    # misfire_grace_time=300 (5 min) — Replit may sleep the container and wake it
+    # after the scheduled time. A 5-minute window ensures the scan still runs after
+    # a brief sleep, without risk of crash loops (night guard blocks >20h CET anyway).
+    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=300)
+    bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=300)
+    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=300)
+    bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=300)
     # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
     # misfire_grace_time=3600 (1h) — journal is pure data processing (no external API calls),
     # so crash loops are not a concern. A long grace period ensures the journal runs even
