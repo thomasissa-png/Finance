@@ -37,6 +37,7 @@ from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
+from ..market_data import validate_price
 
 logger = logging.getLogger(__name__)
 
@@ -694,6 +695,16 @@ class AgentTrader4(BaseAgent):
         if position_size <= 0:
             return None
 
+        # Validate entry price before storing
+        if price is not None:
+            is_valid, reason = validate_price(ticker, price)
+            if not is_valid:
+                logger.error("T4: rejected entry price for %s — %s", ticker, reason)
+                return None
+        else:
+            logger.warning("T4: no price available for %s — skipping", ticker)
+            return None
+
         now_iso = datetime.now(timezone.utc).isoformat()
 
         # P3: Calculate TP/SL prices
@@ -862,6 +873,11 @@ class AgentTrader4(BaseAgent):
         now_iso = datetime.now(timezone.utc).isoformat()
         for ticker, price in prices.items():
             if not price or ticker not in positions:
+                continue
+            # Validate price before updating
+            is_valid, reason = validate_price(ticker, price)
+            if not is_valid:
+                logger.warning("T4 price update: rejected for %s — %s", ticker, reason)
                 continue
             pos = positions[ticker]
             pos["current_price"] = price

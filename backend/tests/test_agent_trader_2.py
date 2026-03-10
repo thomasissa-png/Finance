@@ -38,6 +38,17 @@ from backend.app.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_price_refs():
+    """Clear price reference cache between tests to avoid cross-test contamination."""
+    from backend.app.market_data import _price_reference, _price_ref_lock
+    with _price_ref_lock:
+        _price_reference.clear()
+    yield
+    with _price_ref_lock:
+        _price_reference.clear()
+
+
 @pytest.fixture
 def agent():
     return AgentTrader2()

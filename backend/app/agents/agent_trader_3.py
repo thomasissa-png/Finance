@@ -35,6 +35,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
+from ..market_data import validate_price
 
 logger = logging.getLogger(__name__)
 
@@ -418,6 +419,13 @@ class AgentTrader3(BaseAgent):
                 still_active.append(pos)
                 continue
 
+            # Validate price before updating position
+            is_valid, reason = validate_price(ticker, price)
+            if not is_valid:
+                logger.warning("T3 monitor: rejected price for %s — %s", ticker, reason)
+                still_active.append(pos)
+                continue
+
             # Update current price and watermarks
             pos["current_price"] = price
             pos["high_watermark"] = max(price, pos.get("high_watermark", price))
@@ -662,13 +670,13 @@ class AgentTrader3(BaseAgent):
                 from ..market_data import fetch_price
                 live_price = fetch_price(ticker)
                 if live_price and live_price > 0:
-                    entry_price = live_price
-                    # Cross-validate: if live vs scoring differ by >30%, log warning (data quality issue)
-                    if scoring_price > 0:
-                        deviation = abs(live_price - scoring_price) / scoring_price
-                        if deviation > 0.30:
-                            logger.warning("Price discrepancy for %s: live=%.4f vs scoring=%.4f (%.0f%% diff)",
-                                           ticker, live_price, scoring_price, deviation * 100)
+                    # Validate price against reference
+                    is_valid, reason = validate_price(ticker, live_price)
+                    if is_valid:
+                        entry_price = live_price
+                    else:
+                        logger.error("T3: rejected live price for %s — %s", ticker, reason)
+                        entry_price = scoring_price
                 else:
                     entry_price = scoring_price
             except Exception:

@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone, timedelta
 
-from .market_data import fetch_history
+from .market_data import fetch_history, validate_price
 
 from .config import (
     ASSET_BY_TICKER,
@@ -1109,6 +1109,17 @@ def select_trades(
             f"News: '{best_news.news.title[:80]}' | "
             f"Categorie: {best_news.news_category}, edge={best_news.transmission_delay}/{best_news.market_awareness}"
         )
+
+        # Validate entry price against reference to catch API anomalies
+        price_valid, price_reason = validate_price(ticker, price)
+        if not price_valid:
+            logger.error("REJECTED trade %s: entry price failed validation — %s", ticker, price_reason)
+            rejection_log.append({
+                "title": best_news.news.title, "ticker": ticker,
+                "reason": f"Price validation failed: {price_reason}",
+                "score": raw_score, "adjusted_score": best_score,
+            })
+            continue
 
         recommendation = TradeRecommendation(
             scan_type=scan_type,

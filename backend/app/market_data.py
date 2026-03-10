@@ -617,8 +617,142 @@ def fetch_price(ticker: str) -> float | None:
     """
     quote = fetch_quote(ticker)
     if quote and "price" in quote:
-        return quote["price"]
+        price = quote["price"]
+        if price is not None and price > 0:
+            return price
     return None
+
+
+# ── Price validation ─────────────────────────────────────────────
+# Reference prices from last known-good fetch, used to detect anomalies.
+_price_reference: dict[str, float] = {}
+_price_ref_lock = threading.Lock()
+
+# Max allowed deviation from reference price (50% = 1.5x or 0.5x).
+# Legitimate single-day moves rarely exceed 20%, even for volatile commodities.
+_MAX_PRICE_DEVIATION = 0.50
+
+
+def validate_price(ticker: str, price: float | None) -> tuple[bool, str]:
+    """Validate a price against the reference (last known-good price).
+
+    Returns (is_valid, reason).
+    - If no reference exists, the price is accepted and becomes the reference.
+    - If deviation exceeds _MAX_PRICE_DEVIATION (50%), price is rejected.
+    """
+    if price is None or price <= 0:
+        return False, f"Invalid price: {price}"
+
+    with _price_ref_lock:
+        ref = _price_reference.get(ticker)
+
+    if ref is None:
+        # No reference yet — accept and store
+        _update_price_reference(ticker, price)
+        return True, "first_price"
+
+    deviation = abs(price - ref) / ref
+    if deviation > _MAX_PRICE_DEVIATION:
+        return False, (
+            f"Price anomaly: {ticker} price={price} vs reference={ref} "
+            f"(deviation={deviation:.1%} > {_MAX_PRICE_DEVIATION:.0%})"
+        )
+
+    # Valid — update reference
+    _update_price_reference(ticker, price)
+    return True, "ok"
+
+
+def _update_price_reference(ticker: str, price: float) -> None:
+    """Store a validated price as the new reference."""
+    with _price_ref_lock:
+        _price_reference[ticker] = price
+
+
+def fetch_price_validated(ticker: str) -> float | None:
+    """Fetch current price with sanity-check validation.
+
+    Use this for entry_price and any price that will be stored long-term.
+    Falls back to yfinance cross-check if Twelve Data price looks anomalous.
+    """
+    price = fetch_price(ticker)
+    if price is None:
+        return None
+
+    is_valid, reason = validate_price(ticker, price)
+    if is_valid:
+        return price
+
+    # Price anomaly detected — try cross-checking with yfinance
+    logger.warning("Price validation failed: %s — cross-checking with yfinance", reason)
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        h = t.history(period="5d")
+        if not h.empty:
+            yf_price = float(h["Close"].iloc[-1])
+            if yf_price > 0:
+                # Check if yfinance agrees with the anomalous price
+                yf_deviation = abs(price - yf_price) / yf_price
+                if yf_deviation < 0.10:  # Within 10% — original price was correct
+                    logger.info("yfinance confirms price for %s: %.4f (was flagged at %.4f)",
+                                ticker, yf_price, price)
+                    _update_price_reference(ticker, price)
+                    return price
+                else:
+                    # yfinance disagrees — use yfinance price
+                    logger.warning("Using yfinance price for %s: %.4f (rejected: %.4f)",
+                                   ticker, yf_price, price)
+                    _update_price_reference(ticker, yf_price)
+                    return yf_price
+    except Exception as exc:
+        logger.warning("yfinance cross-check failed for %s: %s", ticker, exc)
+
+    # Both sources failed validation — reject
+    logger.error("REJECTED price for %s: %s — no valid cross-check available", ticker, reason)
+    return None
+
+
+def seed_price_references() -> None:
+    """Seed the reference price cache from recent history at startup.
+
+    Called once at app init to establish baseline prices,
+    so the first fetch_price_validated() call has something to compare against.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Get all known tickers from config
+    try:
+        from .config import ASSETS
+        tickers = [a["ticker"] for a in ASSETS]
+    except Exception:
+        logger.warning("Could not load ASSETS for price seeding")
+        return
+
+    logger.info("Seeding price references for %d tickers...", len(tickers))
+    seeded = 0
+
+    def _seed_one(ticker: str) -> tuple[str, float | None]:
+        try:
+            p = fetch_price(ticker)
+            return ticker, p
+        except Exception:
+            return ticker, None
+
+    executor = ThreadPoolExecutor(max_workers=5)
+    try:
+        futs = {executor.submit(_seed_one, t): t for t in tickers}
+        for fut in as_completed(futs, timeout=60):
+            ticker, price = fut.result()
+            if price is not None and price > 0:
+                _update_price_reference(ticker, price)
+                seeded += 1
+    except Exception as exc:
+        logger.warning("Price seeding timeout: %s", exc)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    logger.info("Seeded %d/%d price references", seeded, len(tickers))
 
 
 def fetch_intraday(ticker: str, period: str = "5d", interval: str = "1h") -> pd.DataFrame | None:

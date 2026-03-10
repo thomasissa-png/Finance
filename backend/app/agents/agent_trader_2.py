@@ -42,6 +42,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
+from ..market_data import validate_price
 
 logger = logging.getLogger(__name__)
 
@@ -427,6 +428,11 @@ class AgentTrader2(BaseAgent):
         for ticker, price in prices.items():
             if price is None or ticker not in positions:
                 continue
+            # Validate price before storing — reject anomalous values
+            is_valid, reason = validate_price(ticker, price)
+            if not is_valid:
+                logger.warning("T2 price update: rejected for %s — %s", ticker, reason)
+                continue
             pos = positions[ticker]
             pos["current_price"] = price
             pos["last_price_update"] = now_iso
@@ -463,6 +469,12 @@ class AgentTrader2(BaseAgent):
     def _init_position(self, ticker: str, info: dict) -> dict:
         """Initialize a new position entry (starts NEUTRAL until first evaluation)."""
         price = _fetch_current_price(ticker)
+        # Validate price before storing — reject anomalous values
+        if price is not None:
+            is_valid, reason = validate_price(ticker, price)
+            if not is_valid:
+                logger.error("T2 init: rejected price for %s — %s", ticker, reason)
+                price = None
         return {
             "ticker": ticker,
             "name": info["name"],
@@ -758,6 +770,12 @@ class AgentTrader2(BaseAgent):
         # Guard: cannot open a position without a valid price
         if not current_price:
             logger.warning("Cannot change position for %s — no price available", ticker)
+            return None
+
+        # Validate price before using as new entry_price
+        is_valid, reason = validate_price(ticker, current_price)
+        if not is_valid:
+            logger.error("T2 flip: rejected price for %s — %s", ticker, reason)
             return None
 
         # P8: Calculate realized P&L with entry_price > 0 guard

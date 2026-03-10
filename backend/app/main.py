@@ -960,6 +960,15 @@ async def lifespan(app: FastAPI):
     # (e.g., app was down overnight, Replit killed the process before journal ran)
     _recover_pending_trades_on_startup()
 
+    # Seed price references for anomaly detection (background, non-blocking)
+    def _seed_prices():
+        try:
+            from .market_data import seed_price_references
+            seed_price_references()
+        except Exception as exc:
+            logger.warning("Price reference seeding failed: %s", exc)
+    threading.Thread(target=_seed_prices, daemon=True, name="price-seed").start()
+
     # Start keepalive thread to prevent Replit autoscale from killing the app
     keepalive_thread = threading.Thread(target=_keepalive_loop, daemon=True, name="keepalive")
     keepalive_thread.start()
@@ -2307,6 +2316,153 @@ def source_health_weekly():
     except Exception as exc:
         logger.error("Weekly source health endpoint error: %s", exc)
         return {"error": str(exc)}
+
+
+# ── Admin: Price corrections ────────────────────────────────────────
+
+
+@app.post("/api/admin/fix-entry-price")
+def fix_entry_price(body: dict):
+    """Fix a bad entry_price for any team's position.
+
+    Body: {"team": 1|2|3|4, "ticker": "HG=F", "correct_price": 5.93}
+
+    This will:
+    1. Update the entry_price in the position/trade data
+    2. Recalculate P&L based on the corrected price
+    3. Save to persistence (PG + JSON fallback)
+    """
+    team = body.get("team")
+    ticker = body.get("ticker")
+    correct_price = body.get("correct_price")
+
+    if not team or not ticker or correct_price is None:
+        raise HTTPException(400, "Required: team (1-4), ticker, correct_price")
+    if correct_price <= 0:
+        raise HTTPException(400, "correct_price must be positive")
+
+    result = {"team": team, "ticker": ticker, "new_entry_price": correct_price}
+
+    if team == 1:
+        # Team 1: fix in trades table (PENDING trades only)
+        from .learning import load_trades, save_trades
+        trades = load_trades()
+        fixed = 0
+        for t in trades:
+            if t.ticker == ticker and t.result == "PENDING":
+                old_price = t.entry_price
+                t.entry_price = correct_price
+                # Recalculate TP/SL based on original ratios
+                if old_price and old_price > 0:
+                    tp_ratio = t.target_price / old_price if t.target_price else None
+                    sl_ratio = t.stop_price / old_price if t.stop_price else None
+                    if tp_ratio:
+                        t.target_price = round(correct_price * tp_ratio, 4)
+                    if sl_ratio:
+                        t.stop_price = round(correct_price * sl_ratio, 4)
+                fixed += 1
+                logger.info("Fixed T1 entry_price for %s: %.4f → %.4f", ticker, old_price, correct_price)
+        if fixed:
+            save_trades(trades)
+        result["fixed_count"] = fixed
+
+    elif team == 2:
+        # Team 2: fix in trend_positions
+        agent = get_agent("trader_2")
+        if agent:
+            positions = agent.get_positions()
+            if ticker in positions:
+                pos = positions[ticker]
+                old_price = pos.get("entry_price")
+                pos["entry_price"] = correct_price
+                # Recalculate unrealized P&L
+                cur = pos.get("current_price")
+                direction = pos.get("direction")
+                if cur and cur > 0 and direction in ("LONG", "SHORT"):
+                    if direction == "LONG":
+                        pos["unrealized_pnl_pct"] = round((cur - correct_price) / correct_price * 100, 2)
+                    else:
+                        pos["unrealized_pnl_pct"] = round((correct_price - cur) / correct_price * 100, 2)
+                # Save via agent's internal method
+                from .agents.agent_trader_2 import _save_positions
+                _save_positions(positions)
+                result["old_price"] = old_price
+                result["direction"] = direction
+                result["new_pnl_pct"] = pos.get("unrealized_pnl_pct")
+                logger.info("Fixed T2 entry_price for %s: %s → %.4f", ticker, old_price, correct_price)
+            else:
+                raise HTTPException(404, f"No T2 position for {ticker}")
+        else:
+            raise HTTPException(500, "Trader 2 agent not available")
+
+    elif team == 3:
+        # Team 3: fix in tech_positions
+        agent = get_agent("trader_3")
+        if agent:
+            state = agent.get_positions()
+            active = state.get("active", [])
+            fixed = 0
+            for pos in active:
+                if pos.get("ticker") == ticker:
+                    old_price = pos.get("entry_price")
+                    pos["entry_price"] = correct_price
+                    pos["current_price"] = pos.get("current_price", correct_price)
+                    cur = pos.get("current_price")
+                    direction = pos.get("direction", "LONG")
+                    if cur and cur > 0:
+                        if direction == "LONG":
+                            pos["unrealized_pnl_pct"] = round((cur - correct_price) / correct_price * 100, 2)
+                        else:
+                            pos["unrealized_pnl_pct"] = round((correct_price - cur) / correct_price * 100, 2)
+                    pos["high_watermark"] = max(correct_price, pos.get("high_watermark", correct_price))
+                    pos["low_watermark"] = min(correct_price, pos.get("low_watermark", correct_price))
+                    fixed += 1
+                    logger.info("Fixed T3 entry_price for %s: %s → %.4f", ticker, old_price, correct_price)
+            if fixed:
+                from .agents.agent_trader_3 import _save_positions
+                _save_positions(state)
+            result["fixed_count"] = fixed
+
+    elif team == 4:
+        # Team 4: fix in meta_positions
+        agent = get_agent("trader_4")
+        if agent:
+            positions = agent.get_positions()
+            if ticker in positions:
+                pos = positions[ticker]
+                old_price = pos.get("entry_price")
+                pos["entry_price"] = correct_price
+                cur = pos.get("current_price")
+                direction = pos.get("direction")
+                if cur and cur > 0 and direction in ("LONG", "SHORT"):
+                    if direction == "LONG":
+                        pos["unrealized_pnl_pct"] = round((cur - correct_price) / correct_price * 100, 2)
+                    else:
+                        pos["unrealized_pnl_pct"] = round((correct_price - cur) / correct_price * 100, 2)
+                from .agents.agent_trader_4 import _save_positions
+                _save_positions(positions)
+                result["old_price"] = old_price
+                logger.info("Fixed T4 entry_price for %s: %s → %.4f", ticker, old_price, correct_price)
+            else:
+                raise HTTPException(404, f"No T4 position for {ticker}")
+        else:
+            raise HTTPException(500, "Trader 4 agent not available")
+    else:
+        raise HTTPException(400, "team must be 1, 2, 3, or 4")
+
+    # Update price reference to prevent future anomalies
+    from .market_data import _update_price_reference
+    _update_price_reference(ticker, correct_price)
+
+    return result
+
+
+@app.get("/api/admin/price-references")
+def get_price_references():
+    """Get current price reference cache (for debugging price anomalies)."""
+    from .market_data import _price_reference, _price_ref_lock
+    with _price_ref_lock:
+        return dict(_price_reference)
 
 
 # ── Serve frontend build (production only) ────────────────────────
