@@ -611,10 +611,11 @@ class AgentJournal2(BaseAgent):
 
         P2 fix: snapshots are now persisted (saved as entries with entry_type=snapshot).
         """
+        now_utc = datetime.now(timezone.utc)
         return {
             "ticker": ticker,
-            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "entry_time": f"snapshot_{ticker}_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+            "date": now_utc.strftime("%Y-%m-%d"),
+            "entry_time": f"snapshot_{ticker}_{now_utc.strftime('%Y-%m-%dT%H:%M:%S')}",
             "direction": pos.get("direction", "NEUTRAL"),
             "entry_price": pos.get("entry_price"),
             "current_price": pos.get("current_price"),

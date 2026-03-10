@@ -1394,8 +1394,8 @@ def extract_structured_anomalies(trades: list[TradeRecommendation] | None = None
     try:
         from .journal import load_journal
         journal_entries = load_journal()
-        mae_vals = [getattr(je, "max_adverse_excursion", None) for je in journal_entries
-                    if getattr(je, "max_adverse_excursion", None) is not None]
+        mae_vals = [je.max_adverse_excursion for je in journal_entries
+                    if je.max_adverse_excursion is not None]
         if len(mae_vals) >= 5:
             avg_mae = statistics.mean(mae_vals)
             sl_rate = len(losses) / len(closed) * 100 if closed else 0

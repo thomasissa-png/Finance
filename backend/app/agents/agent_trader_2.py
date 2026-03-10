@@ -540,8 +540,8 @@ class AgentTrader2(BaseAgent):
         if use_trend_scoring:
             # Scoring 2 already computed trend-weighted accumulation
             # Apply learning adjustments on top
-            long_score = trend_accumulation["long"]
-            short_score = trend_accumulation["short"]
+            long_score = trend_accumulation.get("long", 0)
+            short_score = trend_accumulation.get("short", 0)
             # Apply per-ticker learning
             ticker_mult = ticker_adj.get(ticker, 1.0)
             long_score *= ticker_mult
@@ -590,7 +590,7 @@ class AgentTrader2(BaseAgent):
             chain_dir = None
             for cr in (sn.chain_reactions or []):
                 if cr.ticker == ticker:
-                    chain_dir = cr.direction.value
+                    chain_dir = cr.direction.value if hasattr(cr.direction, "value") else str(cr.direction)
 
             if not use_trend_scoring:
                 # Fallback: compute signal from Scoring 1 raw scores

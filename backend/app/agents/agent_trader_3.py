@@ -845,8 +845,11 @@ class AgentTrader3(BaseAgent):
         }
 
     def _load_weekly_config_from_disk(self):
-        """T3-P5: Load persisted weekly config from disk (survives restart)."""
-        config_path = Path(__file__).parent.parent.parent.parent / "data" / "learning3_weekly_config.json"
+        """T3-P5: Load persisted weekly config from disk (survives restart).
+
+        Uses same path resolution as Learning 3 (DATA_DIR env or "data/").
+        """
+        config_path = Path(os.getenv("DATA_DIR", "data")) / "learning3_weekly_config.json"
         try:
             if config_path.exists():
                 with open(config_path, "r") as f:

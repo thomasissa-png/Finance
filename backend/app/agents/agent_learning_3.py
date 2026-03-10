@@ -626,6 +626,8 @@ class AgentLearning3(BaseAgent):
             entries = _filter_by_current_versions(_load_journal_entries())
             self._cached_adjustments = compute_tech_learning(entries)
             self._cache_valid = True
+            self._total_recalculations += 1
+            self._last_run_time = datetime.now(timezone.utc)
         return self._cached_adjustments
 
     def invalidate_cache(self):

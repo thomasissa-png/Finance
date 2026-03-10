@@ -170,18 +170,25 @@ class AgentLearning(BaseAgent):
         if not self._cache_valid or self._cached_adjustments is None:
             self._cached_adjustments = self._compute_adjustments()
             self._cache_valid = True
+            self._total_recalculations += 1
+            self._last_run_time = datetime.now(timezone.utc)
         return self._cached_adjustments
 
     def invalidate_cache(self):
         """Invalidate the learning cache and perf summary cache (called after journal)."""
         self._cache_valid = False
         # P3+P7: Also invalidate the performance summary cache so next scan gets fresh data
+        perf_ok = True
         try:
             from ..learning import invalidate_perf_summary_cache
             invalidate_perf_summary_cache()
-        except Exception:
-            pass
-        self.log("Learning cache invalidated (incl. perf summary)")
+        except Exception as exc:
+            perf_ok = False
+            self.log("Perf summary cache invalidation failed", {"error": str(exc)}, level="WARN")
+        if perf_ok:
+            self.log("Learning cache invalidated (incl. perf summary)")
+        else:
+            self.log("Learning cache invalidated (perf summary cache NOT cleared)")
 
     # ── Private helpers ────────────────────────────────────────────
 
