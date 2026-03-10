@@ -69,11 +69,9 @@ def td_available() -> bool:
 # ── Ticker mapping: yfinance format → (td_symbol, extra_params) ──
 # Verified against TD /indices, /forex_pairs, /commodities endpoints (2026-03).
 _TICKER_MAP: dict[str, tuple[str, dict]] = {
-    # Indices — verified via /indices endpoint
-    "^FCHI": ("FCHI", {}),       # CAC 40
-    "^GDAXI": ("GDAXI", {}),    # DAX
-    "^FTSE": ("FTSE", {}),       # FTSE 100
-    "^N225": ("N225", {}),       # Nikkei 225
+    # Indices — ^FCHI/^GDAXI REMOVED: TD returns ETF prices (~46/44) not index
+    # (CAC=8000+, DAX=24000+). ^FTSE/^N225 also removed (same risk).
+    # All EU/JP indices use yfinance fallback (reliable).
     # Note: ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX are NOT on TD — blacklisted below
     # Forex — all verified correct via /forex_pairs endpoint
     "EURUSD=X": ("EUR/USD", {}),
@@ -102,20 +100,11 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "SI=F": ("XAG/USD", {}),    # Silver
     "PL=F": ("XPT/USD", {}),    # Platinum
     "PA=F": ("XPD/USD", {}),    # Palladium
-    # Base metals
-    "HG=F": ("HG1", {}),        # Copper
-    # Agriculture — TD uses exchange notation
-    "ZC=F": ("C_1", {}),        # Corn
-    "ZW=F": ("W_1", {}),        # Wheat
-    "ZS=F": ("S_1", {}),        # Soybeans
-    "KC=F": ("KC1", {}),        # Coffee
-    "SB=F": ("SB1", {}),        # Sugar
-    "CC=F": ("CC1", {}),        # Cocoa
-    "CT=F": ("CT1", {}),        # Cotton
-    "OJ=F": ("JO1", {}),        # Orange Juice
-    # Livestock
-    "LE=F": ("LC1", {}),        # Live Cattle
-    "HE=F": ("LH1", {}),        # Lean Hogs
+    # Base metals — HG=F REMOVED: TD HG1 returns $/lb (~25) vs yfinance $/cwt (~5.93)
+    # Agriculture — REMOVED: TD returns wrong units/contracts for most agri futures
+    # CC=F→CC1: 287 vs 3425 (-92%), KC=F→KC1: 0.01 vs 296 (-100%),
+    # ZW=F→W_1: 9.68 vs 590 (-98%). All agri/livestock use yfinance fallback.
+    # SB=F, CT=F, OJ=F, ZC=F, ZS=F, LE=F, HE=F also removed (same risk).
     # ETFs — standard US equity symbols, work as-is on TD
     "SPY": ("SPY", {}), "QQQ": ("QQQ", {}),
     "USO": ("USO", {}), "GLD": ("GLD", {}),
@@ -126,8 +115,20 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
 }
 
 # Tickers known to not work on Twelve Data — skip to yfinance directly.
-# US indices (SPX/DJI/IXIC/RUT) and VIX are not available on TD free tier.
-_td_blacklist: set[str] = {"ZQ=F", "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX"}
+# US indices: not available on TD free tier.
+# EU/JP indices: TD returns ETF prices not index values.
+# Agri/metals futures: TD returns wrong units (cents vs dollars, $/lb vs $/cwt).
+_td_blacklist: set[str] = {
+    # Indices — all use yfinance
+    "ZQ=F", "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX",
+    "^FCHI", "^GDAXI", "^FTSE", "^N225",
+    # Agriculture — TD unit mismatch (CC1=287 vs yf CC=F=3425, etc.)
+    "CC=F", "KC=F", "ZW=F", "ZC=F", "ZS=F", "SB=F", "CT=F", "OJ=F",
+    # Base metals — TD HG1=25.40$/lb vs yf HG=F=5.93$/cwt
+    "HG=F",
+    # Livestock — same risk as agri (unit mismatch)
+    "LE=F", "HE=F",
+}
 _blacklist_lock = threading.Lock()
 
 
@@ -632,16 +633,69 @@ _price_ref_lock = threading.Lock()
 # Legitimate single-day moves rarely exceed 20%, even for volatile commodities.
 _MAX_PRICE_DEVIATION = 0.50
 
+# Hardcoded plausible price ranges (min, max) per ticker.
+# Catches wrong-unit/wrong-instrument errors even on first fetch (no reference).
+# Ranges are generous (5x-10x from current levels) to allow for long-term moves.
+# Updated 2026-03 from yfinance ground truth.
+_PRICE_RANGES: dict[str, tuple[float, float]] = {
+    # Commodities — futures
+    "CC=F": (500, 15000),       # Cocoa $/ton (yf ~3425)
+    "KC=F": (50, 1000),         # Coffee cents/lb (yf ~296)
+    "ZW=F": (200, 2000),        # Wheat cents/bu (yf ~590)
+    "ZC=F": (150, 1500),        # Corn cents/bu (yf ~450)
+    "ZS=F": (400, 3000),        # Soybeans cents/bu (yf ~1204)
+    "HG=F": (1.0, 20.0),        # Copper $/lb as cwt (yf ~5.93)
+    "CL=F": (20, 250),          # WTI Crude (yf ~86)
+    "BZ=F": (20, 250),          # Brent Crude (yf ~86)
+    "NG=F": (0.5, 20.0),        # Natural Gas (yf ~3.05)
+    "GC=F": (1000, 15000),      # Gold (yf ~5236)
+    "SI=F": (10, 250),          # Silver (yf ~90)
+    "PL=F": (400, 5000),        # Platinum (yf ~2215)
+    "PA=F": (300, 5000),        # Palladium (yf ~1688)
+    "SB=F": (3, 50),            # Sugar cents/lb (yf ~14)
+    "CT=F": (20, 200),          # Cotton cents/lb (yf ~65)
+    "OJ=F": (50, 800),          # Orange Juice (yf ~189)
+    "LE=F": (80, 500),          # Live Cattle (yf ~233)
+    "HE=F": (30, 250),          # Lean Hogs (yf ~96)
+    # Indices
+    "^GSPC": (2000, 15000),     # S&P 500 (yf ~6823)
+    "^DJI": (15000, 80000),     # Dow Jones (yf ~47987)
+    "^IXIC": (5000, 40000),     # Nasdaq (yf ~22832)
+    "^RUT": (800, 5000),        # Russell 2000 (yf ~2575)
+    "^FCHI": (3000, 15000),     # CAC 40 (yf ~8054)
+    "^GDAXI": (8000, 40000),    # DAX (yf ~23936)
+    "^FTSE": (4000, 15000),     # FTSE 100 (yf ~10404)
+    "^N225": (15000, 80000),    # Nikkei 225 (yf ~54248)
+    # Forex — ranges are tight since they're currency pairs
+    "EURUSD=X": (0.7, 1.6),     # (yf ~1.08)
+    "USDJPY=X": (80, 200),      # (yf ~148)
+    "GBPUSD=X": (0.9, 1.8),     # (yf ~1.29)
+    "USDCHF=X": (0.6, 1.4),     # (yf ~0.88)
+    "AUDUSD=X": (0.4, 1.1),     # (yf ~0.63)
+    "USDCNH=X": (5.0, 10.0),    # (yf ~7.24)
+}
+
 
 def validate_price(ticker: str, price: float | None) -> tuple[bool, str]:
     """Validate a price against the reference (last known-good price).
 
     Returns (is_valid, reason).
+    - First checks hardcoded price ranges (catches wrong-unit errors).
     - If no reference exists, the price is accepted and becomes the reference.
     - If deviation exceeds _MAX_PRICE_DEVIATION (50%), price is rejected.
     """
     if price is None or price <= 0:
         return False, f"Invalid price: {price}"
+
+    # Check hardcoded range first (catches wrong-unit/instrument on first fetch)
+    price_range = _PRICE_RANGES.get(ticker)
+    if price_range:
+        low, high = price_range
+        if price < low or price > high:
+            return False, (
+                f"Price out of range: {ticker} price={price} "
+                f"expected [{low}, {high}]"
+            )
 
     with _price_ref_lock:
         ref = _price_reference.get(ticker)

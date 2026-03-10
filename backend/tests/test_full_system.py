@@ -1070,11 +1070,12 @@ class TestMarketDataModule:
     """Vérifie le module market_data."""
 
     def test_ticker_mapping_exists(self):
-        """Le mapping tickers est disponible."""
+        """Le mapping tickers est disponible (tickers TD-compatible)."""
         from backend.app.market_data import _TICKER_MAP
         assert "CL=F" in _TICKER_MAP
         assert "GC=F" in _TICKER_MAP
-        assert "ZW=F" in _TICKER_MAP
+        # ZW=F blacklisted from TD (unit mismatch) — uses yfinance fallback
+        assert "EURUSD=X" in _TICKER_MAP
 
     def test_fetch_functions_exist(self):
         """Les fonctions de fetch sont disponibles."""
