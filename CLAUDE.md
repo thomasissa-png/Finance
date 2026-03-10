@@ -44,11 +44,11 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 |-------|---------|-------------------|
 | News | 7.7 | news_zone on EIA/USDA/SHFE sources |
 | Scoring | 7.4 | 9 fixes, token tracking |
-| Scoring 2 | 7.4 | Word-boundary regex for structural keywords |
+| Scoring 2 | 7.5 | Structural freshness exempt, +5 keywords, decouple from intraday scoring |
 | Scoring 3 | 2.0 | Multi-timeframe, SMA 200, stochastic strategy, regime filter, configurable params |
 | Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
 | Trader 1 | 6.5 | Timeout audit, trailing stop |
-| Trader 2 | 7.5 | Zone+intensity-aware learning lookup |
+| Trader 2 | 7.6 | Remove total_score pre-filter (decouple from intraday edge) |
 | Trader 3 | 2.0 | Correlation check, trailing per-strategy, regime filter, agent_versions, weekly config |
 | Trader 4 | 2.1 | Always-save after monitor, stale stop_price fix |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
@@ -575,14 +575,21 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **MEDIUM P14** : `main.py` — dead import `invalidate_learning_2_cache` removed
 - **25+ tests** added in `test_agents.py` covering all fixes
 
+#### 25. Team 2 Scoring Pipeline Decouple v7.6 — 4 fixes
+- **CRITICAL Fix A** : `agent_trader_2.py` — removed `total_score < MIN_NEWS_SCORE` pre-filter in `_filter_relevant_news()`. Scoring 1's total_score includes edge_factor (transmission_delay × market_awareness) designed for intraday, which killed trend-relevant signals (e.g., USDA report with delay=80 but awareness=70 → low edge score → dropped before Scoring 2 could re-weight). Scoring 2's MIN_TREND_SCORE is the proper quality gate.
+- **HIGH Fix C** : `config.py` + `news_collector.py` — added `STRUCTURED_SOURCE_MAX_AGE_HOURS=18` and `STRUCTURED_SOURCES` set (EIA, USDA, NOAA, Open-Meteo, CFTC, GIE_AGSI, NASA, WOAH, SHFE, FedWatch, GNEWS). `_filter_old_news()` now uses per-source max age instead of global 8h. Trend following needs 12-18h lookback for overnight structured data.
+- **MEDIUM Fix E** : `agent_scoring_2.py` — structural categories (weather, supply_chain, commodity, commodities_energy/agri/soft/industrial) exempt from freshness_weight decay. A 12h-old USDA report is as valid for trend as a 1h-old one.
+- **LOW Fix G** : `agent_scoring_2.py` — added 5 structural keywords: `ferrugem` (1.4, Brazilian coffee rust), `black frost` (1.6), `geada negra` (1.6), `conab` (1.3, Brazilian crop agency), `tc/rc` (1.3, copper smelting terms)
+- **Tests** : 61/61 pass. Updated `test_t3_fresh_news_weighted_more` (geopolitical instead of weather), added `test_t3_structural_category_no_freshness_penalty`
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 21 singletons (4 équipes + infra + perf + audit), run_scan_pipeline (News→Scoring→per-team branches), helpers pour toutes les équipes
 - `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
 - `backend/app/agents/agent_scoring.py` : score Claude API, zero-edge filter, chain reactions, token tracking
-- `backend/app/agents/agent_scoring_2.py` : Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored
+- `backend/app/agents/agent_scoring_2.py` : Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored. v7.5: structural categories (weather, supply_chain, commodity) exempt from freshness_weight decay, +5 keywords (ferrugem, black frost, geada negra, conab, tc/rc)
 - `backend/app/agents/agent_trader.py` : v6.4, décision trade, position monitor (fixed return type), multi-trader ready, daily counters (wired to scheduler)
-- `backend/app/agents/agent_trader_2.py` : v7.0, trend following 4 commodities, consomme Learning 2 (ticker_adj, newscat_adj, direction_adj, threshold_adj), flip history, persistence PG/JSON
+- `backend/app/agents/agent_trader_2.py` : v7.6, trend following 4 commodities, consomme Learning 2 (ticker_adj, newscat_adj, direction_adj, threshold_adj), flip history, persistence PG/JSON. v7.6: removed total_score pre-filter (decoupled from intraday edge scoring)
 - `backend/app/agents/agent_journal.py` : Équipe 1, clôture trades, P&L, MAE/MFE, startup recovery
 - `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
 - `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
@@ -607,7 +614,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - `backend/app/trade_selector.py` : v6.5, convex calibration, fallback ticker, spread filter (synced high-vol formula), VIX daily cap, fixed static group correlation check, direct field access on ScoredNews (no hasattr/getattr)
 - `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
 - `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
-- `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES
+- `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES, STRUCTURED_SOURCE_MAX_AGE_HOURS (18h), STRUCTURED_SOURCES (EIA, USDA, NOAA, etc.)
 - `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr). v7.6: `news_zone: str = ""` field added to NewsItem, ScoredNews, TradeRecommendation, and JournalEntry for geographic tagging
 - `backend/app/scan_history.py` : PG support, pruning 365j
 - `frontend/src/App.jsx` : v7.0, navigation centrée agents (sidebar-driven), hash routing (#dashboard, #news, #scoring, #scoring2, #trader, #journal, #learning, #auditor), lazy-load pages, notification polling, health check
@@ -1118,7 +1125,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 - Reliability factor floor: 0.4 (rumeur garde 40% de valeur)
 - Ratio risque/rendement minimum: 1.2 (abaisse de 1.3 — plus realiste en intraday)
 - Freshness peak: < 2h (stocke, non inclus dans la formule)
-- News max age: 8h (elargi de 6h pour capter overnight US au scan Europe 07:50)
+- News max age: 8h default, 18h for structured sources (EIA, USDA, NOAA, etc.) — per-source in news_collector.py
 - Dedup Jaccard threshold: 0.65 (abaisse de 0.75 pour meilleure dedup)
 - Trigger cooldown: 300s (5 min entre deux triggers manuels)
 - Schema version: 3
