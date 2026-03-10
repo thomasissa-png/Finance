@@ -353,6 +353,22 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
         logger.warning("Équipe 3 technical evaluation failed: %s", exc)
         team_results["team_3"] = {"has_activity": False, "error": str(exc)[:100]}
 
+    # v8.6: Always read live Team 3 position count — catches cases where
+    # positions were saved to disk but run() raised after save, or where
+    # team_results["team_3"] was never set (agent init failed).
+    try:
+        from .agent_trader_3 import _load_positions as _t3_load
+        t3_live = _t3_load()
+        t3_active = t3_live.get("active", [])
+        if "team_3" not in team_results:
+            team_results["team_3"] = {"has_activity": False}
+        team_results["team_3"]["active_count"] = len(t3_active)
+        # If positions exist but has_activity is False, flag it
+        if len(t3_active) > 0 and not team_results["team_3"].get("has_activity"):
+            team_results["team_3"]["has_activity"] = True
+    except Exception:
+        pass  # Best effort — don't break pipeline for dashboard data
+
     # Step 7: Équipe 4 — Scoring 4 + Trader 4 (non-blocking, needs data from teams 1-3)
     try:
         agent_scoring4 = _agents.get("scoring_4")
@@ -404,6 +420,20 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
     except Exception as exc:
         logger.warning("Équipe 4 meta evaluation failed: %s", exc)
         team_results["team_4"] = {"has_activity": False, "error": str(exc)[:100]}
+
+    # v8.6: Always read live Team 4 position count (same pattern as Team 3)
+    try:
+        from .agent_trader_4 import _load_positions as _t4_load
+        t4_live = _t4_load()
+        t4_open = sum(1 for p in t4_live.values()
+                      if isinstance(p, dict) and p.get("status") == "OPEN")
+        if "team_4" not in team_results:
+            team_results["team_4"] = {"has_activity": False}
+        team_results["team_4"]["open_positions"] = t4_open
+        if t4_open > 0 and not team_results["team_4"].get("has_activity"):
+            team_results["team_4"]["has_activity"] = True
+    except Exception:
+        pass
 
     # Attach team results to scan output
     result_dict["team_results"] = team_results
