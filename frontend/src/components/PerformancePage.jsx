@@ -428,6 +428,31 @@ export default function PerformancePage({ isActive, agents }) {
                 {t1.worst_ticker && <> | Pire ticker: <span style={{ color: "var(--red)", fontWeight: 600 }}>{t1.worst_ticker}</span></>}
               </div>
             )}
+
+            {/* Top 3 categories */}
+            {categoryData.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Top stratégies (par catégorie de news)</div>
+                <div className="compact-table">
+                  <table>
+                    <thead>
+                      <tr><th>#</th><th>Catégorie</th><th>Trades</th><th>WR</th><th>P&L</th></tr>
+                    </thead>
+                    <tbody>
+                      {categoryData.slice(0, 5).map((c, i) => (
+                        <tr key={c.name}>
+                          <td style={{ color: i < 3 ? "var(--accent)" : "var(--text-muted)", fontWeight: 600 }}>{i + 1}</td>
+                          <td><code style={{ fontSize: 11 }}>{c.name}</code></td>
+                          <td>{c.trades}</td>
+                          <td style={{ color: c.wr >= 50 ? "var(--green)" : c.wr > 0 ? "var(--red)" : "var(--text-muted)" }}>{c.wr.toFixed(1)}%</td>
+                          <td style={{ color: pnlColor(c.pnl), fontWeight: 600 }}>{c.pnl > 0 ? "+" : ""}{c.pnl.toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Team 2 — Trend */}
@@ -500,41 +525,65 @@ export default function PerformancePage({ isActive, agents }) {
                 <div className="kpi-label">Win Rate</div>
               </div>
               <div className="kpi-card mini">
-                <div className="kpi-value" style={{ color: pnlColor(t3.pnl_total ?? t3.total_realized_pnl) }}>
-                  {(t3.pnl_total ?? t3.total_realized_pnl) != null ? `${(t3.pnl_total ?? t3.total_realized_pnl) > 0 ? "+" : ""}${(t3.pnl_total ?? t3.total_realized_pnl).toFixed(2)}%` : "N/A"}
+                <div className="kpi-value" style={{ color: pnlColor(t3.total_realized_pnl ?? t3.pnl_total) }}>
+                  {(t3.total_realized_pnl ?? t3.pnl_total) != null ? `${(t3.total_realized_pnl ?? t3.pnl_total) > 0 ? "+" : ""}${(t3.total_realized_pnl ?? t3.pnl_total).toFixed(2)}%` : "N/A"}
                 </div>
-                <div className="kpi-label">P&L</div>
+                <div className="kpi-label">P&L réalisé</div>
               </div>
               <div className="kpi-card mini">
                 <div className="kpi-value">{t3.total_trades || 0}</div>
                 <div className="kpi-label">Trades</div>
               </div>
-              {t3.by_strategy && Object.keys(t3.by_strategy).length > 0 && (
-                <div className="kpi-card mini">
-                  <div className="kpi-value">{Object.keys(t3.by_strategy).length}</div>
-                  <div className="kpi-label">Stratégies actives</div>
+              <div className="kpi-card mini">
+                <div className="kpi-value">{t3.active_positions || 0}</div>
+                <div className="kpi-label">Positions ouvertes</div>
+              </div>
+              <div className="kpi-card mini">
+                <div className="kpi-value">{t3.strategies_active || 0}</div>
+                <div className="kpi-label">Stratégies actives</div>
+              </div>
+              <div className="kpi-card mini">
+                <div className="kpi-value" style={{ color: t3.has_weekly_config ? "var(--green)" : "var(--text-muted)" }}>
+                  {t3.has_weekly_config ? "Oui" : "Non"}
                 </div>
-              )}
+                <div className="kpi-label">Config hebdo</div>
+              </div>
             </div>
-            {t3.by_strategy && Object.keys(t3.by_strategy).length > 0 && (
-              <div className="compact-table" style={{ marginTop: 12 }}>
-                <table>
-                  <thead>
-                    <tr><th>Stratégie</th><th>Trades</th><th>WR</th><th>P&L</th></tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(t3.by_strategy).map(([strat, stats]) => (
-                      <tr key={strat}>
-                        <td><code style={{ fontSize: 11 }}>{strat}</code></td>
-                        <td>{stats.trades || 0}</td>
-                        <td style={{ color: (stats.win_rate || 0) >= 50 ? "var(--green)" : "var(--red)" }}>{(stats.win_rate || 0).toFixed(1)}%</td>
-                        <td style={{ color: pnlColor(stats.pnl), fontWeight: 600 }}>{(stats.pnl || 0) > 0 ? "+" : ""}{(stats.pnl || 0).toFixed(2)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {t3.best_strategy && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8 }}>
+                Meilleure stratégie: <span style={{ color: "var(--green)", fontWeight: 600 }}>{t3.best_strategy}</span>
+                {t3.worst_strategy && <> | Pire: <span style={{ color: "var(--red)", fontWeight: 600 }}>{t3.worst_strategy}</span></>}
               </div>
             )}
+
+            {/* Top strategies table */}
+            {t3.by_strategy && Object.keys(t3.by_strategy).length > 0 && (() => {
+              const sorted = Object.entries(t3.by_strategy)
+                .sort(([, a], [, b]) => (b.pnl || 0) - (a.pnl || 0));
+              return (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Performance par stratégie</div>
+                  <div className="compact-table">
+                    <table>
+                      <thead>
+                        <tr><th>#</th><th>Stratégie</th><th>Trades</th><th>WR</th><th>P&L</th></tr>
+                      </thead>
+                      <tbody>
+                        {sorted.map(([strat, stats], i) => (
+                          <tr key={strat}>
+                            <td style={{ color: i < 3 ? "var(--accent)" : "var(--text-muted)", fontWeight: 600 }}>{i + 1}</td>
+                            <td><code style={{ fontSize: 11 }}>{strat}</code></td>
+                            <td>{stats.trades || 0}</td>
+                            <td style={{ color: (stats.win_rate || 0) >= 50 ? "var(--green)" : "var(--red)" }}>{(stats.win_rate || 0).toFixed(1)}%</td>
+                            <td style={{ color: pnlColor(stats.pnl), fontWeight: 600 }}>{(stats.pnl || 0) > 0 ? "+" : ""}{(stats.pnl || 0).toFixed(2)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Team 4 — Meta */}
@@ -548,17 +597,69 @@ export default function PerformancePage({ isActive, agents }) {
                 <div className="kpi-label">Win Rate (obj. 80%)</div>
               </div>
               <div className="kpi-card mini">
-                <div className="kpi-value" style={{ color: pnlColor(t4.pnl_total ?? t4.total_realized_pnl) }}>
-                  {(t4.pnl_total ?? t4.total_realized_pnl) != null ? `${(t4.pnl_total ?? t4.total_realized_pnl) > 0 ? "+" : ""}${(t4.pnl_total ?? t4.total_realized_pnl).toFixed(2)}%` : "N/A"}
+                <div className="kpi-value" style={{ color: pnlColor(t4.total_realized_pnl ?? t4.pnl_total) }}>
+                  {(t4.total_realized_pnl ?? t4.pnl_total) != null ? `${(t4.total_realized_pnl ?? t4.pnl_total) > 0 ? "+" : ""}${(t4.total_realized_pnl ?? t4.pnl_total).toFixed(2)}%` : "N/A"}
                 </div>
-                <div className="kpi-label">P&L</div>
+                <div className="kpi-label">P&L réalisé</div>
               </div>
               <div className="kpi-card mini">
                 <div className="kpi-value">{t4.total_trades || 0}</div>
                 <div className="kpi-label">Trades</div>
               </div>
+              <div className="kpi-card mini">
+                <div className="kpi-value">{t4.open_positions || 0}</div>
+                <div className="kpi-label">Positions ouvertes</div>
+              </div>
+              <div className="kpi-card mini">
+                <div className="kpi-value" style={{ color: pnlColor(t4.total_unrealized_pnl) }}>
+                  {t4.total_unrealized_pnl != null ? `${t4.total_unrealized_pnl > 0 ? "+" : ""}${t4.total_unrealized_pnl.toFixed(2)}%` : "N/A"}
+                </div>
+                <div className="kpi-label">P&L latent</div>
+              </div>
+              <div className="kpi-card mini">
+                <div className="kpi-value" style={{ color: t4.upstream_ready ? "var(--green)" : "var(--yellow)" }}>
+                  {t4.upstream_ready ? "Prêt" : "Attente"}
+                </div>
+                <div className="kpi-label">Upstream</div>
+              </div>
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8 }}>
+            {t4.best_combo && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8 }}>
+                Meilleure combo: <span style={{ color: "var(--green)", fontWeight: 600 }}>{t4.best_combo}</span>
+                {t4.worst_combo && <> | Pire: <span style={{ color: "var(--red)", fontWeight: 600 }}>{t4.worst_combo}</span></>}
+              </div>
+            )}
+
+            {/* By combo table */}
+            {t4.by_combo && Object.keys(t4.by_combo).length > 0 && (() => {
+              const sorted = Object.entries(t4.by_combo)
+                .sort(([, a], [, b]) => (b.pnl || 0) - (a.pnl || 0));
+              return (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Performance par combinaison</div>
+                  <div className="compact-table">
+                    <table>
+                      <thead>
+                        <tr><th>#</th><th>Combinaison</th><th>Trades</th><th>WR</th><th>P&L</th></tr>
+                      </thead>
+                      <tbody>
+                        {sorted.map(([combo, stats], i) => (
+                          <tr key={combo}>
+                            <td style={{ color: i < 3 ? "var(--accent)" : "var(--text-muted)", fontWeight: 600 }}>{i + 1}</td>
+                            <td><code style={{ fontSize: 11 }}>{combo}</code></td>
+                            <td>{stats.trades || 0}</td>
+                            <td style={{ color: (stats.win_rate || 0) >= 50 ? "var(--green)" : "var(--red)" }}>{(stats.win_rate || 0).toFixed(1)}%</td>
+                            <td style={{ color: pnlColor(stats.pnl), fontWeight: 600 }}>{(stats.pnl || 0) > 0 ? "+" : ""}{(stats.pnl || 0).toFixed(2)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>
               Objectif: 80% WR | Activation: 16 mars 2026 | Combine les signaux des 3 équipes
             </div>
           </div>
@@ -716,26 +817,33 @@ export default function PerformancePage({ isActive, agents }) {
             <div className="section-card" style={{ padding: 20 }}>
               <h3>Alertes actives ({report.alerts.length})</h3>
               <div className="agent-logs" style={{ marginTop: 12 }}>
-                {report.alerts.map((alert, i) => (
-                  <div key={i} className={`agent-log-entry ${alert.level === "CRITICAL" ? "error" : "warn"}`}>
-                    <div className="agent-log-header">
-                      <span className="agent-log-icon" style={{ fontSize: 14 }}>
-                        {alert.level === "CRITICAL" ? "!!" : "!"}
-                      </span>
-                      <span style={{ fontSize: 11, color: alert.level === "CRITICAL" ? "var(--red)" : "var(--yellow)", fontWeight: 600 }}>
-                        {alert.level}
-                      </span>
-                      <span className="agent-log-action" style={{ color: "var(--text-primary)" }}>
-                        {alert.message || alert.description || JSON.stringify(alert)}
-                      </span>
-                    </div>
-                    {alert.agent && (
-                      <div style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 24, marginTop: 2 }}>
-                        Agent: {alert.agent}
+                {report.alerts.map((alert, i) => {
+                  const level = alert.severity || alert.level || "WARN";
+                  const msg = typeof alert.message === "string" ? alert.message
+                    : typeof alert.description === "string" ? alert.description
+                    : typeof alert === "string" ? alert
+                    : JSON.stringify(alert);
+                  return (
+                    <div key={i} className={`agent-log-entry ${level === "CRITICAL" ? "error" : "warn"}`}>
+                      <div className="agent-log-header">
+                        <span className="agent-log-icon" style={{ fontSize: 14 }}>
+                          {level === "CRITICAL" ? "!!" : "!"}
+                        </span>
+                        <span style={{ fontSize: 11, color: level === "CRITICAL" ? "var(--red)" : "var(--yellow)", fontWeight: 600 }}>
+                          {level}
+                        </span>
+                        <span className="agent-log-action" style={{ color: "var(--text-primary)" }}>
+                          {msg}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      {alert.agent && (
+                        <div style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 24, marginTop: 2 }}>
+                          Agent: {typeof alert.agent === "string" ? alert.agent : JSON.stringify(alert.agent)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -750,11 +858,16 @@ export default function PerformancePage({ isActive, agents }) {
               <h3 style={{ color: "var(--green)" }}>Top performers</h3>
               {report?.top_performers?.length > 0 ? (
                 <div className="agent-logs" style={{ marginTop: 8 }}>
-                  {report.top_performers.map((p, i) => (
-                    <div key={i} className="agent-log-entry" style={{ padding: "6px 8px" }}>
-                      <span style={{ fontWeight: 600, color: "var(--green)" }}>{p}</span>
-                    </div>
-                  ))}
+                  {report.top_performers.map((p, i) => {
+                    const agent = typeof p === "string" ? p : (p.agent || "?");
+                    const reason = typeof p === "string" ? "" : (p.reason || "");
+                    return (
+                      <div key={i} className="agent-log-entry" style={{ padding: "6px 8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 600, color: "var(--green)" }}>{agent}</span>
+                        {reason && <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{reason}</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 8 }}>Pas encore de données</div>
@@ -764,11 +877,16 @@ export default function PerformancePage({ isActive, agents }) {
               <h3 style={{ color: "var(--red)" }}>Sous-performers</h3>
               {report?.underperformers?.length > 0 ? (
                 <div className="agent-logs" style={{ marginTop: 8 }}>
-                  {report.underperformers.map((p, i) => (
-                    <div key={i} className="agent-log-entry" style={{ padding: "6px 8px" }}>
-                      <span style={{ fontWeight: 600, color: "var(--red)" }}>{p}</span>
-                    </div>
-                  ))}
+                  {report.underperformers.map((p, i) => {
+                    const agent = typeof p === "string" ? p : (p.agent || "?");
+                    const reason = typeof p === "string" ? "" : (p.reason || "");
+                    return (
+                      <div key={i} className="agent-log-entry" style={{ padding: "6px 8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 600, color: "var(--red)" }}>{agent}</span>
+                        {reason && <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{reason}</span>}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 8 }}>Aucun agent sous-performant</div>

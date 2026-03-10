@@ -471,6 +471,15 @@ class AgentPerformance(BaseAgent):
                         del stats["durations"]  # Don't expose raw list
                     kpis["by_ticker"] = by_ticker
 
+                    # Best/worst ticker (min 2 flips)
+                    qualified = {k: v for k, v in by_ticker.items()
+                                 if v["flips"] >= 2}
+                    if qualified:
+                        kpis["best_ticker"] = max(
+                            qualified, key=lambda k: qualified[k]["pnl"])
+                        kpis["worst_ticker"] = min(
+                            qualified, key=lambda k: qualified[k]["pnl"])
+
         except Exception as exc:
             self.log("Trader 2 KPI computation error", {"error": str(exc)}, level="WARN")
 
@@ -666,10 +675,10 @@ class AgentPerformance(BaseAgent):
         return kpis
 
     def _compute_trader_3_kpis(self) -> dict:
-        """Compute Trader 3 (technical) KPIs from positions.
+        """Compute Trader 3 (technical) KPIs from positions and journal entries.
 
-        v2.0: Added weekly config status, Sharpe ratio, regime match stats,
-        correlation check, and R/R tracking.
+        v2.1: Added all-time win_rate, total_trades, by_strategy breakdown,
+        best/worst strategy from journal entries for balanced KPIs.
         """
         kpis: dict[str, Any] = {
             "active_positions": 0,
@@ -678,6 +687,11 @@ class AgentPerformance(BaseAgent):
             "strategies_active": 0,
             "has_weekly_config": False,
             "validated_strategies": 0,
+            "win_rate": None,
+            "total_trades": 0,
+            "best_strategy": None,
+            "worst_strategy": None,
+            "by_strategy": {},
         }
         try:
             from . import registry
@@ -707,11 +721,57 @@ class AgentPerformance(BaseAgent):
                         config.get("enabled_strategies", []))
                     kpis["disabled_strategies"] = config.get("disabled_strategies", [])
 
-            # Journal 3 stats
+            # Journal 3: all-time stats + by_strategy breakdown
             j3 = registry.get_agent("journal_3")
             if j3:
                 j3_metrics = j3.get_metrics()
                 kpis["total_journal_entries"] = j3_metrics.get("total_entries", 0)
+
+                entries = self._filter_entries_by_version(
+                    j3.get_entries(), "scoring_3", "trader_3")
+
+                if entries:
+                    entries_with_pnl = [e for e in entries
+                                        if e.get("pnl_pct") is not None
+                                        and abs(e.get("pnl_pct", 0)) <= 50]
+                    if entries_with_pnl:
+                        kpis["total_trades"] = len(entries_with_pnl)
+                        wins = sum(1 for e in entries_with_pnl
+                                   if (e.get("pnl_pct") or 0) > 0)
+                        kpis["win_rate"] = round(
+                            wins / len(entries_with_pnl) * 100, 1)
+                        total_pnl = sum(e.get("pnl_pct", 0)
+                                        for e in entries_with_pnl)
+                        if kpis["total_realized_pnl"] is None:
+                            kpis["total_realized_pnl"] = round(total_pnl, 2)
+
+                        # By strategy breakdown
+                        by_strat: dict[str, dict] = {}
+                        for e in entries_with_pnl:
+                            strat = e.get("strategy", "unknown")
+                            if strat not in by_strat:
+                                by_strat[strat] = {
+                                    "trades": 0, "wins": 0, "pnl": 0.0}
+                            by_strat[strat]["trades"] += 1
+                            pnl = e.get("pnl_pct", 0)
+                            by_strat[strat]["pnl"] += pnl
+                            if pnl > 0:
+                                by_strat[strat]["wins"] += 1
+                        for strat, stats in by_strat.items():
+                            stats["win_rate"] = round(
+                                stats["wins"] / stats["trades"] * 100,
+                                1) if stats["trades"] else 0
+                            stats["pnl"] = round(stats["pnl"], 2)
+                        kpis["by_strategy"] = by_strat
+
+                        # Best/worst strategy (min 2 trades)
+                        qualified = {k: v for k, v in by_strat.items()
+                                     if v["trades"] >= 2}
+                        if qualified:
+                            kpis["best_strategy"] = max(
+                                qualified, key=lambda k: qualified[k]["pnl"])
+                            kpis["worst_strategy"] = min(
+                                qualified, key=lambda k: qualified[k]["pnl"])
 
                 # Weekly summary for the report
                 try:
@@ -727,7 +787,11 @@ class AgentPerformance(BaseAgent):
         return kpis
 
     def _compute_trader_4_kpis(self) -> dict:
-        """Compute Trader 4 (meta/ensemble) KPIs from positions and weekly summary."""
+        """Compute Trader 4 (meta/ensemble) KPIs from positions and journal entries.
+
+        v2.1: Added all-time win_rate, total_trades, by_combo breakdown,
+        best/worst combo from journal entries for balanced KPIs.
+        """
         kpis: dict[str, Any] = {
             "open_positions": 0,
             "total_realized_pnl": None,
@@ -737,6 +801,11 @@ class AgentPerformance(BaseAgent):
             "activation_date": None,
             "has_weekly_config": False,
             "validated_combos": [],
+            "win_rate": None,
+            "total_trades": 0,
+            "best_combo": None,
+            "worst_combo": None,
+            "by_combo": {},
             "weekly_win_rate": None,
             "weekly_pnl": None,
             "weekly_trades": 0,
@@ -764,9 +833,56 @@ class AgentPerformance(BaseAgent):
                 if config:
                     kpis["validated_combos"] = config.get("validated_combos", [])
 
-            # Journal 4 weekly summary
+            # Journal 4: all-time stats + by_combo breakdown
             j4 = registry.get_agent("journal_4")
             if j4:
+                entries = self._filter_entries_by_version(
+                    j4.get_entries(), "scoring_4", "trader_4")
+
+                if entries:
+                    entries_with_pnl = [e for e in entries
+                                        if e.get("pnl_pct") is not None
+                                        and abs(e.get("pnl_pct", 0)) <= 50]
+                    if entries_with_pnl:
+                        kpis["total_trades"] = len(entries_with_pnl)
+                        wins = sum(1 for e in entries_with_pnl
+                                   if (e.get("pnl_pct") or 0) > 0)
+                        kpis["win_rate"] = round(
+                            wins / len(entries_with_pnl) * 100, 1)
+                        total_pnl = sum(e.get("pnl_pct", 0)
+                                        for e in entries_with_pnl)
+                        if kpis["total_realized_pnl"] is None:
+                            kpis["total_realized_pnl"] = round(total_pnl, 2)
+
+                        # By combo breakdown
+                        by_combo: dict[str, dict] = {}
+                        for e in entries_with_pnl:
+                            combo = e.get("team_combination", "unknown")
+                            if combo not in by_combo:
+                                by_combo[combo] = {
+                                    "trades": 0, "wins": 0, "pnl": 0.0}
+                            by_combo[combo]["trades"] += 1
+                            pnl = e.get("pnl_pct", 0)
+                            by_combo[combo]["pnl"] += pnl
+                            if pnl > 0:
+                                by_combo[combo]["wins"] += 1
+                        for combo, stats in by_combo.items():
+                            stats["win_rate"] = round(
+                                stats["wins"] / stats["trades"] * 100,
+                                1) if stats["trades"] else 0
+                            stats["pnl"] = round(stats["pnl"], 2)
+                        kpis["by_combo"] = by_combo
+
+                        # Best/worst combo (min 2 trades)
+                        qualified = {k: v for k, v in by_combo.items()
+                                     if v["trades"] >= 2}
+                        if qualified:
+                            kpis["best_combo"] = max(
+                                qualified, key=lambda k: qualified[k]["pnl"])
+                            kpis["worst_combo"] = min(
+                                qualified, key=lambda k: qualified[k]["pnl"])
+
+                # Weekly summary
                 try:
                     weekly = j4.compute_weekly_summary()
                     kpis["weekly_win_rate"] = weekly.get("win_rate", 0)
