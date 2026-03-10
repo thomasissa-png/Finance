@@ -275,16 +275,18 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
             "all_scored_news": [],
         }
 
-    # Step 5: Équipe 2 — Scoring 2 + Trader 2 (non-blocking)
+    # Step 5: Équipe 2 — Scoring 2 (dedicated Claude) + Trader 2 (non-blocking)
+    # v8.0: Scoring 2 now makes its own Claude API call with raw news_items
+    # (no longer consumes Scoring 1 output)
     try:
         agent_scoring2 = _agents.get("scoring_2")
         agent_trader2 = _agents.get("trader_2")
         agent_learning2 = _agents.get("learning_2")
         if agent_trader2:
             trend_scoring = None
-            if agent_scoring2 and scored:
+            if agent_scoring2 and news_items:
                 trend_scoring = agent_scoring2.run(
-                    scored_news=scored, scan_type=scan_type)
+                    news_items=news_items, scan_type=scan_type)
 
             learning2_data = (agent_learning2.get_adjustments()
                               if agent_learning2 else {})

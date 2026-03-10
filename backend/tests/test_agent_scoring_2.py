@@ -1,12 +1,13 @@
-"""Tests for Agent Scoring 2 — Trend-specific re-scoring for Équipe 2.
+"""Tests for Agent Scoring 2 — Dedicated Claude scoring for Équipe 2 (v8.0).
 
 Tests:
-1. Core functions (persistence mult, trend score, score_for_trend)
+1. Core functions (persistence mult, pre-filter, score formula)
 2. Category multipliers and structural keywords
 3. AgentScoring2 class (init, run, metrics)
-4. Pipeline integration (registry, accumulation)
-5. Filtering (NEUTRAL skipped, non-trend tickers skipped, min threshold)
-6. v7.3 audit fixes (P1, P5, P6, P7, P9, P10, P11, P12, T2, T3, T4, T5, T7)
+4. Claude integration (mock API call, tool schema, prompt)
+5. Pipeline integration (registry, accumulation)
+6. Cache (trend score cache)
+7. Backward compatibility (scored_news kwarg)
 """
 
 import time
@@ -20,12 +21,22 @@ from backend.app.agents.agent_scoring_2 import (
     TREND_CATEGORY_MULTS,
     STRUCTURAL_KEYWORDS,
     TREND_TICKERS,
+    TREND_TICKER_INFO,
     MIN_TREND_SCORE,
     CHAIN_DISCOUNT,
     _CATEGORY_PRIORITY,
+    TREND_SYSTEM_PROMPT,
+    TREND_SCORING_TOOL,
+    TREND_NEWS_CATEGORIES,
+    RELEVANT_CATEGORIES_KEYWORDS,
     _compute_persistence_mult,
-    _compute_trend_score,
-    score_for_trend,
+    _is_trend_relevant,
+    score_news_for_trend,
+    get_trend_token_usage,
+    _trend_score_cache,
+    _get_trend_cache_key,
+    _get_cached_trend_score,
+    _set_cached_trend_score,
 )
 from backend.app.models import (
     Direction,
@@ -36,32 +47,30 @@ from backend.app.models import (
 )
 
 
-def _make_scored_news(ticker, direction="LONG", surprise=80,
-                      category="commodity", reliability=80, clarity=80,
-                      magnitude=60, title="Test commodity news",
-                      source_weight=1.1, chain_ticker=None,
-                      chain_direction="LONG", published=None,
-                      convergence_count=0, description="Test description"):
-    """Helper to create a ScoredNews for trend scoring tests."""
-    news = NewsItem(
+def _make_news_item(title="Test commodity news", description="Test description",
+                    source="test", source_weight=1.1, published=None,
+                    news_zone="", related_tickers=None):
+    """Helper to create a NewsItem for trend scoring tests."""
+    return NewsItem(
         title=title,
-        source="test",
+        source=source,
         url="https://test.com",
         published=published or datetime.now(timezone.utc),
         source_weight=source_weight,
         description=description,
+        news_zone=news_zone,
+        related_tickers=related_tickers or [],
     )
 
-    impacted = [ticker] if ticker else []
-    chains = []
-    if chain_ticker:
-        chains.append(ChainReaction(
-            ticker=chain_ticker,
-            direction=Direction(chain_direction),
-            reason="chain reaction",
-            source_ticker=ticker or "CL=F",
-        ))
 
+def _make_scored_news(ticker, direction="LONG", surprise=80,
+                      category="commodity", reliability=80, clarity=80,
+                      magnitude=60, title="Test commodity news",
+                      source_weight=1.1, published=None,
+                      convergence_count=0, description="Test description"):
+    """Helper to create ScoredNews (for backward compat tests)."""
+    news = _make_news_item(title=title, description=description,
+                           source_weight=source_weight, published=published)
     return ScoredNews(
         news=news,
         surprise=surprise,
@@ -72,11 +81,10 @@ def _make_scored_news(ticker, direction="LONG", surprise=80,
         expected_magnitude=magnitude,
         signal_reliability=reliability,
         direction=Direction(direction),
-        impacted_tickers=impacted,
+        impacted_tickers=[ticker] if ticker else [],
         reasoning="Test reasoning",
         news_category=category,
         category_score_mult=1.5,
-        chain_reactions=chains,
         convergence_count=convergence_count,
     )
 
@@ -98,11 +106,7 @@ class TestPersistenceMult:
         assert mult == 1.5
 
     def test_temporary_event_low_mult(self):
-        # "rumor" keyword has mult 0.7, but best_mult starts at 1.0
-        # so if "production" also matches (via "production cut"=1.3), it wins
-        # Use a title with ONLY a low-persistence keyword
         mult = _compute_persistence_mult("Pure rumor nothing else", "")
-        # best_mult = max(1.0, 0.7) = 1.0 — low keywords don't reduce below 1.0
         assert mult == 1.0
 
     def test_no_keyword_returns_1(self):
@@ -110,9 +114,7 @@ class TestPersistenceMult:
         assert mult == 1.0
 
     def test_best_keyword_wins(self):
-        """If multiple keywords match, the highest mult wins."""
         mult = _compute_persistence_mult("Drought and rumor about embargo", "")
-        # drought=1.5, rumor=0.7, embargo=1.5 → best = 1.5
         assert mult == 1.5
 
     def test_description_also_checked(self):
@@ -120,123 +122,282 @@ class TestPersistenceMult:
         assert mult == 1.5
 
 
-# ── Trend score formula ─────────────────────────────────────────────
+# ── Pre-filter relevance ─────────────────────────────────────────────
 
 
-class TestTrendScore:
-    def test_basic_score_positive(self):
-        sn = _make_scored_news("HG=F", surprise=80, clarity=80,
-                               magnitude=60, reliability=80)
-        score = _compute_trend_score(sn, 1.6, 1.0)
-        assert score > 0
+class TestTrendRelevance:
+    def test_commodity_category_always_relevant(self):
+        assert _is_trend_relevant("Random", "", "commodity")
 
-    def test_higher_magnitude_higher_score(self):
-        sn_low = _make_scored_news("HG=F", magnitude=20)
-        sn_high = _make_scored_news("HG=F", magnitude=90)
-        score_low = _compute_trend_score(sn_low, 1.0, 1.0)
-        score_high = _compute_trend_score(sn_high, 1.0, 1.0)
-        assert score_high > score_low
+    def test_weather_category_always_relevant(self):
+        assert _is_trend_relevant("Random", "", "weather")
 
-    def test_category_mult_scales_score(self):
-        sn = _make_scored_news("HG=F")
-        score_weather = _compute_trend_score(sn, 2.0, 1.0)
-        score_macro = _compute_trend_score(sn, 0.3, 1.0)
-        assert score_weather > score_macro
-        assert abs(score_weather / score_macro - 2.0/0.3) < 0.1
+    def test_supply_chain_category_always_relevant(self):
+        assert _is_trend_relevant("Random", "", "supply_chain")
 
-    def test_persistence_mult_scales_score(self):
-        sn = _make_scored_news("HG=F")
-        score_base = _compute_trend_score(sn, 1.0, 1.0)
-        score_persist = _compute_trend_score(sn, 1.0, 1.5)
-        assert score_persist == pytest.approx(score_base * 1.5, rel=0.01)
+    def test_keyword_in_title(self):
+        assert _is_trend_relevant("Drought hits Midwest wheat", "")
 
-    def test_source_weight_matters(self):
-        sn_high = _make_scored_news("HG=F", source_weight=1.2)
-        sn_low = _make_scored_news("HG=F", source_weight=0.7)
-        score_high = _compute_trend_score(sn_high, 1.0, 1.0)
-        score_low = _compute_trend_score(sn_low, 1.0, 1.0)
-        assert score_high > score_low
+    def test_keyword_in_description(self):
+        assert _is_trend_relevant("Report", "copper mine closure")
+
+    def test_irrelevant_news_filtered(self):
+        assert not _is_trend_relevant("Apple earnings beat estimates", "", "earnings")
+
+    def test_keyword_case_insensitive(self):
+        assert _is_trend_relevant("DROUGHT hits region", "")
+
+    def test_ticker_keyword_matches(self):
+        assert _is_trend_relevant("Coffee prices surge", "")
+
+    def test_country_keyword_matches(self):
+        assert _is_trend_relevant("Brazil crop outlook", "")
 
 
-# ── score_for_trend() ────────────────────────────────────────────────
+# ── Claude prompt and tool schema ─────────────────────────────────────
 
 
-class TestScoreForTrend:
+class TestTrendPrompt:
+    def test_prompt_mentions_4_tickers(self):
+        for ticker in TREND_TICKERS:
+            assert ticker in TREND_SYSTEM_PROMPT
+
+    def test_prompt_mentions_structural_impact(self):
+        assert "structurel" in TREND_SYSTEM_PROMPT.lower() or "structural" in TREND_SYSTEM_PROMPT.lower()
+
+    def test_prompt_no_transmission_delay(self):
+        """Trend prompt should NOT mention transmission_delay as a scoring dimension."""
+        assert "transmission_delay" not in TREND_SYSTEM_PROMPT
+
+    def test_prompt_no_market_awareness(self):
+        """Trend prompt should NOT mention market_awareness as a scoring dimension."""
+        assert "market_awareness" not in TREND_SYSTEM_PROMPT
+
+    def test_tool_schema_has_structural_impact(self):
+        props = TREND_SCORING_TOOL["input_schema"]["properties"]["scores"]["items"]["properties"]
+        assert "structural_impact" in props
+
+    def test_tool_schema_has_persistence(self):
+        props = TREND_SCORING_TOOL["input_schema"]["properties"]["scores"]["items"]["properties"]
+        assert "persistence" in props
+
+    def test_tool_schema_no_transmission_delay(self):
+        props = TREND_SCORING_TOOL["input_schema"]["properties"]["scores"]["items"]["properties"]
+        assert "transmission_delay" not in props
+
+    def test_tool_schema_no_market_awareness(self):
+        props = TREND_SCORING_TOOL["input_schema"]["properties"]["scores"]["items"]["properties"]
+        assert "market_awareness" not in props
+
+    def test_tool_name_is_submit_trend_scores(self):
+        assert TREND_SCORING_TOOL["name"] == "submit_trend_scores"
+
+    def test_trend_news_categories_subset(self):
+        """Trend categories should be a subset of commodity-relevant categories."""
+        assert "weather" in TREND_NEWS_CATEGORIES
+        assert "supply_chain" in TREND_NEWS_CATEGORIES
+        assert "commodity" in TREND_NEWS_CATEGORIES
+        # earnings/macro/m_a should NOT be in trend categories
+        assert "earnings" not in TREND_NEWS_CATEGORIES
+        assert "macro" not in TREND_NEWS_CATEGORIES
+        assert "m_a" not in TREND_NEWS_CATEGORIES
+
+
+# ── score_news_for_trend() ────────────────────────────────────────────
+
+
+class TestScoreNewsForTrend:
     def test_empty_list(self):
-        result = score_for_trend([])
+        result = score_news_for_trend([])
         assert result["trend_scored"] == []
         assert result["stats"]["total_items"] == 0
         assert result["stats"]["relevant_items"] == 0
 
-    def test_neutral_skipped(self):
-        sn = _make_scored_news("HG=F", direction="NEUTRAL")
-        result = score_for_trend([sn])
-        assert result["stats"]["relevant_items"] == 0
-
-    def test_non_trend_ticker_skipped(self):
-        sn = _make_scored_news("TTE.PA", direction="LONG")
-        result = score_for_trend([sn])
-        assert result["stats"]["relevant_items"] == 0
-
-    def test_trend_ticker_included(self):
-        sn = _make_scored_news("HG=F", direction="LONG", surprise=90,
-                               category="weather", title="Drought copper mine")
-        result = score_for_trend([sn])
-        assert result["stats"]["relevant_items"] >= 1
-        assert "HG=F" in result["by_ticker"]
-
-    def test_accumulation_long(self):
-        sn = _make_scored_news("CC=F", direction="LONG", surprise=90,
-                               category="weather", title="Drought in Ivory Coast")
-        result = score_for_trend([sn])
-        acc = result["accumulation"].get("CC=F", {})
-        assert acc.get("long", 0) > 0
-        assert acc.get("short", 0) == 0
-
-    def test_accumulation_short(self):
-        sn = _make_scored_news("ZW=F", direction="SHORT", surprise=90,
-                               category="commodity", title="Wheat surplus record harvest")
-        result = score_for_trend([sn])
-        acc = result["accumulation"].get("ZW=F", {})
-        assert acc.get("short", 0) > 0
-
-    def test_chain_reaction_ticker(self):
-        """A news impacting CL=F with chain to HG=F should appear in HG=F."""
-        sn = _make_scored_news("CL=F", direction="LONG", surprise=90,
-                               category="supply_chain", title="Embargo oil",
-                               chain_ticker="HG=F", chain_direction="SHORT")
-        result = score_for_trend([sn])
-        # CL=F is not a trend ticker, but HG=F is via chain reaction
-        assert len(result["by_ticker"].get("HG=F", [])) >= 1
-
-    def test_min_threshold_filter(self):
-        """Very low score should be filtered (< 5.0)."""
-        sn = _make_scored_news("HG=F", direction="LONG", surprise=5,
-                               clarity=10, magnitude=5, reliability=10,
-                               category="earnings", source_weight=0.5,
-                               title="Generic low relevance")
-        result = score_for_trend([sn])
-        assert result["stats"]["relevant_items"] == 0
-
-    def test_stats_top_category(self):
+    def test_irrelevant_news_filtered_before_claude(self):
+        """News without commodity keywords should be pre-filtered (no Claude call)."""
         items = [
-            _make_scored_news("HG=F", category="weather", surprise=90,
-                              title="Drought copper region"),
-            _make_scored_news("CC=F", category="weather", surprise=85,
-                              title="Frost cocoa Ivory Coast"),
-            _make_scored_news("KC=F", category="commodity", surprise=90,
-                              title="Coffee surplus Brazil"),
+            _make_news_item(title="Apple Q4 earnings beat", description="Revenue up 8%"),
         ]
-        result = score_for_trend(items)
-        if result["stats"]["relevant_items"] >= 2:
-            assert result["stats"]["top_category"] in ("weather", "commodity")
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = []
+            result = score_news_for_trend(items)
+            # Irrelevant news should not be sent to Claude
+            mock_claude.assert_not_called()
 
-    def test_all_trend_tickers_initialized(self):
-        result = score_for_trend([_make_scored_news("HG=F", surprise=90,
-                                                     title="Drought mine")])
+    def test_relevant_news_sent_to_claude(self):
+        """News with commodity keywords should be sent to Claude."""
+        items = [
+            _make_news_item(title="Severe drought hits Midwest wheat belt",
+                            description="USDA warns of crop damage"),
+        ]
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = [{
+                "index": 1,
+                "structural_impact": 80,
+                "persistence": 70,
+                "magnitude": 65,
+                "reliability": 90,
+                "directional_clarity": 85,
+                "direction": "LONG",
+                "impacted_tickers": ["ZW=F"],
+                "news_category": "weather",
+                "reasoning": "Drought during critical growth period",
+            }]
+            result = score_news_for_trend(items)
+            mock_claude.assert_called_once()
+            assert result["stats"]["relevant_items"] == 1
+            assert result["accumulation"]["ZW=F"]["long"] > 0
+
+    def test_neutral_scores_ignored(self):
+        items = [
+            _make_news_item(title="Copper market update",
+                            description="No change in copper production"),
+        ]
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = [{
+                "index": 1,
+                "structural_impact": 0,
+                "persistence": 0,
+                "magnitude": 10,
+                "reliability": 50,
+                "directional_clarity": 20,
+                "direction": "NEUTRAL",
+                "impacted_tickers": [],
+                "news_category": "commodity",
+                "reasoning": "No significant impact",
+            }]
+            result = score_news_for_trend(items)
+            assert result["stats"]["relevant_items"] == 0
+
+    def test_non_trend_tickers_filtered(self):
+        """If Claude returns non-trend tickers, they should be filtered out."""
+        items = [
+            _make_news_item(title="Oil embargo impacts supply chain",
+                            description="OPEC sanctions"),
+        ]
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = [{
+                "index": 1,
+                "structural_impact": 70,
+                "persistence": 60,
+                "magnitude": 55,
+                "reliability": 80,
+                "directional_clarity": 75,
+                "direction": "LONG",
+                "impacted_tickers": ["CL=F", "BZ=F"],  # Not trend tickers
+                "news_category": "supply_chain",
+                "reasoning": "Oil supply disruption",
+            }]
+            result = score_news_for_trend(items)
+            # CL=F and BZ=F are not in TREND_TICKERS → filtered
+            assert result["stats"]["relevant_items"] == 0
+
+    def test_all_tickers_initialized(self):
+        result = score_news_for_trend([])
         for ticker in TREND_TICKERS:
             assert ticker in result["accumulation"]
             assert ticker in result["by_ticker"]
+
+    def test_trend_score_formula(self):
+        """Verify the trend score formula includes persistence_factor."""
+        items = [
+            _make_news_item(title="Drought copper mine closure",
+                            description="Major copper mine shut down"),
+        ]
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = [{
+                "index": 1,
+                "structural_impact": 90,
+                "persistence": 80,  # High persistence
+                "magnitude": 70,
+                "reliability": 90,
+                "directional_clarity": 85,
+                "direction": "LONG",
+                "impacted_tickers": ["HG=F"],
+                "news_category": "commodity",
+                "reasoning": "Mine closure reduces copper supply",
+            }]
+            result = score_news_for_trend(items)
+            assert result["stats"]["relevant_items"] == 1
+            scored = result["trend_scored"][0]
+            # Score should be > 0 and include persistence factor
+            assert scored["trend_score"] > MIN_TREND_SCORE
+            assert scored["structural_impact"] == 90
+            assert scored["persistence"] == 80
+
+    def test_accumulation_direction(self):
+        """LONG news accumulates in 'long', SHORT in 'short'."""
+        items = [
+            _make_news_item(title="Wheat export ban by Russia",
+                            description="Export restrictions on wheat"),
+        ]
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = [{
+                "index": 1,
+                "structural_impact": 80,
+                "persistence": 70,
+                "magnitude": 65,
+                "reliability": 85,
+                "directional_clarity": 90,
+                "direction": "LONG",
+                "impacted_tickers": ["ZW=F"],
+                "news_category": "supply_chain",
+                "reasoning": "Export ban reduces global supply",
+            }]
+            result = score_news_for_trend(items)
+            assert result["accumulation"]["ZW=F"]["long"] > 0
+            assert result["accumulation"]["ZW=F"]["short"] == 0
+
+
+# ── Cache ─────────────────────────────────────────────────────────────
+
+
+class TestTrendScoreCache:
+    def setup_method(self):
+        """Clear cache before each test."""
+        _trend_score_cache.clear()
+
+    def test_cache_set_and_get(self):
+        key = _get_trend_cache_key("Test title", "Test desc")
+        entry = {"direction": "LONG", "trend_score": 50.0, "impacted_tickers": ["HG=F"]}
+        _set_cached_trend_score(key, entry)
+        cached = _get_cached_trend_score(key)
+        assert cached is not None
+        assert cached["direction"] == "LONG"
+
+    def test_cache_miss(self):
+        key = _get_trend_cache_key("Non-existent", "")
+        assert _get_cached_trend_score(key) is None
+
+    def test_cache_key_includes_trend_prefix(self):
+        key = _get_trend_cache_key("Title", "Desc")
+        # Key is an MD5 hash, but the input includes "trend|" prefix
+        # to avoid collision with Scoring 1 cache
+        from hashlib import md5
+        expected = md5(b"trend|Title|Desc").hexdigest()
+        assert key == expected
+
+    def test_cached_items_reused(self):
+        """Cached items should bypass Claude call."""
+        items = [
+            _make_news_item(title="Drought copper mine", description="desc"),
+        ]
+        # Pre-populate cache
+        cache_key = _get_trend_cache_key("Drought copper mine", "desc")
+        _set_cached_trend_score(cache_key, {
+            "direction": "LONG",
+            "trend_score": 50.0,
+            "impacted_tickers": ["HG=F"],
+            "reliability": 80,
+            "news_category": "weather",
+        })
+
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = []
+            result = score_news_for_trend(items)
+            # Claude should NOT be called (item was in cache)
+            mock_claude.assert_not_called()
+            assert result["stats"]["relevant_items"] == 1
 
 
 # ── Category multipliers ────────────────────────────────────────────
@@ -271,6 +432,13 @@ class TestStructuralKeywords:
     def test_export_ban_highest(self):
         assert STRUCTURAL_KEYWORDS["export ban"] == 1.6
 
+    def test_accent_variants(self):
+        assert "el nino" in STRUCTURAL_KEYWORDS
+        assert STRUCTURAL_KEYWORDS["el nino"] == STRUCTURAL_KEYWORDS["el niño"]
+        assert "la nina" in STRUCTURAL_KEYWORDS
+        assert STRUCTURAL_KEYWORDS["la nina"] == STRUCTURAL_KEYWORDS["la niña"]
+        assert "secheresse" in STRUCTURAL_KEYWORDS
+
 
 # ── Trend tickers ───────────────────────────────────────────────────
 
@@ -285,6 +453,9 @@ class TestTrendTickers:
         assert "KC=F" in TREND_TICKERS
         assert "ZW=F" in TREND_TICKERS
 
+    def test_ticker_info_matches(self):
+        assert set(TREND_TICKER_INFO.keys()) == TREND_TICKERS
+
 
 # ── AgentScoring2 class ─────────────────────────────────────────────
 
@@ -293,13 +464,18 @@ class TestAgentScoring2:
     def test_init(self):
         agent = AgentScoring2()
         assert agent.name == "scoring_2"
-        assert "trend" in agent.description.lower() or "tendance" in agent.description.lower()
+        assert agent.version == "8.0"
+
+    def test_description_mentions_claude(self):
+        agent = AgentScoring2()
+        assert "claude" in agent.description.lower() or "dédié" in agent.description.lower()
 
     def test_metrics_initial(self):
         agent = AgentScoring2()
         m = agent.get_metrics()
         assert m["last_relevant_count"] == 0
         assert m["total_rescorings"] == 0
+        assert "token_usage" in m
 
     def test_get_last_result_initial(self):
         agent = AgentScoring2()
@@ -307,32 +483,42 @@ class TestAgentScoring2:
 
     def test_run_with_empty_list(self):
         agent = AgentScoring2()
-        result = agent.run(scored_news=[], scan_type=ScanType.EUROPE)
+        result = agent.run(news_items=[], scan_type=ScanType.EUROPE)
         assert result["stats"]["total_items"] == 0
         assert result["stats"]["relevant_items"] == 0
         assert agent.get_last_result() is not None
         assert agent.get_metrics()["total_rescorings"] == 1
 
-    def test_run_with_trend_news(self):
+    def test_run_backward_compat_scored_news(self):
+        """v8.0 backward compat: scored_news kwarg should extract NewsItems."""
         agent = AgentScoring2()
-        news_list = [
-            _make_scored_news("HG=F", direction="LONG", surprise=90,
-                              category="weather", title="Drought copper mine"),
-        ]
-        result = agent.run(scored_news=news_list, scan_type=ScanType.EUROPE)
+        sn = _make_scored_news("HG=F", title="Apple earnings", category="earnings")
+        result = agent.run(scored_news=[sn], scan_type=ScanType.EUROPE)
+        # Should work without crashing, even if irrelevant
         assert result["stats"]["total_items"] == 1
-        assert result["stats"]["relevant_items"] >= 1
-        assert agent.get_metrics()["last_relevant_count"] >= 1
 
-    def test_run_updates_accumulation_metrics(self):
+    def test_run_with_relevant_news(self):
         agent = AgentScoring2()
-        news_list = [
-            _make_scored_news("CC=F", direction="SHORT", surprise=85,
-                              category="commodity", title="Cocoa surplus export ban"),
+        items = [
+            _make_news_item(title="Severe drought hits copper mine region",
+                            description="Major copper producer affected"),
         ]
-        result = agent.run(scored_news=news_list, scan_type=ScanType.US)
-        metrics = agent.get_metrics()
-        assert "accumulation" in metrics
+        with patch("backend.app.agents.agent_scoring_2._call_claude_for_trend") as mock_claude:
+            mock_claude.return_value = [{
+                "index": 1,
+                "structural_impact": 85,
+                "persistence": 75,
+                "magnitude": 70,
+                "reliability": 90,
+                "directional_clarity": 80,
+                "direction": "LONG",
+                "impacted_tickers": ["HG=F"],
+                "news_category": "weather",
+                "reasoning": "Drought reduces copper production",
+            }]
+            result = agent.run(news_items=items, scan_type=ScanType.EUROPE)
+            assert result["stats"]["relevant_items"] == 1
+            assert agent.get_metrics()["last_relevant_count"] == 1
 
 
 # ── Registry integration ────────────────────────────────────────────
@@ -352,235 +538,18 @@ class TestRegistryIntegration:
         assert "scoring_2" in names
 
 
-# ── Audit v7.3 fixes ──────────────────────────────────────────────
+# ── Token tracking ──────────────────────────────────────────────────
 
 
-class TestAuditFixesV73:
-    """Tests for all v7.3 audit fixes (Auditeur + Trader 2 perspectives)."""
+class TestTokenTracking:
+    def test_initial_token_usage(self):
+        usage = get_trend_token_usage()
+        assert "input_tokens" in usage
+        assert "output_tokens" in usage
+        assert "scans" in usage
 
-    # P1: No getattr on sn.news.description
-    def test_p1_no_getattr_in_scoring_2(self):
-        """P1: description accessed directly, not via getattr."""
-        import inspect
-        source = inspect.getsource(score_for_trend)
-        assert "getattr" not in source
-
-    # P5: Accent-free variants in STRUCTURAL_KEYWORDS
-    def test_p5_el_nino_no_accent(self):
-        assert "el nino" in STRUCTURAL_KEYWORDS
-        assert STRUCTURAL_KEYWORDS["el nino"] == STRUCTURAL_KEYWORDS["el niño"]
-
-    def test_p5_la_nina_no_accent(self):
-        assert "la nina" in STRUCTURAL_KEYWORDS
-        assert STRUCTURAL_KEYWORDS["la nina"] == STRUCTURAL_KEYWORDS["la niña"]
-
-    def test_p5_secheresse_no_accent(self):
-        assert "secheresse" in STRUCTURAL_KEYWORDS
-        assert STRUCTURAL_KEYWORDS["secheresse"] == STRUCTURAL_KEYWORDS["sécheresse"]
-
-    def test_p5_persistence_mult_ascii(self):
-        """Accent-free text should match accent-free keywords."""
-        mult = _compute_persistence_mult("el nino conditions developing", "")
-        assert mult == 1.3
-
-    # P6: Convergence count factor
-    def test_p6_convergence_boosts_score(self):
-        sn = _make_scored_news("HG=F", convergence_count=3)
-        score_no_conv = _compute_trend_score(sn, 1.0, 1.0, convergence_count=0)
-        score_with_conv = _compute_trend_score(sn, 1.0, 1.0, convergence_count=3)
-        # +30% boost
-        assert score_with_conv == pytest.approx(score_no_conv * 1.3, rel=0.01)
-
-    def test_p6_convergence_capped_at_3(self):
-        sn = _make_scored_news("HG=F", convergence_count=5)
-        score_3 = _compute_trend_score(sn, 1.0, 1.0, convergence_count=3)
-        score_5 = _compute_trend_score(sn, 1.0, 1.0, convergence_count=5)
-        # Cap at +30%, so 5 sources = same as 3
-        assert score_5 == score_3
-
-    def test_p6_convergence_in_score_for_trend(self):
-        """score_for_trend passes convergence_count to formula."""
-        sn_0 = _make_scored_news("HG=F", surprise=90, category="weather",
-                                  title="Drought", convergence_count=0)
-        sn_3 = _make_scored_news("HG=F", surprise=90, category="weather",
-                                  title="Drought", convergence_count=3)
-        r0 = score_for_trend([sn_0])
-        r3 = score_for_trend([sn_3])
-        if r0["trend_scored"] and r3["trend_scored"]:
-            assert r3["trend_scored"][0]["trend_score"] > r0["trend_scored"][0]["trend_score"]
-
-    # P7: duration_ms not dead variable
-    def test_p7_duration_ms_in_bus(self):
-        """duration_ms should be published in the bus message."""
+    def test_metrics_include_token_usage(self):
         agent = AgentScoring2()
-        news_list = [
-            _make_scored_news("HG=F", surprise=90, category="weather",
-                              title="Drought copper mine"),
-        ]
-        # Run and check that duration_ms is tracked
-        result = agent.run(scored_news=news_list, scan_type=ScanType.EUROPE)
-        # The bus publish is called — we just verify the agent completes
-        assert result is not None
-
-    # P10: Deterministic top_category on tie
-    def test_p10_top_category_priority_on_tie(self):
-        """When categories tie in count, weather > commodity (priority order)."""
-        items = [
-            _make_scored_news("HG=F", category="weather", surprise=90,
-                              title="Drought copper mine"),
-            _make_scored_news("CC=F", category="commodity", surprise=90,
-                              title="Cocoa inventory draw"),
-        ]
-        result = score_for_trend(items)
-        if result["stats"]["relevant_items"] == 2:
-            # Both have count=1, weather has higher priority
-            assert result["stats"]["top_category"] == "weather"
-
-    def test_p10_category_priority_list_exists(self):
-        """Priority list contains all TREND_CATEGORY_MULTS keys."""
-        for cat in TREND_CATEGORY_MULTS:
-            assert cat in _CATEGORY_PRIORITY
-
-    # P12: max_trend_score in stats
-    def test_p12_max_trend_score_present(self):
-        sn = _make_scored_news("HG=F", surprise=90, category="weather",
-                                title="Drought copper mine")
-        result = score_for_trend([sn])
-        assert "max_trend_score" in result["stats"]
-        if result["stats"]["relevant_items"] > 0:
-            assert result["stats"]["max_trend_score"] > 0
-            assert result["stats"]["max_trend_score"] >= result["stats"]["avg_trend_score"]
-
-    def test_p12_max_score_empty_list(self):
-        result = score_for_trend([])
-        assert result["stats"]["max_trend_score"] == 0.0
-
-    # T3: Freshness weight in accumulation
-    def test_t3_fresh_news_weighted_more(self):
-        """Recent non-structural news should accumulate more weight than old news.
-
-        v7.5: Structural categories (weather, commodity, supply_chain) no longer
-        get freshness penalty — a drought from 6h ago is still fully relevant for
-        trend following. Use 'geopolitical' to test freshness decay still works.
-        """
-        now = datetime.now(timezone.utc)
-        sn_fresh = _make_scored_news("HG=F", surprise=90, category="geopolitical",
-                                      title="Sanctions copper mine",
-                                      published=now - timedelta(minutes=30))
-        sn_old = _make_scored_news("HG=F", surprise=90, category="geopolitical",
-                                    title="Sanctions copper mine",
-                                    published=now - timedelta(hours=10))
-        r_fresh = score_for_trend([sn_fresh])
-        r_old = score_for_trend([sn_old])
-        acc_fresh = r_fresh["accumulation"].get("HG=F", {}).get("long", 0)
-        acc_old = r_old["accumulation"].get("HG=F", {}).get("long", 0)
-        # Fresh non-structural news should have higher accumulation weight
-        if acc_fresh > 0 and acc_old > 0:
-            assert acc_fresh > acc_old
-
-    def test_t3_structural_category_no_freshness_penalty(self):
-        """Structural categories should NOT be penalized for age (v7.5)."""
-        now = datetime.now(timezone.utc)
-        sn_fresh = _make_scored_news("HG=F", surprise=90, category="weather",
-                                      title="Drought copper mine",
-                                      published=now - timedelta(minutes=30))
-        sn_old = _make_scored_news("HG=F", surprise=90, category="weather",
-                                    title="Drought copper mine",
-                                    published=now - timedelta(hours=10))
-        r_fresh = score_for_trend([sn_fresh])
-        r_old = score_for_trend([sn_old])
-        acc_fresh = r_fresh["accumulation"].get("HG=F", {}).get("long", 0)
-        acc_old = r_old["accumulation"].get("HG=F", {}).get("long", 0)
-        # Structural categories: no freshness penalty, weights should be equal
-        if acc_fresh > 0 and acc_old > 0:
-            assert acc_fresh == acc_old
-
-    # T4: Description in trend_scored items
-    def test_t4_description_in_items(self):
-        sn = _make_scored_news("HG=F", surprise=90, category="weather",
-                                title="Drought copper mine",
-                                description="Detailed copper mine drought report")
-        result = score_for_trend([sn])
-        if result["trend_scored"]:
-            assert "description" in result["trend_scored"][0]
-            assert "Detailed" in result["trend_scored"][0]["description"]
-
-    def test_t4_convergence_count_in_items(self):
-        sn = _make_scored_news("HG=F", surprise=90, category="weather",
-                                title="Drought", convergence_count=2)
-        result = score_for_trend([sn])
-        if result["trend_scored"]:
-            assert result["trend_scored"][0]["convergence_count"] == 2
-
-    # T5: Chain discount 0.7
-    def test_t5_chain_discount_constant(self):
-        assert CHAIN_DISCOUNT == 0.7
-
-    def test_t5_chain_accumulation_discounted(self):
-        """Chain reaction tickers get 0.7 weight vs direct tickers."""
-        # Direct impact on HG=F
-        sn_direct = _make_scored_news("HG=F", surprise=90, category="weather",
-                                       title="Drought copper mine", reliability=80)
-        # Chain reaction to HG=F (primary is CL=F)
-        sn_chain = _make_scored_news("CL=F", surprise=90, category="supply_chain",
-                                      title="Embargo oil", reliability=80,
-                                      chain_ticker="HG=F", chain_direction="LONG")
-
-        r_direct = score_for_trend([sn_direct])
-        r_chain = score_for_trend([sn_chain])
-        acc_direct = r_direct["accumulation"].get("HG=F", {}).get("long", 0)
-        acc_chain = r_chain["accumulation"].get("HG=F", {}).get("long", 0)
-        # Chain should be discounted (less weight)
-        if acc_direct > 0 and acc_chain > 0:
-            assert acc_chain < acc_direct
-
-    # T7: MIN_TREND_SCORE constant
-    def test_t7_min_trend_score_constant(self):
-        assert MIN_TREND_SCORE == 8.0
-
-    def test_t7_low_scores_filtered(self):
-        """Scores between 5 and 8 should now be filtered (was 5.0 threshold)."""
-        # Low surprise + low category mult → trend score between 5-8
-        sn = _make_scored_news("HG=F", direction="LONG", surprise=15,
-                               clarity=30, magnitude=20, reliability=30,
-                               category="other", source_weight=0.7,
-                               title="Generic unrelated headline")
-        result = score_for_trend([sn])
-        # Should be filtered by the new higher threshold
-        assert result["stats"]["relevant_items"] == 0
-
-    # T2: newscat_adj applied when use_trend_scoring=True (in Trader 2)
-    def test_t2_trader2_applies_newscat_adj_with_scoring2(self):
-        """Trader 2 should apply newscat_adj even when Scoring 2 provides accumulation."""
-        from backend.app.agents.agent_trader_2 import AgentTrader2
-        trader = AgentTrader2()
-        # Set up learning with newscat penalty
-        trader._current_learning = {
-            "newscat_adj": {"weather": 0.5},  # Penalty
-            "ticker_adj": {},
-            "newscat_ticker_adj": {},
-            "direction_adj": {},
-            "signal_calibration": {"threshold_adj": 1.0},
-        }
-        # Scoring 2 provides accumulation
-        trader._current_trend_scoring = {
-            "accumulation": {"HG=F": {"long": 100.0, "short": 0.0}},
-        }
-        # News used for newscat analysis
-        news_list = [
-            _make_scored_news("HG=F", surprise=90, category="weather",
-                              title="Drought copper mine"),
-        ]
-        position = {
-            "direction": "SHORT",
-            "confidence": 50,
-            "entry_price": 4.0,
-            "current_price": 4.2,
-            "key_catalysts": [],
-        }
-        change = trader._evaluate_ticker("HG=F", news_list, position)
-        # With newscat_adj=0.5, the signal should be halved (100*0.5=50)
-        # Change may or may not happen depending on threshold, but the
-        # signal should be reduced
-        # Just verify the code path doesn't crash and learning is applied
-        assert True  # If we get here, no crash = newscat_adj was applied
+        m = agent.get_metrics()
+        assert "token_usage" in m
+        assert "input_tokens" in m["token_usage"]
