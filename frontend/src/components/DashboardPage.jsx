@@ -386,6 +386,143 @@ function TeamSummaryCards({ report, positions }) {
   );
 }
 
+/* Compact scan result for Teams 2/3/4 within each scan slot */
+function TeamScanResult({ team, label, data, color }) {
+  if (!data) {
+    return (
+      <div className="team-scan-result" style={{ borderLeftColor: color }}>
+        <div className="team-scan-header">
+          <span className="team-scan-name" style={{ color }}>{label}</span>
+          <span className="team-scan-status idle">En attente</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (data.error) {
+    return (
+      <div className="team-scan-result" style={{ borderLeftColor: color }}>
+        <div className="team-scan-header">
+          <span className="team-scan-name" style={{ color }}>{label}</span>
+          <span className="team-scan-status error">Erreur</span>
+        </div>
+        <div className="team-scan-detail muted">{data.error}</div>
+      </div>
+    );
+  }
+
+  // Team 2 — trend flips
+  if (team === "2") {
+    const changes = data.changes || [];
+    return (
+      <div className="team-scan-result" style={{ borderLeftColor: color }}>
+        <div className="team-scan-header">
+          <span className="team-scan-name" style={{ color }}>{label}</span>
+          {changes.length > 0 ? (
+            <span className="team-scan-status active">
+              {changes.length} flip{changes.length > 1 ? "s" : ""}
+            </span>
+          ) : (
+            <span className="team-scan-status idle">
+              Pas de flip{data.news_evaluated ? ` (${data.news_evaluated} news)` : ""}
+            </span>
+          )}
+        </div>
+        {changes.map((c, i) => (
+          <div key={i} className="team-scan-change">
+            <span className="ticker-cell">{tickerName(c.ticker)}</span>
+            <span className={`direction-badge sm ${(c.old_direction || "").toLowerCase()}`}>{c.old_direction}</span>
+            <span style={{ color: "var(--text-muted)", fontSize: 11 }}>→</span>
+            <span className={`direction-badge sm ${(c.new_direction || "").toLowerCase()}`}>{c.new_direction}</span>
+            {c.reason && <span className="team-scan-reason">{c.reason}</span>}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Team 3 — tech positions opened/closed
+  if (team === "3") {
+    const newPos = data.new_positions || [];
+    const closedPos = data.closed_positions || [];
+    const hasAny = newPos.length > 0 || closedPos.length > 0;
+    return (
+      <div className="team-scan-result" style={{ borderLeftColor: color }}>
+        <div className="team-scan-header">
+          <span className="team-scan-name" style={{ color }}>{label}</span>
+          {hasAny ? (
+            <span className="team-scan-status active">
+              {newPos.length > 0 && `+${newPos.length} ouv.`}
+              {newPos.length > 0 && closedPos.length > 0 && " / "}
+              {closedPos.length > 0 && `-${closedPos.length} ferm.`}
+            </span>
+          ) : (
+            <span className="team-scan-status idle">
+              Pas de mouvement{data.active_count ? ` (${data.active_count} actives)` : ""}
+            </span>
+          )}
+        </div>
+        {newPos.map((p, i) => (
+          <div key={`n${i}`} className="team-scan-change">
+            <span className="team-scan-action open">OPEN</span>
+            <span className="ticker-cell">{tickerName(p.ticker)}</span>
+            <span className={`direction-badge sm ${(p.direction || "").toLowerCase()}`}>{p.direction}</span>
+            {p.strategy && <span className="team-scan-strategy">{p.strategy}</span>}
+          </div>
+        ))}
+        {closedPos.map((p, i) => (
+          <div key={`c${i}`} className="team-scan-change">
+            <span className={`team-scan-action ${(p.result || "").includes("TP") ? "tp" : (p.result || "").includes("SL") ? "sl" : "expired"}`}>
+              {p.result || "CLOSE"}
+            </span>
+            <span className="ticker-cell">{tickerName(p.ticker)}</span>
+            {p.pnl_pct != null && (
+              <span style={{ color: pnlColor(p.pnl_pct), fontWeight: 600, fontSize: 11 }}>
+                {p.pnl_pct > 0 ? "+" : ""}{p.pnl_pct.toFixed(2)}%
+              </span>
+            )}
+            {p.strategy && <span className="team-scan-strategy">{p.strategy}</span>}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Team 4 — meta/ensemble changes
+  if (team === "4") {
+    const changes = data.changes || [];
+    return (
+      <div className="team-scan-result" style={{ borderLeftColor: color }}>
+        <div className="team-scan-header">
+          <span className="team-scan-name" style={{ color }}>{label}</span>
+          {changes.length > 0 ? (
+            <span className="team-scan-status active">
+              {changes.length} action{changes.length > 1 ? "s" : ""}
+            </span>
+          ) : (
+            <span className="team-scan-status idle">
+              Pas de signal{data.open_positions ? ` (${data.open_positions} ouvertes)` : ""}
+            </span>
+          )}
+        </div>
+        {changes.map((c, i) => (
+          <div key={i} className="team-scan-change">
+            <span className={`team-scan-action ${c.action === "OPEN" ? "open" : c.action === "CLOSE" ? "sl" : "expired"}`}>
+              {c.action}
+            </span>
+            <span className="ticker-cell">{tickerName(c.ticker)}</span>
+            {c.direction && (
+              <span className={`direction-badge sm ${(c.direction || "").toLowerCase()}`}>{c.direction}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 export default function DashboardPage({ isActive, agents }) {
   const [scans, setScans] = useState({});
   const [loading, setLoading] = useState({});
@@ -652,22 +789,37 @@ export default function DashboardPage({ isActive, agents }) {
           </div>
         ))}
 
-      {/* Scan results */}
+      {/* Scan results — all teams */}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {SCAN_DEFS.map((s) => {
           const scan = scans[s.key];
           const recs = scan?.recommendations || [];
-          if (scan?.has_trade && recs.length > 1) {
-            return (
-              <div key={s.key} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div className="scan-multi-label">{s.label} ({recs.length} trades)</div>
-                {recs.map((rec, i) => (
-                  <TradeCard key={`${s.key}-${rec.ticker}-${i}`} scan={{ ...scan, recommendation: rec }} label={`${s.label} #${i + 1}`} />
-                ))}
-              </div>
-            );
-          }
-          return <TradeCard key={s.key} scan={scan} label={s.label} />;
+          const teamRes = scan?.team_results || {};
+
+          return (
+            <div key={s.key} className="scan-slot-container">
+              {/* Team 1 — Day Trading */}
+              {scan?.has_trade && recs.length > 1 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div className="scan-multi-label">{s.label} ({recs.length} trades)</div>
+                  {recs.map((rec, i) => (
+                    <TradeCard key={`${s.key}-${rec.ticker}-${i}`} scan={{ ...scan, recommendation: rec }} label={`${s.label} — Éq. 1 #${i + 1}`} />
+                  ))}
+                </div>
+              ) : (
+                <TradeCard scan={scan} label={`${s.label} — Éq. 1 Day Trading`} />
+              )}
+
+              {/* Teams 2-4 summary row */}
+              {scan && (
+                <div className="scan-teams-row">
+                  <TeamScanResult team="2" label="Éq. 2 Tendance" data={teamRes.team_2} color="#F59E0B" />
+                  <TeamScanResult team="3" label="Éq. 3 Technique" data={teamRes.team_3} color="#8B5CF6" />
+                  <TeamScanResult team="4" label="Éq. 4 Meta" data={teamRes.team_4} color="#EC4899" />
+                </div>
+              )}
+            </div>
+          );
         })}
       </div>
 

@@ -275,6 +275,9 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
             "all_scored_news": [],
         }
 
+    # v8.5: Capture team results for dashboard multi-team display
+    team_results = {}
+
     # Step 5: Équipe 2 — Scoring 2 (dedicated Claude) + Trader 2 (non-blocking)
     # v8.0: Scoring 2 now makes its own Claude API call with raw news_items
     # (no longer consumes Scoring 1 output)
@@ -290,11 +293,23 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
 
             learning2_data = (agent_learning2.get_adjustments()
                               if agent_learning2 else {})
-            agent_trader2.run(scored_news=scored, scan_type=scan_type,
-                              learning_data=learning2_data,
-                              trend_scoring=trend_scoring)
+            t2_result = agent_trader2.run(
+                scored_news=scored, scan_type=scan_type,
+                learning_data=learning2_data,
+                trend_scoring=trend_scoring)
+            changes_2 = t2_result.get("changes", []) if t2_result else []
+            team_results["team_2"] = {
+                "has_activity": len(changes_2) > 0,
+                "changes": [
+                    {"ticker": c.get("ticker"), "old_direction": c.get("old_direction"),
+                     "new_direction": c.get("new_direction"), "reason": c.get("reason", "")[:120]}
+                    for c in changes_2
+                ],
+                "news_evaluated": t2_result.get("news_evaluated", 0) if t2_result else 0,
+            }
     except Exception as exc:
         logger.warning("Équipe 2 trend evaluation failed: %s", exc)
+        team_results["team_2"] = {"has_activity": False, "error": str(exc)[:100]}
 
     # Step 6: Équipe 3 — Scoring 3 + Trader 3 (non-blocking)
     try:
@@ -312,12 +327,31 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
                 scan_type=scan_type,
                 weekly_config=weekly_config)
             # Pass weekly_config and learning to Trader 3
-            agent_trader3.run(tech_scoring=tech_scoring,
-                              scan_type=scan_type,
-                              learning_data=learning3_data,
-                              weekly_config=weekly_config)
+            t3_result = agent_trader3.run(
+                tech_scoring=tech_scoring,
+                scan_type=scan_type,
+                learning_data=learning3_data,
+                weekly_config=weekly_config)
+            new_opened_3 = t3_result.get("new_opened", []) if t3_result else []
+            newly_closed_3 = t3_result.get("newly_closed", []) if t3_result else []
+            team_results["team_3"] = {
+                "has_activity": len(new_opened_3) > 0 or len(newly_closed_3) > 0,
+                "new_positions": [
+                    {"ticker": p.get("ticker"), "direction": p.get("direction"),
+                     "strategy": p.get("strategy"), "score": p.get("score")}
+                    for p in new_opened_3
+                ],
+                "closed_positions": [
+                    {"ticker": p.get("ticker"), "direction": p.get("direction"),
+                     "strategy": p.get("strategy"), "result": p.get("result"),
+                     "pnl_pct": p.get("pnl_pct")}
+                    for p in newly_closed_3
+                ],
+                "active_count": len(t3_result.get("active", [])) if t3_result else 0,
+            }
     except Exception as exc:
         logger.warning("Équipe 3 technical evaluation failed: %s", exc)
+        team_results["team_3"] = {"has_activity": False, "error": str(exc)[:100]}
 
     # Step 7: Équipe 4 — Scoring 4 + Trader 4 (non-blocking, needs data from teams 1-3)
     try:
@@ -349,12 +383,30 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
                 weekly_config=weekly_config_4,
             )
             # Pass weekly_config and learning to Trader 4
-            agent_trader4.run(meta_scoring=meta_scoring,
-                              scan_type=scan_type,
-                              learning_data=learning4_data,
-                              weekly_config=weekly_config_4)
+            t4_result = agent_trader4.run(
+                meta_scoring=meta_scoring,
+                scan_type=scan_type,
+                learning_data=learning4_data,
+                weekly_config=weekly_config_4)
+            changes_4 = t4_result.get("changes", []) if t4_result else []
+            team_results["team_4"] = {
+                "has_activity": len(changes_4) > 0,
+                "changes": [
+                    {"ticker": c.get("ticker"), "action": c.get("action"),
+                     "direction": c.get("direction")}
+                    for c in changes_4
+                ],
+                "open_positions": sum(
+                    1 for p in (t4_result.get("positions", {}) if t4_result else {}).values()
+                    if isinstance(p, dict) and p.get("status") == "OPEN"
+                ),
+            }
     except Exception as exc:
         logger.warning("Équipe 4 meta evaluation failed: %s", exc)
+        team_results["team_4"] = {"has_activity": False, "error": str(exc)[:100]}
+
+    # Attach team results to scan output
+    result_dict["team_results"] = team_results
 
     # Attach source health
     source_health = news_result.get("source_health")
