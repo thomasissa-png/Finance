@@ -404,7 +404,8 @@ function TraderSection({ teamId }) {
   const paged = paginate(filteredHistory, page);
   const tp = totalPages(filteredHistory);
   const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";
-  const pnlField = teamId === "2" ? "realized_pnl" : "pnl_total";
+  const pnlField = teamId === "1" ? "total_pnl" : "total_realized_pnl";
+  const tradesField = teamId === "2" ? "flip_count" : "total_trades";
 
   return (
     <div>
@@ -424,7 +425,7 @@ function TraderSection({ teamId }) {
             <div className="kpi-label">P&L</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-value">{perf.total_trades || perf.total_flips || 0}</div>
+            <div className="kpi-value">{perf[tradesField] || 0}</div>
             <div className="kpi-label">Trades</div>
           </div>
           <div className="kpi-card">
@@ -926,7 +927,8 @@ function OverviewSection({ teamId, agents }) {
 
   const active = trades.filter((t) => t._isActive);
   const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";
-  const pnlField = teamId === "2" ? "realized_pnl" : "pnl_total";
+  const pnlField = teamId === "1" ? "total_pnl" : "total_realized_pnl";
+  const tradesField = teamId === "2" ? "flip_count" : "total_trades";
 
   // Fetch live prices for active positions
   const fetchLivePrices = useCallback(async () => {
@@ -970,7 +972,7 @@ function OverviewSection({ teamId, agents }) {
             <div className="kpi-label">P&L</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-value">{perf.total_trades || perf.total_flips || 0}</div>
+            <div className="kpi-value">{perf[tradesField] || 0}</div>
             <div className="kpi-label">Trades</div>
           </div>
           <div className="kpi-card">
