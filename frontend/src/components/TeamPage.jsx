@@ -9,6 +9,7 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring", trader: "trader_1", journal: "journal", learning: "learning" },
     api: {
       trades: "/api/trades",
+      tradesActive: "/api/trades/pending",
       tradesFormat: "array",
       perf: "/api/performance/report",
       learning: "/api/learning",
@@ -122,6 +123,7 @@ function AgentStatusCard({ agent }) {
 function LogSection({ agentName, logFilter, setLogFilter }) {
   const [logs, setLogs] = useState([]);
   const [logError, setLogError] = useState(null);
+  const [expandedLog, setExpandedLog] = useState(null);
 
   useEffect(() => {
     const url = `/api/agents/${agentName}/logs?limit=30${logFilter !== "ALL" ? `&level=${logFilter}` : ""}`;
@@ -146,30 +148,59 @@ function LogSection({ agentName, logFilter, setLogFilter }) {
       <div className="agent-logs compact-logs">
         {logs.length === 0 && !logError ? (
           <div className="agent-logs-empty">Aucun log</div>
-        ) : logs.slice(0, 15).map((log, i) => (
-          <div key={`${log.timestamp}-${i}`} className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}>
-            <div className="agent-log-header">
-              <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
-              <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
-                {replaceTickersInText(log.action)}
-              </span>
-              <span className="agent-log-time">
-                {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
-              </span>
-              {log.duration_ms != null && <span className="agent-log-duration">{log.duration_ms}ms</span>}
-            </div>
-            {log.details && Object.keys(log.details).length > 0 && (
-              <div className="agent-log-details">
-                {Object.entries(log.details).slice(0, 3).map(([k, v]) => (
-                  <span key={k} className="agent-log-detail">
-                    <span className="agent-log-detail-key">{k}:</span>{" "}
-                    {replaceTickersInText(typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80))}
-                  </span>
-                ))}
+        ) : logs.slice(0, 15).map((log, i) => {
+          const logKey = `${log.timestamp}-${i}`;
+          const isExpanded = expandedLog === logKey;
+          const hasDetails = log.details && Object.keys(log.details).length > 0;
+          // Preview: show 3 short fields in collapsed mode
+          const previewEntries = hasDetails ? Object.entries(log.details).slice(0, 3) : [];
+          return (
+            <div key={logKey}
+              className={`agent-log-entry ${(log.level || "info").toLowerCase()}`}
+              style={{ cursor: hasDetails ? "pointer" : "default" }}
+              onClick={() => hasDetails && setExpandedLog(isExpanded ? null : logKey)}
+              role={hasDetails ? "button" : undefined}
+              tabIndex={hasDetails ? 0 : undefined}
+              onKeyDown={hasDetails ? (e) => { if (e.key === "Enter") setExpandedLog(isExpanded ? null : logKey); } : undefined}
+            >
+              <div className="agent-log-header">
+                <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
+                <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
+                  {replaceTickersInText(log.action)}
+                </span>
+                <span className="agent-log-time">
+                  {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
+                </span>
+                {log.duration_ms != null && <span className="agent-log-duration">{log.duration_ms}ms</span>}
+                {hasDetails && <span style={{ color: "var(--text-muted)", fontSize: 10, marginLeft: 4 }}>{isExpanded ? "▲" : "▼"}</span>}
               </div>
-            )}
-          </div>
-        ))}
+              {hasDetails && !isExpanded && (
+                <div className="agent-log-details">
+                  {previewEntries.map(([k, v]) => (
+                    <span key={k} className="agent-log-detail">
+                      <span className="agent-log-detail-key">{k}:</span>{" "}
+                      {replaceTickersInText(typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v).slice(0, 60))}
+                    </span>
+                  ))}
+                  {Object.keys(log.details).length > 3 && <span className="agent-log-detail" style={{ color: "var(--text-muted)" }}>+{Object.keys(log.details).length - 3} champs…</span>}
+                </div>
+              )}
+              {hasDetails && isExpanded && (
+                <div style={{ marginTop: 6, padding: "8px 10px", background: "rgba(139,157,195,0.04)", borderRadius: 6, fontSize: 12, lineHeight: 1.7 }}>
+                  {Object.entries(log.details).map(([k, v]) => {
+                    const display = typeof v === "object" ? JSON.stringify(v, null, 2) : String(v);
+                    return (
+                      <div key={k} style={{ marginBottom: 2 }}>
+                        <strong style={{ color: "var(--text-secondary)" }}>{k} :</strong>{" "}
+                        <span style={{ color: "var(--text-primary)" }}>{replaceTickersInText(display)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -557,18 +588,51 @@ function TraderSection({ teamId }) {
                 {paged.map((t, i) => {
                   const res = RESULT_LABELS[t.result] || { label: t.result || "\u2014", cls: "" };
                   const reason = t.news_headline || t.catalyst || t.reason || t.reasoning || t.strategy || "";
+                  const tradeKey = `${t.timestamp || t.entry_time || t.time}-${t.ticker}-${i}`;
+                  const isExpanded = expandedTrade === tradeKey;
+                  // Build detail tags: news_category + news_zone + ticker
+                  const tags = [t.news_category, t.news_zone, t.ticker].filter(Boolean);
                   return (
-                    <tr key={`${t.timestamp || t.entry_time || t.time}-${t.ticker}-${i}`}>
-                      <td>{formatDate(t.timestamp || t.entry_time || t.time)}</td>
-                      <td className="ticker-cell">{tickerName(t.ticker)}</td>
-                      <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-                      <td style={{ fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>{reason || "\u2014"}</td>
-                      <td>{formatPrice(t.entry_price, t.ticker)}</td>
-                      <td><span className={`result-badge ${res.cls}`}>{res.label}</span></td>
-                      <td style={{ color: pnlColor(t.pnl_pct), fontWeight: 600 }}>
-                        {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%` : ""}
-                      </td>
-                    </tr>
+                    <React.Fragment key={tradeKey}>
+                      <tr style={{ cursor: "pointer" }} onClick={() => setExpandedTrade(isExpanded ? null : tradeKey)}>
+                        <td>{formatDate(t.timestamp || t.entry_time || t.time)}</td>
+                        <td className="ticker-cell">{tickerName(t.ticker)}</td>
+                        <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
+                        <td style={{ fontSize: 11, maxWidth: 260 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                            {tags.map((tag, ti) => (
+                              <span key={ti} style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: CATEGORY_COLORS[tag] ? `${CATEGORY_COLORS[tag]}22` : "rgba(139,157,195,0.12)", color: CATEGORY_COLORS[tag] || "var(--text-secondary)", fontWeight: 600, whiteSpace: "nowrap" }}>{tag}</span>
+                            ))}
+                            <span style={{ color: isExpanded ? "var(--accent)" : "var(--text-muted)", fontSize: 9 }}>{isExpanded ? "▲" : "▼"}</span>
+                          </div>
+                        </td>
+                        <td>{formatPrice(t.entry_price, t.ticker)}</td>
+                        <td><span className={`result-badge ${res.cls}`}>{res.label}</span></td>
+                        <td style={{ color: pnlColor(t.pnl_pct), fontWeight: 600 }}>
+                          {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%` : ""}
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan="7" style={{ padding: "8px 12px", background: "rgba(139,157,195,0.04)", borderTop: "none" }}>
+                            <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7 }}>
+                              {reason && <div><strong>Headline :</strong> {reason}</div>}
+                              {t.news_description && <div style={{ color: "var(--text-muted)", fontSize: 11 }}>{t.news_description}</div>}
+                              {t.reasoning && <div><strong>Raisonnement :</strong> {t.reasoning}</div>}
+                              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
+                                {t.news_category && <span><strong>Catégorie :</strong> {t.news_category}</span>}
+                                {t.news_zone && <span><strong>Zone :</strong> {t.news_zone}</span>}
+                                {t.raw_claude_score != null && <span><strong>Score :</strong> {typeof t.raw_claude_score === "number" ? t.raw_claude_score.toFixed(1) : t.raw_claude_score}</span>}
+                                {t.learning_multiplier != null && <span><strong>Learn.x :</strong> {typeof t.learning_multiplier === "number" ? t.learning_multiplier.toFixed(3) : t.learning_multiplier}</span>}
+                                {t.confidence != null && <span><strong>Confiance :</strong> {t.confidence}%</span>}
+                                {t.risk_reward != null && <span><strong>R/R :</strong> {typeof t.risk_reward === "number" ? t.risk_reward.toFixed(2) : t.risk_reward}</span>}
+                              </div>
+                              {t.news_url && <div style={{ marginTop: 4 }}><a href={t.news_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", fontSize: 11 }}>Source originale</a></div>}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -911,8 +975,10 @@ function OverviewSection({ teamId, agents }) {
   const teamAgentNames = Object.values(config.agents);
 
   useEffect(() => {
-    if (config?.api.trades) {
-      fetch(config.api.trades)
+    // For overview, only fetch active positions (lightweight endpoint for Team 1)
+    const tradesUrl = config?.api.tradesActive || config?.api.trades;
+    if (tradesUrl) {
+      fetch(tradesUrl)
         .then((r) => r.ok ? r.json() : (config.api.tradesFormat === "dict" ? {} : []))
         .then((d) => setTrades(parseTradesResponse(d, config.api.tradesFormat)))
         .catch(() => setTrades([]));
@@ -923,7 +989,7 @@ function OverviewSection({ teamId, agents }) {
         if (report && config?.perfKey) setPerf(report[config.perfKey] || null);
       })
       .catch(() => {});
-  }, [teamId, config?.api.trades, config?.api.tradesFormat, config?.perfKey]);
+  }, [teamId, config?.api.trades, config?.api.tradesActive, config?.api.tradesFormat, config?.perfKey]);
 
   const active = trades.filter((t) => t._isActive);
   const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";

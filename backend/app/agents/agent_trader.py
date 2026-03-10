@@ -100,8 +100,10 @@ class AgentTrader(BaseAgent):
                         "risk_reward": round(rec.risk_reward, 2),
                         "confidence": rec.confidence,
                         "score": round(rec.raw_claude_score, 1) if rec.raw_claude_score else None,
-                        "news_headline": rec.news_headline[:100] if rec.news_headline else None,
+                        "news_headline": rec.news_headline if rec.news_headline else None,
                         "news_category": rec.news_category,
+                        "news_zone": rec.news_zone or None,
+                        "reasoning": rec.reasoning[:200] if rec.reasoning else None,
                         "learning_multiplier": round(rec.learning_multiplier, 3) if rec.learning_multiplier else None,
                     })
 
