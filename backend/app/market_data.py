@@ -92,10 +92,10 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     # Commodities / Futures — verified 2026-03 with actual API key.
     # IMPORTANT: Many commodity symbols (CC1, KC1, SB1, HG1, etc.) collide with
     # stock/ETF tickers on TD. Without type=commodities, TD returns the stock price.
-    # Energy — no collision, work without type param
-    "CL=F": ("CL1", {}),        # WTI Crude (front month)
-    "BZ=F": ("CO1", {}),        # Brent Crude (front month)
-    "NG=F": ("NG/USD", {}),     # Natural Gas
+    # Energy — no collision confirmed, but type=commodities added for safety
+    "CL=F": ("CL1", {"type": "commodities"}),    # WTI Crude (front month)
+    "BZ=F": ("CO1", {"type": "commodities"}),     # Brent Crude (front month)
+    "NG=F": ("NG/USD", {}),     # Natural Gas (forex-style symbol, no collision)
     # Precious metals — forex-style symbols, no collision
     "GC=F": ("XAU/USD", {}),    # Gold
     "SI=F": ("XAG/USD", {}),    # Silver
@@ -103,11 +103,11 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "PA=F": ("XPD/USD", {}),    # Palladium
     # Base metals — HG1 collides with Homag Group AG → need type=commodities
     "HG=F": ("HG1", {"type": "commodities"}),   # Copper
-    # Agriculture — symbols with stock collisions need type=commodities
-    "ZW=F": ("W_1", {}),        # Wheat (no collision)
-    "ZC=F": ("C_1", {}),        # Corn (no collision)
-    "ZS=F": ("S_1", {}),        # Soybeans (no collision)
-    "CT=F": ("CT1", {}),        # Cotton (no collision)
+    # Agriculture — type=commodities added to all for safety (verified on Replit)
+    "ZW=F": ("W_1", {"type": "commodities"}),     # Wheat
+    "ZC=F": ("C_1", {"type": "commodities"}),     # Corn
+    "ZS=F": ("S_1", {"type": "commodities"}),     # Soybeans
+    "CT=F": ("CT1", {"type": "commodities"}),     # Cotton
     "CC=F": ("CC1", {"type": "commodities"}),    # Cocoa (collides with Amundi ETF)
     "KC=F": ("KC1", {"type": "commodities"}),    # Coffee (collides with stock)
     "SB=F": ("SB1", {"type": "commodities"}),    # Sugar (collides with Smartbroker AG)
@@ -127,7 +127,6 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
 # Tickers known to not work on Twelve Data — skip to yfinance directly.
 # Indices are not available on TD free tier (404 or resolve to ETFs).
 _td_blacklist: set[str] = {
-    "ZQ=F",                                      # Fed Funds futures — not on TD
     "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX",  # US indices — not on TD free tier
     "^FCHI", "^GDAXI", "^N225",                  # EU/JP indices — 404 on TD
     "^FTSE",                                      # FTSE — resolves to ETF (~14$)
