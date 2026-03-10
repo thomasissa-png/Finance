@@ -173,19 +173,48 @@ export default function PerformancePage({ isActive, agents }) {
       </div>
 
       {/* ══════════════════════ TAB: Overview ══════════════════════ */}
-      {activeTab === "overview" && (
+      {activeTab === "overview" && (() => {
+        // ── Consolidated KPIs across all 4 teams ──
+        const teamStats = [
+          { wr: t1.win_rate, pnl: t1.pnl_total ?? t1.total_pnl ?? 0, n: t1.total_trades || 0, wins: perf?.wins || 0, losses: perf?.losses || 0, expired: perf?.expired || 0, pending: perf?.pending || 0 },
+          { wr: t2.flip_win_rate, pnl: t2.total_realized_pnl ?? t2.realized_pnl ?? 0, n: t2.flip_count || 0, wins: t2.flip_wins || 0, losses: t2.flip_losses || 0, expired: 0, pending: 0 },
+          { wr: t3.win_rate, pnl: t3.pnl_total ?? t3.total_realized_pnl ?? 0, n: t3.total_trades || 0, wins: t3.wins || 0, losses: t3.losses || 0, expired: t3.expired || 0, pending: 0 },
+          { wr: t4.win_rate, pnl: t4.pnl_total ?? t4.total_realized_pnl ?? 0, n: t4.total_trades || 0, wins: t4.wins || 0, losses: t4.losses || 0, expired: t4.expired || 0, pending: 0 },
+        ];
+        const totalTrades = teamStats.reduce((s, x) => s + x.n, 0);
+        const withWr = teamStats.filter((x) => x.wr != null && x.n > 0);
+        const totalN = withWr.reduce((s, x) => s + x.n, 0);
+        const consolidatedWr = totalN > 0 ? withWr.reduce((s, x) => s + x.wr * x.n, 0) / totalN : 0;
+        const totalPnl = teamStats.reduce((s, x) => s + x.pnl, 0);
+        const totalWins = teamStats.reduce((s, x) => s + x.wins, 0);
+        const totalLosses = teamStats.reduce((s, x) => s + x.losses, 0);
+        const totalExpired = teamStats.reduce((s, x) => s + x.expired, 0);
+        const totalPending = teamStats.reduce((s, x) => s + x.pending, 0);
+        const totalClosed = totalWins + totalLosses + totalExpired;
+
+        return (
         <>
-          {/* Global KPIs */}
+          {/* Consolidated KPIs */}
           <div className="kpi-row">
             <div className="kpi-card">
-              <div className="kpi-value">{(agents || []).length}</div>
-              <div className="kpi-label">Agents actifs</div>
+              <div className="kpi-value">{totalTrades}</div>
+              <div className="kpi-label">Trades total (4 éq.)</div>
             </div>
             <div className="kpi-card">
-              <div className="kpi-value" style={{ color: workingCount > 0 ? "var(--accent)" : undefined }}>
-                {workingCount}
+              <div className="kpi-value" style={{ color: consolidatedWr >= 50 ? "var(--green)" : consolidatedWr > 0 ? "var(--red)" : undefined }}>
+                {consolidatedWr > 0 ? `${consolidatedWr.toFixed(1)}%` : "N/A"}
               </div>
-              <div className="kpi-label">En cours</div>
+              <div className="kpi-label">Win rate consolidé</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-value" style={{ color: pnlColor(totalPnl) }}>
+                {`${totalPnl > 0 ? "+" : ""}${totalPnl.toFixed(2)}%`}
+              </div>
+              <div className="kpi-label">P&L consolidé</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-value">{(agents || []).length}</div>
+              <div className="kpi-label">Agents</div>
             </div>
             <div className="kpi-card">
               <div className="kpi-value" style={{ color: errorCount > 0 ? "var(--red)" : "var(--green)" }}>
@@ -193,32 +222,68 @@ export default function PerformancePage({ isActive, agents }) {
               </div>
               <div className="kpi-label">Erreurs</div>
             </div>
-            {perf && (
-              <>
-                <div className="kpi-card">
-                  <div className="kpi-value">{perf.total_trades || 0}</div>
-                  <div className="kpi-label">Trades total</div>
-                </div>
-                <div className="kpi-card">
-                  <div className="kpi-value" style={{ color: (perf.win_rate || 0) >= 50 ? "var(--green)" : "var(--red)" }}>
-                    {(perf.win_rate || 0).toFixed(1)}%
-                  </div>
-                  <div className="kpi-label">Win rate Éq. 1</div>
-                </div>
-                <div className="kpi-card">
-                  <div className="kpi-value" style={{ color: pnlColor(perf.total_pnl_pct) }}>
-                    {perf.total_pnl_pct != null ? `${perf.total_pnl_pct > 0 ? "+" : ""}${perf.total_pnl_pct.toFixed(2)}%` : "--"}
-                  </div>
-                  <div className="kpi-label">P&L total Éq. 1</div>
-                </div>
-              </>
-            )}
           </div>
 
-          {/* Team comparison */}
+          {/* Per-team P&L and WR summary table */}
+          {report && (
+            <div className="section-card" style={{ padding: 20 }}>
+              <h3>Résumé par équipe</h3>
+              <div className="compact-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Équipe</th>
+                      <th>Trades</th>
+                      <th>Win Rate</th>
+                      <th>P&L</th>
+                      <th>Meilleur</th>
+                      <th>Pire</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { name: "Éq. 1 — Intraday", color: TEAM_COLORS["1"], wr: t1.win_rate, pnl: t1.pnl_total ?? t1.total_pnl, n: t1.total_trades || 0, best: t1.best_ticker, worst: t1.worst_ticker },
+                      { name: "Éq. 2 — Tendance", color: TEAM_COLORS["2"], wr: t2.flip_win_rate, pnl: t2.total_realized_pnl ?? t2.realized_pnl, n: t2.flip_count || 0, best: t2.best_ticker, worst: t2.worst_ticker },
+                      { name: "Éq. 3 — Technique", color: TEAM_COLORS["3"], wr: t3.win_rate, pnl: t3.pnl_total ?? t3.total_realized_pnl, n: t3.total_trades || 0, best: t3.best_strategy || t3.best_ticker, worst: t3.worst_strategy || t3.worst_ticker },
+                      { name: "Éq. 4 — Meta", color: TEAM_COLORS["4"], wr: t4.win_rate, pnl: t4.pnl_total ?? t4.total_realized_pnl, n: t4.total_trades || 0, best: t4.best_combo, worst: t4.worst_combo },
+                    ].map((team) => (
+                      <tr key={team.name}>
+                        <td style={{ fontWeight: 600 }}>
+                          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: team.color, marginRight: 6 }} />
+                          {team.name}
+                        </td>
+                        <td>{team.n}</td>
+                        <td style={{ color: team.wr != null && team.wr >= 50 ? "var(--green)" : team.wr != null ? "var(--red)" : "var(--text-muted)", fontWeight: 600 }}>
+                          {team.wr != null ? `${team.wr.toFixed(1)}%` : "N/A"}
+                        </td>
+                        <td style={{ color: pnlColor(team.pnl), fontWeight: 600 }}>
+                          {team.pnl != null ? `${team.pnl > 0 ? "+" : ""}${team.pnl.toFixed(2)}%` : "N/A"}
+                        </td>
+                        <td style={{ fontSize: 11, color: "var(--green)" }}>{team.best || "--"}</td>
+                        <td style={{ fontSize: 11, color: "var(--red)" }}>{team.worst || "--"}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: "2px solid var(--border)", fontWeight: 700 }}>
+                      <td>TOTAL</td>
+                      <td>{totalTrades}</td>
+                      <td style={{ color: consolidatedWr >= 50 ? "var(--green)" : "var(--red)" }}>
+                        {consolidatedWr > 0 ? `${consolidatedWr.toFixed(1)}%` : "N/A"}
+                      </td>
+                      <td style={{ color: pnlColor(totalPnl) }}>
+                        {`${totalPnl > 0 ? "+" : ""}${totalPnl.toFixed(2)}%`}
+                      </td>
+                      <td colSpan="2" />
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Team comparison chart */}
           {teamCompare.some((t) => t.trades > 0) && (
             <div className="section-card" style={{ padding: 20 }}>
-              <h3>Comparaison des équipes</h3>
+              <h3>Comparaison visuelle</h3>
               <div style={{ width: "100%", height: 220, marginTop: 12 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={teamCompare} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
@@ -235,19 +300,19 @@ export default function PerformancePage({ isActive, agents }) {
             </div>
           )}
 
-          {/* Trade outcomes distribution (Team 1) */}
-          {perf && perf.total_trades > 0 && (
+          {/* Consolidated results distribution */}
+          {totalClosed > 0 && (
             <div className="section-card" style={{ padding: 20 }}>
-              <h3>Distribution des résultats (Éq. 1)</h3>
+              <h3>Distribution des résultats (toutes équipes)</h3>
               <div style={{ display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
                 <div style={{ width: 180, height: 180 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
                         data={[
-                          { name: "TP Hit", value: perf.wins || 0, color: "#10B981" },
-                          { name: "SL Hit", value: perf.losses || 0, color: "#EF4444" },
-                          { name: "Expired", value: perf.expired || 0, color: "#6B7280" },
+                          { name: "TP Hit / Win", value: totalWins, color: "#10B981" },
+                          { name: "SL Hit / Loss", value: totalLosses, color: "#EF4444" },
+                          { name: "Expired", value: totalExpired, color: "#6B7280" },
                         ].filter(d => d.value > 0)}
                         cx="50%" cy="50%" innerRadius={40} outerRadius={70}
                         paddingAngle={3} dataKey="value"
@@ -263,53 +328,13 @@ export default function PerformancePage({ isActive, agents }) {
                   </ResponsiveContainer>
                 </div>
                 <div style={{ flex: 1 }}>
-                  <StatBar value={perf.wins || 0} max={perf.total_trades - (perf.pending || 0)} color="var(--green)" label="TP Hit" sublabel={`${perf.wins || 0} trades`} />
-                  <StatBar value={perf.losses || 0} max={perf.total_trades - (perf.pending || 0)} color="var(--red)" label="SL Hit" sublabel={`${perf.losses || 0} trades`} />
-                  <StatBar value={perf.expired || 0} max={perf.total_trades - (perf.pending || 0)} color="#6B7280" label="Expired" sublabel={`${perf.expired || 0} trades`} />
-                  {perf.pending > 0 && (
-                    <StatBar value={perf.pending} max={perf.total_trades} color="var(--accent)" label="Pending" sublabel={`${perf.pending} trades`} />
+                  <StatBar value={totalWins} max={totalClosed || 1} color="var(--green)" label="Gains (TP/Win)" sublabel={`${totalWins} trades`} />
+                  <StatBar value={totalLosses} max={totalClosed || 1} color="var(--red)" label="Pertes (SL/Loss)" sublabel={`${totalLosses} trades`} />
+                  <StatBar value={totalExpired} max={totalClosed || 1} color="#6B7280" label="Expired" sublabel={`${totalExpired} trades`} />
+                  {totalPending > 0 && (
+                    <StatBar value={totalPending} max={totalTrades || 1} color="var(--accent)" label="En cours" sublabel={`${totalPending} trades`} />
                   )}
-                  <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-secondary)" }}>
-                    Meilleur trade: <span style={{ color: "var(--green)", fontWeight: 600 }}>{perf.best_trade_pnl != null ? `+${perf.best_trade_pnl.toFixed(2)}%` : "--"}</span>
-                    {" | "}
-                    Pire trade: <span style={{ color: "var(--red)", fontWeight: 600 }}>{perf.worst_trade_pnl != null ? `${perf.worst_trade_pnl.toFixed(2)}%` : "--"}</span>
-                    {" | "}
-                    Moyenne: <span style={{ fontWeight: 600 }}>{perf.avg_pnl_pct != null ? `${perf.avg_pnl_pct > 0 ? "+" : ""}${perf.avg_pnl_pct.toFixed(3)}%` : "--"}</span>
-                  </div>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {/* By category breakdown */}
-          {categoryData.length > 0 && (
-            <div className="section-card" style={{ padding: 20 }}>
-              <h3>Performance par catégorie (Éq. 1)</h3>
-              <div className="compact-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Catégorie</th>
-                      <th>Trades</th>
-                      <th>Win Rate</th>
-                      <th>P&L</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {categoryData.map((cat) => (
-                      <tr key={cat.name}>
-                        <td><span className="news-cat-badge">{cat.name}</span></td>
-                        <td>{cat.trades}</td>
-                        <td style={{ color: cat.wr >= 50 ? "var(--green)" : cat.wr > 0 ? "var(--red)" : "var(--text-muted)" }}>
-                          {cat.wr.toFixed(1)}%
-                        </td>
-                        <td style={{ color: pnlColor(cat.pnl), fontWeight: 600 }}>
-                          {cat.pnl > 0 ? "+" : ""}{cat.pnl.toFixed(2)}%
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </div>
           )}
@@ -354,7 +379,8 @@ export default function PerformancePage({ isActive, agents }) {
             )}
           </div>
         </>
-      )}
+        );
+      })()}
 
       {/* ══════════════════════ TAB: Teams ══════════════════════ */}
       {activeTab === "teams" && (
