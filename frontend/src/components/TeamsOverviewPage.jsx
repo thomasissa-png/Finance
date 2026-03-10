@@ -53,13 +53,13 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
       const [t1, t2, t3, t4] = await Promise.all([
         fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/agents/trader_3/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
-        fetch("/api/agents/trader_4/metrics").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
       const pending1 = Array.isArray(t1) ? t1.filter((t) => t.result === "PENDING") : [];
-      const active2 = Array.isArray(t2) ? t2.filter((t) => t.direction && t.direction !== "FLAT") : [];
-      const active3 = Array.isArray(t3?.positions || []) ? (t3.positions || []) : [];
-      const active4 = Array.isArray(t4?.positions || []) ? (t4.positions || []) : [];
+      const active2 = t2 && typeof t2 === "object" && !Array.isArray(t2) ? Object.values(t2).filter((t) => t.direction && t.direction !== "FLAT") : [];
+      const active3 = Array.isArray(t3?.active) ? t3.active : [];
+      const active4 = Array.isArray(t4?.active) ? t4.active : [];
       setActiveTrades({ "1": pending1, "2": active2, "3": active3, "4": active4 });
     } catch { /* */ }
   }, []);
@@ -78,18 +78,6 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
     const m = {};
     (agents || []).forEach((a) => { m[a.name] = a; });
     return m;
-  }, [agents]);
-
-  const agentVersions = useMemo(() => {
-    return (agents || [])
-      .filter((a) => a.version)
-      .map((a) => ({
-        agent: a.name?.replace(/_/g, " "),
-        version: a.version,
-        status: a.status,
-        name: a.name,
-      }))
-      .sort((a, b) => a.agent.localeCompare(b.agent));
   }, [agents]);
 
   // P2.4: Team comparison chart data
@@ -237,34 +225,6 @@ export default function TeamsOverviewPage({ isActive, agents, onNavigate }) {
         })}
       </div>
 
-      {/* Agent versions (live) */}
-      <div className="section-card" style={{ marginTop: 20 }}>
-        <h3>Versions des agents (live)</h3>
-        <div className="compact-table">
-          <table className="version-table">
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th>Version</th>
-                <th>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {agentVersions.map((av) => (
-                <tr key={av.name}>
-                  <td className="ticker-cell">{av.agent}</td>
-                  <td style={{ color: "var(--accent)" }}>v{av.version}</td>
-                  <td>
-                    <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", marginRight: 6,
-                      background: av.status === "working" ? "var(--accent)" : av.status === "error" ? "var(--red)" : "var(--text-muted)" }} />
-                    {av.status === "working" ? "Actif" : av.status === "error" ? "Erreur" : "En attente"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }

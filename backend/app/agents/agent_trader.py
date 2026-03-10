@@ -30,7 +30,7 @@ from .base import BaseAgent, AgentStatus
 class AgentTrader(BaseAgent):
     name = "trader_1"
     description = "Décision d'investissement — news trading expert"
-    version = "6.6"  # v6.6: __import__ fix, div-by-zero guard, direction enum cleanup, cached trades
+    version = "6.7"  # v6.7: Enhanced logging (max_score, top_headline), save_trade error handling
 
     def __init__(self):
         super().__init__()
@@ -60,11 +60,15 @@ class AgentTrader(BaseAgent):
         start = time.monotonic()
 
         try:
-            # Log candidates
+            # Log candidates with max score for visibility
+            max_score = max((s.total_score for s in scored_news), default=0)
+            top_ticker = next((s.news.title[:60] for s in sorted(scored_news, key=lambda s: s.total_score, reverse=True)), None)
             self.log("Evaluating trade candidates", {
                 "candidates": len(scored_news),
                 "scan_type": scan_type.value if scan_type else None,
                 "existing_tickers": existing_trade_ticker,
+                "max_score": round(max_score, 1),
+                "top_headline": top_ticker,
                 "learning_dims": len(learning_data.get("adjustments", {})) if isinstance(learning_data, dict) else 0,
             })
 
@@ -102,7 +106,13 @@ class AgentTrader(BaseAgent):
                     })
 
                     # Save trade
-                    self._save_trade(rec)
+                    try:
+                        self._save_trade(rec)
+                    except Exception as save_exc:
+                        self.log("Failed to save trade", {
+                            "ticker": rec.ticker,
+                            "error": str(save_exc),
+                        }, level="ERROR")
 
                 self.publish("trade_executed", {
                     "count": len(result.recommendations),

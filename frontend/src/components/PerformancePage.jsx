@@ -156,7 +156,7 @@ export default function PerformancePage({ isActive, agents }) {
           <div className="page-title">Performance</div>
           <div className="page-subtitle">Suivi détaillé, versioning, évolution</div>
         </div>
-        <button className="refresh-btn" onClick={fetchData} title="Rafraîchir">&circlearrowright;</button>
+        <button className="refresh-btn" onClick={fetchData} title="Rafraîchir">&#x21BB;</button>
       </div>
 
       {loading && (

@@ -660,6 +660,11 @@ class AgentTrader4(BaseAgent):
                     return close_change
                 return None
 
+        # Market hours check
+        from ..config import is_market_open
+        if not is_market_open(ticker):
+            return None
+
         # P5: Check correlation conflict
         if _check_correlation_conflict(ticker, direction, positions):
             return None

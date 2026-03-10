@@ -1198,7 +1198,7 @@ class TestTeam3V2Trader3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_3 import AgentTrader3
-        assert AgentTrader3.version == "2.1"
+        assert AgentTrader3.version == "2.2"
 
 
 class TestTeam3V2Journal3:

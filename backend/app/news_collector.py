@@ -465,7 +465,9 @@ def collect_all_news() -> list[NewsItem]:
     # Phase 0 sources are individually tracked in data_apis.collect_structured_data()
     structured_news = _safe_collect(collect_structured_data, "structured_data", "phase0")
     early_news = _safe_collect(collect_early_signal_news, "early_signal", "phase1")
-    yf_news = _safe_collect(collect_yfinance_news, "yfinance", "phase2")
+    # yfinance news disabled 2026-03-10: returns 0 items in 43s (sequential fetch, empty API responses)
+    # yfinance is still used for price data (market_data.py fallback), just not for news collection
+    yf_news: list = []
     rss_news = _safe_collect(collect_rss_news, "rss_mainstream", "phase3")
 
     # Log per-source results for diagnostics (helps debug "0 news" issues)

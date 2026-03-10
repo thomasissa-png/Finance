@@ -209,7 +209,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "2.1"  # v2.1: Disabled strategy check, correlation fix, atomic writes, weekly config persistence
+    version = "2.2"  # v2.2: Market hours validation, live entry price fetch, price cross-validation
 
     def __init__(self):
         super().__init__()
@@ -605,6 +605,12 @@ class AgentTrader3(BaseAgent):
             if strategy in disabled_strategies:
                 continue
 
+            # Market hours check: don't trade when the market is closed
+            from ..config import is_market_open
+            if not is_market_open(ticker):
+                logger.debug("Skipping %s — market not open", ticker)
+                continue
+
             # Skip if already have same ticker+direction position
             if (ticker, direction) in active_ticker_dirs:
                 continue
@@ -638,6 +644,24 @@ class AgentTrader3(BaseAgent):
                                ticker, strategy, entry_price)
                 continue
 
+            # Fetch live entry price (fallback to Scoring 3's last_close)
+            scoring_price = setup.get("entry_price", 0)
+            try:
+                from ..market_data import fetch_price
+                live_price = fetch_price(ticker)
+                if live_price and live_price > 0:
+                    entry_price = live_price
+                    # Cross-validate: if live vs scoring differ by >30%, log warning (data quality issue)
+                    if scoring_price > 0:
+                        deviation = abs(live_price - scoring_price) / scoring_price
+                        if deviation > 0.30:
+                            logger.warning("Price discrepancy for %s: live=%.4f vs scoring=%.4f (%.0f%% diff)",
+                                           ticker, live_price, scoring_price, deviation * 100)
+                else:
+                    entry_price = scoring_price
+            except Exception:
+                entry_price = scoring_price
+
             # Create position
             now_iso = datetime.now(timezone.utc).isoformat()
             position = {
@@ -655,8 +679,8 @@ class AgentTrader3(BaseAgent):
                     * timeframe_adj.get(timeframe, 1.0), 3
                 ),
                 "confidence": setup.get("confidence", 0),
-                "entry_price": setup.get("entry_price", 0),
-                "current_price": setup.get("entry_price", 0),
+                "entry_price": entry_price,
+                "current_price": entry_price,
                 "target_pct": setup.get("target_pct", 0),
                 "stop_pct": setup.get("stop_pct", 0),
                 "effective_stop": -setup.get("stop_pct", 0),
@@ -670,8 +694,8 @@ class AgentTrader3(BaseAgent):
                 "adx_at_entry": setup.get("adx"),
                 "volume_ratio_at_entry": setup.get("volume_ratio", 1.0),
                 "unrealized_pnl_pct": 0.0,
-                "high_watermark": setup.get("entry_price", 0),
-                "low_watermark": setup.get("entry_price", 0),
+                "high_watermark": entry_price,
+                "low_watermark": entry_price,
                 # P6: Version stamping
                 "agent_versions": agent_versions,
                 # J1: Strategy version for param tracking

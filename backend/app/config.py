@@ -288,6 +288,55 @@ ASSETS: list[Asset] = [
 
 ASSET_BY_TICKER = {a.ticker: a for a in ASSETS}
 
+# ── Market hours (CET) — used by Trader 3 to validate entry timing ──
+# Only assets with restricted trading hours are listed.
+# Forex, commodities (CME Globex), and US indices (futures) trade nearly 24h — not restricted.
+# Format: (open_hour, open_minute, close_hour, close_minute) in Europe/Paris timezone.
+MARKET_HOURS: dict[str, tuple[int, int, int, int]] = {
+    # Euronext Paris: 09:00 - 17:30 CET
+    "MC.PA": (9, 0, 17, 30),
+    "OR.PA": (9, 0, 17, 30),
+    "AI.PA": (9, 0, 17, 30),
+    "SAN.PA": (9, 0, 17, 30),
+    "TTE.PA": (9, 0, 17, 30),
+    "BNP.PA": (9, 0, 17, 30),
+    "RMS.PA": (9, 0, 17, 30),
+    # CAC 40 / DAX / FTSE indices: use futures open times (8:00 CET)
+    # Cash indices open at 9:00 but futures trade from 8:00 — prices are valid from 8:00
+    "^FCHI": (8, 0, 17, 30),
+    "^GDAXI": (8, 0, 17, 30),
+    "^FTSE": (8, 0, 17, 30),
+    # Nikkei: 01:00 - 07:00 CET (TSE hours in CET: 00:00-06:00 + some buffer)
+    "^N225": (1, 0, 7, 0),
+    # US equities: 15:30 - 22:00 CET (NYSE/NASDAQ regular hours)
+    "AAPL": (15, 30, 22, 0),
+    "MSFT": (15, 30, 22, 0),
+    "TSLA": (15, 30, 22, 0),
+    "AMZN": (15, 30, 22, 0),
+    # US indices: futures trade nearly 24h on CME Globex, no restriction needed
+    # Commodities: CME Globex, ICE — near 24h, no restriction needed
+    # Forex: 24h Sun-Fri, no restriction needed
+}
+
+
+def is_market_open(ticker: str) -> bool:
+    """Check if the market for this ticker is currently open (Europe/Paris timezone)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    hours = MARKET_HOURS.get(ticker)
+    if hours is None:
+        return True  # No restriction = always tradeable (forex, commodities, US futures)
+    open_h, open_m, close_h, close_m = hours
+    now = datetime.now(ZoneInfo("Europe/Paris"))
+    # Weekend check
+    if now.weekday() >= 5:
+        return False
+    current = now.hour * 60 + now.minute
+    market_open = open_h * 60 + open_m
+    market_close = close_h * 60 + close_m
+    return market_open <= current <= market_close
+
+
 CATEGORIES = {
     "actions_europe": "Actions Euronext Paris",
     "metaux": "Métaux Précieux",
@@ -419,12 +468,12 @@ EARLY_SIGNAL_FEEDS = [
     "https://www.federalreserve.gov/feeds/press_all.xml",
     "https://www.bankofengland.co.uk/rss/speeches",                 # BoE: verified working (200)
     # ── P2-1: China data sources — key demand driver for commodities ──
-    "https://www.caixin.com/api/dataapi/index.jsp?type=rss",       # Caixin: China business/economics (EN when available)
-    "http://www.xinhuanet.com/english/rss/finances.xml",           # Xinhua Finance: official China economic news
+    # Removed 2026-03-10: caixin.com/api/dataapi — persistent timeouts, unreliable API endpoint
+    # Removed 2026-03-10: xinhuanet.com/english/rss — 404 (domain/path changed)
     "http://english.www.gov.cn/policies/latestreleases/rss.xml",   # China State Council: policy announcements, trade decisions
     # ── P3-3: Government gazettes — export bans, tariffs, regulations ──
     "https://www.federalregister.gov/documents/search.atom?conditions%5Bagencies%5D%5B%5D=international-trade-commission&conditions%5Btype%5D%5B%5D=RULE",  # US Federal Register: trade rules, tariffs
-    "https://eur-lex.europa.eu/collection/eu-law/legislation/recent.atom",  # EU Official Journal: trade/agri regulations
+    # Removed 2026-03-10: eur-lex.europa.eu — persistent timeouts
 ]
 
 # ── Source weights: early-signal sources get premium weight ──────

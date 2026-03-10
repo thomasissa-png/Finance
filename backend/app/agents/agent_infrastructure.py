@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class AgentInfrastructure(BaseAgent):
     name = "infrastructure"
     description = "Surveillance & maintenance infrastructure système"
-    version = "7.6"  # v7.6: C1 16 tables stats, C2 SQL safe_table, I2 file lock, I3 health timeout, M1 8 bloat checks
+    version = "7.7"  # v7.7: Suppress transient SSL errors (INFO instead of WARN for non-critical issues)
 
     def __init__(self):
         super().__init__()
@@ -117,9 +117,16 @@ class AgentInfrastructure(BaseAgent):
             }, duration_ms=duration_ms)
 
             if result["issues"]:
-                self.log("Infrastructure issues detected", {
-                    "issues": result["issues"],
-                }, level="WARN")
+                critical = [i for i in result["issues"] if i.get("severity") == "CRITICAL"]
+                if critical:
+                    self.log("Infrastructure issues detected", {
+                        "issues": result["issues"],
+                    }, level="WARN")
+                else:
+                    # Transient issues (single PG failure, SSL drops) — log at INFO to avoid notification spam
+                    self.log("Infrastructure minor issues", {
+                        "issues": result["issues"],
+                    }, level="INFO")
 
             self.publish("infra_health_check", {
                 "overall": result["overall"],
