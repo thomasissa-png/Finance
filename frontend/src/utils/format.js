@@ -74,6 +74,25 @@ export function tickerName(ticker) {
   return TICKER_NAMES[ticker] || ticker;
 }
 
+/** Replace ticker IDs in free-text strings with readable names.
+ *  Matches case-insensitively and preserves surrounding context. */
+const _TICKER_RE = (() => {
+  const escaped = Object.keys(TICKER_NAMES)
+    .sort((a, b) => b.length - a.length) // longest first
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`(${escaped.join("|")})`, "gi");
+})();
+
+export function replaceTickersInText(text) {
+  if (!text || typeof text !== "string") return text;
+  return text.replace(_TICKER_RE, (match) => {
+    // Lookup is case-insensitive — find the canonical key
+    const upper = match.toUpperCase();
+    const key = Object.keys(TICKER_NAMES).find((k) => k.toUpperCase() === upper);
+    return key ? TICKER_NAMES[key] : match;
+  });
+}
+
 // ── Category colors (O9 — centralized palette) ───────────────
 export const CATEGORY_COLORS = {
   weather: "#4fc3f7",
@@ -268,7 +287,7 @@ export function formatLogDetails(details) {
     } else {
       display = String(v).slice(0, 100);
     }
-    parts.push({ key: k.replace(/_/g, " "), value: display });
+    parts.push({ key: k.replace(/_/g, " "), value: replaceTickersInText(display) });
   }
   return parts;
 }

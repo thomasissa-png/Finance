@@ -3,7 +3,7 @@
  */
 import React from "react";
 import { LEVEL_ICONS, LEVEL_COLORS } from "../utils/constants";
-import { formatLogDetails } from "../utils/format";
+import { formatLogDetails, replaceTickersInText } from "../utils/format";
 
 // ── Error banner (visible error state) ───────────────────────
 export function ErrorBanner({ error, onRetry }) {
@@ -87,7 +87,7 @@ export function LogEntry({ log, expandable, expanded, onToggle }) {
       <div className="agent-log-header">
         <span className="agent-log-icon">{icon}</span>
         <span className="agent-log-action" style={{ color }}>
-          {log.action}
+          {replaceTickersInText(log.action)}
         </span>
         <span className="agent-log-time">
           {log.timestamp

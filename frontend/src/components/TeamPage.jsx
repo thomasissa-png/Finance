@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { formatDate, formatTime, pnlColor, RESULT_LABELS, CATEGORY_COLORS, scanLabel, tickerName, paginate, totalPages } from "../utils/format";
+import { formatDate, formatTime, pnlColor, RESULT_LABELS, CATEGORY_COLORS, scanLabel, tickerName, paginate, totalPages, replaceTickersInText } from "../utils/format";
 
 const TEAM_CONFIG = {
   "1": {
@@ -9,6 +9,7 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring", trader: "trader_1", journal: "journal", learning: "learning" },
     api: {
       trades: "/api/trades",
+      tradesFormat: "array",
       perf: "/api/performance/report",
       learning: "/api/learning",
       scoring: "/api/scan-history?limit=20",
@@ -23,7 +24,7 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring_2", trader: "trader_2", journal: "journal_2", learning: "learning_2" },
     api: {
       trades: "/api/trader2/positions",
-      tradesFormat: "dict",  // API returns {ticker: posData}
+      tradesFormat: "dict",
       perf: "/api/performance/report",
       learning: "/api/learning2/adjustments",
       scoring: null,
@@ -38,7 +39,7 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring_3", trader: "trader_3", journal: "journal_3", learning: "learning_3" },
     api: {
       trades: "/api/trader3/positions",
-      tradesFormat: "active_closed",  // API returns {active: [...], closed: [...]}
+      tradesFormat: "active_closed",
       perf: "/api/performance/report",
       learning: "/api/learning3/weekly-config",
       scoring: null,
@@ -53,7 +54,7 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring_4", trader: "trader_4", journal: "journal_4", learning: "learning_4" },
     api: {
       trades: "/api/trader4/positions",
-      tradesFormat: "dict",  // API returns {ticker: posData}
+      tradesFormat: "dict",
       perf: "/api/performance/report",
       learning: "/api/learning4/weekly-config",
       scoring: null,
@@ -62,6 +63,34 @@ const TEAM_CONFIG = {
     perfKey: "trader_4",
   },
 };
+
+/* Shared helper: parse API response into normalized trades array */
+function parseTradesResponse(data, format) {
+  if (format === "dict") {
+    const values = data && typeof data === "object" && !Array.isArray(data) ? Object.values(data) : [];
+    return values.map((p) => ({
+      ...p,
+      _isActive: !!(p.direction && p.direction !== "FLAT" && p.direction !== "NONE"),
+    }));
+  }
+  if (format === "active_closed") {
+    const active = Array.isArray(data?.active) ? data.active.map((p) => ({ ...p, _isActive: true })) : [];
+    const closed = Array.isArray(data?.closed) ? data.closed.map((p) => ({ ...p, _isActive: false })) : [];
+    return [...active, ...closed];
+  }
+  // Default: array (Team 1)
+  if (Array.isArray(data)) return data.map((t) => ({ ...t, _isActive: t.result === "PENDING" }));
+  return [];
+}
+
+/* Smart price formatting: auto-detect decimals based on price magnitude */
+function formatPrice(price) {
+  if (price == null) return "\u2014";
+  if (price >= 1000) return price.toFixed(0);
+  if (price >= 100) return price.toFixed(1);
+  if (price >= 1) return price.toFixed(2);
+  return price.toFixed(4); // forex pairs
+}
 
 const DIM_LABELS = {
   surprise: "Surprise",
@@ -131,7 +160,7 @@ function LogSection({ agentName, logFilter, setLogFilter }) {
             <div className="agent-log-header">
               <span className="agent-log-icon">{LEVEL_ICONS[log.level] || "i"}</span>
               <span className="agent-log-action" style={{ color: log.level === "ERROR" ? "var(--red)" : log.level === "WARN" ? "var(--yellow)" : log.level === "DECISION" ? "var(--accent)" : "var(--text-secondary)" }}>
-                {log.action}
+                {replaceTickersInText(log.action)}
               </span>
               <span className="agent-log-time">
                 {log.timestamp ? new Date(log.timestamp).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}
@@ -143,7 +172,7 @@ function LogSection({ agentName, logFilter, setLogFilter }) {
                 {Object.entries(log.details).slice(0, 3).map(([k, v]) => (
                   <span key={k} className="agent-log-detail">
                     <span className="agent-log-detail-key">{k}:</span>{" "}
-                    {typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80)}
+                    {replaceTickersInText(typeof v === "object" ? JSON.stringify(v).slice(0, 80) : String(v).slice(0, 80))}
                   </span>
                 ))}
               </div>
@@ -329,65 +358,36 @@ function TraderSection({ teamId }) {
   const [filterResult, setFilterResult] = useState("");
   const [page, setPage] = useState(1);
   const [logFilter, setLogFilter] = useState("DECISION");
+  const [expandedTrade, setExpandedTrade] = useState(null);
 
   const config = TEAM_CONFIG[teamId];
 
   useEffect(() => {
-    // Fetch team-specific trades
     if (config?.api.trades) {
       fetch(config.api.trades)
-        .then((r) => r.ok ? r.json() : [])
-        .then((d) => {
-          const fmt = config.api.tradesFormat;
-          if (fmt === "dict") {
-            // Dict {ticker: posData} — convert to array, mark active vs closed
-            const values = d && typeof d === "object" && !Array.isArray(d) ? Object.values(d) : [];
-            // Active positions get status=PENDING for display, FLAT/NONE are history
-            const normalized = values.map((p) => ({
-              ...p,
-              result: (p.direction && p.direction !== "FLAT" && p.direction !== "NONE") ? "PENDING" : (p.result || "CLOSED"),
-              status: (p.direction && p.direction !== "FLAT" && p.direction !== "NONE") ? "PENDING" : "CLOSED",
-            }));
-            setTrades(normalized);
-          } else if (fmt === "active_closed") {
-            // {active: [...], closed: [...]}
-            const active = Array.isArray(d?.active) ? d.active.map((p) => ({ ...p, result: p.result || "PENDING", status: "PENDING" })) : [];
-            const closed = Array.isArray(d?.closed) ? d.closed : [];
-            setTrades([...active, ...closed]);
-          } else if (Array.isArray(d)) {
-            setTrades(d);
-          } else if (Array.isArray(d?.trades)) {
-            setTrades(d.trades);
-          } else if (Array.isArray(d?.history)) {
-            setTrades(d.history);
-          } else {
-            setTrades([]);
-          }
-        })
+        .then((r) => r.ok ? r.json() : (config.api.tradesFormat === "dict" ? {} : []))
+        .then((d) => setTrades(parseTradesResponse(d, config.api.tradesFormat)))
         .catch(() => setTrades([]));
     }
-    // Fetch team-specific performance from report
     fetch("/api/performance/report")
       .then((r) => r.ok ? r.json() : null)
       .then((report) => {
-        if (report && config?.perfKey) {
-          setPerf(report[config.perfKey] || null);
-        }
+        if (report && config?.perfKey) setPerf(report[config.perfKey] || null);
       })
       .catch(() => {});
-  }, [teamId, config?.api.trades, config?.perfKey]);
+  }, [teamId, config?.api.trades, config?.api.tradesFormat, config?.perfKey]);
 
-  const filteredTrades = useMemo(() => {
-    let list = [...trades].sort((a, b) => new Date(b.timestamp || b.entry_time || 0) - new Date(a.timestamp || a.entry_time || 0));
+  const active = trades.filter((t) => t._isActive);
+  const history = trades.filter((t) => !t._isActive);
+
+  const filteredHistory = useMemo(() => {
+    let list = [...history].sort((a, b) => new Date(b.timestamp || b.entry_time || b.time || 0) - new Date(a.timestamp || a.entry_time || a.time || 0));
     if (filterResult) list = list.filter((t) => t.result === filterResult);
     return list;
-  }, [trades, filterResult]);
+  }, [history, filterResult]);
 
-  const pending = trades.filter((t) => t.result === "PENDING" || t.status === "PENDING" || t.status === "active");
-  const paged = paginate(filteredTrades, page);
-  const tp = totalPages(filteredTrades);
-
-  // Determine KPI fields based on team
+  const paged = paginate(filteredHistory, page);
+  const tp = totalPages(filteredHistory);
   const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";
   const pnlField = teamId === "2" ? "realized_pnl" : "pnl_total";
 
@@ -413,57 +413,104 @@ function TraderSection({ teamId }) {
             <div className="kpi-label">Trades</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-value">{pending.length}</div>
+            <div className="kpi-value" style={{ color: active.length > 0 ? "var(--accent)" : "var(--text-muted)" }}>{active.length}</div>
             <div className="kpi-label">En cours</div>
           </div>
         </div>
       )}
 
-      {/* Pending positions */}
-      {pending.length > 0 && (
-        <div className="section-card">
-          <h3>Positions en cours ({pending.length})</h3>
-          <div className="compact-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Actif</th>
-                  <th>Direction</th>
-                  <th>Entrée</th>
-                  <th>Actuel</th>
-                  <th>Target</th>
-                  <th>Stop</th>
-                  <th>P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pending.map((t, i) => {
-                  const livePnl = t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
-                  return (
-                    <tr key={`${t.ticker}-${t.strategy || ""}-${i}`}>
-                      <td className="ticker-cell">{tickerName(t.ticker)}</td>
-                      <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-                      <td>{t.entry_price?.toFixed(2)}</td>
-                      <td>{t.current_price?.toFixed(2) || "\u2014"}</td>
-                      <td style={{ color: "var(--green)" }}>{t.target_price?.toFixed(2) || "\u2014"}</td>
-                      <td style={{ color: "var(--red)" }}>{t.stop_price?.toFixed(2) || "\u2014"}</td>
-                      <td style={{ color: pnlColor(livePnl), fontWeight: 600 }}>
-                        {livePnl != null ? `${livePnl > 0 ? "+" : ""}${livePnl.toFixed(2)}%` : "\u2014"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      {/* Active positions with full details */}
+      <div className="section-card">
+        <h3>Positions en cours ({active.length})</h3>
+        {active.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {active.map((t, i) => {
+              const pnl = t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
+              const isExpanded = expandedTrade === `${t.ticker}-${i}`;
+              return (
+                <div key={`${t.ticker}-${t.strategy || ""}-${i}`} className="section-card" style={{ padding: "10px 14px", cursor: "pointer", margin: 0 }}
+                  onClick={() => setExpandedTrade(isExpanded ? null : `${t.ticker}-${i}`)}
+                  role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") setExpandedTrade(isExpanded ? null : `${t.ticker}-${i}`); }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontWeight: 700 }}>{tickerName(t.ticker)}</span>
+                      <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
+                      {t.strategy && <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "rgba(139,157,195,0.12)", color: "var(--text-secondary)" }}>{t.strategy}</span>}
+                      {t.confluence_level && <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "rgba(236,72,153,0.12)", color: "#EC4899" }}>Confluence {t.confluence_level}/3</span>}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12 }}>
+                      <span>Entrée: {formatPrice(t.entry_price)}</span>
+                      <span>Actuel: {formatPrice(t.current_price)}</span>
+                      <span style={{ color: pnlColor(pnl), fontWeight: 700 }}>
+                        {pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%` : "\u2014"}
+                      </span>
+                      <span style={{ color: "var(--text-muted)", fontSize: 10 }}>{isExpanded ? "▲" : "▼"}</span>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.8 }}>
+                      {/* Team 1: headline + news link */}
+                      {t.news_headline && (
+                        <div style={{ marginBottom: 4 }}>
+                          <strong>News :</strong> {t.news_headline}
+                          {t.news_url && <a href={t.news_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", marginLeft: 6, fontSize: 11 }}>[source]</a>}
+                        </div>
+                      )}
+                      {t.news_description && <div style={{ marginBottom: 4, color: "var(--text-muted)", fontSize: 11 }}>{t.news_description}</div>}
+                      {t.catalyst && <div style={{ marginBottom: 4 }}><strong>Catalyseur :</strong> {t.catalyst}</div>}
+                      {t.news_category && <span className="cat-badge" style={{ backgroundColor: CATEGORY_COLORS[t.news_category] || "#5A6F94", marginRight: 6 }}>{t.news_category}</span>}
+
+                      {/* Team 2: reasoning + key catalysts */}
+                      {t.reasoning && <div style={{ marginBottom: 4 }}><strong>Raisonnement :</strong> {t.reasoning}</div>}
+                      {t.key_catalysts?.length > 0 && (
+                        <div style={{ marginBottom: 4 }}>
+                          <strong>Catalyseurs :</strong>
+                          {t.key_catalysts.slice(0, 3).map((c, ci) => (
+                            <div key={ci} style={{ marginLeft: 8, fontSize: 11 }}>
+                              {c.title || c.headline} {c.score != null && <span style={{ color: "var(--accent)" }}>({c.score.toFixed(0)})</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Team 3: strategy + signals */}
+                      {t.strategy_name && <div><strong>Stratégie :</strong> {t.strategy_name}</div>}
+                      {t.signals_at_entry && (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+                          {Object.entries(t.signals_at_entry).slice(0, 6).map(([k, v]) => (
+                            <span key={k} style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(139,157,195,0.08)" }}>
+                              {k}: {typeof v === "number" ? v.toFixed(1) : String(v)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Shared: pricing details */}
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 6 }}>
+                        {t.target_price != null && <span style={{ color: "var(--green)" }}>TP: {formatPrice(t.target_price)}</span>}
+                        {t.stop_price != null && <span style={{ color: "var(--red)" }}>SL: {formatPrice(t.stop_price)}</span>}
+                        {t.risk_reward != null && <span>R/R: {t.risk_reward.toFixed(2)}</span>}
+                        {t.raw_claude_score != null && <span>Score: {t.raw_claude_score.toFixed(0)}</span>}
+                        {t.confidence != null && <span>Confiance: {t.confidence}%</span>}
+                        {t.entry_time && <span style={{ color: "var(--text-muted)" }}>Depuis: {formatDate(t.entry_time)} {formatTime(t.entry_time)}</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="agent-logs-empty" style={{ padding: "12px 0" }}>Aucune position ouverte</div>
+        )}
+      </div>
 
       {/* Trade history */}
-      {filteredTrades.length > 0 && (
+      {filteredHistory.length > 0 && (
         <div className="section-card">
           <div className="section-header">
-            <h3>Historique des trades ({filteredTrades.length})</h3>
+            <h3>Historique ({filteredHistory.length})</h3>
             <div className="filter-row">
               <select value={filterResult} onChange={(e) => { setFilterResult(e.target.value); setPage(1); }} className="filter-select">
                 <option value="">Tous résultats</option>
@@ -473,41 +520,30 @@ function TraderSection({ teamId }) {
               </select>
             </div>
           </div>
-
-          {/* Desktop table */}
-          <div className="compact-table desktop-only">
+          <div className="compact-table">
             <table>
               <thead>
                 <tr>
                   <th>Date</th>
                   <th>Actif</th>
                   <th>Dir</th>
-                  <th>Catégorie</th>
+                  <th>Raison</th>
                   <th>Entrée</th>
-                  <th>R/R</th>
-                  <th>Score</th>
                   <th>Résultat</th>
                   <th>P&L</th>
                 </tr>
               </thead>
               <tbody>
                 {paged.map((t, i) => {
-                  const res = RESULT_LABELS[t.result] || { label: t.result, cls: "" };
+                  const res = RESULT_LABELS[t.result] || { label: t.result || "\u2014", cls: "" };
+                  const reason = t.news_headline || t.catalyst || t.reason || t.reasoning || t.strategy || "";
                   return (
-                    <tr key={`${t.timestamp}-${t.ticker}-${i}`}>
-                      <td>{formatDate(t.timestamp || t.entry_time)}</td>
+                    <tr key={`${t.timestamp || t.entry_time || t.time}-${t.ticker}-${i}`}>
+                      <td>{formatDate(t.timestamp || t.entry_time || t.time)}</td>
                       <td className="ticker-cell">{tickerName(t.ticker)}</td>
                       <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-                      <td>
-                        {t.news_category && (
-                          <span className="cat-badge" style={{ backgroundColor: CATEGORY_COLORS[t.news_category] || "#5A6F94" }}>
-                            {t.news_category}
-                          </span>
-                        )}
-                      </td>
-                      <td>{t.entry_price?.toFixed(2)}</td>
-                      <td>{t.risk_reward?.toFixed(2)}</td>
-                      <td>{t.raw_claude_score?.toFixed(0) || ""}</td>
+                      <td style={{ fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>{reason || "\u2014"}</td>
+                      <td>{formatPrice(t.entry_price)}</td>
                       <td><span className={`result-badge ${res.cls}`}>{res.label}</span></td>
                       <td style={{ color: pnlColor(t.pnl_pct), fontWeight: 600 }}>
                         {t.pnl_pct != null ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct.toFixed(2)}%` : ""}
@@ -518,17 +554,6 @@ function TraderSection({ teamId }) {
               </tbody>
             </table>
           </div>
-
-          {/* Mobile cards */}
-          <div className="mobile-only">
-            {paged.map((t, i) => {
-              const res = RESULT_LABELS[t.result] || { label: t.result, cls: "" };
-              return (
-                <MobileTradeCard key={`m-${t.timestamp}-${i}`} t={t} res={res} />
-              );
-            })}
-          </div>
-
           {tp > 1 && (
             <div className="pagination">
               <button disabled={page <= 1} onClick={() => setPage(page - 1)}>&laquo;</button>
@@ -859,42 +884,27 @@ function OverviewSection({ teamId, agents }) {
   const config = TEAM_CONFIG[teamId];
   const [trades, setTrades] = useState([]);
   const [perf, setPerf] = useState(null);
-  const [logFilter, setLogFilter] = useState("DECISION");
 
   const agentMap = {};
   (agents || []).forEach((a) => { agentMap[a.name] = a; });
   const teamAgentNames = Object.values(config.agents);
 
   useEffect(() => {
-    // Fetch positions
     if (config?.api.trades) {
       fetch(config.api.trades)
-        .then((r) => r.ok ? r.json() : [])
-        .then((d) => {
-          if (Array.isArray(d)) setTrades(d);
-          else if (config.api.tradesKey && Array.isArray(d?.[config.api.tradesKey])) setTrades(d[config.api.tradesKey]);
-          else if (Array.isArray(d?.trades)) setTrades(d.trades);
-          else if (Array.isArray(d?.history)) setTrades(d.history);
-          else setTrades([]);
-        })
+        .then((r) => r.ok ? r.json() : (config.api.tradesFormat === "dict" ? {} : []))
+        .then((d) => setTrades(parseTradesResponse(d, config.api.tradesFormat)))
         .catch(() => setTrades([]));
     }
-    // Fetch performance
     fetch("/api/performance/report")
       .then((r) => r.ok ? r.json() : null)
       .then((report) => {
         if (report && config?.perfKey) setPerf(report[config.perfKey] || null);
       })
       .catch(() => {});
-  }, [teamId, config?.api.trades, config?.perfKey]);
+  }, [teamId, config?.api.trades, config?.api.tradesFormat, config?.perfKey]);
 
-  const pending = trades.filter((t) =>
-    t.result === "PENDING" || t.status === "PENDING" ||
-    (teamId === "2" && t.direction && t.direction !== "FLAT") ||
-    (teamId === "3" && !t.result) ||
-    (teamId === "4" && !t.result)
-  );
-
+  const active = trades.filter((t) => t._isActive);
   const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";
   const pnlField = teamId === "2" ? "realized_pnl" : "pnl_total";
 
@@ -920,65 +930,55 @@ function OverviewSection({ teamId, agents }) {
             <div className="kpi-label">Trades</div>
           </div>
           <div className="kpi-card">
-            <div className="kpi-value" style={{ color: pending.length > 0 ? "var(--accent)" : "var(--text-muted)" }}>{pending.length}</div>
+            <div className="kpi-value" style={{ color: active.length > 0 ? "var(--accent)" : "var(--text-muted)" }}>{active.length}</div>
             <div className="kpi-label">En cours</div>
           </div>
         </div>
       )}
 
       {/* Open positions */}
-      {pending.length > 0 && (
+      {active.length > 0 ? (
         <div className="section-card">
-          <h3>Positions ouvertes ({pending.length})</h3>
-          <div className="compact-table desktop-only">
+          <h3>Positions ouvertes ({active.length})</h3>
+          <div className="compact-table">
             <table>
               <thead>
                 <tr>
                   <th>Actif</th>
                   <th>Direction</th>
                   <th>Entrée</th>
-                  <th>Target</th>
-                  <th>Stop</th>
-                  <th>R/R</th>
+                  <th>Actuel</th>
+                  <th>P&L</th>
+                  {teamId === "1" && <th>Raison</th>}
+                  {teamId === "2" && <th>Catalyseurs</th>}
                   {teamId === "3" && <th>Stratégie</th>}
                   {teamId === "4" && <th>Confluence</th>}
                 </tr>
               </thead>
               <tbody>
-                {pending.map((t, i) => (
-                  <tr key={`${t.ticker}-${i}`}>
-                    <td className="ticker-cell">{tickerName(t.ticker)}</td>
-                    <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-                    <td>{t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</td>
-                    <td style={{ color: "var(--green)" }}>{t.target_price != null ? t.target_price.toFixed(2) : "--"}</td>
-                    <td style={{ color: "var(--red)" }}>{t.stop_price != null ? t.stop_price.toFixed(2) : "--"}</td>
-                    <td>{t.risk_reward != null ? t.risk_reward.toFixed(2) : "--"}</td>
-                    {teamId === "3" && <td style={{ fontSize: 11 }}>{t.strategy || "--"}</td>}
-                    {teamId === "4" && <td style={{ fontSize: 11 }}>{t.confluence_level || t.sources || "--"}</td>}
-                  </tr>
-                ))}
+                {active.map((t, i) => {
+                  const pnl = t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
+                  const reason = t.news_headline || t.catalyst || t.reasoning || t.strategy || "";
+                  return (
+                    <tr key={`${t.ticker}-${t.strategy || ""}-${i}`}>
+                      <td className="ticker-cell">{tickerName(t.ticker)}</td>
+                      <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
+                      <td>{formatPrice(t.entry_price)}</td>
+                      <td>{formatPrice(t.current_price)}</td>
+                      <td style={{ color: pnlColor(pnl), fontWeight: 600 }}>
+                        {pnl != null ? `${pnl > 0 ? "+" : ""}${pnl.toFixed(2)}%` : "\u2014"}
+                      </td>
+                      <td style={{ fontSize: 11, maxWidth: 250, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>
+                        {reason || "\u2014"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          <div className="mobile-only">
-            {pending.map((t, i) => (
-              <div key={`m-${t.ticker}-${i}`} className="trade-mobile-card">
-                <div className="trade-mobile-header">
-                  <span className="ticker-cell">{tickerName(t.ticker)}</span>
-                  <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
-                </div>
-                <div className="trade-mobile-body">
-                  <span>Entrée: {t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</span>
-                  <span>TP: {t.target_price != null ? t.target_price.toFixed(2) : "--"}</span>
-                  <span>SL: {t.stop_price != null ? t.stop_price.toFixed(2) : "--"}</span>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
-      )}
-
-      {pending.length === 0 && (
+      ) : (
         <div className="section-card">
           <div className="agent-logs-empty" style={{ padding: "16px 0" }}>
             Aucune position ouverte actuellement.

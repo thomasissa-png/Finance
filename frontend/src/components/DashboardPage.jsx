@@ -2,6 +2,15 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import { timeAgo, pnlColor, tickerName, formatDate, formatTime } from "../utils/format";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 
+/* Smart price formatting based on magnitude */
+function formatPrice(price) {
+  if (price == null) return "--";
+  if (price >= 1000) return price.toFixed(0);
+  if (price >= 100) return price.toFixed(1);
+  if (price >= 1) return price.toFixed(2);
+  return price.toFixed(4);
+}
+
 function useToasts() {
   const [toasts, setToasts] = useState([]);
   const idRef = useRef(0);
@@ -171,44 +180,31 @@ function computeLivePnl(entry_price, current_price, direction) {
   return direction === "SHORT" ? -pct : pct;
 }
 
-/* All-teams open positions section */
+/* All-teams open positions section — split winning/losing */
 function AllTeamsPositions({ positions, onRefresh, loading }) {
   const [livePrices, setLivePrices] = useState({});
   const [pricesLoading, setPricesLoading] = useState(false);
 
   const allPositions = useMemo(() => {
     const result = [];
-    (positions["1"] || []).forEach((t) => {
-      result.push({ ...t, _team: "1", _key: `t1-${t.ticker}-${t.timestamp}` });
-    });
-    (positions["2"] || []).forEach((t) => {
-      result.push({ ...t, _team: "2", _key: `t2-${t.ticker}` });
-    });
-    (positions["3"] || []).forEach((t) => {
-      result.push({ ...t, _team: "3", _key: `t3-${t.ticker}-${t.strategy || ""}` });
-    });
-    (positions["4"] || []).forEach((t) => {
-      result.push({ ...t, _team: "4", _key: `t4-${t.ticker}-${t.entry_time || ""}` });
-    });
+    (positions["1"] || []).forEach((t) => result.push({ ...t, _team: "1", _key: `t1-${t.ticker}-${t.timestamp}` }));
+    (positions["2"] || []).forEach((t) => result.push({ ...t, _team: "2", _key: `t2-${t.ticker}` }));
+    (positions["3"] || []).forEach((t) => result.push({ ...t, _team: "3", _key: `t3-${t.ticker}-${t.strategy || ""}` }));
+    (positions["4"] || []).forEach((t) => result.push({ ...t, _team: "4", _key: `t4-${t.ticker}-${t.entry_time || ""}` }));
     return result;
   }, [positions]);
 
-  // Fetch live prices for all open tickers
   const fetchLivePrices = useCallback(async () => {
     const tickers = [...new Set(allPositions.map((p) => p.ticker).filter(Boolean))];
     if (tickers.length === 0) return;
     setPricesLoading(true);
     try {
       const res = await fetch(`/api/prices/current?tickers=${encodeURIComponent(tickers.join(","))}`);
-      if (res.ok) {
-        const data = await res.json();
-        setLivePrices(data);
-      }
+      if (res.ok) setLivePrices(await res.json());
     } catch { /* silent */ }
     setPricesLoading(false);
   }, [allPositions]);
 
-  // Auto-fetch prices on mount and every 60s
   useEffect(() => {
     if (allPositions.length === 0) return;
     fetchLivePrices();
@@ -216,7 +212,45 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
     return () => clearInterval(id);
   }, [fetchLivePrices, allPositions.length]);
 
-  const totalCount = allPositions.length;
+  // Compute P&L for each position and split winning/losing
+  const positionsWithPnl = useMemo(() => {
+    return allPositions.map((t) => {
+      const currentPrice = livePrices[t.ticker] ?? t.current_price ?? null;
+      const livePnl = computeLivePnl(t.entry_price, currentPrice, t.direction);
+      const displayPnl = livePnl ?? t.unrealized_pnl_pct ?? t.pnl_pct ?? t.unrealized_pnl ?? null;
+      return { ...t, _currentPrice: currentPrice, _displayPnl: displayPnl };
+    });
+  }, [allPositions, livePrices]);
+
+  const winning = positionsWithPnl.filter((t) => t._displayPnl != null && t._displayPnl > 0);
+  const losing = positionsWithPnl.filter((t) => t._displayPnl != null && t._displayPnl <= 0);
+  const unknown = positionsWithPnl.filter((t) => t._displayPnl == null);
+  const totalCount = positionsWithPnl.length;
+
+  const renderRow = (t) => {
+    const entryTime = t.timestamp || t.entry_time || t.last_change_time;
+    return (
+      <tr key={t._key}>
+        <td>
+          <span className="team-badge" style={{ borderColor: TEAM_COLORS[t._team], color: TEAM_COLORS[t._team] }}>
+            {TEAM_LABELS[t._team] || `Éq. ${t._team}`}
+          </span>
+        </td>
+        <td className="ticker-cell">{tickerName(t.ticker)}</td>
+        <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
+        <td>{formatPrice(t.entry_price)}</td>
+        <td style={{ fontWeight: 500, color: t._currentPrice ? "var(--text-primary)" : "var(--text-muted)" }}>
+          {formatPrice(t._currentPrice)}
+        </td>
+        <td style={{ color: pnlColor(t._displayPnl), fontWeight: 600 }}>
+          {t._displayPnl != null ? `${t._displayPnl > 0 ? "+" : ""}${t._displayPnl.toFixed(2)}%` : "--"}
+        </td>
+        <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+          {entryTime ? formatDate(entryTime) + " " + formatTime(entryTime) : "--"}
+        </td>
+      </tr>
+    );
+  };
 
   return (
     <div className="section-card">
@@ -224,14 +258,8 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
         <h3>Positions ouvertes — toutes équipes ({totalCount})</h3>
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {pricesLoading && <span className="spinner spinner-inline" style={{ width: 12, height: 12 }} />}
-          <button
-            className="refresh-btn"
-            onClick={() => { onRefresh(); fetchLivePrices(); }}
-            disabled={loading}
-            title="Rafraîchir les positions et les prix"
-            aria-label="Rafraîchir les positions"
-            style={{ fontSize: 16, padding: "2px 8px" }}
-          >
+          <button className="refresh-btn" onClick={() => { onRefresh(); fetchLivePrices(); }} disabled={loading}
+            title="Rafraîchir les positions et les prix" style={{ fontSize: 16, padding: "2px 8px" }}>
             {loading ? <span className="spinner spinner-inline" /> : "↻"}
           </button>
         </div>
@@ -242,92 +270,36 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
           Aucune position ouverte actuellement.
         </div>
       ) : (
-        <>
-          {/* Desktop table */}
-          <div className="compact-table desktop-only">
-            <table>
-              <thead>
-                <tr>
-                  <th>Équipe</th>
-                  <th>Actif</th>
-                  <th>Direction</th>
-                  <th>Entrée</th>
-                  <th>Prix actuel</th>
-                  <th>Target</th>
-                  <th>Stop</th>
-                  <th>P&L latent</th>
-                  <th>Ouvert depuis</th>
-                </tr>
-              </thead>
-              <tbody>
-                {allPositions.map((t) => {
-                  const currentPrice = livePrices[t.ticker] ?? null;
-                  const livePnl = computeLivePnl(t.entry_price, currentPrice, t.direction);
-                  const displayPnl = livePnl ?? t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
-                  const entryTime = t.timestamp || t.entry_time || t.last_change_time;
-                  return (
-                    <tr key={t._key}>
-                      <td>
-                        <span className="team-badge" style={{ borderColor: TEAM_COLORS[t._team], color: TEAM_COLORS[t._team] }}>
-                          {TEAM_LABELS[t._team] || `Éq. ${t._team}`}
-                        </span>
-                      </td>
-                      <td className="ticker-cell">{tickerName(t.ticker)}</td>
-                      <td>
-                        <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>
-                          {t.direction}
-                        </span>
-                      </td>
-                      <td>{t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</td>
-                      <td style={{ fontWeight: 500, color: currentPrice ? "var(--text-primary)" : "var(--text-muted)" }}>
-                        {currentPrice != null ? currentPrice.toFixed(2) : "--"}
-                      </td>
-                      <td style={{ color: "var(--green)" }}>{t.target_price != null ? t.target_price.toFixed(2) : "--"}</td>
-                      <td style={{ color: "var(--red)" }}>{t.stop_price != null ? t.stop_price.toFixed(2) : "--"}</td>
-                      <td style={{ color: pnlColor(displayPnl), fontWeight: 600 }}>
-                        {displayPnl != null ? `${displayPnl > 0 ? "+" : ""}${displayPnl.toFixed(2)}%` : "--"}
-                      </td>
-                      <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-                        {entryTime ? formatDate(entryTime) + " " + formatTime(entryTime) : "--"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Mobile cards */}
-          <div className="mobile-only">
-            {allPositions.map((t) => {
-              const currentPrice = livePrices[t.ticker] ?? null;
-              const livePnl = computeLivePnl(t.entry_price, currentPrice, t.direction);
-              const displayPnl = livePnl ?? t.pnl_pct ?? t.unrealized_pnl ?? t.latent_pnl ?? null;
-              return (
-                <div key={t._key} className="trade-mobile-card">
-                  <div className="trade-mobile-header">
-                    <span className="team-badge" style={{ borderColor: TEAM_COLORS[t._team], color: TEAM_COLORS[t._team], fontSize: 9 }}>
-                      {TEAM_LABELS[t._team]}
-                    </span>
-                    <span className="ticker-cell">{tickerName(t.ticker)}</span>
-                    <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
-                  </div>
-                  <div className="trade-mobile-body">
-                    <span>Entrée: {t.entry_price != null ? t.entry_price.toFixed(2) : "--"}</span>
-                    {currentPrice != null && (
-                      <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>
-                        Actuel: {currentPrice.toFixed(2)}
-                      </span>
-                    )}
-                    <span style={{ color: pnlColor(displayPnl), fontWeight: 600 }}>
-                      {displayPnl != null ? `${displayPnl > 0 ? "+" : ""}${displayPnl.toFixed(2)}%` : "--"}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </>
+        <div className="compact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Équipe</th>
+                <th>Actif</th>
+                <th>Direction</th>
+                <th>Entrée</th>
+                <th>Prix actuel</th>
+                <th>P&L latent</th>
+                <th>Ouvert depuis</th>
+              </tr>
+            </thead>
+            <tbody>
+              {winning.length > 0 && (
+                <>
+                  <tr><td colSpan="7" style={{ fontSize: 10, fontWeight: 700, color: "var(--green)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(16,185,129,0.05)" }}>GAGNANTES ({winning.length})</td></tr>
+                  {winning.sort((a, b) => (b._displayPnl || 0) - (a._displayPnl || 0)).map(renderRow)}
+                </>
+              )}
+              {losing.length > 0 && (
+                <>
+                  <tr><td colSpan="7" style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(239,68,68,0.05)" }}>PERDANTES ({losing.length})</td></tr>
+                  {losing.sort((a, b) => (a._displayPnl || 0) - (b._displayPnl || 0)).map(renderRow)}
+                </>
+              )}
+              {unknown.length > 0 && unknown.map(renderRow)}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -706,7 +678,7 @@ export default function DashboardPage({ isActive, agents }) {
                         </span>
                       ) : (
                         <span className="scan-summary-activity idle">
-                          Stable{t2?.news_evaluated ? ` (${t2.news_evaluated} news)` : ""}
+                          Pas de changement{t2?.news_evaluated ? ` (${t2.news_evaluated} news)` : ""}
                         </span>
                       )}
                     </div>
@@ -723,7 +695,7 @@ export default function DashboardPage({ isActive, agents }) {
                           if (cp > 0) parts.push(`-${cp} ferm.`);
                           return <span className="scan-summary-activity active">{parts.join(" / ")}</span>;
                         }
-                        return <span className="scan-summary-activity idle">Stable{t3?.active_count ? ` (${t3.active_count} actives)` : ""}</span>;
+                        return <span className="scan-summary-activity idle">Pas de changement{t3?.active_count ? ` (${t3.active_count} actives)` : ""}</span>;
                       })()}
                     </div>
 
@@ -736,7 +708,7 @@ export default function DashboardPage({ isActive, agents }) {
                         </span>
                       ) : (
                         <span className="scan-summary-activity idle">
-                          Stable{t4?.open_positions ? ` (${t4.open_positions} ouvertes)` : ""}
+                          Pas de changement{t4?.open_positions ? ` (${t4.open_positions} ouvertes)` : ""}
                         </span>
                       )}
                     </div>
