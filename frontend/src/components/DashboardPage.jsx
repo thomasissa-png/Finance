@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { timeAgo, pnlColor, tickerName, formatDate, formatTime } from "../utils/format";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
-import TradeCard from "./TradeCard";
 
 function useToasts() {
   const [toasts, setToasts] = useState([]);
@@ -386,142 +385,6 @@ function TeamSummaryCards({ report, positions }) {
   );
 }
 
-/* Compact scan result for Teams 2/3/4 within each scan slot */
-function TeamScanResult({ team, label, data, color }) {
-  if (!data) {
-    return (
-      <div className="team-scan-result" style={{ borderLeftColor: color }}>
-        <div className="team-scan-header">
-          <span className="team-scan-name" style={{ color }}>{label}</span>
-          <span className="team-scan-status idle">En attente</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (data.error) {
-    return (
-      <div className="team-scan-result" style={{ borderLeftColor: color }}>
-        <div className="team-scan-header">
-          <span className="team-scan-name" style={{ color }}>{label}</span>
-          <span className="team-scan-status error">Erreur</span>
-        </div>
-        <div className="team-scan-detail muted">{data.error}</div>
-      </div>
-    );
-  }
-
-  // Team 2 — trend flips
-  if (team === "2") {
-    const changes = data.changes || [];
-    return (
-      <div className="team-scan-result" style={{ borderLeftColor: color }}>
-        <div className="team-scan-header">
-          <span className="team-scan-name" style={{ color }}>{label}</span>
-          {changes.length > 0 ? (
-            <span className="team-scan-status active">
-              {changes.length} flip{changes.length > 1 ? "s" : ""}
-            </span>
-          ) : (
-            <span className="team-scan-status idle">
-              Pas de flip{data.news_evaluated ? ` (${data.news_evaluated} news)` : ""}
-            </span>
-          )}
-        </div>
-        {changes.map((c, i) => (
-          <div key={i} className="team-scan-change">
-            <span className="ticker-cell">{tickerName(c.ticker)}</span>
-            <span className={`direction-badge sm ${(c.old_direction || "").toLowerCase()}`}>{c.old_direction}</span>
-            <span style={{ color: "var(--text-muted)", fontSize: 11 }}>→</span>
-            <span className={`direction-badge sm ${(c.new_direction || "").toLowerCase()}`}>{c.new_direction}</span>
-            {c.reason && <span className="team-scan-reason">{c.reason}</span>}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // Team 3 — tech positions opened/closed
-  if (team === "3") {
-    const newPos = data.new_positions || [];
-    const closedPos = data.closed_positions || [];
-    const hasAny = newPos.length > 0 || closedPos.length > 0;
-    return (
-      <div className="team-scan-result" style={{ borderLeftColor: color }}>
-        <div className="team-scan-header">
-          <span className="team-scan-name" style={{ color }}>{label}</span>
-          {hasAny ? (
-            <span className="team-scan-status active">
-              {newPos.length > 0 && `+${newPos.length} ouv.`}
-              {newPos.length > 0 && closedPos.length > 0 && " / "}
-              {closedPos.length > 0 && `-${closedPos.length} ferm.`}
-            </span>
-          ) : (
-            <span className="team-scan-status idle">
-              Pas de mouvement{data.active_count ? ` (${data.active_count} actives)` : ""}
-            </span>
-          )}
-        </div>
-        {newPos.map((p, i) => (
-          <div key={`n${i}`} className="team-scan-change">
-            <span className="team-scan-action open">OPEN</span>
-            <span className="ticker-cell">{tickerName(p.ticker)}</span>
-            <span className={`direction-badge sm ${(p.direction || "").toLowerCase()}`}>{p.direction}</span>
-            {p.strategy && <span className="team-scan-strategy">{p.strategy}</span>}
-          </div>
-        ))}
-        {closedPos.map((p, i) => (
-          <div key={`c${i}`} className="team-scan-change">
-            <span className={`team-scan-action ${(p.result || "").includes("TP") ? "tp" : (p.result || "").includes("SL") ? "sl" : "expired"}`}>
-              {p.result || "CLOSE"}
-            </span>
-            <span className="ticker-cell">{tickerName(p.ticker)}</span>
-            {p.pnl_pct != null && (
-              <span style={{ color: pnlColor(p.pnl_pct), fontWeight: 600, fontSize: 11 }}>
-                {p.pnl_pct > 0 ? "+" : ""}{p.pnl_pct.toFixed(2)}%
-              </span>
-            )}
-            {p.strategy && <span className="team-scan-strategy">{p.strategy}</span>}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // Team 4 — meta/ensemble changes
-  if (team === "4") {
-    const changes = data.changes || [];
-    return (
-      <div className="team-scan-result" style={{ borderLeftColor: color }}>
-        <div className="team-scan-header">
-          <span className="team-scan-name" style={{ color }}>{label}</span>
-          {changes.length > 0 ? (
-            <span className="team-scan-status active">
-              {changes.length} action{changes.length > 1 ? "s" : ""}
-            </span>
-          ) : (
-            <span className="team-scan-status idle">
-              Pas de signal{data.open_positions ? ` (${data.open_positions} ouvertes)` : ""}
-            </span>
-          )}
-        </div>
-        {changes.map((c, i) => (
-          <div key={i} className="team-scan-change">
-            <span className={`team-scan-action ${c.action === "OPEN" ? "open" : c.action === "CLOSE" ? "sl" : "expired"}`}>
-              {c.action}
-            </span>
-            <span className="ticker-cell">{tickerName(c.ticker)}</span>
-            {c.direction && (
-              <span className={`direction-badge sm ${(c.direction || "").toLowerCase()}`}>{c.direction}</span>
-            )}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return null;
-}
 
 export default function DashboardPage({ isActive, agents }) {
   const [scans, setScans] = useState({});
@@ -789,38 +652,100 @@ export default function DashboardPage({ isActive, agents }) {
           </div>
         ))}
 
-      {/* Scan results — all teams */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {SCAN_DEFS.map((s) => {
-          const scan = scans[s.key];
-          const recs = scan?.recommendations || [];
-          const teamRes = scan?.team_results || {};
+      {/* Scan results — compact unified summary */}
+      <div className="section-card">
+        <h3>Derniers scans</h3>
+        <div className="scan-summary-grid">
+          {SCAN_DEFS.map((s) => {
+            const scan = scans[s.key];
+            const recs = scan?.recommendations || [];
+            const teamRes = scan?.team_results || {};
+            const t2 = teamRes.team_2;
+            const t3 = teamRes.team_3;
+            const t4 = teamRes.team_4;
 
-          return (
-            <div key={s.key} className="scan-slot-container">
-              {/* Team 1 — Day Trading */}
-              {scan?.has_trade && recs.length > 1 ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div className="scan-multi-label">{s.label} ({recs.length} trades)</div>
-                  {recs.map((rec, i) => (
-                    <TradeCard key={`${s.key}-${rec.ticker}-${i}`} scan={{ ...scan, recommendation: rec }} label={`${s.label} — Éq. 1 #${i + 1}`} />
-                  ))}
-                </div>
-              ) : (
-                <TradeCard scan={scan} label={`${s.label} — Éq. 1 Day Trading`} />
-              )}
+            // Team 1 summary
+            const t1Count = recs.length || (scan?.has_trade ? 1 : 0);
+            const t1Ticker = scan?.recommendation?.ticker;
 
-              {/* Teams 2-4 summary row */}
-              {scan && (
-                <div className="scan-teams-row">
-                  <TeamScanResult team="2" label="Éq. 2 Tendance" data={teamRes.team_2} color="#F59E0B" />
-                  <TeamScanResult team="3" label="Éq. 3 Technique" data={teamRes.team_3} color="#8B5CF6" />
-                  <TeamScanResult team="4" label="Éq. 4 Meta" data={teamRes.team_4} color="#EC4899" />
+            return (
+              <div key={s.key} className="scan-summary-slot">
+                <div className="scan-summary-header">
+                  <span className="scan-summary-label">{s.btn}</span>
+                  {scan ? (
+                    <span className="scan-summary-time">
+                      {scan.timestamp ? formatTime(scan.timestamp) : ""}
+                    </span>
+                  ) : (
+                    <span className="scan-summary-time muted">—</span>
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
+
+                {!scan ? (
+                  <div className="scan-summary-body muted">En attente</div>
+                ) : (
+                  <div className="scan-summary-body">
+                    {/* Team 1 */}
+                    <div className="scan-summary-team" style={{ borderLeftColor: TEAM_COLORS["1"] }}>
+                      <span className="scan-summary-team-name">Éq. 1</span>
+                      {t1Count > 0 ? (
+                        <span className="scan-summary-activity active">
+                          {t1Count} trade{t1Count > 1 ? "s" : ""}{t1Ticker ? ` — ${tickerName(t1Ticker)}` : ""}
+                        </span>
+                      ) : (
+                        <span className="scan-summary-activity idle">Pas de trade</span>
+                      )}
+                    </div>
+
+                    {/* Team 2 */}
+                    <div className="scan-summary-team" style={{ borderLeftColor: TEAM_COLORS["2"] }}>
+                      <span className="scan-summary-team-name">Éq. 2</span>
+                      {t2?.changes?.length > 0 ? (
+                        <span className="scan-summary-activity active">
+                          {t2.changes.length} flip{t2.changes.length > 1 ? "s" : ""} — {t2.changes.map((c) => tickerName(c.ticker)).join(", ")}
+                        </span>
+                      ) : (
+                        <span className="scan-summary-activity idle">
+                          Stable{t2?.news_evaluated ? ` (${t2.news_evaluated} news)` : ""}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Team 3 */}
+                    <div className="scan-summary-team" style={{ borderLeftColor: TEAM_COLORS["3"] }}>
+                      <span className="scan-summary-team-name">Éq. 3</span>
+                      {(() => {
+                        const np = t3?.new_positions?.length || 0;
+                        const cp = t3?.closed_positions?.length || 0;
+                        if (np > 0 || cp > 0) {
+                          const parts = [];
+                          if (np > 0) parts.push(`+${np} ouv.`);
+                          if (cp > 0) parts.push(`-${cp} ferm.`);
+                          return <span className="scan-summary-activity active">{parts.join(" / ")}</span>;
+                        }
+                        return <span className="scan-summary-activity idle">Stable{t3?.active_count ? ` (${t3.active_count} actives)` : ""}</span>;
+                      })()}
+                    </div>
+
+                    {/* Team 4 */}
+                    <div className="scan-summary-team" style={{ borderLeftColor: TEAM_COLORS["4"] }}>
+                      <span className="scan-summary-team-name">Éq. 4</span>
+                      {t4?.changes?.length > 0 ? (
+                        <span className="scan-summary-activity active">
+                          {t4.changes.length} action{t4.changes.length > 1 ? "s" : ""} — {t4.changes.map((c) => tickerName(c.ticker)).join(", ")}
+                        </span>
+                      ) : (
+                        <span className="scan-summary-activity idle">
+                          Stable{t4?.open_positions ? ` (${t4.open_positions} ouvertes)` : ""}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Toasts */}

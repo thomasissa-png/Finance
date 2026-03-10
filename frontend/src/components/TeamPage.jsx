@@ -23,6 +23,7 @@ const TEAM_CONFIG = {
     agents: { scoring: "scoring_2", trader: "trader_2", journal: "journal_2", learning: "learning_2" },
     api: {
       trades: "/api/trader2/positions",
+      tradesFormat: "dict",  // API returns {ticker: posData}
       perf: "/api/performance/report",
       learning: "/api/learning2/adjustments",
       scoring: null,
@@ -36,8 +37,8 @@ const TEAM_CONFIG = {
     desc: "Trading sur indicateurs techniques (RSI, MACD, Bollinger), positions heures à 3 jours",
     agents: { scoring: "scoring_3", trader: "trader_3", journal: "journal_3", learning: "learning_3" },
     api: {
-      trades: "/api/agents/trader_3/metrics",
-      tradesKey: "positions",
+      trades: "/api/trader3/positions",
+      tradesFormat: "active_closed",  // API returns {active: [...], closed: [...]}
       perf: "/api/performance/report",
       learning: "/api/learning3/weekly-config",
       scoring: null,
@@ -51,8 +52,8 @@ const TEAM_CONFIG = {
     desc: "Confluence-driven, combine les signaux des 3 équipes",
     agents: { scoring: "scoring_4", trader: "trader_4", journal: "journal_4", learning: "learning_4" },
     api: {
-      trades: "/api/agents/trader_4/metrics",
-      tradesKey: "positions",
+      trades: "/api/trader4/positions",
+      tradesFormat: "dict",  // API returns {ticker: posData}
       perf: "/api/performance/report",
       learning: "/api/learning4/weekly-config",
       scoring: null,
@@ -337,11 +338,31 @@ function TraderSection({ teamId }) {
       fetch(config.api.trades)
         .then((r) => r.ok ? r.json() : [])
         .then((d) => {
-          if (Array.isArray(d)) setTrades(d);
-          else if (config.api.tradesKey && Array.isArray(d?.[config.api.tradesKey])) setTrades(d[config.api.tradesKey]);
-          else if (Array.isArray(d?.trades)) setTrades(d.trades);
-          else if (Array.isArray(d?.history)) setTrades(d.history);
-          else setTrades([]);
+          const fmt = config.api.tradesFormat;
+          if (fmt === "dict") {
+            // Dict {ticker: posData} — convert to array, mark active vs closed
+            const values = d && typeof d === "object" && !Array.isArray(d) ? Object.values(d) : [];
+            // Active positions get status=PENDING for display, FLAT/NONE are history
+            const normalized = values.map((p) => ({
+              ...p,
+              result: (p.direction && p.direction !== "FLAT" && p.direction !== "NONE") ? "PENDING" : (p.result || "CLOSED"),
+              status: (p.direction && p.direction !== "FLAT" && p.direction !== "NONE") ? "PENDING" : "CLOSED",
+            }));
+            setTrades(normalized);
+          } else if (fmt === "active_closed") {
+            // {active: [...], closed: [...]}
+            const active = Array.isArray(d?.active) ? d.active.map((p) => ({ ...p, result: p.result || "PENDING", status: "PENDING" })) : [];
+            const closed = Array.isArray(d?.closed) ? d.closed : [];
+            setTrades([...active, ...closed]);
+          } else if (Array.isArray(d)) {
+            setTrades(d);
+          } else if (Array.isArray(d?.trades)) {
+            setTrades(d.trades);
+          } else if (Array.isArray(d?.history)) {
+            setTrades(d.history);
+          } else {
+            setTrades([]);
+          }
         })
         .catch(() => setTrades([]));
     }
@@ -362,7 +383,7 @@ function TraderSection({ teamId }) {
     return list;
   }, [trades, filterResult]);
 
-  const pending = trades.filter((t) => t.result === "PENDING" || t.status === "PENDING");
+  const pending = trades.filter((t) => t.result === "PENDING" || t.status === "PENDING" || t.status === "active");
   const paged = paginate(filteredTrades, page);
   const tp = totalPages(filteredTrades);
 
@@ -409,22 +430,29 @@ function TraderSection({ teamId }) {
                   <th>Actif</th>
                   <th>Direction</th>
                   <th>Entrée</th>
+                  <th>Actuel</th>
                   <th>Target</th>
                   <th>Stop</th>
-                  <th>R/R</th>
+                  <th>P&L</th>
                 </tr>
               </thead>
               <tbody>
-                {pending.map((t, i) => (
-                  <tr key={`${t.ticker}-${i}`}>
-                    <td className="ticker-cell">{tickerName(t.ticker)}</td>
-                    <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-                    <td>{t.entry_price?.toFixed(2)}</td>
-                    <td style={{ color: "var(--green)" }}>{t.target_price?.toFixed(2)}</td>
-                    <td style={{ color: "var(--red)" }}>{t.stop_price?.toFixed(2)}</td>
-                    <td>{t.risk_reward?.toFixed(2)}</td>
-                  </tr>
-                ))}
+                {pending.map((t, i) => {
+                  const livePnl = t.unrealized_pnl_pct ?? t.pnl_pct ?? null;
+                  return (
+                    <tr key={`${t.ticker}-${t.strategy || ""}-${i}`}>
+                      <td className="ticker-cell">{tickerName(t.ticker)}</td>
+                      <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
+                      <td>{t.entry_price?.toFixed(2)}</td>
+                      <td>{t.current_price?.toFixed(2) || "\u2014"}</td>
+                      <td style={{ color: "var(--green)" }}>{t.target_price?.toFixed(2) || "\u2014"}</td>
+                      <td style={{ color: "var(--red)" }}>{t.stop_price?.toFixed(2) || "\u2014"}</td>
+                      <td style={{ color: pnlColor(livePnl), fontWeight: 600 }}>
+                        {livePnl != null ? `${livePnl > 0 ? "+" : ""}${livePnl.toFixed(2)}%` : "\u2014"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

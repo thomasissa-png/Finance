@@ -2136,109 +2136,77 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
 }
 
 /* ── Scan Slot — Multi-Team Display ─────────────────── */
-.scan-slot-container {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.scan-teams-row {
+/* Compact scan summary grid */
+.scan-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 @media (max-width: 768px) {
-  .scan-teams-row {
+  .scan-summary-grid {
     grid-template-columns: 1fr;
   }
 }
-.team-scan-result {
+.scan-summary-slot {
   background: var(--bg-secondary);
-  border-radius: 6px;
-  padding: 8px 10px;
-  border-left: 3px solid var(--accent);
-  min-height: 42px;
+  border-radius: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
 }
-.team-scan-header {
+.scan-summary-header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  margin-bottom: 2px;
-}
-.team-scan-name {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.team-scan-status {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.team-scan-status.idle {
-  background: rgba(139, 157, 195, 0.12);
-  color: var(--text-muted);
-}
-.team-scan-status.active {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--accent);
-}
-.team-scan-status.error {
-  background: rgba(239, 68, 68, 0.12);
-  color: var(--red);
-}
-.team-scan-change {
-  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 0;
-  font-size: 11px;
-  flex-wrap: wrap;
+  margin-bottom: 8px;
 }
-.team-scan-action {
-  font-size: 9px;
+.scan-summary-label {
+  font-size: 12px;
   font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
-  text-transform: uppercase;
+  color: var(--text-primary);
   letter-spacing: 0.02em;
 }
-.team-scan-action.open {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--accent);
-}
-.team-scan-action.tp {
-  background: rgba(34, 197, 94, 0.15);
-  color: var(--green);
-}
-.team-scan-action.sl {
-  background: rgba(239, 68, 68, 0.15);
-  color: var(--red);
-}
-.team-scan-action.expired {
-  background: rgba(234, 179, 8, 0.15);
-  color: var(--yellow);
-}
-.team-scan-reason {
+.scan-summary-time {
   font-size: 10px;
-  color: var(--text-muted);
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.team-scan-strategy {
-  font-size: 9px;
-  padding: 0 4px;
-  border-radius: 2px;
-  background: rgba(139, 157, 195, 0.1);
   color: var(--text-secondary);
 }
-.team-scan-detail.muted {
-  font-size: 10px;
+.scan-summary-time.muted {
   color: var(--text-muted);
-  margin-top: 2px;
+}
+.scan-summary-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scan-summary-body.muted {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 6px 0;
+}
+.scan-summary-team {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0 3px 8px;
+  border-left: 2px solid var(--accent);
+  font-size: 11px;
+}
+.scan-summary-team-name {
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 32px;
+  flex-shrink: 0;
+}
+.scan-summary-activity {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scan-summary-activity.active {
+  color: var(--accent);
+  font-weight: 500;
+}
+.scan-summary-activity.idle {
+  color: var(--text-muted);
 }
