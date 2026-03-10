@@ -30,7 +30,7 @@ from .base import BaseAgent, AgentStatus
 class AgentTrader(BaseAgent):
     name = "trader_1"
     description = "Décision d'investissement — news trading expert"
-    version = "6.5"  # v6.5: timeout audit, trailing stop persistence, spread filter sync
+    version = "6.6"  # v6.6: __import__ fix, div-by-zero guard, direction enum cleanup, cached trades
 
     def __init__(self):
         super().__init__()
@@ -84,12 +84,12 @@ class AgentTrader(BaseAgent):
                     self._trades_today += 1
                     self._trades_total += 1
                     self._last_trade_ticker = rec.ticker
-                    self._last_trade_direction = rec.direction.value if hasattr(rec.direction, 'value') else rec.direction
+                    self._last_trade_direction = rec.direction.value
 
                     self.log_decision("TRADE SELECTED", {
                         "ticker": rec.ticker,
                         "asset": rec.asset_name,
-                        "direction": rec.direction.value if hasattr(rec.direction, 'value') else rec.direction,
+                        "direction": rec.direction.value,
                         "entry_price": rec.entry_price,
                         "target_pct": round(rec.target_pct, 3),
                         "stop_pct": round(rec.stop_pct, 3),
@@ -109,7 +109,7 @@ class AgentTrader(BaseAgent):
                     "trades": [
                         {
                             "ticker": r.ticker,
-                            "direction": r.direction.value if hasattr(r.direction, 'value') else r.direction,
+                            "direction": r.direction.value,
                             "score": round(r.raw_claude_score, 1) if r.raw_claude_score else None,
                         }
                         for r in result.recommendations
@@ -134,7 +134,6 @@ class AgentTrader(BaseAgent):
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
 
-            duration_ms = int((time.monotonic() - start) * 1000)
             action = (f"Trade: {self._last_trade_direction} {self._last_trade_ticker}"
                       if result.has_trade else f"No trade: {result.reason_no_trade}")
             self._set_status(AgentStatus.IDLE, action)
@@ -208,7 +207,7 @@ class AgentTrader(BaseAgent):
                      level="ERROR")
             return ScanResult(
                 scan_type=scan_type,
-                timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                timestamp=datetime.now(timezone.utc),
                 has_trade=False,
                 reason_no_trade="Trade selection timeout (60s) — possible market data hang",
                 news_analyzed=len(scored),

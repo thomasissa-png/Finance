@@ -270,7 +270,12 @@ def monitor_positions() -> list[dict]:
 
 
 def _compute_pnl(trade: TradeRecommendation, exit_price: float) -> float:
-    """Compute PnL percentage."""
+    """Compute PnL percentage.
+
+    T1-P2: Guard against division by zero (consistent with journal.py A2).
+    """
+    if not trade.entry_price or trade.entry_price == 0:
+        return 0.0
     if trade.direction == Direction.LONG:
         return round((exit_price - trade.entry_price) / trade.entry_price * 100, 4)
     return round((trade.entry_price - exit_price) / trade.entry_price * 100, 4)

@@ -109,10 +109,19 @@ def _save_positions(positions: dict):
         return
 
     _ensure_positions_file()
-    with open(POSITIONS_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(positions, f, indent=2, default=str)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    # T2-P1: Atomic write — write to temp then rename (avoids truncate-before-lock race)
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(POSITIONS_FILE), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(positions, f, indent=2, default=str)
+        os.replace(tmp_path, POSITIONS_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _pg_load_positions() -> dict:
@@ -150,19 +159,16 @@ def _pg_save_positions(positions: dict):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 for ticker, data in positions.items():
+                    data_json = json.dumps(data, default=str)  # T2-P12: serialize once
                     cur.execute("""
                         INSERT INTO trend_positions (ticker, data, updated_at)
                         VALUES (%s, %s, NOW())
                         ON CONFLICT (ticker) DO UPDATE SET data = %s, updated_at = NOW()
-                    """, (ticker, json.dumps(data, default=str),
-                          json.dumps(data, default=str)))
+                    """, (ticker, data_json, data_json))
     except Exception as exc:
         logger.warning("PG save trend_positions failed: %s — fallback JSON", exc)
-        _ensure_positions_file()
-        with open(POSITIONS_FILE, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            json.dump(positions, f, indent=2, default=str)
-            fcntl.flock(f, fcntl.LOCK_UN)
+        # T2-P2: Atomic write for fallback too
+        _save_positions(positions)
 
 
 def _fetch_current_price(ticker: str) -> float | None:
@@ -200,7 +206,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "7.6"  # v7.6: remove total_score pre-filter (was using intraday edge_factor, penalising trend signals)
+    version = "7.7"  # v7.7: Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once
 
     def __init__(self):
         super().__init__()
@@ -382,28 +388,31 @@ class AgentTrader2(BaseAgent):
         tickers = list(TREND_TICKERS.keys())
         prices: dict[str, float | None] = {}
 
+        # T2-P18: Use shutdown(wait=False, cancel_futures=True) pattern
+        executor = ThreadPoolExecutor(max_workers=4)
         try:
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {
-                    executor.submit(_fetch_current_price, t): t
-                    for t in tickers
-                }
-                for future in as_completed(futures, timeout=PER_FETCH_TIMEOUT_S * 2):
-                    ticker = futures[future]
-                    try:
-                        prices[ticker] = future.result(timeout=PER_FETCH_TIMEOUT_S)
-                    except Exception as exc:
-                        logger.warning("Price fetch timeout/error for %s: %s", ticker, exc)
-                        prices[ticker] = None
+            futures = {
+                executor.submit(_fetch_current_price, t): t
+                for t in tickers
+            }
+            for future in as_completed(futures, timeout=PER_FETCH_TIMEOUT_S * 2):
+                ticker = futures[future]
+                try:
+                    prices[ticker] = future.result(timeout=PER_FETCH_TIMEOUT_S)
+                except Exception as exc:
+                    logger.warning("Price fetch timeout/error for %s: %s", ticker, exc)
+                    prices[ticker] = None
         except Exception as exc:
             logger.warning("Parallel price fetch failed: %s — trying sequential", exc)
             for t in tickers:
                 if t not in prices:
                     prices[t] = _fetch_current_price(t)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         now_iso = datetime.now(timezone.utc).isoformat()
         for ticker, price in prices.items():
-            if not price or ticker not in positions:
+            if price is None or ticker not in positions:
                 continue
             pos = positions[ticker]
             pos["current_price"] = price

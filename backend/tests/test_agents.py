@@ -1167,14 +1167,14 @@ class TestTeam3V2Trader3:
         assert "SI=F" in TECH_CORRELATION_GROUPS["gold_silver"]
 
     def test_correlation_conflict_detection(self):
-        """P8: Should detect opposing directions in correlated group."""
+        """P8: Should detect ANY position in correlated group (v2.1: blocks all, not just opposing)."""
         from backend.app.agents.agent_trader_3 import AgentTrader3
         trader = AgentTrader3()
         active = [{"ticker": "GC=F", "direction": "LONG"}]
         # SI=F SHORT should conflict with GC=F LONG (gold_silver group)
         assert trader._check_correlation_conflict("SI=F", "SHORT", active) is True
-        # SI=F LONG should NOT conflict (same direction)
-        assert trader._check_correlation_conflict("SI=F", "LONG", active) is False
+        # SI=F LONG should ALSO conflict (same group = double exposure)
+        assert trader._check_correlation_conflict("SI=F", "LONG", active) is True
         # AAPL SHORT should NOT conflict (different group)
         assert trader._check_correlation_conflict("AAPL", "SHORT", active) is False
 
@@ -1198,7 +1198,7 @@ class TestTeam3V2Trader3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_3 import AgentTrader3
-        assert AgentTrader3.version == "2.0"
+        assert AgentTrader3.version == "2.1"
 
 
 class TestTeam3V2Journal3:
@@ -2047,7 +2047,7 @@ class TestTrader2Fixes:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_2 import AgentTrader2
-        assert AgentTrader2.version == "7.6"
+        assert AgentTrader2.version == "7.7"
 
 
 class TestLearning2SnapshotContamination:

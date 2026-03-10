@@ -112,11 +112,20 @@ def _save_positions(positions: dict):
         _pg_save_positions(positions)
         return
 
+    # T3-P3: Atomic write — write to temp then rename (avoids truncate-before-lock race)
     _ensure_positions_file()
-    with open(POSITIONS_FILE, "w") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        json.dump(positions, f, indent=2, default=str)
-        fcntl.flock(f, fcntl.LOCK_UN)
+    import tempfile
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(POSITIONS_FILE), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(positions, f, indent=2, default=str)
+        os.replace(tmp_path, POSITIONS_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _pg_load_positions() -> dict:
@@ -165,11 +174,8 @@ def _pg_save_positions(positions: dict):
                 """, (data_json, data_json))
     except Exception as exc:
         logger.warning("PG save tech_positions failed: %s — fallback JSON", exc)
-        _ensure_positions_file()
-        with open(POSITIONS_FILE, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            json.dump(positions, f, indent=2, default=str)
-            fcntl.flock(f, fcntl.LOCK_UN)
+        # T3-P3: Use atomic write for fallback
+        _save_positions(positions)
 
 
 def _fetch_current_price(ticker: str) -> float | None:
@@ -203,7 +209,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "2.0"
+    version = "2.1"  # v2.1: Disabled strategy check, correlation fix, atomic writes, weekly config persistence
 
     def __init__(self):
         super().__init__()
@@ -212,6 +218,8 @@ class AgentTrader3(BaseAgent):
         self._evaluations_today: int = 0
         self._current_learning: dict = {}
         self._weekly_config: dict | None = None  # J5: weekly strategy config
+        # T3-P5: Load persisted weekly config on init (survives restart)
+        self._load_weekly_config_from_disk()
 
     def run(self, tech_scoring=None, learning_data=None,
             weekly_config=None, **kwargs) -> dict:
@@ -416,7 +424,8 @@ class AgentTrader3(BaseAgent):
                 entry_dt = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
                 holding_hours = (now - entry_dt).total_seconds() / 3600
             except (ValueError, AttributeError, TypeError):
-                holding_hours = 0
+                # T3-P7: Default to large value to force expiry (not 0 which blocks it)
+                holding_hours = MAX_HOLDING_DAYS * 24 + 1
 
             # Check target hit
             target_pct = pos.get("target_pct", 0)
@@ -513,15 +522,14 @@ class AgentTrader3(BaseAgent):
         if ticker_group is None:
             return False  # No group, no conflict
 
-        # Check existing active positions for same-group conflicts
+        # T3-P2: Check existing active positions for same-group conflicts
+        # Block ANY position on a different ticker in the same group (same OR opposing direction)
+        # Same direction = double exposure risk, opposing = hedge that shouldn't exist here
         group_tickers = TECH_CORRELATION_GROUPS[ticker_group]
         for pos in active_positions:
             pos_ticker = pos.get("ticker", "")
-            pos_dir = pos.get("direction", "")
             if pos_ticker in group_tickers and pos_ticker != ticker:
-                # Same group, different ticker — conflict if opposing directions
-                if pos_dir != direction:
-                    return True  # Opposing direction in correlated group = conflict
+                return True  # Same group, different ticker = correlation conflict
 
         return False
 
@@ -578,6 +586,11 @@ class AgentTrader3(BaseAgent):
         # P6: Get agent versions for stamping
         agent_versions = self._get_agent_versions()
 
+        # T3-P1: Build disabled set from weekly config
+        disabled_strategies = set()
+        if self._weekly_config:
+            disabled_strategies = set(self._weekly_config.get("disabled_strategies", []))
+
         for setup in setups:
             if len(current_active) + len(new_positions) >= MAX_POSITIONS:
                 break
@@ -587,6 +600,10 @@ class AgentTrader3(BaseAgent):
             direction = setup.get("direction", "")
             score = setup.get("score", 0)
             timeframe = setup.get("timeframe", "1d")
+
+            # T3-P1: Skip strategies that Learning 3 explicitly disabled
+            if strategy in disabled_strategies:
+                continue
 
             # Skip if already have same ticker+direction position
             if (ticker, direction) in active_ticker_dirs:
@@ -612,6 +629,13 @@ class AgentTrader3(BaseAgent):
             adj_score *= timeframe_adj.get(timeframe, 1.0)
 
             if adj_score < MIN_TRADE_SCORE:
+                continue
+
+            # T3-P6: Skip setups with invalid entry_price
+            entry_price = setup.get("entry_price", 0)
+            if not entry_price or entry_price <= 0:
+                logger.warning("T3-P6: Skipping %s/%s — invalid entry_price: %s",
+                               ticker, strategy, entry_price)
                 continue
 
             # Create position
@@ -795,6 +819,18 @@ class AgentTrader3(BaseAgent):
             "strategy_counts": strategy_counts,
             "max_positions": MAX_POSITIONS,
         }
+
+    def _load_weekly_config_from_disk(self):
+        """T3-P5: Load persisted weekly config from disk (survives restart)."""
+        config_path = Path(__file__).parent.parent.parent.parent / "data" / "learning3_weekly_config.json"
+        try:
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    self._weekly_config = json.load(f)
+                logger.info("T3-P5: Loaded weekly config from disk (%s)",
+                           self._weekly_config.get("generated_at", "?"))
+        except Exception as exc:
+            logger.debug("Could not load weekly config from disk: %s", exc)
 
     def reset_daily_counters(self):
         """Reset daily counters (called by scheduler at midnight)."""

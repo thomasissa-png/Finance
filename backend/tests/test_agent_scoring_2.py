@@ -23,7 +23,6 @@ from backend.app.agents.agent_scoring_2 import (
     TREND_TICKERS,
     TREND_TICKER_INFO,
     MIN_TREND_SCORE,
-    CHAIN_DISCOUNT,
     _CATEGORY_PRIORITY,
     TREND_SYSTEM_PROMPT,
     TREND_SCORING_TOOL,

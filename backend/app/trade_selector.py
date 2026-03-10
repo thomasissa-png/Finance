@@ -1,6 +1,7 @@
 """Selects the best trade from scored news and calibrates entry/TP/SL."""
 
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 
 from .market_data import fetch_history
@@ -47,6 +48,25 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+# T1-P5: Per-scan trade cache to avoid repeated load_trades() calls
+# Reset at the start of each select_trade() call
+_cached_trades: list | None = None
+
+
+def _get_trades_cached() -> list:
+    """Return cached trades list (loaded once per select_trade call)."""
+    global _cached_trades
+    if _cached_trades is not None:
+        return _cached_trades
+    try:
+        from .learning import load_trades
+        _cached_trades = load_trades()
+    except Exception as exc:
+        logger.warning("Failed to load trades: %s", exc)
+        _cached_trades = []
+    return _cached_trades
+
+
 # Cross-day dedup: don't trade the same ticker within this many days
 RECENT_TRADE_COOLDOWN_DAYS = 3
 
@@ -63,14 +83,11 @@ CATEGORY_COOLDOWN_DAYS: dict[str, int] = {
 def _get_recently_traded_tickers(cooldown_days: int = RECENT_TRADE_COOLDOWN_DAYS) -> set[str]:
     """Return tickers traded in the last N days (to avoid repeating the same trade).
 
-    Loads trades and checks which tickers have PENDING or recently-closed trades.
-    This prevents the system from proposing the same trade day after day on
-    persistent news (e.g., wheat drought story running for a week).
+    T1-P5: Uses cached trades (loaded once per select_trade call).
     """
     try:
-        from .learning import load_trades
         cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
-        trades = load_trades()
+        trades = _get_trades_cached()
         return {
             t.ticker
             for t in trades
@@ -101,10 +118,9 @@ def _check_reentry_eligible(ticker: str, news_category: str) -> bool:
     if news_category not in ("weather", "supply_chain", "commodity"):
         return False
     try:
-        from .learning import load_trades
         from .models import TradeResult
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        trades = load_trades()
+        trades = _get_trades_cached()
         for t in trades:
             if t.ticker != ticker:
                 continue
@@ -121,12 +137,14 @@ def _check_reentry_eligible(ticker: str, news_category: str) -> bool:
 
 
 def _count_today_trades() -> int:
-    """Count how many trades were already taken today (for daily cap)."""
+    """Count how many trades were already taken today (for daily cap).
+
+    T1-P15: Uses cached trades (loaded once per select_trade call).
+    """
     try:
-        from .learning import load_trades
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
-        trades = load_trades()
+        trades = _get_trades_cached()
         return sum(1 for t in trades if t.timestamp.strftime("%Y-%m-%d") == today)
     except Exception as exc:
         logger.warning("Failed to count today's trades: %s", exc)
@@ -225,7 +243,9 @@ def _check_binary_event(news_title: str, reasoning: str) -> str | None:
 
 
 # v4.0 D3: Cache dynamic correlation results (TTL 1h) to avoid redundant yfinance calls
+import threading as _corr_threading
 _corr_cache: dict[str, tuple[float | None, float]] = {}  # key -> (correlation, timestamp)
+_corr_cache_lock = _corr_threading.Lock()  # T1-P9: Thread safety for concurrent scans
 _CORR_CACHE_TTL = 3600  # 1 hour
 
 
@@ -237,14 +257,15 @@ def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20)
     silent hangs that block the entire scan pipeline.
     Returns correlation coefficient (-1 to 1), or None if data unavailable.
     """
-    import time as _time
+    _time = time  # T1-P17: Use module-level import
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
     cache_key = f"{min(ticker1, ticker2)}:{max(ticker1, ticker2)}"
-    cached = _corr_cache.get(cache_key)
-    if cached is not None:
-        corr_val, cached_at = cached
-        if _time.time() - cached_at < _CORR_CACHE_TTL:
-            return corr_val
+    with _corr_cache_lock:
+        cached = _corr_cache.get(cache_key)
+        if cached is not None:
+            corr_val, cached_at = cached
+            if _time.time() - cached_at < _CORR_CACHE_TTL:
+                return corr_val
 
     try:
         # v6.5 P9: Use ThreadPoolExecutor with timeout to prevent indefinite blocking
@@ -257,7 +278,8 @@ def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20)
             data2 = f2.result(timeout=10)
         except (TimeoutError, FuturesTimeoutError):
             logger.warning("Dynamic correlation TIMEOUT for %s vs %s (10s)", ticker1, ticker2)
-            _corr_cache[cache_key] = (None, _time.time())
+            with _corr_cache_lock:
+                _corr_cache[cache_key] = (None, _time.time())
             return None
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -274,7 +296,8 @@ def _compute_dynamic_correlation(ticker1: str, ticker2: str, lookback: int = 20)
             return None
         corr = returns1.loc[common].corr(returns2.loc[common])
         result = round(corr, 3) if corr == corr else None  # NaN check
-        _corr_cache[cache_key] = (result, _time.time())
+        with _corr_cache_lock:
+            _corr_cache[cache_key] = (result, _time.time())
         return result
     except Exception:
         return None
@@ -318,7 +341,7 @@ def _check_correlation(ticker: str, existing_trade_tickers: list[str] | str | No
         # If both appear in static groups (even different ones), the groups already capture
         # their correlation profile — no need for expensive yfinance rolling correlation.
         if not (ticker_in_any_group and existing_in_any_group):
-            import time as _corr_time
+            _corr_time = time  # T1-P17: Use module-level import
             _corr_start = _corr_time.monotonic()
             dyn_corr = _compute_dynamic_correlation(ticker, existing)
             _corr_elapsed = _corr_time.monotonic() - _corr_start
@@ -544,6 +567,10 @@ def select_trades(
     Returns:
         ScanResult with recommendations list (0..N trades).
     """
+    # T1-P5: Reset per-scan trade cache (avoids loading trades N times per scan)
+    global _cached_trades
+    _cached_trades = None
+
     now = datetime.now(timezone.utc)
 
     # v3.4: Unpack the structured learning data (backward-compatible with flat dict)
