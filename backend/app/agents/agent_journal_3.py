@@ -289,8 +289,16 @@ class AgentJournal3(BaseAgent):
                     continue
 
                 if holding_hours > 3 * 24:
-                    # Force close expired position
-                    price = prices.get(pos["ticker"]) or pos.get("current_price") or pos.get("entry_price")
+                    # Force close expired position — validate fetched price
+                    raw_price = prices.get(pos["ticker"])
+                    if raw_price is not None:
+                        from ..market_data import validate_price
+                        is_valid, val_reason = validate_price(pos["ticker"], raw_price)
+                        if not is_valid:
+                            logger.warning("J3: rejected force-close price for %s — %s",
+                                           pos["ticker"], val_reason)
+                            raw_price = None
+                    price = raw_price or pos.get("current_price") or pos.get("entry_price")
                     entry_price = pos.get("entry_price", 0)
                     direction = pos.get("direction", "LONG")
 

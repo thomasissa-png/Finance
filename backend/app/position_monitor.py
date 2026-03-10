@@ -66,7 +66,11 @@ def _get_current_price(ticker: str) -> float | None:
         if data is not None and not data.empty:
             price = float(data["Close"].iloc[-1])
             if not math.isnan(price) and not math.isinf(price):
-                return price
+                is_valid, val_reason = validate_price(ticker, price)
+                if is_valid:
+                    return price
+                else:
+                    logger.warning("Position monitor: rejected daily bar price for %s — %s", ticker, val_reason)
     except Exception as exc:
         logger.debug("Price fetch failed for %s: %s", ticker, exc)
     return None

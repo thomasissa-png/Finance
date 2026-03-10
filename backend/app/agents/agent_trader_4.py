@@ -770,11 +770,11 @@ class AgentTrader4(BaseAgent):
         """Close an existing position and record P&L."""
         entry_price = position.get("entry_price")
         current_price = position.get("current_price") or _fetch_current_price(ticker)
-        # Validate exit price
+        # Validate exit price (use val_reason to avoid shadowing the close reason parameter)
         if current_price is not None:
-            is_valid, reason = validate_price(ticker, current_price)
+            is_valid, val_reason = validate_price(ticker, current_price)
             if not is_valid:
-                logger.warning("T4 close: rejected exit price for %s — %s, using entry_price", ticker, reason)
+                logger.warning("T4 close: rejected exit price for %s — %s, using entry_price", ticker, val_reason)
                 current_price = entry_price
         direction = position.get("direction", "NEUTRAL")
 
