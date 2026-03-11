@@ -95,8 +95,18 @@ MAX_NEWS_PER_SCAN = 50
 # Network timeout for RSS feed fetches (seconds).
 # feedparser.parse(url) uses urllib with NO timeout internally,
 # so we fetch via requests first, then parse the content.
-# Raised from 15→20s: Replit cold starts have slow DNS/network, 15s was too tight.
-RSS_FETCH_TIMEOUT = 20
+# Reduced from 20→10s: most feeds respond in 1-3s, 20s wasted time on dead feeds.
+# Known-slow feeds get special handling with shorter connect timeout.
+RSS_FETCH_TIMEOUT = 10
+
+# Feeds known to be slow or require special handling — shorter connect timeout (3s)
+# to fail fast when the host is unreachable, while still allowing 10s for data transfer.
+_SLOW_FEEDS: set[str] = {
+    "investing.com",
+    "hellenicshippingnews.com",
+    "english.www.gov.cn",
+    "war.gov",
+}
 
 # Browser User-Agent — many feeds (CNBC, gCaptain, BoE) return 403
 # when they see the default "python-requests/x.y.z" User-Agent.
@@ -209,7 +219,11 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
     """
     items: list[NewsItem] = []
     try:
-        resp = requests.get(feed_url, timeout=RSS_FETCH_TIMEOUT, headers=_RSS_HEADERS)
+        # Use shorter connect timeout (3s) for known-slow feeds to fail fast
+        is_slow = any(domain in feed_url for domain in _SLOW_FEEDS)
+        timeout = (3, RSS_FETCH_TIMEOUT) if is_slow else RSS_FETCH_TIMEOUT
+        resp = requests.get(feed_url, timeout=timeout, headers=_RSS_HEADERS,
+                            allow_redirects=True)
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
         feed_title = feed.feed.get("title", feed_url)
@@ -258,18 +272,18 @@ def collect_rss_news() -> list[NewsItem]:
     futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
     completed_count = 0
     try:
-        for future in as_completed(futures, timeout=60):
+        for future in as_completed(futures, timeout=30):
             url = futures[future]
             try:
-                result = future.result(timeout=25)
+                result = future.result(timeout=15)
                 items.extend(result)
                 completed_count += 1
             except TimeoutError:
-                logger.warning("RSS feed TIMEOUT (25s) for %s", url)
+                logger.warning("RSS feed TIMEOUT (15s) for %s", url)
             except Exception as exc:
                 logger.warning("RSS feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("RSS collection global TIMEOUT (60s), %d/%d feeds completed",
+        logger.warning("RSS collection global TIMEOUT (30s), %d/%d feeds completed",
                        completed_count, len(RSS_FEEDS))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
@@ -288,25 +302,25 @@ def collect_early_signal_news() -> list[NewsItem]:
     """
     items: list[NewsItem] = []
 
-    # Workers increased to 5 (from 3), global timeout 90s (from 45s)
-    # 25 feeds / 5 workers = 5 rounds max, plenty of time for DNS cold-starts
-    executor = ThreadPoolExecutor(max_workers=5)
+    # Workers at 8 (up from 5) to fetch all 20 feeds faster in parallel.
+    # Global timeout 40s (down from 90s): per-feed timeout is 10s, 8 workers = 3 rounds max.
+    executor = ThreadPoolExecutor(max_workers=8)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
     try:
-        for future in as_completed(futures, timeout=90):
+        for future in as_completed(futures, timeout=40):
             url = futures[future]
             try:
-                result = future.result(timeout=25)
+                result = future.result(timeout=15)
                 if result:
                     items.extend(result)
                 completed_count += 1
             except TimeoutError:
-                logger.warning("Early-signal feed TIMEOUT (25s) for %s", url)
+                logger.warning("Early-signal feed TIMEOUT (15s) for %s", url)
             except Exception as exc:
                 logger.warning("Early-signal feed error for %s: %s", url, exc)
     except TimeoutError:
-        logger.warning("Early-signal collection global TIMEOUT (90s), %d/%d feeds completed",
+        logger.warning("Early-signal collection global TIMEOUT (40s), %d/%d feeds completed",
                        completed_count, len(EARLY_SIGNAL_FEEDS))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)

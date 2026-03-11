@@ -571,17 +571,23 @@ def fetch_quote(ticker: str, bypass_cache: bool = False) -> dict | None:
 
     result = None
 
-    # Try Twelve Data /quote
+    # Try Twelve Data /quote for high/low range, override price with /price (real-time)
     mapping = _map_ticker(ticker)
     if mapping and td_available():
         td_sym, extra_params = mapping
         params = {"symbol": td_sym, **extra_params}
-        data = _td_request("quote", params, yf_ticker=ticker)
-        if data and "close" in data:
+        # /quote gives high/low for intraday range calculation
+        quote_data = _td_request("quote", params, yf_ticker=ticker)
+        if quote_data and "close" in quote_data:
             try:
-                price = float(data.get("close", 0))
-                high = float(data.get("high", price))
-                low = float(data.get("low", price))
+                price = float(quote_data.get("close", 0))
+                high = float(quote_data.get("high", price))
+                low = float(quote_data.get("low", price))
+                # Override with real-time price from /price endpoint
+                # /quote "close" is the daily bar close (stale for futures during trading hours)
+                rt_price = fetch_price(ticker, bypass_cache=bypass_cache)
+                if rt_price and rt_price > 0:
+                    price = rt_price
                 if price > 0 and high > low:
                     intraday_range_pct = (high - low) / price * 100
                     result = {
@@ -618,21 +624,59 @@ def fetch_quote(ticker: str, bypass_cache: bool = False) -> dict | None:
 
 
 def fetch_price(ticker: str, bypass_cache: bool = False) -> float | None:
-    """Fetch current price for a ticker.
+    """Fetch current real-time price for a ticker.
 
-    Wrapper around fetch_quote() — returns just the price float or None.
-    Used by agents (Trader 2/3/4, Journal 2/3) for position monitoring.
+    Uses Twelve Data /price endpoint (real-time last trade) instead of /quote
+    (which returns daily bar close, not live price — causes stale entry prices
+    for commodity futures). Falls back to yfinance if TD unavailable.
 
     Args:
         bypass_cache: If True, skip cache and force fresh fetch.
             Use when opening positions to get real-time price.
     """
-    quote = fetch_quote(ticker, bypass_cache=bypass_cache)
-    if quote and "price" in quote:
-        price = quote["price"]
-        if price is not None and price > 0:
-            return price
-    return None
+    cache_key = f"price:{ticker}"
+    if not bypass_cache:
+        cached = _cache_get_or_miss(cache_key)
+        if cached is not _CACHE_MISS:
+            return cached
+
+    price = None
+
+    # Try Twelve Data /price (1 credit, returns real-time last trade price)
+    mapping = _map_ticker(ticker)
+    if mapping and td_available():
+        td_sym, extra_params = mapping
+        params = {"symbol": td_sym, **extra_params}
+        data = _td_request("price", params, yf_ticker=ticker)
+        if data and "price" in data:
+            try:
+                price = float(data["price"])
+                if price <= 0:
+                    price = None
+            except (ValueError, TypeError):
+                price = None
+
+    # Fallback: yfinance
+    if price is None:
+        try:
+            t = yf.Ticker(ticker)
+            info = t.fast_info if hasattr(t, "fast_info") else t.info
+            price = float(info.get("lastPrice") or info.get("regularMarketPrice") or 0)
+            if price <= 0:
+                price = None
+        except Exception:
+            price = None
+
+    # Fallback: fetch_quote (legacy path, uses /quote close as last resort)
+    if price is None:
+        quote = fetch_quote(ticker, bypass_cache=bypass_cache)
+        if quote and "price" in quote:
+            price = quote["price"]
+            if price is not None and price <= 0:
+                price = None
+
+    _cache_set(cache_key, price, CACHE_TTL_SHORT)
+    return price
 
 
 # ── Price validation ─────────────────────────────────────────────

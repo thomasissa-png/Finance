@@ -775,6 +775,17 @@ def select_trades(
 
         candidates.append((sn, adjusted_score, eligible_for_news, multiplier))
 
+        # Log learning decomposition for diagnostics (Bug #1: explains score reduction)
+        if multiplier < 0.8 or multiplier > 1.2:
+            logger.info(
+                "Learning impact on '%s': claude_score=%.1f × mult=%.3f "
+                "(base=%.2f sess=%.2f nc=%.2f regime=%.2f dir=%.2f delay=%.2f) → adjusted=%.1f",
+                sn.news.title[:50], sn.total_score, multiplier,
+                base_mult, current_session_mult, nc_mult,
+                current_regime_mult, dir_mult, delay_bias_adj,
+                adjusted_score,
+            )
+
     candidates.sort(key=lambda x: x[1], reverse=True)
 
     # Log score filtering summary — diagnose why scans produce no trades
@@ -901,15 +912,30 @@ def select_trades(
             # (#22) Correlation check
             if _check_correlation(candidate_ticker, all_existing):
                 logger.debug("D1 fallback: %s correlated, trying next", candidate_ticker)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": candidate_ticker,
+                    "reason": f"Correlated with existing position",
+                    "score": raw_score, "adjusted_score": best_score,
+                })
                 continue
             # Cross-day dedup
             if candidate_ticker in cat_recently_traded and not _check_reentry_eligible(candidate_ticker, best_news.news_category):
                 logger.debug("D1 fallback: %s recently traded, trying next", candidate_ticker)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": candidate_ticker,
+                    "reason": f"Recently traded (cooldown {effective_cooldown}d)",
+                    "score": raw_score, "adjusted_score": best_score,
+                })
                 continue
             # Price check
             _p, _ar, _pc, _vr, _to = price_cache.get(candidate_ticker, (None, 1.5, None, None, None))
             if _p is None:
                 logger.debug("D1 fallback: %s no price, trying next", candidate_ticker)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": candidate_ticker,
+                    "reason": "Price unavailable",
+                    "score": raw_score, "adjusted_score": best_score,
+                })
                 continue
             # Found valid ticker
             ticker = candidate_ticker

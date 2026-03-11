@@ -385,7 +385,7 @@ function TraderSection({ teamId }) {
 
   const config = TEAM_CONFIG[teamId];
 
-  useEffect(() => {
+  const fetchTradesAndPerf = useCallback(() => {
     if (config?.api.trades) {
       fetch(config.api.trades)
         .then((r) => r.ok ? r.json() : (config.api.tradesFormat === "dict" ? {} : []))
@@ -398,7 +398,13 @@ function TraderSection({ teamId }) {
         if (report && config?.perfKey) setPerf(report[config.perfKey] || null);
       })
       .catch(() => {});
-  }, [teamId, config?.api.trades, config?.api.tradesFormat, config?.perfKey]);
+  }, [config?.api.trades, config?.api.tradesFormat, config?.perfKey]);
+
+  useEffect(() => {
+    fetchTradesAndPerf();
+    const id = setInterval(fetchTradesAndPerf, 30_000);
+    return () => clearInterval(id);
+  }, [teamId, fetchTradesAndPerf]);
 
   const active = trades.filter((t) => t._isActive);
   const history = trades.filter((t) => !t._isActive);
@@ -1036,7 +1042,7 @@ function OverviewSection({ teamId, agents }) {
   (agents || []).forEach((a) => { agentMap[a.name] = a; });
   const teamAgentNames = Object.values(config.agents);
 
-  useEffect(() => {
+  const fetchOverviewData = useCallback(() => {
     // For overview, only fetch active positions (lightweight endpoint for Team 1)
     const tradesUrl = config?.api.tradesActive || config?.api.trades;
     if (tradesUrl) {
@@ -1051,7 +1057,13 @@ function OverviewSection({ teamId, agents }) {
         if (report && config?.perfKey) setPerf(report[config.perfKey] || null);
       })
       .catch(() => {});
-  }, [teamId, config?.api.trades, config?.api.tradesActive, config?.api.tradesFormat, config?.perfKey]);
+  }, [config?.api.trades, config?.api.tradesActive, config?.api.tradesFormat, config?.perfKey]);
+
+  useEffect(() => {
+    fetchOverviewData();
+    const id = setInterval(fetchOverviewData, 30_000);
+    return () => clearInterval(id);
+  }, [teamId, fetchOverviewData]);
 
   const active = trades.filter((t) => t._isActive);
   const wrField = teamId === "2" ? "flip_win_rate" : "win_rate";
