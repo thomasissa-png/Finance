@@ -479,17 +479,19 @@ RSS_FEEDS = [
     "https://feeds.bbci.co.uk/news/rss.xml",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://www.cnbc.com/id/10000664/device/rss/rss.html",
-    "https://www.investing.com/rss/news.rss",
+    # Removed 2026-03-11: investing.com — Cloudflare anti-bot blocks all non-browser requests (403).
+    # Phase 3 low value anyway; BBC + CNBC cover mainstream news.
 ]
 
 # ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
-# Verified 2026-03-09 — 20 feeds (replaced 4 dead: drought.gov 404, climate.gov 404, NASS SSL, splash247 SSL)
+# Verified 2026-03-11 — 17 feeds (removed: weather.gov HTML page, gov.cn 403, investing.com Cloudflare)
 EARLY_SIGNAL_FEEDS = [
     # Meteo / Agri — signaux physiques pour commodities
     # drought.gov/rss 404 since 2026-03. Covered by Open-Meteo drought API + NWS alerts.
     "https://www.spc.noaa.gov/products/spcrss.xml",                # SPC: severe weather outlooks, tornado/storm watches
-    "https://www.weather.gov/rss_page.php?site_name=nws",          # NWS national weather summary
-    "https://api.weather.gov/alerts/active.atom",                   # NWS active alerts (CAP v1.2 ATOM)
+    # Removed 2026-03-11: weather.gov/rss_page.php — HTML page listing feeds, NOT an RSS feed.
+    # feedparser got 0 entries. NWS coverage via api.weather.gov + SPC + Open-Meteo.
+    "https://api.weather.gov/alerts/active.atom",                   # NWS active alerts (CAP v1.2 ATOM — feedparser handles ATOM natively)
     "https://www.nhc.noaa.gov/index-at.xml",                       # NHC: Atlantic hurricane advisories (Jun-Nov critical for oil/sugar)
     # climate.gov archived June 2025, feeds dead. ENSO/outlooks covered by Open-Meteo + NWS.
     # USDA / FAO — rapports sur les recoltes et stocks
@@ -517,7 +519,8 @@ EARLY_SIGNAL_FEEDS = [
     # ── P2-1: China data sources — key demand driver for commodities ──
     # Removed 2026-03-10: caixin.com/api/dataapi — persistent timeouts, unreliable API endpoint
     # Removed 2026-03-10: xinhuanet.com/english/rss — 404 (domain/path changed)
-    "http://english.www.gov.cn/policies/latestreleases/rss.xml",   # China State Council: policy announcements, trade decisions
+    # Removed 2026-03-11: english.www.gov.cn — HTTP 403 "Host not allowed" from outside China.
+    # China coverage via GNews queries (PMI, PBOC, export bans).
     # ── P3-3: Government gazettes — export bans, tariffs, regulations ──
     "https://www.federalregister.gov/documents/search.atom?conditions%5Bagencies%5D%5B%5D=international-trade-commission&conditions%5Btype%5D%5B%5D=RULE",  # US Federal Register: trade rules, tariffs
     # Removed 2026-03-10: eur-lex.europa.eu — persistent timeouts

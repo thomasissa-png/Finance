@@ -102,9 +102,7 @@ RSS_FETCH_TIMEOUT = 10
 # Feeds known to be slow or require special handling — shorter connect timeout (3s)
 # to fail fast when the host is unreachable, while still allowing 10s for data transfer.
 _SLOW_FEEDS: set[str] = {
-    "investing.com",
     "hellenicshippingnews.com",
-    "english.www.gov.cn",
     "war.gov",
 }
 
