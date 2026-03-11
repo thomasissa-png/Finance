@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { DIR_COLORS, DIR_ARROWS, POLL_FAST, T4_TEAM_COLORS, T4_TEAM_LABELS } from "../utils/constants";
 import { apiFetch } from "../utils/api";
 import { pnlColor } from "../utils/format";
+import TickerLink from "./TickerLink";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 
 export default function Trader4Page({ isActive }) {
@@ -202,7 +203,7 @@ export default function Trader4Page({ isActive }) {
             <tbody>
               {activePositions.map((p, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                  <td style={{ fontWeight: 600 }}><TickerLink ticker={p.ticker} raw /></td>
                   <td style={{ color: DIR_COLORS[p.direction] }}>
                     {DIR_ARROWS[p.direction] || "\u2022"} {p.direction}
                   </td>
@@ -248,7 +249,7 @@ export default function Trader4Page({ isActive }) {
                 {pagedHistory.map((t, i) => (
                   <tr key={i}>
                     <td>{t.timestamp ? new Date(t.timestamp).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) : "\u2014"}</td>
-                    <td style={{ fontWeight: 600 }}>{t.ticker}</td>
+                    <td style={{ fontWeight: 600 }}><TickerLink ticker={t.ticker} raw /></td>
                     <td style={{ color: DIR_COLORS[t.direction] }}>{t.direction}</td>
                     <td>{t.confluence_level || 0}/3</td>
                     <td>{t.result || "\u2014"}</td>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { formatDate, formatTime, pnlColor, RESULT_LABELS, CATEGORY_COLORS, scanLabel, paginate, totalPages, PAGE_SIZE } from "../utils/format";
+import TickerLink from "./TickerLink";
 import NewscatPerformance from "./NewscatPerformance";
 
 const LEVEL_ICONS = { INFO: "\u2139\ufe0f", WARN: "\u26a0\ufe0f", ERROR: "\u274c", DECISION: "\u26a1" };
@@ -119,7 +120,7 @@ export default function TraderPage({ isActive }) {
               <tbody>
                 {pending.map((t, i) => (
                   <tr key={`${t.ticker}-${t.timestamp}-${i}`}>
-                    <td className="ticker-cell">{t.ticker}</td>
+                    <td className="ticker-cell"><TickerLink ticker={t.ticker} raw /></td>
                     <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
                     <td>{t.entry_price?.toFixed(2)}</td>
                     <td style={{ color: "var(--green)" }}>{t.target_price?.toFixed(2)}</td>
@@ -182,7 +183,7 @@ export default function TraderPage({ isActive }) {
                     onClick={() => setExpandedTrade(expandedTrade === i ? null : i)}>
                     <td>{formatDate(t.timestamp)}</td>
                     <td className="scan-cell">{scanLabel(t.scan_type)}</td>
-                    <td className="ticker-cell">{t.ticker}</td>
+                    <td className="ticker-cell"><TickerLink ticker={t.ticker} raw /></td>
                     <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
                     <td>
                       <span className="cat-badge" style={{ backgroundColor: CATEGORY_COLORS[t.news_category] || "#90a4ae" }}>
@@ -213,7 +214,7 @@ export default function TraderPage({ isActive }) {
             return (
               <div key={`m-${t.timestamp}-${i}`} className="trade-mobile-card">
                 <div className="trade-mobile-header">
-                  <span className="ticker-cell">{t.ticker}</span>
+                  <span className="ticker-cell"><TickerLink ticker={t.ticker} raw /></span>
                   <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
                   <span className={`result-badge ${res.cls}`}>{res.label}</span>
                 </div>

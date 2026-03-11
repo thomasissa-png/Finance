@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { DIR_COLORS, DIR_ARROWS, POLL_FAST } from "../utils/constants";
 import { apiFetch } from "../utils/api";
 import { pnlColor } from "../utils/format";
+import TickerLink from "./TickerLink";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 import StrategyPerformance from "./StrategyPerformance";
 
@@ -184,7 +185,7 @@ export default function Trader3Page({ isActive }) {
                 const holdingHours = (holdingMs / 3600000).toFixed(1);
                 return (
                   <tr key={i}>
-                    <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                    <td style={{ fontWeight: 600 }}><TickerLink ticker={p.ticker} raw /></td>
                     <td>{p.strategy || "\u2014"}</td>
                     <td style={{ color: DIR_COLORS[p.direction] }}>
                       {DIR_ARROWS[p.direction] || "\u2022"} {p.direction}
@@ -243,7 +244,7 @@ export default function Trader3Page({ isActive }) {
                 {pagedHistory.map((t, i) => (
                   <tr key={i}>
                     <td>{(t.close_time || t.entry_time || t.timestamp) ? new Date(t.close_time || t.entry_time || t.timestamp).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) : "\u2014"}</td>
-                    <td style={{ fontWeight: 600 }}>{t.ticker}</td>
+                    <td style={{ fontWeight: 600 }}><TickerLink ticker={t.ticker} raw /></td>
                     <td>{t.strategy || "\u2014"}</td>
                     <td style={{ color: DIR_COLORS[t.direction] }}>{t.direction}</td>
                     <td>{t.result}</td>

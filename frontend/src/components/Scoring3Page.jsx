@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { LEVEL_ICONS, LEVEL_COLORS, POLL_NORMAL } from "../utils/constants";
 import { apiFetch } from "../utils/api";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
+import TickerLink from "./TickerLink";
 
 const DIR_COLORS = { LONG: "var(--green)", SHORT: "var(--red)", NEUTRAL: "var(--text-muted)" };
 const DIR_ARROWS = { LONG: "\u2191", SHORT: "\u2193", NEUTRAL: "\u2022" };
@@ -113,7 +114,7 @@ export default function Scoring3Page({ isActive }) {
               <tbody>
                 {setups.slice(0, 50).map((s, i) => (
                   <tr key={`${s.ticker}-${s.strategy}-${i}`}>
-                    <td style={{ fontWeight: 600 }}>{s.ticker}</td>
+                    <td style={{ fontWeight: 600 }}><TickerLink ticker={s.ticker} raw /></td>
                     <td>{s.strategy}</td>
                     <td>{s.timeframe}</td>
                     <td style={{ color: DIR_COLORS[s.direction] }}>
@@ -133,7 +134,7 @@ export default function Scoring3Page({ isActive }) {
               {setups.slice(0, 50).map((s, i) => (
                 <div key={`m-${s.ticker}-${s.strategy}-${i}`} className="mobile-card">
                   <div className="mobile-card-header">
-                    <span style={{ fontWeight: 600 }}>{s.ticker}</span>
+                    <span style={{ fontWeight: 600 }}><TickerLink ticker={s.ticker} raw /></span>
                     <span style={{ color: DIR_COLORS[s.direction] }}>
                       {DIR_ARROWS[s.direction] || "\u2022"} {s.direction}
                     </span>

@@ -74,6 +74,51 @@ export function tickerName(ticker) {
   return TICKER_NAMES[ticker] || ticker;
 }
 
+// ── Twelve Data chart URLs ──────────────────────────────────
+// Maps yfinance tickers to Twelve Data chart URL slugs.
+// Indices are blacklisted on TD → link to Yahoo Finance instead.
+const TICKER_TD_SLUGS = {
+  // Forex
+  "EURUSD=X": "EUR/USD", "USDJPY=X": "USD/JPY", "GBPUSD=X": "GBP/USD",
+  "USDCHF=X": "USD/CHF", "EURJPY=X": "EUR/JPY", "AUDUSD=X": "AUD/USD",
+  "USDCNH=X": "USD/CNH",
+  // Paris stocks
+  "TTE.PA": "TTE", "MC.PA": "MC", "BNP.PA": "BNP", "SAN.PA": "SAN",
+  "AI.PA": "AI", "OR.PA": "OR", "RMS.PA": "RMS",
+  // Energy
+  "CL=F": "CL1", "BZ=F": "CO1", "NG=F": "NG/USD",
+  // Precious metals
+  "GC=F": "XAU/USD", "SI=F": "XAG/USD", "PL=F": "XPT/USD", "PA=F": "XPD/USD",
+  // Base metals
+  "HG=F": "HG1",
+  // Agriculture
+  "ZW=F": "W_1", "ZC=F": "C_1", "ZS=F": "S_1", "CT=F": "CT1",
+  // Soft commodities
+  "CC=F": "CC1", "KC=F": "KC1", "SB=F": "SB1", "OJ=F": "JO1",
+  // Livestock
+  "LE=F": "LC1", "HE=F": "LH1",
+  // US stocks & ETFs
+  "AAPL": "AAPL", "MSFT": "MSFT", "TSLA": "TSLA", "AMZN": "AMZN",
+  "URA": "URA",
+};
+
+const _YF_INDEX_TICKERS = new Set([
+  "^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX",
+  "^FCHI", "^GDAXI", "^FTSE", "^N225",
+]);
+
+export function tickerTdUrl(ticker) {
+  if (!ticker) return null;
+  // Indices → Yahoo Finance (not on TD free tier)
+  if (_YF_INDEX_TICKERS.has(ticker)) {
+    return `https://finance.yahoo.com/quote/${encodeURIComponent(ticker)}/`;
+  }
+  const slug = TICKER_TD_SLUGS[ticker];
+  if (slug) return `https://twelvedata.com/chart/${slug}`;
+  // Fallback: try direct slug
+  return `https://twelvedata.com/chart/${encodeURIComponent(ticker)}`;
+}
+
 /** Replace ticker IDs in free-text strings with readable names.
  *  Matches case-insensitively and preserves surrounding context. */
 const _TICKER_RE = (() => {

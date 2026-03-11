@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { DIR_COLORS, POLL_NORMAL, T4_TEAM_COLORS, T4_TEAM_LABELS } from "../utils/constants";
 import { apiFetch, apiTrigger } from "../utils/api";
 import { pnlColor } from "../utils/format";
+import TickerLink from "./TickerLink";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 
 export default function Journal4Page({ isActive }) {
@@ -209,7 +210,7 @@ export default function Journal4Page({ isActive }) {
                 {levelEntries.slice(0, 20).map((e, i) => (
                   <tr key={i}>
                     <td>{e.entry_time ? new Date(e.entry_time).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) : "\u2014"}</td>
-                    <td style={{ fontWeight: 600 }}>{e.ticker}</td>
+                    <td style={{ fontWeight: 600 }}><TickerLink ticker={e.ticker} raw /></td>
                     <td style={{ color: DIR_COLORS[e.direction] }}>{e.direction}</td>
                     <td>
                       {(e.contributing_teams || []).map((t, j) => (

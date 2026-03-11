@@ -3,6 +3,7 @@ import {
   RESULT_LABELS, CATEGORY_COLORS, formatDate, formatTime, formatPnl,
   pnlColor, scoreColor, timeAgo, paginate, totalPages, PAGE_SIZE,
 } from "../utils/format";
+import TickerLink from "./TickerLink";
 
 export default function Journal({ isActive }) {
   const [entries, setEntries] = useState([]);
@@ -278,7 +279,7 @@ export default function Journal({ isActive }) {
                     onClick={() => setExpandedEntry(isExpanded ? null : key)}
                   >
                     <span className="journal-compact-time">{formatTime(e.entry_time)}</span>
-                    <span className="journal-compact-ticker">{e.ticker || "--"}</span>
+                    <span className="journal-compact-ticker"><TickerLink ticker={e.ticker} raw /></span>
                     <span
                       className={`direction-badge sm ${e.direction === "LONG" ? "long" : "short"}`}
                     >
@@ -633,7 +634,7 @@ export default function Journal({ isActive }) {
                   <div className="trade-mobile-card-header">
                     <div>
                       <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{e.asset_name || "--"}</div>
-                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{e.ticker || "--"}</div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}><TickerLink ticker={e.ticker} raw style={{ color: "var(--text-muted)" }} /></div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span className={`direction-badge sm ${e.direction === "LONG" ? "long" : "short"}`}>

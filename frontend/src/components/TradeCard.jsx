@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { formatTime, confidenceColor, confidenceLabel, tickerName } from "../utils/format";
+import TickerLink from "./TickerLink";
 
 export default function TradeCard({ scan, label }) {
   const [open, setOpen] = useState(false);
@@ -36,7 +37,7 @@ export default function TradeCard({ scan, label }) {
           <div>
             <div className="trade-asset">{t.asset_name || tickerName(t.ticker)}</div>
             <div className="trade-ticker">
-              {t.ticker}
+              <TickerLink ticker={t.ticker} raw />
               {t.news_category && t.news_category !== "other" && (
                 <span className="trade-news-cat-badge">{t.news_category}</span>
               )}

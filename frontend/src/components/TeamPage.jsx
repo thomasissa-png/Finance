@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { formatDate, formatTime, pnlColor, RESULT_LABELS, CATEGORY_COLORS, scanLabel, tickerName, paginate, totalPages, replaceTickersInText, formatPrice } from "../utils/format";
+import TickerLink from "./TickerLink";
 
 const TEAM_CONFIG = {
   "1": {
@@ -350,7 +351,7 @@ function MobileTradeCard({ t, res }) {
   return (
     <div className="trade-mobile-card" onClick={() => setExpanded(!expanded)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }} aria-expanded={expanded}>
       <div className="trade-mobile-header">
-        <span className="ticker-cell">{tickerName(t.ticker)}</span>
+        <span className="ticker-cell"><TickerLink ticker={t.ticker} /></span>
         <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
         <span className={`result-badge ${res.cls}`}>{res.label}</span>
       </div>
@@ -489,7 +490,7 @@ function TraderSection({ teamId }) {
                   role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") setExpandedTrade(isExpanded ? null : `${t.ticker}-${i}`); }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontWeight: 700 }}>{tickerName(t.ticker)}</span>
+                      <span style={{ fontWeight: 700 }}><TickerLink ticker={t.ticker} /></span>
                       <span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span>
                       {t.strategy && <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "rgba(139,157,195,0.12)", color: "var(--text-secondary)" }}>{t.strategy}</span>}
                       {t.confluence_level && <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "rgba(236,72,153,0.12)", color: "#EC4899" }}>Confluence {t.confluence_level}/3</span>}
@@ -602,7 +603,7 @@ function TraderSection({ teamId }) {
                     <React.Fragment key={tradeKey}>
                       <tr style={{ cursor: "pointer" }} onClick={() => setExpandedTrade(isExpanded ? null : tradeKey)}>
                         <td>{formatDate(t.timestamp || t.entry_time || t.time)}</td>
-                        <td className="ticker-cell">{tickerName(t.ticker)}</td>
+                        <td className="ticker-cell"><TickerLink ticker={t.ticker} /></td>
                         <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
                         <td style={{ fontSize: 11, maxWidth: 260 }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
@@ -726,7 +727,7 @@ function JournalSection({ teamId }) {
                     <React.Fragment key={entryKey}>
                       <tr style={{ cursor: "pointer" }} onClick={() => setExpandedEntry(isExpanded ? null : entryKey)}>
                         <td>{formatDate(e.entry_time || e.timestamp)}</td>
-                        <td className="ticker-cell">{tickerName(e.ticker)}</td>
+                        <td className="ticker-cell"><TickerLink ticker={e.ticker} /></td>
                         <td><span className={`direction-badge ${(e.direction || "").toLowerCase()}`}>{e.direction}</span></td>
                         <td style={{ fontSize: 11 }}>
                           <div style={{ display: "flex", gap: 3, alignItems: "center", flexWrap: "wrap" }}>
@@ -1151,7 +1152,7 @@ function OverviewSection({ teamId, agents }) {
                   const entryTime = t.timestamp || t.entry_time || t.last_change_time;
                   return (
                     <tr key={`${t.ticker}-${t.strategy || ""}-${i}`}>
-                      <td className="ticker-cell">{tickerName(t.ticker)}</td>
+                      <td className="ticker-cell"><TickerLink ticker={t.ticker} /></td>
                       <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
                       <td>{formatPrice(t.entry_price, t.ticker)}</td>
                       <td style={{ fontWeight: 500, color: curPrice ? "var(--text-primary)" : "var(--text-muted)" }}>{formatPrice(curPrice, t.ticker)}</td>

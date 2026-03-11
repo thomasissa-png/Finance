@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { DIR_COLORS, POLL_NORMAL } from "../utils/constants";
 import { apiFetch, apiTrigger } from "../utils/api";
 import { pnlColor } from "../utils/format";
+import TickerLink from "./TickerLink";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 
 export default function Journal3Page({ isActive }) {
@@ -171,7 +172,7 @@ export default function Journal3Page({ isActive }) {
               {entries.slice(0, 30).map((e, i) => (
                 <tr key={i}>
                   <td>{e.entry_time ? new Date(e.entry_time).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" }) : "\u2014"}</td>
-                  <td style={{ fontWeight: 600 }}>{e.ticker}</td>
+                  <td style={{ fontWeight: 600 }}><TickerLink ticker={e.ticker} raw /></td>
                   <td>{e.strategy || "\u2014"}</td>
                   <td style={{ color: DIR_COLORS[e.direction] }}>{e.direction}</td>
                   <td>{e.result || "\u2014"}</td>

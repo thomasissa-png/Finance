@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { DIR_COLORS, DIR_ARROWS, POLL_FAST } from "../utils/constants";
 import { apiFetch } from "../utils/api";
 import { pnlColor } from "../utils/format";
+import TickerLink from "./TickerLink";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
 import NewscatPerformance from "./NewscatPerformance";
 
@@ -124,7 +125,7 @@ export default function Trader2Page({ isActive }) {
                   <span className="trend-dir-arrow" style={{ color: DIR_COLORS[pos.direction] }}>
                     {DIR_ARROWS[pos.direction] || "\u2022"}
                   </span>
-                  <span className="trend-ticker-name">{pos.ticker}</span>
+                  <TickerLink ticker={pos.ticker} raw className="trend-ticker-name" />
                   <span className="trend-asset-name">{pos.name}</span>
                 </div>
                 <div className="trend-position-dir" style={{ color: DIR_COLORS[pos.direction] }}>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { TEAM_COLORS, LEVEL_ICONS, LEVEL_COLORS, POLL_NORMAL } from "../utils/constants";
 import { apiFetch } from "../utils/api";
 import { ErrorBanner, EmptyState, LastUpdated, LogSection } from "./shared";
+import TickerLink from "./TickerLink";
 
 const DIR_COLORS = { LONG: "var(--green)", SHORT: "var(--red)", NEUTRAL: "var(--text-muted)" };
 const DIR_ARROWS = { LONG: "\u2191", SHORT: "\u2193", NEUTRAL: "\u2022" };
@@ -224,7 +225,7 @@ export default function Scoring4Page({ isActive }) {
               <tbody>
                 {metaScored.slice(0, 30).map((item, i) => (
                   <tr key={`${item.ticker}-${i}`}>
-                    <td style={{ fontWeight: 600 }}>{item.ticker}</td>
+                    <td style={{ fontWeight: 600 }}><TickerLink ticker={item.ticker} raw /></td>
                     <td style={{ color: DIR_COLORS[item.direction] }}>
                       {DIR_ARROWS[item.direction] || "\u2022"} {item.direction}
                     </td>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { apiFetch } from "../utils/api";
 import { pnlColor } from "../utils/format";
+import TickerLink from "./TickerLink";
 import { POLL_FAST } from "../utils/constants";
 
 const DIR_COLORS = { LONG: "var(--green)", SHORT: "var(--red)" };
@@ -212,7 +213,7 @@ export default function StrategyPerformance({ isActive }) {
                               ? new Date(t.entry_time).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" })
                               : "—"}
                           </td>
-                          <td style={{ fontWeight: 600 }}>{t.ticker}</td>
+                          <td style={{ fontWeight: 600 }}><TickerLink ticker={t.ticker} raw /></td>
                           <td style={{ color: DIR_COLORS[t.direction] }}>{t.direction}</td>
                           <td style={{ color: RESULT_COLORS[t.result] || "var(--text-primary)" }}>{t.result}</td>
                           <td style={{ color: pnlColor(t.pnl_pct) }}>

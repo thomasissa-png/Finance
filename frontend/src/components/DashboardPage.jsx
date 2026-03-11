@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { timeAgo, pnlColor, tickerName, formatDate, formatTime, formatPrice } from "../utils/format";
+import TickerLink from "./TickerLink";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Area, AreaChart } from "recharts";
 
 function useToasts() {
@@ -227,7 +228,7 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
             {TEAM_LABELS[t._team] || `Éq. ${t._team}`}
           </span>
         </td>
-        <td className="ticker-cell">{tickerName(t.ticker)}</td>
+        <td className="ticker-cell"><TickerLink ticker={t.ticker} /></td>
         <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
         <td>{formatPrice(t.entry_price, t.ticker)}</td>
         <td style={{ fontWeight: 500, color: t._currentPrice ? "var(--text-primary)" : "var(--text-muted)" }}>
