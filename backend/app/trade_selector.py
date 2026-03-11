@@ -21,6 +21,7 @@ from .config import (
     NEWS_CATEGORY_MULTIPLIERS,
     TARGET_PERCENT,
     assets_for_session,
+    is_market_open,
 )
 
 # ── Pre-move thresholds by asset category ──────────────────────────
@@ -888,6 +889,15 @@ def select_trades(
         multiplier = 1.0
 
         for candidate_ticker in elig_tickers:
+            # Market hours check — only place orders when market is open and liquid
+            if not is_market_open(candidate_ticker):
+                logger.debug("D1 fallback: %s market closed, trying next", candidate_ticker)
+                rejection_log.append({
+                    "title": best_news.news.title, "ticker": candidate_ticker,
+                    "reason": f"Market closed for {candidate_ticker}",
+                    "score": raw_score,
+                })
+                continue
             # (#22) Correlation check
             if _check_correlation(candidate_ticker, all_existing):
                 logger.debug("D1 fallback: %s correlated, trying next", candidate_ticker)

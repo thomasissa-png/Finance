@@ -313,3 +313,48 @@ def test_select_trade_rejects_recently_traded_ticker(mock_recent, mock_recent_ca
     # With D1 fallback, rejection message is "Tous les tickers bloques" when all fallbacks fail
     assert any("bloques" in r.get("reason", "") or "Deja trade" in r.get("reason", "")
                for r in result.rejection_log)
+
+
+def test_market_hours_rejects_closed_market():
+    """Trade should be rejected when market is closed for the ticker."""
+    scored = [_make_scored("MC.PA", surprise=90, freshness=90, clarity=90,
+                           news_category="commodity")]
+    scored[0].transmission_delay = 80
+    scored[0].market_awareness = 10
+    # Force market closed for MC.PA
+    with patch("backend.app.trade_selector.is_market_open", return_value=False):
+        result = select_trade(scored, ScanType.EUROPE)
+    assert not result.has_trade
+    assert any("Market closed" in r.get("reason", "") for r in result.rejection_log)
+
+
+def test_market_hours_allows_open_market():
+    """Trade should be allowed when market is open for the ticker."""
+    scored = [_make_scored("CL=F", surprise=95, freshness=90, clarity=95,
+                           news_category="commodity")]
+    scored[0].transmission_delay = 85
+    scored[0].market_awareness = 5
+    scored[0].expected_magnitude = 90
+    scored[0].signal_reliability = 95
+    with patch("backend.app.trade_selector.is_market_open", return_value=True), \
+         patch("backend.app.trade_selector._get_price_and_range",
+               return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
+         patch("backend.app.trade_selector._count_today_trades", return_value=0), \
+         patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()), \
+         patch("backend.app.trade_selector.validate_price", return_value=(True, "")):
+        result = select_trade(scored, ScanType.EUROPE)
+    assert result.has_trade
+    assert result.recommendation.ticker == "CL=F"
+
+
+def test_is_market_open_covers_all_restricted_assets():
+    """All non-forex assets should have entries in MARKET_HOURS."""
+    from backend.app.config import ASSETS, MARKET_HOURS
+    forex_tickers = {a.ticker for a in ASSETS if a.category == "forex"}
+    for a in ASSETS:
+        if a.ticker in forex_tickers:
+            continue  # Forex is 24h, no entry needed
+        assert a.ticker in MARKET_HOURS, (
+            f"{a.ticker} ({a.name}) is missing from MARKET_HOURS — "
+            f"must have trading hours defined to prevent orders on closed markets"
+        )

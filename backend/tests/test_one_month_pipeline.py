@@ -492,13 +492,14 @@ class TestOneMonthRealPipeline:
                                            if t.timestamp.date() == day_date.date()
                                            and t.result == TradeResult.PENDING]
                         try:
-                            scan_result = select_trade(
-                                scored_news,
-                                scan_type,
-                                learning_adjustments=learning_adj,
-                                existing_trade_ticker=existing_tickers,
-                                market_context=market_ctx,
-                            )
+                            with patch("backend.app.trade_selector.is_market_open", return_value=True):
+                                scan_result = select_trade(
+                                    scored_news,
+                                    scan_type,
+                                    learning_adjustments=learning_adj,
+                                    existing_trade_ticker=existing_tickers,
+                                    market_context=market_ctx,
+                                )
                         except Exception as e:
                             errors.append(f"Day {day_idx+1} scan {scan_type.value}: select_trade error: {e}")
                             day_record["errors"].append(str(e))
@@ -694,11 +695,12 @@ class TestOneMonthRealPipeline:
                     invalidate_perf_summary_cache()
                     learning_adj = compute_learning_adjustments()
 
-                    scan_result = select_trade(
-                        scored_news, ScanType.EUROPE,
-                        learning_adjustments=learning_adj,
-                        market_context=market_ctx,
-                    )
+                    with patch("backend.app.trade_selector.is_market_open", return_value=True):
+                        scan_result = select_trade(
+                            scored_news, ScanType.EUROPE,
+                            learning_adjustments=learning_adj,
+                            market_context=market_ctx,
+                        )
 
                     if scan_result.has_trade and scan_result.recommendation:
                         rec = scan_result.recommendation
@@ -817,6 +819,7 @@ class TestOneMonthRealPipeline:
              patch("backend.app.news_scorer.fetch_history", side_effect=_mock_fetch_history), \
              patch("backend.app.trade_selector.fetch_history", side_effect=_mock_fetch_history), \
              patch("backend.app.trade_selector.check_event_conflict", return_value=False), \
+             patch("backend.app.trade_selector.is_market_open", return_value=True), \
              patch("backend.app.learning.is_pg_enabled", return_value=False), \
              patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
 
@@ -1121,12 +1124,13 @@ class TestThreeMonthWithLosses:
                         # Select
                         existing = [t for t in day_trades_tickers]
                         try:
-                            result = select_trade(
-                                scored_news, scan_type,
-                                learning_adjustments=learning_adj,
-                                existing_trade_ticker=existing,
-                                market_context=market_ctx,
-                            )
+                            with patch("backend.app.trade_selector.is_market_open", return_value=True):
+                                result = select_trade(
+                                    scored_news, scan_type,
+                                    learning_adjustments=learning_adj,
+                                    existing_trade_ticker=existing,
+                                    market_context=market_ctx,
+                                )
                         except Exception as e:
                             all_errors.append(f"D{trading_day} select: {e}")
                             continue

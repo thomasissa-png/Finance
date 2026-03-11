@@ -877,7 +877,8 @@ class TestMultiTradeSelection:
         with patch("backend.app.trade_selector._get_price_and_range",
                    return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=0), \
-             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()), \
+             patch("backend.app.trade_selector.is_market_open", return_value=True):
             result = select_trades(scored, ScanType.EUROPE)
         assert result.has_trade is True
         assert len(result.recommendations) == 2
@@ -973,7 +974,9 @@ class TestMultiTradeSelection:
         with patch("backend.app.trade_selector._get_price_and_range",
                    return_value=(70.0, 2.5, 69.95, 1.5, 70.0)), \
              patch("backend.app.trade_selector._count_today_trades", return_value=1), \
-             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()):
+             patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()), \
+             patch("backend.app.trade_selector.is_market_open", return_value=True), \
+             patch("backend.app.trade_selector.validate_price", return_value=(True, "")):
             result = select_trades(scored, ScanType.EUROPE, existing_trade_ticker=["CL=F"])
         assert result.has_trade is True
         # BZ=F blocked (correlated with CL=F), only GC=F should pass

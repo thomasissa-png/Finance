@@ -288,12 +288,12 @@ ASSETS: list[Asset] = [
 
 ASSET_BY_TICKER = {a.ticker: a for a in ASSETS}
 
-# ── Market hours (CET) — used by Trader 3 to validate entry timing ──
-# Only assets with restricted trading hours are listed.
-# Forex, commodities (CME Globex), and US indices (futures) trade nearly 24h — not restricted.
+# ── Market hours (CET/Paris) — ALL traders validate before placing orders ──
+# We only place orders when the underlying market is open and liquid.
 # Format: (open_hour, open_minute, close_hour, close_minute) in Europe/Paris timezone.
+# Tickers NOT listed here are considered 24h tradeable (forex pairs).
 MARKET_HOURS: dict[str, tuple[int, int, int, int]] = {
-    # Euronext Paris: 09:00 - 17:30 CET
+    # ── Euronext Paris: 09:00 - 17:30 CET ──
     "MC.PA": (9, 0, 17, 30),
     "OR.PA": (9, 0, 17, 30),
     "AI.PA": (9, 0, 17, 30),
@@ -301,21 +301,53 @@ MARKET_HOURS: dict[str, tuple[int, int, int, int]] = {
     "TTE.PA": (9, 0, 17, 30),
     "BNP.PA": (9, 0, 17, 30),
     "RMS.PA": (9, 0, 17, 30),
-    # CAC 40 / DAX / FTSE indices: use futures open times (8:00 CET)
-    # Cash indices open at 9:00 but futures trade from 8:00 — prices are valid from 8:00
-    "^FCHI": (8, 0, 17, 30),
-    "^GDAXI": (8, 0, 17, 30),
-    "^FTSE": (8, 0, 17, 30),
-    # Nikkei: 01:00 - 07:00 CET (TSE hours in CET: 00:00-06:00 + some buffer)
-    "^N225": (1, 0, 7, 0),
-    # US equities: 15:30 - 22:00 CET (NYSE/NASDAQ regular hours)
+    # ── European indices (futures) ──
+    # CAC/DAX: Eurex futures from 08:00 CET, cash from 09:00
+    "^FCHI": (8, 0, 22, 0),
+    "^GDAXI": (8, 0, 22, 0),
+    # FTSE: ICE futures from 09:00 CET
+    "^FTSE": (9, 0, 22, 0),
+    # ── Nikkei: Osaka/TSE 01:00 - 08:00 CET ──
+    "^N225": (1, 0, 8, 0),
+    # ── US equities: NYSE/NASDAQ 15:30 - 22:00 CET ──
     "AAPL": (15, 30, 22, 0),
     "MSFT": (15, 30, 22, 0),
     "TSLA": (15, 30, 22, 0),
     "AMZN": (15, 30, 22, 0),
-    # US indices: futures trade nearly 24h on CME Globex, no restriction needed
-    # Commodities: CME Globex, ICE — near 24h, no restriction needed
-    # Forex: 24h Sun-Fri, no restriction needed
+    # ── US indices: cash 15:30-22:00. Futures trade ~24h but prices via yfinance
+    # are cash-based — only reliable during regular session ──
+    "^GSPC": (15, 30, 22, 0),
+    "^DJI": (15, 30, 22, 0),
+    "^IXIC": (15, 30, 22, 0),
+    "^RUT": (15, 30, 22, 0),
+    # ── Energy: CME Globex/ICE — near 24h, 1h break 23:00-00:00 CET ──
+    "CL=F": (0, 0, 22, 45),
+    "BZ=F": (2, 0, 22, 0),
+    "NG=F": (0, 0, 22, 45),
+    # ── Precious metals: COMEX/NYMEX Globex ──
+    "GC=F": (0, 0, 22, 45),
+    "SI=F": (0, 0, 22, 45),
+    "PL=F": (0, 0, 22, 45),
+    "PA=F": (0, 0, 22, 45),
+    # ── Industrial metals: COMEX ──
+    "HG=F": (0, 0, 22, 45),
+    # ── Agriculture: CBOT Globex 02:00-20:45 CET ──
+    "ZC=F": (2, 0, 20, 45),
+    "ZW=F": (2, 0, 20, 45),
+    "ZS=F": (2, 0, 20, 45),
+    "CT=F": (2, 0, 20, 45),
+    # ── Soft commodities: ICE US — 10:15-19:30 CET ──
+    "KC=F": (10, 15, 19, 30),
+    "CC=F": (10, 15, 19, 30),
+    "SB=F": (10, 15, 19, 30),
+    "OJ=F": (10, 15, 19, 30),
+    # ── Livestock: CME 15:30-21:05 CET ──
+    "LE=F": (15, 30, 21, 5),
+    "HE=F": (15, 30, 21, 5),
+    # ── ETFs: NYSE Arca 15:30-22:00 CET ──
+    "URA": (15, 30, 22, 0),
+    # ── Forex: 24h Sun evening to Fri evening — NOT listed, always tradeable ──
+    # EURUSD=X, GBPUSD=X, USDJPY=X, AUDUSD=X, USDCHF=X, EURJPY=X, USDCNH=X
 }
 
 
