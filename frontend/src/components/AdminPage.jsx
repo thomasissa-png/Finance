@@ -72,12 +72,19 @@ function AdminPage({ isActive }) {
     try { return localStorage.getItem("theme") || "light"; } catch { return "light"; }
   });
 
-  // Reset state
+  // Reset state (full)
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetPassword, setResetPassword] = useState("");
   const [resetting, setResetting] = useState(false);
   const [resetResult, setResetResult] = useState(null);
   const [resetError, setResetError] = useState(null);
+
+  // Per-team reset state
+  const [teamResetTarget, setTeamResetTarget] = useState(null); // 1-4 or null
+  const [teamResetPassword, setTeamResetPassword] = useState("");
+  const [teamResetting, setTeamResetting] = useState(false);
+  const [teamResetResult, setTeamResetResult] = useState(null);
+  const [teamResetError, setTeamResetError] = useState(null);
 
   // API status from backend
   const [apiStatus, setApiStatus] = useState(null);
@@ -138,6 +145,44 @@ function AdminPage({ isActive }) {
       setResetError(`Erreur réseau : ${err.message}`);
     }
     setResetting(false);
+  };
+
+  const doTeamReset = async () => {
+    if (!teamResetTarget) return;
+    setTeamResetting(true);
+    setTeamResetError(null);
+    setTeamResetResult(null);
+    try {
+      const res = await fetch(
+        `/api/infrastructure/reset-team/${teamResetTarget}?password=${encodeURIComponent(teamResetPassword)}`,
+        { method: "POST" },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setTeamResetError(data.detail || `Erreur HTTP ${res.status}`);
+      } else {
+        setTeamResetResult(data);
+        setTeamResetTarget(null);
+        setTeamResetPassword("");
+      }
+    } catch (err) {
+      setTeamResetError(`Erreur réseau : ${err.message}`);
+    }
+    setTeamResetting(false);
+  };
+
+  const TEAM_LABELS = {
+    1: "Équipe 1 — Day Trading Intraday",
+    2: "Équipe 2 — Trend Following",
+    3: "Équipe 3 — Technical Indicators",
+    4: "Équipe 4 — Meta/Ensemble",
+  };
+
+  const TEAM_DESCRIPTIONS = {
+    1: "Trades, journal, scan history, learning 1 (tables: trades, journal_entries, scan_history, last_scans)",
+    2: "Positions trend, journal trend, learning 2 (tables: trend_positions, trend_journal_entries)",
+    3: "Positions techniques, journal technique, learning 3 + weekly config (tables: tech_positions, tech_journal_entries)",
+    4: "Positions meta, journal meta, learning 4 + weekly config (tables: meta_positions, meta_journal_entries)",
   };
 
   if (!isActive) return null;
@@ -430,6 +475,108 @@ function AdminPage({ isActive }) {
               </details>
             </div>
           )}
+
+          {/* ── Per-team reset ── */}
+          <div style={{ marginTop: 24, borderTop: "1px solid rgba(239,68,68,0.2)", paddingTop: 20 }}>
+            <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
+              Réinitialisation par équipe
+            </p>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--text-secondary)" }}>
+              Réinitialise uniquement les données d'une équipe spécifique, sans toucher aux autres.
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {[1, 2, 3, 4].map((tid) => (
+                <button
+                  key={tid}
+                  className="trigger-btn"
+                  style={{
+                    background: teamResetTarget === tid ? "var(--red)" : "transparent",
+                    color: teamResetTarget === tid ? "#fff" : "var(--red)",
+                    border: "1px solid var(--red)",
+                    fontSize: 13,
+                    opacity: teamResetting ? 0.5 : 1,
+                  }}
+                  onClick={() => {
+                    setTeamResetTarget(teamResetTarget === tid ? null : tid);
+                    setTeamResetPassword("");
+                    setTeamResetError(null);
+                    setTeamResetResult(null);
+                  }}
+                  disabled={teamResetting}
+                >
+                  Éq. {tid}
+                </button>
+              ))}
+            </div>
+
+            {teamResetTarget && (
+              <div style={{ marginTop: 12, background: "rgba(239,68,68,0.08)", borderRadius: 8, padding: 16 }}>
+                <p style={{ margin: "0 0 8px", fontWeight: 600, color: "var(--red)" }}>
+                  {TEAM_LABELS[teamResetTarget]}
+                </p>
+                <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--text-secondary)" }}>
+                  Données supprimées : {TEAM_DESCRIPTIONS[teamResetTarget]}.
+                  <strong> Les autres équipes ne seront pas affectées.</strong>
+                </p>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                    Mot de passe de réinitialisation
+                  </label>
+                  <input
+                    type="password"
+                    value={teamResetPassword}
+                    onChange={(e) => setTeamResetPassword(e.target.value)}
+                    placeholder="Entrer le mot de passe RESET_PASSWORD"
+                    style={{
+                      width: "100%", maxWidth: 320, padding: "8px 12px",
+                      border: "1px solid var(--border)", borderRadius: 6,
+                      background: "var(--bg-primary)", color: "var(--text-primary)",
+                      fontSize: 14,
+                    }}
+                    autoComplete="off"
+                    onKeyDown={(e) => { if (e.key === "Enter" && teamResetPassword) doTeamReset(); }}
+                  />
+                </div>
+                {teamResetError && (
+                  <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--red)" }}>
+                    {teamResetError}
+                  </p>
+                )}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="trigger-btn"
+                    style={{ background: "var(--red)", color: "#fff", border: "none", opacity: teamResetting || !teamResetPassword ? 0.6 : 1 }}
+                    onClick={doTeamReset}
+                    disabled={teamResetting || !teamResetPassword}
+                  >
+                    {teamResetting ? "Réinitialisation..." : `Supprimer les données Éq. ${teamResetTarget}`}
+                  </button>
+                  <button
+                    className="trigger-btn"
+                    style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}
+                    onClick={() => { setTeamResetTarget(null); setTeamResetPassword(""); setTeamResetError(null); }}
+                    disabled={teamResetting}
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {teamResetResult && (
+              <div style={{ marginTop: 12, padding: 12, borderRadius: 6, background: "rgba(16,185,129,0.1)", border: "1px solid var(--green)" }}>
+                <strong style={{ color: "var(--green)" }}>
+                  {teamResetResult.results?.label || "Équipe"} — Réinitialisation réussie
+                </strong>
+                <details style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>
+                  <summary style={{ cursor: "pointer" }}>Détails du reset</summary>
+                  <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, background: "var(--bg-secondary)", padding: 8, borderRadius: 6, maxHeight: 200, overflow: "auto" }}>
+                    {JSON.stringify(teamResetResult.results, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

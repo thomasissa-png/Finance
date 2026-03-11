@@ -1897,6 +1897,204 @@ def reset_all_data(password: str = ""):
     return {"status": "ok", "results": results}
 
 
+# ── Per-team reset definitions ───────────────────────────────────
+
+_TEAM_RESET_MAP: dict[int, dict] = {
+    1: {
+        "label": "Équipe 1 — Day Trading Intraday",
+        "pg_tables": ["trades", "journal_entries", "scan_history", "last_scans"],
+        "json_files": {
+            "trades.json": "[]",
+            "journal.json": "[]",
+            "scan_history.json": "[]",
+            "last_scans.json": "{}",
+        },
+        "learning_configs": [],
+        "agents": ["trader_1", "journal", "learning"],
+    },
+    2: {
+        "label": "Équipe 2 — Trend Following",
+        "pg_tables": ["trend_positions", "trend_journal_entries"],
+        "json_files": {
+            "trend_positions.json": "{}",
+            "trend_journal.json": "[]",
+        },
+        "learning_configs": [],
+        "agents": ["scoring_2", "trader_2", "journal_2", "learning_2"],
+    },
+    3: {
+        "label": "Équipe 3 — Technical Indicators",
+        "pg_tables": ["tech_positions", "tech_journal_entries"],
+        "json_files": {
+            "tech_positions.json": '{"active": [], "closed": []}',
+            "tech_journal.json": "[]",
+        },
+        "learning_configs": ["learning3_weekly_config.json", "learning3_config_history.json"],
+        "agents": ["scoring_3", "trader_3", "journal_3", "learning_3"],
+    },
+    4: {
+        "label": "Équipe 4 — Meta/Ensemble",
+        "pg_tables": ["meta_positions", "meta_journal_entries"],
+        "json_files": {
+            "meta_positions.json": "{}",
+            "meta_journal.json": "[]",
+        },
+        "learning_configs": ["learning4_weekly_config.json", "learning4_config_history.json"],
+        "agents": ["scoring_4", "trader_4", "journal_4", "learning_4"],
+    },
+}
+
+
+@app.post("/api/infrastructure/reset-team/{team_id}")
+def reset_team_data(team_id: int, password: str = ""):
+    """Reset trading data for a SINGLE team (1-4).
+
+    Only touches PG tables, JSON files, learning configs, and agent memory
+    that belong to the specified team. All other teams remain untouched.
+    """
+    expected = os.environ.get("RESET_PASSWORD", "")
+    if not expected:
+        raise HTTPException(403, "RESET_PASSWORD secret not configured on server")
+    if password != expected:
+        raise HTTPException(403, "Mot de passe incorrect")
+    if team_id not in _TEAM_RESET_MAP:
+        raise HTTPException(400, f"Équipe invalide : {team_id}. Valeurs acceptées : 1, 2, 3, 4")
+
+    team = _TEAM_RESET_MAP[team_id]
+    results: dict = {"team": team_id, "label": team["label"]}
+
+    # 1. PG tables
+    pg_results = {}
+    if is_pg_enabled():
+        for table in team["pg_tables"]:
+            try:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT 1 FROM information_schema.tables "
+                            "WHERE table_schema = 'public' AND table_name = %s",
+                            (table,),
+                        )
+                        if cur.fetchone():
+                            cur.execute(f"TRUNCATE TABLE {table} CASCADE")
+                            pg_results[table] = "truncated"
+                        else:
+                            pg_results[table] = "not_found"
+                    conn.commit()
+            except Exception as exc:
+                pg_results[table] = f"error: {exc}"
+    results["pg_tables"] = pg_results
+
+    # 2. JSON files
+    data_dir = Path(os.getenv("DATA_DIR", "data"))
+    json_results = {}
+    for fname, empty_content in team["json_files"].items():
+        fpath = data_dir / fname
+        try:
+            fpath.parent.mkdir(parents=True, exist_ok=True)
+            fpath.write_text(empty_content)
+            json_results[fname] = "reset"
+        except Exception as exc:
+            json_results[fname] = f"error: {exc}"
+    results["json_files"] = json_results
+
+    # 3. Learning configs
+    config_results = {}
+    for fname in team["learning_configs"]:
+        fpath = data_dir / fname
+        try:
+            if fpath.exists():
+                fpath.unlink()
+                config_results[fname] = "deleted"
+            else:
+                config_results[fname] = "not_found"
+        except Exception as exc:
+            config_results[fname] = f"error: {exc}"
+    if config_results:
+        results["learning_configs"] = config_results
+
+    # 4. Clear in-memory state for team agents only
+    agent_results = {}
+    try:
+        all_agents = get_all_agents()
+        for agent_name in team["agents"]:
+            agent = all_agents.get(agent_name)
+            if not agent:
+                agent_results[agent_name] = "not_found"
+                continue
+            cleared = []
+            # Learning caches
+            if hasattr(agent, "_cached_adjustments"):
+                agent._cached_adjustments = None
+                agent._cache_valid = False
+                cleared.append("cached_adjustments")
+            if hasattr(agent, "_last_anomalies") and isinstance(getattr(agent, "_last_anomalies", None), list):
+                agent._last_anomalies = []
+                cleared.append("anomalies")
+            if hasattr(agent, "_total_recalculations"):
+                agent._total_recalculations = 0
+                cleared.append("recalculations")
+            if hasattr(agent, "_last_run_time"):
+                agent._last_run_time = None
+                cleared.append("last_run_time")
+            # Trader counters
+            for attr in ["_trades_today", "_trades_total", "_rejections_today",
+                         "_evaluations_today", "_position_changes_total",
+                         "_trades_opened_total", "_trades_closed_total",
+                         "_position_opens_total", "_position_closes_total",
+                         "_pending_positions"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+            for attr in ["_last_trade_ticker", "_last_trade_direction",
+                         "_last_change_ticker", "_last_change_direction",
+                         "_last_action_ticker", "_last_action_direction"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, None)
+                    cleared.append(attr)
+            if hasattr(agent, "_current_learning"):
+                agent._current_learning = {}
+                cleared.append("current_learning")
+            if hasattr(agent, "_current_trend_scoring"):
+                agent._current_trend_scoring = {}
+                cleared.append("current_trend_scoring")
+            if hasattr(agent, "_weekly_config"):
+                agent._weekly_config = None
+                cleared.append("weekly_config")
+            # Journal stats
+            for attr in ["_last_run_trades_closed", "_last_run_tp", "_last_run_sl",
+                         "_last_run_expired", "_total_entries"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+            if hasattr(agent, "_last_pnl_sum"):
+                agent._last_pnl_sum = 0.0
+                cleared.append("last_pnl_sum")
+            # Scoring counters
+            for attr in ["_last_scored_count", "_last_zero_edge_filtered",
+                         "_total_scored", "_total_tokens_used", "_cache_hits"]:
+                if hasattr(agent, attr):
+                    setattr(agent, attr, 0)
+                    cleared.append(attr)
+            if hasattr(agent, "_last_result"):
+                agent._last_result = None
+                cleared.append("last_result")
+            agent_results[agent_name] = cleared if cleared else "no_state"
+    except Exception as exc:
+        agent_results["error"] = str(exc)
+    results["agent_memory"] = agent_results
+
+    # 5. Clear scan cache for team 1 only (shared scan cache)
+    if team_id == 1:
+        global _last_scans
+        with _scans_lock:
+            _last_scans = {}
+        results["scan_cache"] = "cleared"
+
+    logger.info("TEAM %d RESET via API — results: %s", team_id, results)
+    return {"status": "ok", "results": results}
+
+
 # ── Agent Performance API ────────────────────────────────────────
 
 
