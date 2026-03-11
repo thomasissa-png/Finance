@@ -671,10 +671,11 @@ class AgentTrader3(BaseAgent):
                 continue
 
             # Fetch live entry price (fallback to Scoring 3's last_close)
+            # v9.0: bypass_cache=True to avoid stale prices from previous session
             scoring_price = setup.get("entry_price", 0)
             try:
                 from ..market_data import fetch_price
-                live_price = fetch_price(ticker)
+                live_price = fetch_price(ticker, bypass_cache=True)
                 if live_price and live_price > 0:
                     # Validate price against reference
                     is_valid, reason = validate_price(ticker, live_price)

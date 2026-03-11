@@ -38,7 +38,7 @@ _TD_RPM = 7
 # ── TTL Cache ─────────────────────────────────────────────────────
 _cache: dict[str, tuple[float, Any]] = {}
 _cache_lock = threading.Lock()
-CACHE_TTL_SHORT = 120    # 2 min — quotes, 2d history
+CACHE_TTL_SHORT = 30     # 30s — quotes (was 120s, reduced to prevent stale prices after gaps)
 CACHE_TTL_MEDIUM = 600   # 10 min — daily history (25d)
 CACHE_TTL_LONG = 1800    # 30 min — intraday bars (journal uses once/day)
 
@@ -553,16 +553,21 @@ def fetch_history_batch(
     return result
 
 
-def fetch_quote(ticker: str) -> dict | None:
+def fetch_quote(ticker: str, bypass_cache: bool = False) -> dict | None:
     """Fetch real-time quote for spread/liquidity analysis.
 
     Returns dict with 'price' and 'intraday_range_pct' or None.
     Uses Twelve Data /quote when available, falls back to history-based estimate.
+
+    Args:
+        bypass_cache: If True, skip cache and force fresh fetch.
+            Use when opening positions to avoid stale prices from previous session.
     """
     cache_key = f"quote:{ticker}"
-    cached = _cache_get_or_miss(cache_key)
-    if cached is not _CACHE_MISS:
-        return cached
+    if not bypass_cache:
+        cached = _cache_get_or_miss(cache_key)
+        if cached is not _CACHE_MISS:
+            return cached
 
     result = None
 
@@ -612,13 +617,17 @@ def fetch_quote(ticker: str) -> dict | None:
     return result
 
 
-def fetch_price(ticker: str) -> float | None:
+def fetch_price(ticker: str, bypass_cache: bool = False) -> float | None:
     """Fetch current price for a ticker.
 
     Wrapper around fetch_quote() — returns just the price float or None.
     Used by agents (Trader 2/3/4, Journal 2/3) for position monitoring.
+
+    Args:
+        bypass_cache: If True, skip cache and force fresh fetch.
+            Use when opening positions to get real-time price.
     """
-    quote = fetch_quote(ticker)
+    quote = fetch_quote(ticker, bypass_cache=bypass_cache)
     if quote and "price" in quote:
         price = quote["price"]
         if price is not None and price > 0:

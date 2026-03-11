@@ -716,7 +716,13 @@ def _reset_json_files() -> tuple[dict, bool]:
     for fname in _ALL_JSON_FILES:
         fpath = data_dir / fname
         try:
-            empty = "{}" if "last_scans" in fname else "[]"
+            # Positions files are dicts, not arrays — reset to correct format
+            if fname in ("last_scans.json", "trend_positions.json", "meta_positions.json"):
+                empty = "{}"
+            elif fname == "tech_positions.json":
+                empty = '{"active": [], "closed": []}'
+            else:
+                empty = "[]"
             fpath.parent.mkdir(parents=True, exist_ok=True)
             fpath.write_text(empty)
             results[fname] = "reset"

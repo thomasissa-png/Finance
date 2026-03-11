@@ -1615,6 +1615,14 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
             if total_call_oi == 0 and total_put_oi == 0:
                 continue
 
+            # v9.0: Minimum OI threshold — low OI produces aberrant ratios
+            # (e.g., SPY calls 2,234,664% of OI because OI=47)
+            MIN_OI_THRESHOLD = 500
+            if total_call_oi < MIN_OI_THRESHOLD and total_put_oi < MIN_OI_THRESHOLD:
+                logger.debug("Options skipping %s: OI too low (call_oi=%d, put_oi=%d < %d)",
+                             ticker, total_call_oi, total_put_oi, MIN_OI_THRESHOLD)
+                continue
+
             # Put/Call ratio
             total_vol = total_call_vol + total_put_vol
             if total_vol == 0:
@@ -1698,9 +1706,11 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
                 pass  # IV data not always available
 
             # Alert on volume spike vs OI (>50% of OI traded in a day)
-            if total_call_oi > 0 and total_call_vol > total_call_oi * 0.5:
+            # v9.0: Require OI >= MIN_OI_THRESHOLD and cap ratio display at 1000%
+            if total_call_oi >= MIN_OI_THRESHOLD and total_call_vol > total_call_oi * 0.5:
+                vol_oi_ratio = min(total_call_vol / total_call_oi, 10.0)  # Cap at 1000%
                 title = (
-                    f"[OPTIONS] {name} ({ticker}) — Volume calls = {total_call_vol / total_call_oi:.0%} "
+                    f"[OPTIONS] {name} ({ticker}) — Volume calls = {vol_oi_ratio:.0%} "
                     f"de l'open interest ({total_call_vol} vs {total_call_oi} OI) — "
                     f"activite inhabituelle"
                 )

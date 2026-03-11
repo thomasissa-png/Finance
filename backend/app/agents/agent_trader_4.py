@@ -203,11 +203,11 @@ def _pg_save_positions(positions: dict):
         _save_positions_json(positions)
 
 
-def _fetch_current_price(ticker: str) -> float | None:
+def _fetch_current_price(ticker: str, bypass_cache: bool = False) -> float | None:
     """Fetch the latest price for a ticker."""
     try:
         from ..market_data import fetch_price
-        price = fetch_price(ticker)
+        price = fetch_price(ticker, bypass_cache=bypass_cache)
         if price is not None:
             return price
         logger.warning("fetch_price returned None for %s — trying yfinance", ticker)
@@ -698,8 +698,8 @@ class AgentTrader4(BaseAgent):
         if open_count >= MAX_POSITIONS:
             return None
 
-        # Open new position
-        price = _fetch_current_price(ticker)
+        # Open new position — bypass cache for fresh price at entry
+        price = _fetch_current_price(ticker, bypass_cache=True)
         position_size = SIZING_BY_CONFLUENCE.get(confluence_level, 0.0)
 
         if position_size <= 0:

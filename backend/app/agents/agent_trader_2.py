@@ -96,6 +96,9 @@ def _load_positions() -> dict:
             fcntl.flock(f, fcntl.LOCK_SH)
             data = json.load(f)
             fcntl.flock(f, fcntl.LOCK_UN)
+            # Validate: positions must be a dict, not a list (corrupted reset)
+            if not isinstance(data, dict):
+                return {}
             return data
     except (json.JSONDecodeError, FileNotFoundError):
         return {}
@@ -148,6 +151,8 @@ def _load_positions_json_only() -> dict:
             fcntl.flock(f, fcntl.LOCK_SH)
             data = json.load(f)
             fcntl.flock(f, fcntl.LOCK_UN)
+            if not isinstance(data, dict):
+                return {}
             return data
     except (json.JSONDecodeError, FileNotFoundError):
         return {}
@@ -185,7 +190,7 @@ def _pg_save_positions(positions: dict):
             raise
 
 
-def _fetch_current_price(ticker: str) -> float | None:
+def _fetch_current_price(ticker: str, bypass_cache: bool = False) -> float | None:
     """Fetch the latest price for a ticker.
 
     P4 fix: log errors instead of silent pass.
@@ -193,7 +198,7 @@ def _fetch_current_price(ticker: str) -> float | None:
     """
     try:
         from ..market_data import fetch_price
-        price = fetch_price(ticker)
+        price = fetch_price(ticker, bypass_cache=bypass_cache)
         if price is not None:
             return price
         logger.warning("fetch_price returned None for %s — trying yfinance", ticker)

@@ -137,7 +137,7 @@ class AgentTrader(BaseAgent):
                 self.log("No trade selected", {
                     "reason": reason,
                     "candidates_evaluated": len(scored_news),
-                    "rejection_log": result_dict.get("rejection_log", [])[:5],
+                    "rejection_log": result_dict.get("rejection_log", []),
                 })
 
                 self.publish("no_trade", {

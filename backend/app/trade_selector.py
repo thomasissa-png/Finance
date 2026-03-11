@@ -1208,6 +1208,35 @@ def select_trades(
             learning_state=learning_state_for_log,
         )
 
+    # v9.0: Trace top-scored candidates that were rejected — helps diagnose why
+    # strong signals (e.g., 68.7) produce no trades
+    if candidates and rejection_log:
+        # Find the highest raw score among ALL scored_news (not just candidates)
+        top_raw = max(scored_news, key=lambda s: s.total_score) if scored_news else None
+        if top_raw and top_raw.total_score >= MIN_SCORE_THRESHOLD:
+            # Check if this top signal appears in rejection_log
+            top_rejections = [r for r in rejection_log
+                              if r.get("score", 0) >= top_raw.total_score - 0.1]
+            if top_rejections:
+                for rej in top_rejections:
+                    logger.warning(
+                        "TOP SIGNAL REJECTED: score=%.1f, ticker=%s, reason='%s' — "
+                        "headline='%s'",
+                        rej.get("score", 0), rej.get("ticker"),
+                        rej.get("reason", "unknown"),
+                        rej.get("title", "")[:80],
+                    )
+            else:
+                # Top signal was a candidate but rejected at price/R/R/spread stage
+                logger.warning(
+                    "TOP SIGNAL (score=%.1f, dir=%s) not in rejection_log — "
+                    "check if rejected at calibration stage. Ticker(s): %s, "
+                    "headline: '%s'",
+                    top_raw.total_score, top_raw.direction.value,
+                    top_raw.impacted_tickers[:3],
+                    top_raw.news.title[:80],
+                )
+
     # All candidates failed checks
     decision_parts.append("AUCUN candidat n'a passe les checks prix/R/R")
     return ScanResult(
