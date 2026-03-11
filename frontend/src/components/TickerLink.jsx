@@ -2,7 +2,7 @@ import React from "react";
 import { tickerName, tickerTdUrl } from "../utils/format";
 
 /**
- * Clickable ticker that opens the Twelve Data (or Yahoo Finance for indices) chart page.
+ * Clickable ticker that opens the TradingView chart page.
  * Props:
  *   ticker   — yfinance-format ticker string (e.g. "ZW=F", "BNP.PA")
  *   raw      — if true, display raw ticker instead of readable name
@@ -20,7 +20,7 @@ export default function TickerLink({ ticker, raw, className, style }) {
       rel="noopener noreferrer"
       className={className}
       style={{ color: "inherit", textDecoration: "none", borderBottom: "1px dashed var(--text-muted)", ...style }}
-      title={`Voir ${ticker} sur ${url?.includes("yahoo") ? "Yahoo Finance" : "Twelve Data"}`}
+      title={`Voir ${ticker} sur Yahoo Finance`}
       onClick={(e) => e.stopPropagation()}
     >
       {label}
