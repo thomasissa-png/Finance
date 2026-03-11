@@ -351,22 +351,37 @@ MARKET_HOURS: dict[str, tuple[int, int, int, int]] = {
 }
 
 
-def is_market_open(ticker: str) -> bool:
-    """Check if the market for this ticker is currently open (Europe/Paris timezone)."""
+def is_market_open(ticker: str, min_minutes_before_close: int = 0) -> bool:
+    """Check if the market for this ticker is currently open (Europe/Paris timezone).
+
+    Args:
+        ticker: Asset ticker symbol.
+        min_minutes_before_close: Reject if fewer than this many minutes remain
+            before close (0 = no buffer, 30 = need at least 30 min left).
+    """
     from datetime import datetime
     from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("Europe/Paris"))
+    # Weekend check (applies to all tickers, including forex)
+    if now.weekday() >= 5:
+        return False
+    # Holiday check — markets are closed on known holidays
+    today_str = now.strftime("%Y-%m-%d")
+    if today_str in MARKET_HOLIDAYS:
+        return False
     hours = MARKET_HOURS.get(ticker)
     if hours is None:
         return True  # No restriction = always tradeable (forex, commodities, US futures)
     open_h, open_m, close_h, close_m = hours
-    now = datetime.now(ZoneInfo("Europe/Paris"))
-    # Weekend check
-    if now.weekday() >= 5:
-        return False
     current = now.hour * 60 + now.minute
     market_open = open_h * 60 + open_m
     market_close = close_h * 60 + close_m
-    return market_open <= current <= market_close
+    if current < market_open or current > market_close:
+        return False
+    # Buffer check: reject if too close to close
+    if min_minutes_before_close > 0 and (market_close - current) < min_minutes_before_close:
+        return False
+    return True
 
 
 CATEGORIES = {

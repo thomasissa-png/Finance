@@ -225,7 +225,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "7.7"  # v7.7: Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once
+    version = "7.8"  # v7.8: Market hours check before position flips
 
     def __init__(self):
         super().__init__()
@@ -339,6 +339,12 @@ class AgentTrader2(BaseAgent):
                     self.log("Global timeout reached during evaluation",
                              {"elapsed_s": round(elapsed, 1)}, level="WARN")
                     break
+
+                # Market hours check — only flip positions when the market is open
+                from ..config import is_market_open
+                if not is_market_open(ticker):
+                    logger.debug("Trader 2: %s market closed, skipping", ticker)
+                    continue
 
                 ticker_news = relevant_news.get(ticker, [])
                 if not ticker_news:
