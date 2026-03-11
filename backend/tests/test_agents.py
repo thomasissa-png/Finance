@@ -1751,7 +1751,7 @@ class TestVersioningAudit:
     def test_performance_version_bumped(self):
         """Performance agent version should be 8.3."""
         from backend.app.agents.agent_performance import AgentPerformance
-        assert AgentPerformance.version == "8.3"
+        assert AgentPerformance.version == "8.4"
 
     def test_performance_has_filter_method(self):
         """V1: Performance should have _filter_entries_by_version method."""
@@ -2141,7 +2141,7 @@ class TestPerformanceCascadeFailure:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_performance import AgentPerformance
-        assert AgentPerformance.version == "8.3"
+        assert AgentPerformance.version == "8.4"
 
 
 class TestScoring2WordBoundary:
@@ -2292,3 +2292,27 @@ class TestStartupRecoveryLearning:
         method_source = source[method_start:method_end]
         assert "journal_complete" in method_source, \
             "recover_pending must publish journal_complete to message bus"
+
+
+class TestTrader3KpiStrategyPerformance:
+    """Regression test: get_strategy_performance returns a list, not a dict."""
+
+    def test_strategy_performance_returns_list(self):
+        """agent_trader_3.get_strategy_performance() returns a list — not a dict."""
+        from backend.app.agents.agent_trader_3 import AgentTrader3
+        t3 = AgentTrader3()
+        sp = t3.get_strategy_performance()
+        assert isinstance(sp, list), \
+            f"get_strategy_performance must return list, got {type(sp).__name__}"
+
+    def test_performance_agent_handles_list(self):
+        """_compute_trader_3_kpis must not call .values() on a list."""
+        perf_path = Path(__file__).resolve().parent.parent / "app" / "agents" / "agent_performance.py"
+        source = perf_path.read_text()
+        # Find the _compute_trader_3_kpis method
+        start = source.find("def _compute_trader_3_kpis")
+        end = source.find("\n    def ", start + 1)
+        method = source[start:end]
+        # Must check isinstance(sp, list) before using .values()
+        assert "isinstance(sp, list)" in method, \
+            "_compute_trader_3_kpis must handle list from get_strategy_performance"

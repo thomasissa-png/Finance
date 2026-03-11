@@ -33,7 +33,7 @@ from .base import BaseAgent, AgentStatus
 class AgentPerformance(BaseAgent):
     name = "performance"
     description = "Mesure & suivi des KPIs de tous les agents"
-    version = "8.3"  # v8.3: fix cascade failure in daily report
+    version = "8.4"  # v8.4: fix .values() on list crash in _compute_trader_3_kpis
 
     def __init__(self):
         super().__init__()
@@ -704,8 +704,13 @@ class AgentPerformance(BaseAgent):
                 # Strategy performance with Sharpe/R/R
                 if hasattr(t3, "get_strategy_performance"):
                     sp = t3.get_strategy_performance()
-                    kpis["strategies_active"] = len(
-                        [s for s in sp.values() if s.get("trades", 0) > 0])
+                    # sp is a list of dicts (not a dict), each with trades_count
+                    if isinstance(sp, list):
+                        kpis["strategies_active"] = len(
+                            [s for s in sp if s.get("trades_count", 0) > 0])
+                    else:
+                        kpis["strategies_active"] = len(
+                            [s for s in sp.values() if s.get("trades", 0) > 0])
                     kpis["strategy_performance"] = sp
 
             # Learning 3 status
