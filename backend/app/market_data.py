@@ -115,6 +115,11 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     # Livestock — same collision issue
     "LE=F": ("LC1", {"type": "commodities"}),    # Live Cattle (collides with Marzetti Co)
     "HE=F": ("LH1", {"type": "commodities"}),    # Lean Hogs (collides with Lifetime Brands)
+    # US Stocks — explicit mapping (same symbol on TD)
+    "AAPL": ("AAPL", {}),
+    "TSLA": ("TSLA", {}),
+    "MSFT": ("MSFT", {}),
+    "AMZN": ("AMZN", {}),
     # ETFs — standard US equity symbols, work as-is on TD
     "SPY": ("SPY", {}), "QQQ": ("QQQ", {}),
     "USO": ("USO", {}), "GLD": ("GLD", {}),
@@ -122,6 +127,29 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     "WEAT": ("WEAT", {}),
     # v5.0 N7: Uranium ETF (v3.5)
     "URA": ("URA", {}),
+}
+
+# ── Twelve Data market page URLs (for frontend linking) ──────────
+# Format: https://twelvedata.com/markets/{ID}/{type}/{exchange?}/{symbol}
+# These are the web page URLs, NOT API endpoints.
+_TD_MARKET_URLS: dict[str, str] = {
+    # Forex
+    "EURUSD=X": "https://twelvedata.com/markets/503145/forex/eur-usd",
+    "GBPUSD=X": "https://twelvedata.com/markets/232236/forex/gbp-usd",
+    "USDJPY=X": "https://twelvedata.com/markets/100641/forex/usd-jpy",
+    "EURJPY=X": "https://twelvedata.com/markets/482101/forex/eur-jpy",
+    # Commodities
+    "ZW=F": "https://twelvedata.com/markets/196547/commodity/w_1",
+    "HG=F": "https://twelvedata.com/markets/662294/commodity/hg1",
+    # Stocks — Euronext Paris
+    "BNP.PA": "https://twelvedata.com/markets/805148/stock/euronext/bnp",
+    "MC.PA": "https://twelvedata.com/markets/925722/stock/euronext/mc",
+    "SAN.PA": "https://twelvedata.com/markets/390210/stock/euronext/san",
+    # Stocks — US (NASDAQ)
+    "AAPL": "https://twelvedata.com/markets/861640/stock/nasdaq/aapl",
+    "TSLA": "https://twelvedata.com/markets/192184/stock/nasdaq/tsla",
+    "MSFT": "https://twelvedata.com/markets/194626/stock/nasdaq/msft",
+    "AMZN": "https://twelvedata.com/markets/816951/stock/nasdaq/amzn",
 }
 
 # Tickers known to not work on Twelve Data — skip to yfinance directly.
@@ -891,6 +919,16 @@ def fetch_intraday(ticker: str, period: str = "5d", interval: str = "1h") -> pd.
     period_map = {"1d": 1, "2d": 2, "5d": 5, "7d": 7, "10d": 10, "30d": 30}
     period_days = period_map.get(period, 5)
     return fetch_history(ticker, period_days=period_days, interval=interval)
+
+
+def get_td_market_url(ticker: str) -> str | None:
+    """Return the Twelve Data market page URL for a ticker, or None if unknown."""
+    return _TD_MARKET_URLS.get(ticker)
+
+
+def get_all_td_market_urls() -> dict[str, str]:
+    """Return all known Twelve Data market page URLs."""
+    return dict(_TD_MARKET_URLS)
 
 
 def get_provider_status() -> dict:

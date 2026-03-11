@@ -1653,6 +1653,13 @@ def get_current_prices(tickers: str = ""):
     return results
 
 
+@app.get("/api/market-data/td-urls")
+def get_td_market_urls():
+    """Return Twelve Data market page URLs for all known tickers."""
+    from .market_data import get_all_td_market_urls
+    return get_all_td_market_urls()
+
+
 @app.get("/api/price-archive/stats")
 def get_price_archive_stats():
     """v5.1: Get price archive statistics."""
