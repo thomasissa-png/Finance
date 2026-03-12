@@ -1314,7 +1314,7 @@ class TestTeam3V2Learning3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_learning_3 import AgentLearning3
-        assert AgentLearning3.version == "2.1"
+        assert AgentLearning3.version == "2.3"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2080,7 +2080,7 @@ class TestLearning2SnapshotContamination:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_learning_2 import AgentLearning2
-        assert AgentLearning2.version == "7.4"
+        assert AgentLearning2.version == "7.5"
 
 
 class TestLearning34WeeklyConfigPersistence:
@@ -2118,7 +2118,7 @@ class TestLearning34WeeklyConfigPersistence:
 
     def test_learning3_version_bumped(self):
         from backend.app.agents.agent_learning_3 import AgentLearning3
-        assert AgentLearning3.version == "2.1"
+        assert AgentLearning3.version == "2.3"
 
     def test_learning4_version_bumped(self):
         from backend.app.agents.agent_learning_4 import AgentLearning4

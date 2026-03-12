@@ -25,12 +25,20 @@ import logging
 import math
 import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
 
 logger = logging.getLogger(__name__)
+
+# Activation date — Learning 3 only starts after this date
+# Configurable via LEARNING3_ACTIVATION_DATE env var (format: YYYY-MM-DD)
+_l3_activation_str = os.environ.get("LEARNING3_ACTIVATION_DATE", "2026-04-01")
+try:
+    ACTIVATION_DATE = date.fromisoformat(_l3_activation_str)
+except ValueError:
+    ACTIVATION_DATE = date(2026, 4, 1)
 
 # Minimum closed trades for significance
 MIN_TRADES_STRATEGY = 5   # Per-strategy (need enough per variant)
@@ -508,7 +516,7 @@ class AgentLearning3(BaseAgent):
 
     name = "learning_3"
     description = "Learning & A/B testing — technical trading strategies"
-    version = "2.2"  # v2.2: trailing effectiveness stats (segmented by level)
+    version = "2.3"  # v2.3: activation date 2026-04-01
 
     def __init__(self):
         super().__init__()
@@ -528,6 +536,20 @@ class AgentLearning3(BaseAgent):
         Called after Journal 3 runs.
         Returns dict with learning results.
         """
+        # Check activation date
+        if date.today() < ACTIVATION_DATE:
+            self._set_status(AgentStatus.IDLE,
+                             f"Activation {ACTIVATION_DATE.isoformat()}")
+            self.log("Learning 3 not yet activated", {
+                "activation_date": ACTIVATION_DATE.isoformat(),
+                "today": date.today().isoformat(),
+            })
+            return {
+                "adjustments": {}, "anomalies": [],
+                "stats": {}, "ab_test": {}, "dimensions_updated": 0,
+                "reason": "not_yet_activated",
+            }
+
         self._set_status(AgentStatus.WORKING, "Recalculating tech learning")
 
         start = time.monotonic()
@@ -798,4 +820,6 @@ class AgentLearning3(BaseAgent):
             "cache_valid": self._cache_valid,
             "has_weekly_config": self._weekly_config is not None,
             "config_history_count": len(self._config_history),
+            "activation_date": ACTIVATION_DATE.isoformat(),
+            "is_active": date.today() >= ACTIVATION_DATE,
         }

@@ -48,11 +48,11 @@ MIN_META_SCORE = 5.0
 
 # Activation date — Team 4 only starts trading after this date
 # Configurable via TEAM4_ACTIVATION_DATE env var (format: YYYY-MM-DD)
-_activation_str = os.environ.get("TEAM4_ACTIVATION_DATE", "2026-03-16")
+_activation_str = os.environ.get("TEAM4_ACTIVATION_DATE", "2026-04-15")
 try:
     ACTIVATION_DATE = date.fromisoformat(_activation_str)
 except ValueError:
-    ACTIVATION_DATE = date(2026, 3, 16)
+    ACTIVATION_DATE = date(2026, 4, 15)
 
 
 def _normalize_direction(direction: str) -> str:

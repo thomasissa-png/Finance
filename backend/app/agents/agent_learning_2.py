@@ -24,12 +24,21 @@ Expertise incarnée :
 
 import logging
 import math
+import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 
 from .base import BaseAgent, AgentStatus
 
 logger = logging.getLogger(__name__)
+
+# Activation date — Learning 2 only starts after this date
+# Configurable via LEARNING2_ACTIVATION_DATE env var (format: YYYY-MM-DD)
+_l2_activation_str = os.environ.get("LEARNING2_ACTIVATION_DATE", "2026-04-01")
+try:
+    ACTIVATION_DATE = date.fromisoformat(_l2_activation_str)
+except ValueError:
+    ACTIVATION_DATE = date(2026, 4, 1)
 
 # Minimum completed periods needed for significance
 MIN_PERIODS_TICKER = 4    # Per-ticker (only 4 tickers, need small sample)
@@ -396,7 +405,7 @@ class AgentLearning2(BaseAgent):
 
     name = "learning_2"
     description = "Learning & optimisation — trend commodities"
-    version = "7.4"  # v7.4: zone+intensity-aware newscat cross-dimension
+    version = "7.5"  # v7.5: activation date 2026-04-01
 
     def __init__(self):
         super().__init__()
@@ -414,6 +423,20 @@ class AgentLearning2(BaseAgent):
         Called after Journal 2 runs.
         Returns dict with learning results.
         """
+        # Check activation date
+        if date.today() < ACTIVATION_DATE:
+            self._set_status(AgentStatus.IDLE,
+                             f"Activation {ACTIVATION_DATE.isoformat()}")
+            self.log("Learning 2 not yet activated", {
+                "activation_date": ACTIVATION_DATE.isoformat(),
+                "today": date.today().isoformat(),
+            })
+            return {
+                "adjustments": {}, "anomalies": [],
+                "stats": {}, "dimensions_updated": 0,
+                "reason": "not_yet_activated",
+            }
+
         self._set_status(AgentStatus.WORKING, "Recalculating trend learning")
 
         start = time.monotonic()
@@ -554,4 +577,6 @@ class AgentLearning2(BaseAgent):
             "anomalies": self._last_anomalies[:5],
             "total_recalculations": self._total_recalculations,
             "cache_valid": self._cache_valid,
+            "activation_date": ACTIVATION_DATE.isoformat(),
+            "is_active": date.today() >= ACTIVATION_DATE,
         }

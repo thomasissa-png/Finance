@@ -21,17 +21,26 @@ Expertise incarnée :
 - Détection des anomalies (streaks, drawdown, skewness)
 """
 
+import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from .base import BaseAgent, AgentStatus
+
+# Activation date — Learning 1 only starts after this date
+# Configurable via LEARNING1_ACTIVATION_DATE env var (format: YYYY-MM-DD)
+_l1_activation_str = os.environ.get("LEARNING1_ACTIVATION_DATE", "2026-04-01")
+try:
+    ACTIVATION_DATE = date.fromisoformat(_l1_activation_str)
+except ValueError:
+    ACTIVATION_DATE = date(2026, 4, 1)
 
 
 class AgentLearning(BaseAgent):
     name = "learning"
     description = "Machine learning & optimisation continue"
-    version = "5.5"  # v5.5: per-source performance tracking in feedback prompt
+    version = "5.6"  # v5.6: activation date 2026-04-01
 
     def __init__(self):
         super().__init__()
@@ -50,6 +59,20 @@ class AgentLearning(BaseAgent):
         Called after each journal run.
         Returns dict with learning results.
         """
+        # Check activation date
+        if date.today() < ACTIVATION_DATE:
+            self._set_status(AgentStatus.IDLE,
+                             f"Activation {ACTIVATION_DATE.isoformat()}")
+            self.log("Learning 1 not yet activated", {
+                "activation_date": ACTIVATION_DATE.isoformat(),
+                "today": date.today().isoformat(),
+            })
+            return {
+                "adjustments": {}, "anomalies": [],
+                "performance_summary": None, "dimensions_updated": 0,
+                "reason": "not_yet_activated",
+            }
+
         self._set_status(AgentStatus.WORKING, "Recalculating learning dimensions")
 
         start = time.monotonic()
@@ -221,4 +244,6 @@ class AgentLearning(BaseAgent):
             "dimensions": self._learning_dimensions,
             "total_recalculations": self._total_recalculations,
             "cache_valid": self._cache_valid,
+            "activation_date": ACTIVATION_DATE.isoformat(),
+            "is_active": date.today() >= ACTIVATION_DATE,
         }

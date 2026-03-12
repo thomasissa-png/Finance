@@ -82,11 +82,11 @@ TRAILING_DISTANCE_PCT = 0.7     # Trail 0.7% behind peak
 
 # Activation date — Team 4 only starts trading after this date
 # Configurable via TEAM4_ACTIVATION_DATE env var (format: YYYY-MM-DD)
-_activation_str = os.environ.get("TEAM4_ACTIVATION_DATE", "2026-03-16")
+_activation_str = os.environ.get("TEAM4_ACTIVATION_DATE", "2026-04-15")
 try:
     ACTIVATION_DATE = date.fromisoformat(_activation_str)
 except ValueError:
-    ACTIVATION_DATE = date(2026, 3, 16)
+    ACTIVATION_DATE = date(2026, 4, 15)
 
 # P5 fix: Correlation groups (shared with Team 1 & 3)
 META_CORRELATION_GROUPS = {
