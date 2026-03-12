@@ -194,6 +194,8 @@ class AgentLearning(BaseAgent):
         Recalculates if cache is invalid (after journal).
         v8.4 fix P8-E1: Thread-safe cache access via lock.
         """
+        if date.today() < ACTIVATION_DATE:
+            return {}
         with self._cache_lock:
             if not self._cache_valid or self._cached_adjustments is None:
                 self._cached_adjustments = self._compute_adjustments()
