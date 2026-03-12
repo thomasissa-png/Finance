@@ -53,15 +53,36 @@ ADJ_MAX = 1.4
 # P1: Temporal decay — half-life in days
 DECAY_HALF_LIFE_DAYS = 45
 
+# Adaptive decay per newscat — how fast signal patterns change
+NEWSCAT_DECAY_DAYS: dict[str, int] = {
+    "weather": 30,          # Fast-changing: seasons shift quickly
+    "supply_chain": 30,     # Fast-changing: disruptions resolve
+    "commodity": 45,        # Medium: physical cycles
+    "geopolitical": 45,     # Medium: conflicts evolve over weeks
+    "commodities_energy": 45,
+    "commodities_agri": 45,
+    "commodities_soft": 45,
+    "commodities_industrial": 45,
+    "commodities_livestock": 45,
+    # All other categories default to 60 (slow-changing patterns)
+}
+
 
 def _clamp(value: float, lo: float = ADJ_MIN, hi: float = ADJ_MAX) -> float:
     return max(lo, min(hi, value))
 
 
-def _compute_decay_weight(entry: dict, now: datetime) -> float:
+def _compute_decay_weight(entry: dict, now: datetime,
+                          half_life_override: int | None = None) -> float:
     """P1: Compute exponential decay weight based on entry age.
 
     Recent entries weight ~1.0, entries at half_life weight ~0.5.
+
+    Args:
+        entry: Journal entry dict
+        now: Current UTC time
+        half_life_override: Optional half-life in days. If None, uses
+            DECAY_HALF_LIFE_DAYS (45). Use NEWSCAT_DECAY_DAYS for adaptive decay.
     """
     entry_time = entry.get("exit_time") or entry.get("entry_time", "")
     if not entry_time:
@@ -71,7 +92,8 @@ def _compute_decay_weight(entry: dict, now: datetime) -> float:
         age_days = (now - entry_dt).total_seconds() / 86400
         if age_days < 0:
             return 1.0
-        return math.exp(-0.693 * age_days / DECAY_HALF_LIFE_DAYS)  # ln(2) ≈ 0.693
+        half_life = half_life_override if half_life_override is not None else DECAY_HALF_LIFE_DAYS
+        return math.exp(-0.693 * age_days / half_life)  # ln(2) ≈ 0.693
     except (ValueError, AttributeError, TypeError):
         return 1.0
 
@@ -210,10 +232,14 @@ def compute_trend_learning(entries: list[dict]) -> dict:
     def _compute_adj(pnl_weight_pairs: list[tuple[float, float]],
                      sensitivity: float = 0.15,
                      pnl_cap: float = 0.3,
-                     lo: float = ADJ_MIN, hi: float = ADJ_MAX) -> float | None:
+                     lo: float = ADJ_MIN, hi: float = ADJ_MAX,
+                     soft_cap: bool = True) -> float | None:
         """Compute adjustment from weighted (pnl, weight) pairs.
 
         P1: Uses decay weights. P2: Checks significance.
+        soft_cap: if True, raw adj exceeding 1.3/0.7 is capped at softer
+            bounds (1.25/0.75) to prevent over-reaction on small samples.
+            If False, use normal hard clamping to [lo, hi].
         Returns None if not significant.
         """
         if not pnl_weight_pairs:
@@ -234,8 +260,24 @@ def compute_trend_learning(entries: list[dict]) -> dict:
 
         signal = (w_wr - 0.5) * 2  # -1 to +1
         pnl_signal = max(-pnl_cap, min(pnl_cap, w_avg_pnl / 5.0))
-        adj = 1.0 + (signal * sensitivity) + (pnl_signal * 0.5)
-        return round(_clamp(adj, lo, hi), 3)
+        raw_adj = 1.0 + (signal * sensitivity) + (pnl_signal * 0.5)
+
+        # Early stopping on extreme adjustments — prevent over-reaction
+        if soft_cap:
+            if raw_adj > 1.3:
+                logger.debug(
+                    "soft_cap: raw_adj %.3f > 1.3, capping at 1.25 (n=%d)",
+                    raw_adj, len(pnl_weight_pairs),
+                )
+                raw_adj = 1.25
+            elif raw_adj < 0.7:
+                logger.debug(
+                    "soft_cap: raw_adj %.3f < 0.7, capping at 0.75 (n=%d)",
+                    raw_adj, len(pnl_weight_pairs),
+                )
+                raw_adj = 0.75
+
+        return round(_clamp(raw_adj, lo, hi), 3)
 
     # ── 1. Per-ticker adjustments ──
     ticker_groups: dict[str, list[tuple[float, float]]] = {}
@@ -250,14 +292,21 @@ def compute_trend_learning(entries: list[dict]) -> dict:
             if adj is not None:
                 result["ticker_adj"][ticker] = adj
 
-    # ── 2. Per-newscat adjustments (P6: primary category only) ──
-    newscat_groups: dict[str, list[tuple[float, float]]] = {}
-    for e, w in zip(valid, weights):
-        # P6: Use only the first/primary category to avoid double-counting
+    # ── 2. Per-newscat adjustments (P6: primary category only, adaptive decay) ──
+    # Build per-cat groups with adaptive decay weights
+    newscat_entry_groups: dict[str, list[tuple[dict, float]]] = {}
+    for e in valid:
         cats = e.get("news_categories", ["other"])
         primary_cat = cats[0] if cats else "other"
-        pnl = e.get("pnl_pct", 0)
-        newscat_groups.setdefault(primary_cat, []).append((pnl, w))
+        newscat_entry_groups.setdefault(primary_cat, []).append((e, 0.0))
+
+    newscat_groups: dict[str, list[tuple[float, float]]] = {}
+    for cat, entry_list in newscat_entry_groups.items():
+        half_life = NEWSCAT_DECAY_DAYS.get(cat, 60)  # default 60 for slow-changing
+        for e, _ in entry_list:
+            w = _compute_decay_weight(e, now, half_life_override=half_life)
+            pnl = e.get("pnl_pct", 0)
+            newscat_groups.setdefault(cat, []).append((pnl, w))
 
     for cat, pairs in newscat_groups.items():
         if len(pairs) >= MIN_PERIODS_NEWSCAT:
@@ -337,6 +386,64 @@ def compute_trend_learning(entries: list[dict]) -> dict:
             if adj is not None:
                 result["direction_adj"][direction] = adj
 
+    # ── 3b. Per-ticker regime detection ──
+    # Detect trending vs choppy regime based on recent flip frequency change
+    cutoff_recent = now - timedelta(days=30)
+    cutoff_prev = now - timedelta(days=60)
+    ticker_regime: dict[str, dict] = {}
+
+    for ticker in ticker_groups:
+        # Count flips in recent 30d vs previous 30d
+        recent_flips = 0
+        prev_flips = 0
+        total_flips = 0
+        for e in valid:
+            if e.get("ticker") != ticker:
+                continue
+            total_flips += 1
+            entry_time_str = e.get("exit_time") or e.get("entry_time", "")
+            if not entry_time_str:
+                continue
+            try:
+                entry_dt = datetime.fromisoformat(
+                    entry_time_str.replace("Z", "+00:00")
+                )
+                if entry_dt >= cutoff_recent:
+                    recent_flips += 1
+                elif entry_dt >= cutoff_prev:
+                    prev_flips += 1
+            except (ValueError, AttributeError, TypeError):
+                continue
+
+        if total_flips < 3:
+            continue  # Not enough data for regime detection
+
+        # Determine regime based on flip frequency change
+        if prev_flips == 0:
+            # No baseline to compare — mark stable
+            regime = "stable"
+            adj = 1.0
+        else:
+            change_ratio = (recent_flips - prev_flips) / prev_flips
+            if change_ratio > 0.5:
+                regime = "choppy"
+                adj = 0.9  # Penalty: more flips = more noise
+            elif change_ratio < -0.3:
+                regime = "trending"
+                adj = 1.1  # Boost: fewer flips = cleaner trend
+            else:
+                regime = "stable"
+                adj = 1.0
+
+        ticker_regime[ticker] = {
+            "regime": regime,
+            "adj": adj,
+            "recent_flips": recent_flips,
+            "prev_flips": prev_flips,
+        }
+
+    result["ticker_regime"] = ticker_regime
+
     # ── 4. Signal strength calibration (P5: proportional) ──
     strengths = [e.get("signal_strength", 0) for e in valid if e.get("signal_strength")]
     if strengths:
@@ -405,7 +512,7 @@ class AgentLearning2(BaseAgent):
 
     name = "learning_2"
     description = "Learning & optimisation — trend commodities"
-    version = "7.5"  # v7.5: activation date 2026-04-01
+    version = "7.5"  # v7.5: ticker regime, adaptive decay, soft_cap, activation date
 
     def __init__(self):
         super().__init__()

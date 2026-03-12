@@ -45,8 +45,10 @@ try:
 except ValueError:
     ACTIVATION_DATE = date(2026, 4, 1)
 
-# Minimum completed trades before learning activates
-MIN_HISTORY_TRADES = 30
+# Minimum completed trades before learning activates.
+# Lowered from 30 to 15: Team 4 activates 2026-03-16 — early data is sparse
+# and we want learning to kick in after ~2 weeks instead of ~1 month.
+MIN_HISTORY_TRADES = 15
 
 # Per-dimension minimum samples
 MIN_SAMPLES_COMBO = 5       # Per team combination
@@ -127,6 +129,34 @@ TARGET_WIN_RATE = 80.0
 AB_WEIGHT_WR = 0.30
 AB_WEIGHT_PNL = 0.40
 AB_WEIGHT_SHARPE = 0.30
+
+
+def _conservative_fallback(dimension: str, key: str = "") -> float:
+    """Return a conservative fallback multiplier when a dimension has too few samples.
+
+    Biases toward caution rather than neutrality so unproven configs don't
+    get full credit.  Applied only to keys that appeared in the data at least
+    once — completely unseen keys receive no entry at all.
+
+    Args:
+        dimension: One of "combo", "ticker", "confluence", "duration".
+        key: The specific key within the dimension (e.g. "2" for confluence
+             level 2, "multi_day" for duration).
+
+    Returns:
+        float multiplier in (0.0, 1.0] — always ≤ 1.0 (conservative direction).
+    """
+    if dimension == "combo":
+        return 0.95   # Slightly cautious on unproven team combinations
+    if dimension == "ticker":
+        return 1.0    # Neutral — no prior information on this asset
+    if dimension == "confluence":
+        # Favour full confluence (3/3) when we have no data to distinguish
+        return 0.9 if key == "2" else 1.0
+    if dimension == "duration":
+        # Longer holds carry more overnight/gap risk without track record
+        return 0.95 if key == "multi_day" else 1.0
+    return 1.0
 
 
 def _clamp(value: float, lo: float = ADJ_MIN, hi: float = ADJ_MAX) -> float:
@@ -266,7 +296,9 @@ def compute_meta_learning(entries: list[dict]) -> dict:
         "confluence_adj": {},
         "duration_adj": {},
         "weight_optimization": {},
+        "source_contribution": {},
         "anomalies": [],
+        "fallback_applied": [],
         "stats": {},
     }
 
@@ -337,6 +369,12 @@ def compute_meta_learning(entries: list[dict]) -> dict:
             if adj is not None:
                 result["combo_adj"][combo] = adj
 
+    # Conservative fallback for combos seen in data but below min_samples
+    for combo in combo_groups:
+        if combo not in result["combo_adj"]:
+            result["combo_adj"][combo] = _conservative_fallback("combo", combo)
+            result["fallback_applied"].append(f"combo:{combo}")
+
     # ── 2. Per-ticker adjustments ──
     ticker_groups: dict[str, list[tuple[float, float]]] = {}
     for e, w in zip(valid, weights):
@@ -349,6 +387,12 @@ def compute_meta_learning(entries: list[dict]) -> dict:
             adj = _compute_adj(pairs)
             if adj is not None:
                 result["ticker_adj"][ticker] = adj
+
+    # Conservative fallback for tickers seen in data but below min_samples
+    for ticker in ticker_groups:
+        if ticker not in result["ticker_adj"]:
+            result["ticker_adj"][ticker] = _conservative_fallback("ticker", ticker)
+            result["fallback_applied"].append(f"ticker:{ticker}")
 
     # ── 3. Per-confluence-level adjustments ──
     confluence_groups: dict[str, list[tuple[float, float]]] = {}
@@ -366,6 +410,12 @@ def compute_meta_learning(entries: list[dict]) -> dict:
             if adj is not None:
                 result["confluence_adj"][level] = adj
 
+    # Conservative fallback for confluence levels seen in data but below min_samples
+    for level in confluence_groups:
+        if level not in result["confluence_adj"]:
+            result["confluence_adj"][level] = _conservative_fallback("confluence", level)
+            result["fallback_applied"].append(f"confluence:{level}")
+
     # ── 4. Per-duration-category adjustments ──
     duration_groups: dict[str, list[tuple[float, float]]] = {}
     for e, w in zip(valid, weights):
@@ -381,6 +431,12 @@ def compute_meta_learning(entries: list[dict]) -> dict:
             )
             if adj is not None:
                 result["duration_adj"][dur] = adj
+
+    # Conservative fallback for duration categories seen in data but below min_samples
+    for dur in duration_groups:
+        if dur not in result["duration_adj"]:
+            result["duration_adj"][dur] = _conservative_fallback("duration", dur)
+            result["fallback_applied"].append(f"duration:{dur}")
 
     # ── 5. Weight optimization ──
     if len(valid) >= MIN_SAMPLES_WEIGHTS:
@@ -417,6 +473,47 @@ def compute_meta_learning(entries: list[dict]) -> dict:
                 result["weight_optimization"] = {
                     k: round(v / total_w, 3) for k, v in weight_adj.items()
                 }
+
+    # ── 5b. Source contribution analysis ──
+    # For each entry, identify which source (news/trend/tech) was the primary
+    # contributor (highest absolute score), then compute per-source win rates.
+    source_primary_data: dict[str, dict] = {}  # source → {wins, total, pnl_sum}
+    for entry in valid:
+        source_details = entry.get("source_details", {})
+        if not source_details:
+            continue
+        # Find source with highest absolute score
+        best_source = None
+        best_score = -1.0
+        for src, score_val in source_details.items():
+            if src not in ("news", "trend", "tech"):
+                continue
+            try:
+                abs_score = abs(float(score_val))
+            except (TypeError, ValueError):
+                continue
+            if abs_score > best_score:
+                best_score = abs_score
+                best_source = src
+        if best_source is None:
+            continue
+        pnl = entry.get("pnl_pct", 0) or 0.0
+        if best_source not in source_primary_data:
+            source_primary_data[best_source] = {"wins": 0, "total": 0, "pnl_sum": 0.0}
+        source_primary_data[best_source]["total"] += 1
+        source_primary_data[best_source]["pnl_sum"] += pnl
+        if pnl > 0:
+            source_primary_data[best_source]["wins"] += 1
+
+    for src, data in source_primary_data.items():
+        if data["total"] >= 3:
+            wr = data["wins"] / data["total"]
+            avg_score_when_primary = data["pnl_sum"] / data["total"]
+            result["source_contribution"][src] = {
+                "primary_count": data["total"],
+                "primary_wr": round(wr, 3),
+                "avg_score_when_primary": round(avg_score_when_primary, 3),
+            }
 
     # ── 6. Anomaly detection ──
     anomalies = result["anomalies"]
@@ -488,7 +585,7 @@ class AgentLearning4(BaseAgent):
 
     name = "learning_4"
     description = "Learning & optimisation — meta/ensemble trading"
-    version = "2.2"  # v2.2: activation date 2026-04-01
+    version = "2.2"  # v2.2: bootstrap 30→15, conservative fallbacks, source contribution, activation date
 
     def __init__(self):
         super().__init__()

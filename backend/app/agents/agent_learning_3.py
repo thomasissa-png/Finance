@@ -44,7 +44,7 @@ except ValueError:
 MIN_TRADES_STRATEGY = 5   # Per-strategy (need enough per variant)
 MIN_TRADES_TICKER = 6     # Per-ticker
 MIN_TRADES_TIMEFRAME = 5  # Per-timeframe
-MIN_TRADES_REGIME = 8     # Per-regime (trending/ranging)
+MIN_TRADES_REGIME = 5     # Per-regime (4 combined states: trending/ranging × high/low vol)
 MIN_TRADES_AB = 10        # For A/B comparison (per variant)
 MIN_TRADES_GLOBAL = 10    # For global metrics
 
@@ -347,13 +347,23 @@ def compute_tech_learning(entries: list[dict]) -> dict:
             if adj is not None:
                 result["timeframe_adj"][tf] = adj
 
-    # ── 4. Per-market-regime adjustments (ADX-based) ──
+    # ── 4. Per-market-regime adjustments (ADX × volatility — 2-dimensional) ──
+    # Dimension 1: ADX-based (trending >= 25, ranging < 25)
+    # Dimension 2: Volatility (high_vol if atr_pct_at_entry > 3%, low_vol otherwise)
+    # Combined: "trending_highvol", "trending_lowvol", "ranging_highvol", "ranging_lowvol"
     regime_groups: dict[str, list[tuple[float, float]]] = {}
     for e, w in zip(valid, weights):
         adx = e.get("adx_at_entry")
+        atr_pct = e.get("atr_pct_at_entry")
         pnl = e.get("pnl_pct", 0)
         if adx is not None:
-            regime = "trending" if adx >= ADX_TRENDING_THRESHOLD else "ranging"
+            adx_dim = "trending" if adx >= ADX_TRENDING_THRESHOLD else "ranging"
+            if atr_pct is not None:
+                vol_dim = "highvol" if atr_pct > 3.0 else "lowvol"
+                regime = f"{adx_dim}_{vol_dim}"
+            else:
+                # Fallback: no ATR data, use ADX-only key
+                regime = adx_dim
         else:
             regime = "unknown"
         regime_groups.setdefault(regime, []).append((pnl, w))
@@ -439,6 +449,41 @@ def compute_tech_learning(entries: list[dict]) -> dict:
                         f"vs {loser[0]} (WR={loser[1]['win_rate']}%)"
                     )
 
+    # Rolling A/B: split trades chronologically into first-half vs second-half
+    # For each strategy with >=3 trades in each half, compute trend direction.
+    mid = len(valid) // 2
+    first_half = valid[:mid]
+    second_half = valid[mid:]
+
+    # Build per-strategy trade lists for each half
+    first_by_strat: dict[str, list[float]] = {}
+    for e in first_half:
+        s = e.get("strategy", "unknown")
+        first_by_strat.setdefault(s, []).append(e.get("pnl_pct", 0))
+
+    second_by_strat: dict[str, list[float]] = {}
+    for e in second_half:
+        s = e.get("strategy", "unknown")
+        second_by_strat.setdefault(s, []).append(e.get("pnl_pct", 0))
+
+    for strategy in set(first_by_strat) | set(second_by_strat):
+        first_pnls = first_by_strat.get(strategy, [])
+        second_pnls = second_by_strat.get(strategy, [])
+        if len(first_pnls) >= 3 and len(second_pnls) >= 3:
+            first_wr = sum(1 for p in first_pnls if p > 0) / len(first_pnls) * 100
+            second_wr = sum(1 for p in second_pnls if p > 0) / len(second_pnls) * 100
+            delta_wr = second_wr - first_wr
+            if delta_wr > 10:
+                rolling_trend = "IMPROVING"
+            elif delta_wr < -10:
+                rolling_trend = "DECLINING"
+            else:
+                rolling_trend = "STABLE"
+            if strategy in ab_test:
+                ab_test[strategy]["rolling_trend"] = rolling_trend
+                ab_test[strategy]["rolling_first_wr"] = round(first_wr, 1)
+                ab_test[strategy]["rolling_second_wr"] = round(second_wr, 1)
+
     result["ab_test"] = ab_test
 
     # ── 6. Anomaly detection ──
@@ -516,7 +561,7 @@ class AgentLearning3(BaseAgent):
 
     name = "learning_3"
     description = "Learning & A/B testing — technical trading strategies"
-    version = "2.3"  # v2.3: activation date 2026-04-01
+    version = "2.3"  # v2.3: rolling A/B trend, 2D regime (ADX×vol), daily anomaly trigger, activation date
 
     def __init__(self):
         super().__init__()
@@ -813,6 +858,85 @@ class AgentLearning3(BaseAgent):
     def get_config_history(self) -> list[dict]:
         """L2: Get history of weekly config changes."""
         return self._config_history
+
+    def check_daily_anomalies(self) -> list[str]:
+        """Check for anomalies in the last 24 hours of journal entries.
+
+        Designed to be called daily (not just at learning time).
+        Checks:
+        - Consecutive losses >= 3 in recent trades
+        - Any strategy with 0 wins in its last 5 trades
+        - Total loss > 3% over the last 24 hours
+
+        Returns list of anomaly strings (empty if none).
+        """
+        anomalies: list[str] = []
+        try:
+            from .agent_journal_3 import _load_journal_entries
+            all_entries = _load_journal_entries()
+        except Exception as exc:
+            logger.warning("check_daily_anomalies: failed to load entries: %s", exc)
+            return anomalies
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        recent: list[dict] = []
+        for e in all_entries:
+            if e.get("result") not in ("TP_HIT", "SL_HIT", "EXPIRED"):
+                continue
+            ts_str = e.get("close_time") or e.get("entry_time", "")
+            if not ts_str:
+                continue
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts >= cutoff:
+                    recent.append(e)
+            except (ValueError, AttributeError):
+                continue
+
+        if not recent:
+            return anomalies
+
+        # Sort chronologically
+        recent.sort(key=lambda e: e.get("close_time") or e.get("entry_time", ""))
+
+        # Check 1: Consecutive losses >= 3
+        consecutive = 0
+        for e in recent:
+            if (e.get("pnl_pct") or 0) <= 0:
+                consecutive += 1
+            else:
+                consecutive = 0
+        if consecutive >= 3:
+            anomalies.append(f"DAILY_STREAK: {consecutive} consecutive losses in last 24h")
+
+        # Check 2: Any strategy with 0 wins in last 5 trades (within recent window)
+        strat_recent: dict[str, list[float]] = {}
+        for e in recent:
+            s = e.get("strategy", "unknown")
+            strat_recent.setdefault(s, []).append(e.get("pnl_pct", 0))
+        for strat, pnls in strat_recent.items():
+            last5 = pnls[-5:]
+            if len(last5) >= 5 and all(p <= 0 for p in last5):
+                anomalies.append(
+                    f"DAILY_ZERO_WINS: {strat} — 0 wins in last 5 trades (24h window)"
+                )
+
+        # Check 3: Total loss > 3% in last 24 hours
+        total_pnl_24h = sum(e.get("pnl_pct", 0) for e in recent)
+        if total_pnl_24h < -3.0:
+            anomalies.append(
+                f"DAILY_LOSS: total P&L={total_pnl_24h:.2f}% over last 24h "
+                f"({len(recent)} trades)"
+            )
+
+        if anomalies:
+            self.log("Daily anomalies detected", {
+                "count": len(anomalies),
+                "anomalies": anomalies,
+                "trades_last_24h": len(recent),
+            }, level="WARN")
+
+        return anomalies
 
     def get_metrics(self) -> dict:
         return {

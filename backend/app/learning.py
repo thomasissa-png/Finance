@@ -23,6 +23,10 @@ v4.2 audit changes:
 - B4: hour_adj — REMOVED (M8: worst data-to-noise ratio)
 - B5: direction_adj — direction accuracy as learning adjustment
 - C1: Regime min trades raised to 15, or merged into 2 buckets
+v5.6 changes:
+- 3 VIX regime buckets (low_vol=calm, mid_vol=normal+elevated, high_vol=stress), min_significant=6
+- _compute_confidence_interval: 90% CI (z=1.645) for ticker and regime adjustments
+- Intraday drift detection: AM vs PM win rate, flag if diff ≥ 15pp with ≥ 5 trades each half
 - C2: Confidence-scaled bounds in adjustments
 - C3: Decay multiplier between journal runs (via cache invalidation)
 - C4: Convergence source dedup (in news_scorer — documented here)
@@ -558,6 +562,46 @@ def _compute_adjustment(entries: list[tuple[float, float]], sensitivity: float =
     return round(max(lo, min(hi, mult)), 3)
 
 
+def _compute_confidence_interval(pnl_weight_pairs: list[tuple[float, float]],
+                                 adjustment: float) -> dict:
+    """Compute a 90% confidence interval around an adjustment (v5.6).
+
+    Uses z=1.645 for 90% CI based on weighted standard error.
+
+    Args:
+        pnl_weight_pairs: list of (pnl_pct, decay_weight) pairs
+        adjustment: the point-estimate multiplier already computed
+
+    Returns:
+        {"low": float, "high": float, "n": int}
+        where low/high are the CI bounds around `adjustment`.
+        Returns a degenerate interval [adjustment, adjustment] if < 2 samples.
+    """
+    n = len(pnl_weight_pairs)
+    if n < 2:
+        return {"low": adjustment, "high": adjustment, "n": n}
+
+    total_w = sum(w for _, w in pnl_weight_pairs)
+    if total_w == 0:
+        return {"low": adjustment, "high": adjustment, "n": n}
+
+    avg_pnl = sum(p * w for p, w in pnl_weight_pairs) / total_w
+    weighted_var = sum(w * (p - avg_pnl) ** 2 for p, w in pnl_weight_pairs) / total_w
+    weighted_stderr = math.sqrt(weighted_var / n) if weighted_var > 0 else 0.0
+
+    # 90% CI: z = 1.645 — we express the CI in adjustment-space (not PnL-space)
+    # sensitivity and pnl_cap used in the actual adjustment are 0.5 and 0.25 for ticker,
+    # 0.3 and 0.15 for regime. We use a generic mapping: ±1.645 * stderr on PnL → ±adjustment
+    # We compute the CI directly on the multiplier scale:
+    #   multiplier = 1.0 + pnl_signal * sensitivity  (where pnl_signal ≈ avg_pnl for small values)
+    # So CI half-width ≈ 1.645 * weighted_stderr (unbounded — clamp to [0.5, 1.5] space)
+    z90 = 1.645
+    half_width = z90 * weighted_stderr
+    ci_low = round(max(0.5, adjustment - half_width), 3)
+    ci_high = round(min(1.5, adjustment + half_width), 3)
+    return {"low": ci_low, "high": ci_high, "n": n}
+
+
 def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None) -> dict:
     """Compute per-ticker score multipliers based on historical performance.
 
@@ -579,7 +623,7 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
     - D1: Lookback reduced to 2x half_life (was 180 days fixed)
     - B1: delay_bias_adj from transmission_delay accuracy data
     - B5: direction_adj LONG/SHORT accuracy
-    - C1: Regime min trades raised to 15, merged to 2 buckets (calm+normal, elevated+stress)
+    - C1: Regime: 3 buckets (low_vol=calm, mid_vol=normal+elevated, high_vol=stress), min 6
     - C2: Significance test on decay-weighted values (weighted mean/stderr)
     - C3: Half-life computed after lookback filter
     - M8: hour_adj removed (worst data-to-noise ratio), t-stat thresholds raised
@@ -649,6 +693,9 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         "direction_adj": {},
         "delay_bias_adj": 1.0,
         "decomposition": {},
+        "confidence_intervals": {"ticker": {}, "regime": {}},
+        "drift_detection": {"am_wr": 0.0, "pm_wr": 0.0, "am_n": 0, "pm_n": 0,
+                            "drift_detected": False},
     }
 
     if len(closed) < 5:
@@ -791,29 +838,44 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         if adj is not None:
             newscat_adj[ncat] = adj
 
-    # ── v3.4 #1 + v4.2 C1: Per-regime adjustments ──
-    # C1: Merge to 2 buckets (calm+normal, elevated+stress) and raise min to 15
+    # ── v3.4 #1 + v4.2 C1 + v5.6: Per-regime adjustments ──
+    # v5.6: 3 buckets (calm, normal+elevated, stress) for better granularity.
+    # min_significant lowered to 6 (was 8) since 3 buckets = smaller samples per bucket.
     regime_weighted: dict[str, list[tuple[float, float]]] = {}
     for t in closed:
         if t.pnl_pct is not None:
             raw_regime = t.market_regime or "normal"
-            # C1: Merge into 2 buckets for larger sample sizes
-            if raw_regime in ("calm", "normal"):
+            # v5.6: 3 buckets: calm → low_vol, normal+elevated → mid_vol, stress → high_vol
+            if raw_regime == "calm":
                 merged_regime = "low_vol"
-            else:  # elevated, stress
+            elif raw_regime in ("normal", "elevated"):
+                merged_regime = "mid_vol"
+            else:  # stress
                 merged_regime = "high_vol"
             w = _compute_decay_weight(t.timestamp, half_life)
             regime_weighted.setdefault(merged_regime, []).append((t.pnl_pct, w))
 
     regime_adj: dict[str, float] = {}
     for regime, entries in regime_weighted.items():
-        # C1: min 8 trades for regime (was 15 — too slow to activate, was 5 before that)
-        # M8: t_threshold raised to 1.5
+        # v5.6: min 6 trades (was 8 with 2 buckets; 3 buckets have smaller samples)
         adj = _compute_adjustment(entries, sensitivity=0.3, pnl_cap=0.15,
-                                  bounds=(0.7, 1.3), min_significant=8,
+                                  bounds=(0.7, 1.3), min_significant=6,
                                   t_threshold=1.5)
         if adj is not None:
             regime_adj[regime] = adj
+
+    # ── v5.6: Confidence intervals for ticker and regime adjustments ──
+    confidence_intervals: dict[str, dict] = {"ticker": {}, "regime": {}}
+    for ticker, entries in ticker_weighted.items():
+        if ticker in ticker_adj:
+            confidence_intervals["ticker"][ticker] = _compute_confidence_interval(
+                entries, ticker_adj[ticker]
+            )
+    for regime, entries in regime_weighted.items():
+        if regime in regime_adj:
+            confidence_intervals["regime"][regime] = _compute_confidence_interval(
+                entries, regime_adj[regime]
+            )
 
     # ── v4.2 B5: Direction accuracy adjustment ──
     dir_weighted: dict[str, list[tuple[float, float]]] = {}
@@ -852,6 +914,51 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
                 delay_bias_adj = round(1.0 + bias_signal, 3)
                 logger.info("B1: delay_bias_adj=%.3f (avg_error=%.1f)", delay_bias_adj, avg_error)
 
+    # ── v5.6: Intraday drift detection ──
+    # Compare AM (entry before 14:00 CET) vs PM (14:00+) win rates.
+    # Flag if the difference exceeds 15pp with at least 5 trades in each half.
+    drift_detection: dict = {"am_wr": 0.0, "pm_wr": 0.0, "am_n": 0, "pm_n": 0,
+                              "drift_detected": False}
+    try:
+        from zoneinfo import ZoneInfo
+        _paris_tz = ZoneInfo("Europe/Paris")
+        am_wins = am_total = 0
+        pm_wins = pm_total = 0
+        for t in closed:
+            if t.pnl_pct is None:
+                continue
+            ts = t.timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            ts_paris = ts.astimezone(_paris_tz)
+            is_win = t.pnl_pct > 0
+            if ts_paris.hour < 14:
+                am_total += 1
+                if is_win:
+                    am_wins += 1
+            else:
+                pm_total += 1
+                if is_win:
+                    pm_wins += 1
+
+        if am_total >= 5 and pm_total >= 5:
+            am_wr = am_wins / am_total
+            pm_wr = pm_wins / pm_total
+            drift = abs(am_wr - pm_wr)
+            drift_detected = drift >= 0.15
+            drift_detection = {
+                "am_wr": round(am_wr, 3),
+                "pm_wr": round(pm_wr, 3),
+                "am_n": am_total,
+                "pm_n": pm_total,
+                "drift_detected": drift_detected,
+            }
+            if drift_detected:
+                logger.info("v5.6: Intraday drift detected: AM WR=%.1f%% (n=%d) vs PM WR=%.1f%% (n=%d)",
+                            am_wr * 100, am_total, pm_wr * 100, pm_total)
+    except Exception as exc:
+        logger.warning("v5.6: Intraday drift detection failed: %s", exc)
+
     # ── Multiplicative blend: ticker * category only ──────────────
     # v3.4 #2/#4: session, newscat, regime, direction returned separately
     from .config import ASSET_BY_TICKER
@@ -876,11 +983,12 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         decomposition[ticker] = {"ticker_mult": t_mult, "cat_mult": c_mult}
 
     # Log per-dimension decomposition
-    logger.info("Learning v4.2: %d tickers, %d categories, %d sessions, %d news_cats, "
-                "%d regimes, %d directions, delay_bias=%.3f, half_life=%.0fd",
+    logger.info("Learning v5.6: %d tickers, %d categories, %d sessions, %d news_cats, "
+                "%d regimes, %d directions, delay_bias=%.3f, half_life=%.0fd, drift=%s",
                 len(adjustments), len(cat_adj), len(session_adj),
                 len(newscat_adj), len(regime_adj),
-                len(direction_adj), delay_bias_adj, half_life)
+                len(direction_adj), delay_bias_adj, half_life,
+                drift_detection.get("drift_detected", False))
     if decomposition:
         for ticker, dec in sorted(decomposition.items()):
             if dec["ticker_mult"] != 1.0 or dec["cat_mult"] != 1.0:
@@ -904,6 +1012,8 @@ def compute_learning_adjustments(trades: list[TradeRecommendation] | None = None
         "direction_adj": direction_adj,
         "delay_bias_adj": delay_bias_adj,
         "decomposition": decomposition,
+        "confidence_intervals": confidence_intervals,
+        "drift_detection": drift_detection,
     }
 
 

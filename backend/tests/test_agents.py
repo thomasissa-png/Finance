@@ -1134,7 +1134,7 @@ class TestTeam3V2Scoring3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_scoring_3 import AgentScoring3
-        assert AgentScoring3.version == "2.3"
+        assert AgentScoring3.version == "2.5"
 
     def test_stochastic_reversal_detector(self):
         """T3: Stochastic reversal should detect oversold conditions."""
@@ -1198,7 +1198,7 @@ class TestTeam3V2Trader3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_3 import AgentTrader3
-        assert AgentTrader3.version == "2.2"
+        assert AgentTrader3.version == "2.4"
 
 
 class TestTeam3V2Journal3:
@@ -1254,7 +1254,7 @@ class TestTeam3V2Journal3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_journal_3 import AgentJournal3
-        assert AgentJournal3.version == "2.1"
+        assert AgentJournal3.version == "2.2"
 
 
 class TestTeam3V2Learning3:
@@ -1994,7 +1994,7 @@ class TestJournalJsonAtomicWrite:
 
     def test_journal3_version_bumped(self):
         from backend.app.agents.agent_journal_3 import AgentJournal3
-        assert AgentJournal3.version == "2.1"
+        assert AgentJournal3.version == "2.2"
 
     def test_journal4_version_bumped(self):
         from backend.app.agents.agent_journal_4 import AgentJournal4

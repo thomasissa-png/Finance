@@ -40,7 +40,7 @@ except ValueError:
 class AgentLearning(BaseAgent):
     name = "learning"
     description = "Machine learning & optimisation continue"
-    version = "5.6"  # v5.6: activation date 2026-04-01
+    version = "5.6"  # v5.6: 3 VIX regimes, confidence intervals, intraday drift detection, activation date
 
     def __init__(self):
         super().__init__()
