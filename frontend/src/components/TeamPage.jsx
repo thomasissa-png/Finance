@@ -564,20 +564,27 @@ function TraderSection({ teamId }) {
         )}
       </div>
 
-      {/* Trade history */}
-      {filteredHistory.length > 0 && (
+      {/* Trade history — always show section when there are trades (even if filter yields 0) */}
+      {history.length > 0 && (
         <div className="section-card">
           <div className="section-header">
-            <h3>Historique ({filteredHistory.length})</h3>
+            <h3>Historique ({filteredHistory.length}{filterResult ? ` / ${history.length}` : ""})</h3>
             <div className="filter-row">
               <select value={filterResult} onChange={(e) => { setFilterResult(e.target.value); setPage(1); }} className="filter-select">
                 <option value="">Tous résultats</option>
                 <option value="TP_HIT">TP</option>
                 <option value="SL_HIT">SL</option>
                 <option value="EXPIRED">Expiré</option>
+                {teamId === "4" && <option value="REVERSAL">Reversal</option>}
+                {teamId === "4" && <option value="SIGNAL">Signal</option>}
               </select>
             </div>
           </div>
+          {filteredHistory.length === 0 ? (
+            <div className="agent-logs-empty" style={{ padding: "16px 0" }}>
+              Aucun trade avec le filtre sélectionné.
+            </div>
+          ) : (
           <div className="compact-table">
             <table>
               <thead>
@@ -585,7 +592,7 @@ function TraderSection({ teamId }) {
                   <th>Date</th>
                   <th>Actif</th>
                   <th>Dir</th>
-                  <th>Raison</th>
+                  <th>Stratégie</th>
                   <th>Entrée</th>
                   <th>Résultat</th>
                   <th>P&L</th>
@@ -597,21 +604,23 @@ function TraderSection({ teamId }) {
                   const reason = t.news_headline || t.catalyst || t.reason || t.reasoning || t.strategy || "";
                   const tradeKey = `${t.timestamp || t.entry_time || t.time}-${t.ticker}-${i}`;
                   const isExpanded = expandedTrade === tradeKey;
-                  // Build detail tags: news_category + news_zone + ticker
-                  const tags = [t.news_category, t.news_zone, t.ticker].filter(Boolean);
+                  // Strategy/context label per team
+                  const stratLabel = t.strategy || t.strategy_name || t.team_combination
+                    || (t.teams_contributing ? t.teams_contributing.join("+") : null)
+                    || [t.news_category, t.news_zone].filter(Boolean).join(" · ")
+                    || null;
                   return (
                     <React.Fragment key={tradeKey}>
                       <tr style={{ cursor: "pointer" }} onClick={() => setExpandedTrade(isExpanded ? null : tradeKey)}>
                         <td>{formatDate(t.timestamp || t.entry_time || t.time)}</td>
                         <td className="ticker-cell"><TickerLink ticker={t.ticker} /></td>
                         <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
-                        <td style={{ fontSize: 11, maxWidth: 260 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                            {tags.map((tag, ti) => (
-                              <span key={ti} style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: CATEGORY_COLORS[tag] ? `${CATEGORY_COLORS[tag]}22` : "rgba(139,157,195,0.12)", color: CATEGORY_COLORS[tag] || "var(--text-secondary)", fontWeight: 600, whiteSpace: "nowrap" }}>{tag}</span>
-                            ))}
-                            <span style={{ color: isExpanded ? "var(--accent)" : "var(--text-muted)", fontSize: 9 }}>{isExpanded ? "▲" : "▼"}</span>
-                          </div>
+                        <td style={{ fontSize: 11, maxWidth: 200 }}>
+                          {stratLabel ? (
+                            <span className="strategy-tag">{stratLabel}</span>
+                          ) : (
+                            <span style={{ color: "var(--text-muted)", fontSize: 10 }}>—</span>
+                          )}
                         </td>
                         <td>{formatPrice(t.entry_price, t.ticker)}</td>
                         <td><span className={`result-badge ${res.cls}`}>{res.label}</span></td>
@@ -629,6 +638,9 @@ function TraderSection({ teamId }) {
                               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
                                 {t.news_category && <span><strong>Catégorie :</strong> {t.news_category}</span>}
                                 {t.news_zone && <span><strong>Zone :</strong> {t.news_zone}</span>}
+                                {t.strategy && <span><strong>Stratégie :</strong> {t.strategy}</span>}
+                                {t.team_combination && <span><strong>Combo :</strong> {t.team_combination}</span>}
+                                {t.confluence_level != null && <span><strong>Confluence :</strong> {t.confluence_level}/3</span>}
                                 {t.raw_claude_score != null && <span><strong>Score :</strong> {typeof t.raw_claude_score === "number" ? t.raw_claude_score.toFixed(1) : t.raw_claude_score}</span>}
                                 {t.learning_multiplier != null && <span><strong>Learn.x :</strong> {typeof t.learning_multiplier === "number" ? t.learning_multiplier.toFixed(3) : t.learning_multiplier}</span>}
                                 {t.confidence != null && <span><strong>Confiance :</strong> {t.confidence}%</span>}
@@ -645,6 +657,7 @@ function TraderSection({ teamId }) {
               </tbody>
             </table>
           </div>
+          )}
           {tp > 1 && (
             <div className="pagination">
               <button disabled={page <= 1} onClick={() => setPage(page - 1)}>&laquo;</button>

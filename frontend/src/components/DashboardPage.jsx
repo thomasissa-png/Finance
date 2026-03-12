@@ -172,8 +172,19 @@ function computeLivePnl(entry_price, current_price, direction) {
   return direction === "SHORT" ? -pct : pct;
 }
 
-/* Strategy display helper */
+/* Strategy display helper — shows contextual info per team */
 function getStrategyLabel(pos) {
+  if (pos._team === "1") {
+    // Team 1: news category + zone as context
+    const parts = [pos.news_category, pos.news_zone].filter(Boolean);
+    return parts.length > 0 ? parts.join(" · ") : null;
+  }
+  if (pos._team === "2") {
+    // Team 2: news categories driving the trend
+    if (pos.news_categories?.length > 0) return pos.news_categories.slice(0, 2).join(" · ");
+    if (pos.news_category) return pos.news_category;
+    return null;
+  }
   if (pos._team === "3") return pos.strategy || pos.strategy_name || null;
   if (pos._team === "4") return pos.team_combination || (pos.teams_contributing ? pos.teams_contributing.join("+") : null);
   return null;
