@@ -1839,6 +1839,41 @@ button:focus:not(:focus-visible), a:focus:not(:focus-visible) { outline: none; }
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+.team-summary-card-clickable {
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.team-summary-card-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.team-summary-card-clickable:active {
+  transform: translateY(0);
+}
+.team-summary-arrow {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: 6px;
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.team-summary-card-clickable:hover .team-summary-arrow {
+  opacity: 1;
+  transform: translateX(2px);
+}
+.strategy-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.1);
+  color: #A78BFA;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ── Newscat Performance ──────────────────────────────── */
 .newscat-perf { padding: 16px; }

@@ -172,6 +172,13 @@ function computeLivePnl(entry_price, current_price, direction) {
   return direction === "SHORT" ? -pct : pct;
 }
 
+/* Strategy display helper */
+function getStrategyLabel(pos) {
+  if (pos._team === "3") return pos.strategy || pos.strategy_name || null;
+  if (pos._team === "4") return pos.team_combination || (pos.teams_contributing ? pos.teams_contributing.join("+") : null);
+  return null;
+}
+
 /* All-teams open positions section — split winning/losing */
 function AllTeamsPositions({ positions, onRefresh, loading }) {
   const [livePrices, setLivePrices] = useState({});
@@ -214,6 +221,9 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
     });
   }, [allPositions, livePrices]);
 
+  const hasStrategy = allPositions.some((t) => getStrategyLabel(t));
+  const colCount = hasStrategy ? 8 : 7;
+
   const winning = positionsWithPnl.filter((t) => t._displayPnl != null && t._displayPnl > 0);
   const losing = positionsWithPnl.filter((t) => t._displayPnl != null && t._displayPnl <= 0);
   const unknown = positionsWithPnl.filter((t) => t._displayPnl == null);
@@ -221,6 +231,7 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
 
   const renderRow = (t) => {
     const entryTime = t.timestamp || t.entry_time || t.last_change_time;
+    const strat = getStrategyLabel(t);
     return (
       <tr key={t._key}>
         <td>
@@ -230,6 +241,11 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
         </td>
         <td className="ticker-cell"><TickerLink ticker={t.ticker} /></td>
         <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
+        {hasStrategy && (
+          <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+            {strat ? <span className="strategy-tag">{strat}</span> : "--"}
+          </td>
+        )}
         <td>{formatPrice(t.entry_price, t.ticker)}</td>
         <td style={{ fontWeight: 500, color: t._currentPrice ? "var(--text-primary)" : "var(--text-muted)" }}>
           {formatPrice(t._currentPrice, t.ticker)}
@@ -269,6 +285,7 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
                 <th>Équipe</th>
                 <th>Actif</th>
                 <th>Direction</th>
+                {hasStrategy && <th>Stratégie</th>}
                 <th>Entrée</th>
                 <th>Prix actuel</th>
                 <th>P&L latent</th>
@@ -278,13 +295,13 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
             <tbody>
               {winning.length > 0 && (
                 <>
-                  <tr><td colSpan="7" style={{ fontSize: 10, fontWeight: 700, color: "var(--green)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(16,185,129,0.05)" }}>GAGNANTES ({winning.length})</td></tr>
+                  <tr><td colSpan={colCount} style={{ fontSize: 10, fontWeight: 700, color: "var(--green)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(16,185,129,0.05)" }}>GAGNANTES ({winning.length})</td></tr>
                   {winning.sort((a, b) => (b._displayPnl || 0) - (a._displayPnl || 0)).map(renderRow)}
                 </>
               )}
               {losing.length > 0 && (
                 <>
-                  <tr><td colSpan="7" style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(239,68,68,0.05)" }}>PERDANTES ({losing.length})</td></tr>
+                  <tr><td colSpan={colCount} style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(239,68,68,0.05)" }}>PERDANTES ({losing.length})</td></tr>
                   {losing.sort((a, b) => (a._displayPnl || 0) - (b._displayPnl || 0)).map(renderRow)}
                 </>
               )}
@@ -297,29 +314,143 @@ function AllTeamsPositions({ positions, onRefresh, loading }) {
   );
 }
 
-/* Per-team summary cards */
-function TeamSummaryCards({ report, positions, journalStats }) {
+/* Today's closed positions across all teams */
+function ClosedPositionsToday({ closedToday }) {
+  const totalPnl = useMemo(() => {
+    return closedToday.reduce((s, t) => s + (t._pnl || 0), 0);
+  }, [closedToday]);
+
+  const hasStrategy = closedToday.some((t) => getStrategyLabel(t));
+  const colCount = hasStrategy ? 8 : 7;
+
+  const wins = closedToday.filter((t) => (t._pnl || 0) > 0);
+  const losses = closedToday.filter((t) => (t._pnl || 0) <= 0);
+
+  if (closedToday.length === 0) return null;
+
+  const RESULT_STYLES = {
+    TP_HIT: { color: "var(--green)", label: "TP" },
+    SL_HIT: { color: "var(--red)", label: "SL" },
+    EXPIRED: { color: "var(--text-muted)", label: "EXP" },
+    REVERSAL: { color: "#F59E0B", label: "REV" },
+    SIGNAL: { color: "#8B5CF6", label: "SIG" },
+  };
+
+  const renderRow = (t) => {
+    const rs = RESULT_STYLES[t.result] || { color: "var(--text-muted)", label: t.result || "?" };
+    const strat = getStrategyLabel(t);
+    return (
+      <tr key={t._key}>
+        <td>
+          <span className="team-badge" style={{ borderColor: TEAM_COLORS[t._team], color: TEAM_COLORS[t._team] }}>
+            {TEAM_LABELS[t._team] || `Éq. ${t._team}`}
+          </span>
+        </td>
+        <td className="ticker-cell"><TickerLink ticker={t.ticker} /></td>
+        <td><span className={`direction-badge ${(t.direction || "").toLowerCase()}`}>{t.direction}</span></td>
+        {hasStrategy && (
+          <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+            {strat ? <span className="strategy-tag">{strat}</span> : "--"}
+          </td>
+        )}
+        <td>
+          <span style={{ color: rs.color, fontWeight: 600, fontSize: 11, padding: "1px 6px", borderRadius: 4, background: `${rs.color}15` }}>
+            {rs.label}
+          </span>
+        </td>
+        <td style={{ color: pnlColor(t._pnl), fontWeight: 600 }}>
+          {t._pnl != null ? `${t._pnl > 0 ? "+" : ""}${t._pnl.toFixed(2)}%` : "--"}
+        </td>
+        <td style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+          {t._closeTime ? formatTime(t._closeTime) : "--"}
+        </td>
+      </tr>
+    );
+  };
+
+  return (
+    <div className="section-card">
+      <div className="section-header">
+        <h3>
+          Positions clôturées aujourd'hui ({closedToday.length})
+          <span style={{ marginLeft: 10, fontSize: 13, fontWeight: 600, color: pnlColor(totalPnl) }}>
+            {totalPnl > 0 ? "+" : ""}{totalPnl.toFixed(2)}%
+          </span>
+        </h3>
+      </div>
+      <div className="compact-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Équipe</th>
+              <th>Actif</th>
+              <th>Direction</th>
+              {hasStrategy && <th>Stratégie</th>}
+              <th>Résultat</th>
+              <th>P&L</th>
+              <th>Fermé à</th>
+            </tr>
+          </thead>
+          <tbody>
+            {wins.length > 0 && (
+              <>
+                <tr><td colSpan={colCount} style={{ fontSize: 10, fontWeight: 700, color: "var(--green)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(16,185,129,0.05)" }}>GAGNANTS ({wins.length})</td></tr>
+                {wins.sort((a, b) => (b._pnl || 0) - (a._pnl || 0)).map(renderRow)}
+              </>
+            )}
+            {losses.length > 0 && (
+              <>
+                <tr><td colSpan={colCount} style={{ fontSize: 10, fontWeight: 700, color: "var(--red)", padding: "6px 8px", letterSpacing: "0.04em", background: "rgba(239,68,68,0.05)" }}>PERDANTS ({losses.length})</td></tr>
+                {losses.sort((a, b) => (a._pnl || 0) - (b._pnl || 0)).map(renderRow)}
+              </>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* Per-team summary cards — clickable to navigate to team page */
+function TeamSummaryCards({ report, positions, journalStats, closedToday }) {
   const teams = [
-    { id: "1", name: "Éq. 1 — Day Trading", perfKey: "trader_1", wrKey: "win_rate", pnlKey: "total_pnl", tradesKey: "total_trades" },
-    { id: "2", name: "Éq. 2 — Tendance", perfKey: "trader_2", wrKey: "flip_win_rate", pnlKey: "total_realized_pnl", tradesKey: "flip_count" },
-    { id: "3", name: "Éq. 3 — Technique", perfKey: "trader_3", wrKey: "win_rate", pnlKey: "total_realized_pnl", tradesKey: "total_trades" },
-    { id: "4", name: "Éq. 4 — Meta", perfKey: "trader_4", wrKey: "win_rate", pnlKey: "total_realized_pnl", tradesKey: "total_trades" },
+    { id: "1", name: "Éq. 1 — Day Trading", perfKey: "trader_1", wrKey: "win_rate", pnlKey: "total_pnl", tradesKey: "total_trades", page: "team1" },
+    { id: "2", name: "Éq. 2 — Tendance", perfKey: "trader_2", wrKey: "flip_win_rate", pnlKey: "total_realized_pnl", tradesKey: "flip_count", page: "team2" },
+    { id: "3", name: "Éq. 3 — Technique", perfKey: "trader_3", wrKey: "win_rate", pnlKey: "total_realized_pnl", tradesKey: "total_trades", page: "team3" },
+    { id: "4", name: "Éq. 4 — Meta", perfKey: "trader_4", wrKey: "win_rate", pnlKey: "total_realized_pnl", tradesKey: "total_trades", page: "team4" },
   ];
 
   return (
     <div className="teams-summary-row">
       {teams.map((team) => {
         const perf = report?.[team.perfKey] || {};
-        // Use performance report data, with journal stats as real-time fallback
         const jStats = journalStats?.[team.id];
         const wr = perf[team.wrKey] ?? jStats?.win_rate ?? null;
         const pnl = perf[team.pnlKey] ?? jStats?.total_realized_pnl ?? null;
-        const trades = perf[team.tradesKey] || jStats?.total_trades || 0;
         const openCount = (positions[team.id] || []).length;
+        const closedCount = (closedToday || []).filter((t) => t._team === team.id).length;
+        // Live trade count = open + closed today (resets daily)
+        const todayTrades = openCount + closedCount;
+        // Historical total from report (if available)
+        const histTrades = perf[team.tradesKey] || jStats?.total_trades || 0;
+        // Show today's activity count if there are any, otherwise show historical
+        const displayTrades = todayTrades > 0 ? todayTrades : histTrades;
 
         return (
-          <div key={team.id} className="team-summary-card" style={{ borderLeftColor: TEAM_COLORS[team.id] }}>
-            <div className="team-summary-name">{team.name}</div>
+          <div
+            key={team.id}
+            className="team-summary-card team-summary-card-clickable"
+            style={{ borderLeftColor: TEAM_COLORS[team.id] }}
+            onClick={() => { window.location.hash = team.page; }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); window.location.hash = team.page; } }}
+            title={`Voir ${team.name}`}
+          >
+            <div className="team-summary-name">
+              {team.name}
+              <span className="team-summary-arrow">→</span>
+            </div>
             <div className="team-summary-kpis">
               <div className="team-summary-kpi">
                 <span className="team-summary-kpi-value" style={{ color: wr != null && wr >= 50 ? "var(--green)" : wr != null ? "var(--red)" : "var(--text-muted)" }}>
@@ -334,8 +465,8 @@ function TeamSummaryCards({ report, positions, journalStats }) {
                 <span className="team-summary-kpi-label">P&L</span>
               </div>
               <div className="team-summary-kpi">
-                <span className="team-summary-kpi-value">{trades}</span>
-                <span className="team-summary-kpi-label">Trades</span>
+                <span className="team-summary-kpi-value">{displayTrades}</span>
+                <span className="team-summary-kpi-label">Trades{todayTrades > 0 ? " (auj.)" : ""}</span>
               </div>
               <div className="team-summary-kpi">
                 <span className="team-summary-kpi-value" style={{ color: openCount > 0 ? "var(--accent)" : "var(--text-muted)" }}>
@@ -343,6 +474,14 @@ function TeamSummaryCards({ report, positions, journalStats }) {
                 </span>
                 <span className="team-summary-kpi-label">Ouvertes</span>
               </div>
+              {closedCount > 0 && (
+                <div className="team-summary-kpi">
+                  <span className="team-summary-kpi-value" style={{ color: "var(--text-secondary)" }}>
+                    {closedCount}
+                  </span>
+                  <span className="team-summary-kpi-label">Fermées</span>
+                </div>
+              )}
             </div>
           </div>
         );
@@ -363,6 +502,7 @@ export default function DashboardPage({ isActive, agents }) {
   const [history, setHistory] = useState([]);
   const [positions, setPositions] = useState({});
   const [journalStats, setJournalStats] = useState({});
+  const [closedToday, setClosedToday] = useState([]);
   const [posLoading, setPosLoading] = useState(false);
   const { toasts, addToast, dismissToast } = useToasts();
   const fetchCountRef = useRef(0);
@@ -374,7 +514,11 @@ export default function DashboardPage({ isActive, agents }) {
     if (document.hidden) return;
     const fetchId = ++fetchCountRef.current;
     try {
-      const [scanRes, perfRes, reportRes, histRes, t1Res, t2Res, t3Res, t4Res, j3Res, j4Res] = await Promise.all([
+      // Get today's date in Paris timezone for filtering closed positions
+      const parisNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Paris" }));
+      const todayStr = `${parisNow.getFullYear()}-${String(parisNow.getMonth() + 1).padStart(2, "0")}-${String(parisNow.getDate()).padStart(2, "0")}`;
+
+      const [scanRes, perfRes, reportRes, histRes, t1Res, t2Res, t3Res, t4Res, j1TodayRes, j2Res, j3Res, j4Res] = await Promise.all([
         fetch("/api/scan/latest").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch("/api/performance/report").then((r) => r.ok ? r.json() : null).catch(() => null),
@@ -383,6 +527,8 @@ export default function DashboardPage({ isActive, agents }) {
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        fetch(`/api/journal/${todayStr}`).then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/journal2/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/journal3/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/journal4/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
       ]);
@@ -409,6 +555,65 @@ export default function DashboardPage({ isActive, agents }) {
         };
       };
       setJournalStats({ "3": computeJournalStats(j3Res), "4": computeJournalStats(j4Res) });
+
+      // Build today's closed positions from all 4 journals
+      const isToday = (dateStr) => {
+        if (!dateStr) return false;
+        return dateStr.startsWith(todayStr);
+      };
+      const closed = [];
+      // Team 1: journal entries for today (already date-filtered by API)
+      (Array.isArray(j1TodayRes) ? j1TodayRes : []).forEach((e) => {
+        closed.push({
+          ...e,
+          _team: "1",
+          _key: `c1-${e.ticker}-${e.timestamp || e.entry_time}`,
+          _pnl: e.pnl_pct ?? null,
+          _closeTime: e.exit_time || e.timestamp,
+        });
+      });
+      // Team 2: filter flips closed today
+      (Array.isArray(j2Res) ? j2Res : []).forEach((e) => {
+        if (e.entry_type === "snapshot") return;
+        const closeTime = e.exit_time || e.close_time || e.created_at;
+        if (isToday(closeTime)) {
+          closed.push({
+            ...e,
+            _team: "2",
+            _key: `c2-${e.ticker}-${e.entry_time || closeTime}`,
+            _pnl: e.pnl_pct ?? null,
+            _closeTime: closeTime,
+            result: e.result || (e.pnl_pct > 0 ? "TP_HIT" : "SL_HIT"),
+          });
+        }
+      });
+      // Team 3: filter entries closed today
+      (Array.isArray(j3Res) ? j3Res : []).forEach((e) => {
+        const closeTime = e.close_time || e.exit_time || e.created_at;
+        if (isToday(closeTime)) {
+          closed.push({
+            ...e,
+            _team: "3",
+            _key: `c3-${e.ticker}-${e.strategy || ""}-${e.entry_time || closeTime}`,
+            _pnl: e.pnl_pct ?? null,
+            _closeTime: closeTime,
+          });
+        }
+      });
+      // Team 4: filter entries closed today
+      (Array.isArray(j4Res) ? j4Res : []).forEach((e) => {
+        const closeTime = e.close_time || e.exit_time || e.created_at;
+        if (isToday(closeTime)) {
+          closed.push({
+            ...e,
+            _team: "4",
+            _key: `c4-${e.ticker}-${e.entry_time || closeTime}`,
+            _pnl: e.pnl_pct ?? null,
+            _closeTime: closeTime,
+          });
+        }
+      });
+      setClosedToday(closed);
 
       // Normalize positions for all teams
       // Team 1: /api/trades/pending returns only PENDING trades (server-side filter)
@@ -585,10 +790,13 @@ export default function DashboardPage({ isActive, agents }) {
       })()}
 
       {/* Per-team summary */}
-      <TeamSummaryCards report={report} positions={positions} journalStats={journalStats} />
+      <TeamSummaryCards report={report} positions={positions} journalStats={journalStats} closedToday={closedToday} />
 
       {/* All teams open positions */}
       <AllTeamsPositions positions={positions} onRefresh={refreshPositions} loading={posLoading} />
+
+      {/* Today's closed positions */}
+      <ClosedPositionsToday closedToday={closedToday} />
 
       {/* Equity curve */}
       <EquityCurve history={history} />
