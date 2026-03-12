@@ -225,7 +225,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "7.8"  # v7.8: Market hours check before position flips
+    version = "7.9"  # v7.9: Fix oscillation — Scoring 1 fallback damping (0.4×), hysteresis on flip threshold
 
     def __init__(self):
         super().__init__()
@@ -649,9 +649,14 @@ class AgentTrader2(BaseAgent):
                     chain_dir = cr.direction.value if hasattr(cr.direction, "value") else str(cr.direction)
 
             if not use_trend_scoring:
-                # Fallback: compute signal from Scoring 1 raw scores
+                # Fallback: compute signal from Scoring 1 raw scores.
+                # v7.9: Dampen Scoring 1 scores — they include edge_factor
+                # (transmission_delay × market_awareness) designed for intraday,
+                # which inflates weights and causes oscillation when used for trend.
+                # Apply 0.4× damping so accumulated signals from Scoring 1
+                # don't trivially exceed the flip threshold of 20.
                 score = sn.total_score
-                weight = score * (sn.signal_reliability / 100) * (sn.directional_clarity / 100)
+                weight = score * (sn.signal_reliability / 100) * (sn.directional_clarity / 100) * 0.4
 
                 # Apply learning 2 adjustments
                 weight *= ticker_adj.get(ticker, 1.0)
@@ -764,7 +769,21 @@ class AgentTrader2(BaseAgent):
         # Contradiction — should we flip?
         # Need stronger signal to change than to confirm
         # Base threshold adjusted by Learning 2 signal calibration
-        change_threshold = 20.0 * signal_cal.get("threshold_adj", 1.0)
+        # v7.9: Hysteresis — positions held longer need stronger signals to flip.
+        # Prevents churning when signals oscillate near the threshold.
+        # Scale: 1.0× at 0h, up to 1.5× after 24h, capped at 1.5×
+        base_threshold = 20.0 * signal_cal.get("threshold_adj", 1.0)
+        entry_time_str = current_position.get("entry_time", "")
+        hysteresis_mult = 1.0
+        if entry_time_str:
+            try:
+                entry_dt = datetime.fromisoformat(entry_time_str)
+                hours_held = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600
+                # Linear ramp: +0.5× over 24 hours, capped at 1.5×
+                hysteresis_mult = min(1.5, 1.0 + 0.5 * min(hours_held, 24) / 24)
+            except (ValueError, TypeError):
+                pass
+        change_threshold = base_threshold * hysteresis_mult
         if signal_strength >= change_threshold:
             return self._make_change(
                 ticker, current_position, suggested_dir,

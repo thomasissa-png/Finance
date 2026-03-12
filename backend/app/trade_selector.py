@@ -823,12 +823,50 @@ def select_trades(
     # Build decision summary — track why we chose the winner
     decision_parts = [f"{len(candidates)} candidats apres filtrage initial sur {len(scored_news)} news"]
 
-    # Pre-fetch prices for all candidate tickers in parallel to avoid sequential yfinance calls
+    # Cross-day dedup: load tickers traded in the last N days (cheap, no I/O)
+    recently_traded = _get_recently_traded_tickers()
+
+    # v8.5: Smart pre-filter — only fetch prices for tickers that can realistically be selected.
+    # With 40 candidates × 3 workers × 15s timeout = 200s >> 60s global timeout.
+    # Pre-check correlation/cooldown/market hours (free) BEFORE expensive price fetch.
+    # Keep at most ~3× daily_slots_remaining unique tickers (margin for blocked ones).
     from concurrent.futures import ThreadPoolExecutor
-    candidate_tickers = set()
-    for sn, _, elig_tickers, _m in candidates:
+    if isinstance(existing_trade_ticker, str):
+        _preflight_existing = [existing_trade_ticker]
+    elif existing_trade_ticker:
+        _preflight_existing = list(existing_trade_ticker)
+    else:
+        _preflight_existing = []
+
+    max_tickers_to_fetch = max(6, daily_slots_remaining * 3)
+    candidate_tickers: set[str] = set()
+    _preflight_selected: list[str] = []  # Track for intra-candidate correlation
+
+    for sn, _adj_score, elig_tickers, _m in candidates:
+        if len(candidate_tickers) >= max_tickers_to_fetch:
+            break
+        cat_recently_traded = _get_recently_traded_tickers_by_category(sn.news_category)
         for t in elig_tickers:
+            if t in candidate_tickers:
+                break  # Already queued for fetch — this candidate is covered
+            # Pre-check: market hours (free)
+            if not is_market_open(t):
+                continue
+            # Pre-check: correlation with existing + already-selected (free)
+            if _check_correlation(t, _preflight_existing + _preflight_selected):
+                continue
+            # Pre-check: cooldown (free)
+            if t in cat_recently_traded and not _check_reentry_eligible(t, sn.news_category):
+                continue
+            # Ticker passes pre-flight — queue for price fetch
             candidate_tickers.add(t)
+            _preflight_selected.append(t)
+            break
+
+    if len(candidate_tickers) < len(candidates):
+        logger.info("Price pre-fetch: %d tickers (from %d candidates) — saved %d fetches",
+                     len(candidate_tickers), len(candidates),
+                     len(set(t for _, _, et, _ in candidates for t in et)) - len(candidate_tickers))
 
     price_cache: dict[str, tuple] = {}
     # max_workers capped at 3: Replit kills process on too many concurrent threads.
@@ -848,9 +886,6 @@ def select_trades(
                 price_cache[ticker_key] = (None, 1.5, None, None, None)
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
-
-    # Cross-day dedup: load tickers traded in the last N days
-    recently_traded = _get_recently_traded_tickers()
     if recently_traded:
         logger.info("Cross-day dedup: %d tickers traded recently: %s",
                      len(recently_traded), ", ".join(sorted(recently_traded)))

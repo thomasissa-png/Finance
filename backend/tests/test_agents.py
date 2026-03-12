@@ -2047,7 +2047,7 @@ class TestTrader2Fixes:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_2 import AgentTrader2
-        assert AgentTrader2.version == "7.8"
+        assert AgentTrader2.version == "7.9"
 
 
 class TestLearning2SnapshotContamination:
