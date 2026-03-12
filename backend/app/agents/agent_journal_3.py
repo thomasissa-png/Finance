@@ -190,7 +190,7 @@ class AgentJournal3(BaseAgent):
 
     name = "journal_3"
     description = "Journal & A/B analysis — technical trading strategies"
-    version = "2.1"  # v2.1: fix JSON fallback double write
+    version = "2.2"  # v2.2: trailing_level + effective_stop_at_close in journal entries
 
     def __init__(self):
         super().__init__()
@@ -488,6 +488,8 @@ class AgentJournal3(BaseAgent):
             "target_pct": target_pct_val,
             "stop_pct": stop_pct_val,
             "trailing_active": trade.get("trailing_active", False),
+            "trailing_level": trade.get("trailing_level", 0),
+            "effective_stop_at_close": trade.get("effective_stop", -stop_pct_val),
             # L4: R/R réalisé par stratégie
             "realized_rr": realized_rr,
             "predicted_rr": predicted_rr,

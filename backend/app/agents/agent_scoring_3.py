@@ -1191,9 +1191,9 @@ STRATEGY_RR_PROFILES = {
     "macd_crossover":       (2.0, 1.0),   # R/R ~2.0
     "ma_trend":             (2.2, 1.0),   # R/R ~2.2 (strongest trend signal)
     "momentum_divergence":  (1.8, 1.0),   # R/R ~1.8
-    # Combo: mean-reversion dominant
-    "rsi_bollinger_combo":  (1.3, 1.2),   # R/R ~1.08
-    "bollinger_stoch_combo": (1.3, 1.2),  # R/R ~1.08
+    # Combo: mean-reversion dominant (target raised to maintain R/R > 1.0 after fees)
+    "rsi_bollinger_combo":  (1.5, 1.2),   # R/R ~1.25 (net ~1.1 after spread)
+    "bollinger_stoch_combo": (1.5, 1.2),  # R/R ~1.25 (net ~1.1 after spread)
     # Combo: momentum dominant
     "rsi_macd_combo":       (1.6, 1.0),   # R/R ~1.6 (mixed)
     "macd_ma_combo":        (2.0, 1.0),   # R/R ~2.0 (trend continuation)
@@ -1742,7 +1742,7 @@ class AgentScoring3(BaseAgent):
 
     name = "scoring_3"
     description = "Technical indicators scoring — multi-strategy, multi-timeframe"
-    version = "2.4"  # v2.4: Strategy-family R/R profiles (mean-reversion vs momentum)
+    version = "2.5"  # v2.5: Mean-reversion combo target raised (R/R > 1.0 after fees)
 
     def __init__(self):
         super().__init__()

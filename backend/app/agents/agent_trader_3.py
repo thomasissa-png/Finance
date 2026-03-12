@@ -222,7 +222,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "2.3"  # v2.3: Progressive trailing stop (3 paliers), strategy-family R/R profiles
+    version = "2.4"  # v2.4: Audit fixes — trailing level monotone, mean-reversion thresholds, effective_stop_at_close
 
     def __init__(self):
         super().__init__()
@@ -463,6 +463,7 @@ class AgentTrader3(BaseAgent):
                 pos["close_time"] = now.isoformat()
                 pos["close_price"] = price
                 pos["holding_hours"] = round(holding_hours, 1)
+                pos["effective_stop_at_close"] = pos.get("effective_stop", -stop_pct)
                 newly_closed.append(pos)
                 continue
 
@@ -477,17 +478,18 @@ class AgentTrader3(BaseAgent):
             if target_pct > 0 and pnl_pct > 0:
                 progress = pnl_pct / target_pct  # How far towards target (0.0-1.0+)
                 new_stop = None
-                if progress >= 0.75:
+                current_level = pos.get("trailing_level", 0)
+                if progress >= 0.75 and current_level < 3:
                     # Palier 3: lock in 50% of target
                     new_stop = target_pct * 0.50
                     pos["trailing_active"] = True
                     pos["trailing_level"] = 3
-                elif progress >= 0.50:
+                elif progress >= 0.50 and current_level < 2:
                     # Palier 2: lock in 25% of target
                     new_stop = target_pct * 0.25
                     pos["trailing_active"] = True
                     pos["trailing_level"] = 2
-                elif progress >= trailing_pct:
+                elif progress >= trailing_pct and current_level < 1:
                     # Palier 1: breakeven (original activation threshold)
                     new_stop = -0.05  # Near-breakeven with tiny buffer
                     pos["trailing_active"] = True
@@ -508,6 +510,7 @@ class AgentTrader3(BaseAgent):
                 pos["close_time"] = now.isoformat()
                 pos["close_price"] = price
                 pos["holding_hours"] = round(holding_hours, 1)
+                pos["effective_stop_at_close"] = effective_stop
                 newly_closed.append(pos)
                 continue
 
@@ -518,6 +521,7 @@ class AgentTrader3(BaseAgent):
                 pos["close_time"] = now.isoformat()
                 pos["close_price"] = price
                 pos["holding_hours"] = round(holding_hours, 1)
+                pos["effective_stop_at_close"] = effective_stop
                 newly_closed.append(pos)
                 continue
 
@@ -538,18 +542,21 @@ class AgentTrader3(BaseAgent):
                 return overrides[strategy]
 
         defaults = {
-            "rsi_reversal": 0.60,       # Reversal: let it run a bit more
-            "macd_crossover": 0.40,     # Trend: trail early
-            "bollinger_squeeze": 0.45,  # Breakout: moderate
-            "ma_trend": 0.35,           # Strong trend: trail tight
-            "momentum_divergence": 0.50,
-            "stochastic_reversal": 0.55,
-            # Combo strategies — tighter trailing (higher conviction)
-            "rsi_macd_combo": 0.45,
-            "bollinger_stoch_combo": 0.50,
+            # Mean-reversion family — lower thresholds (short targets need early trailing)
+            "rsi_reversal": 0.35,       # R/R ~1.0: activate early to protect gains
+            "stochastic_reversal": 0.35, # R/R ~1.0: same logic
+            "bollinger_squeeze": 0.40,  # R/R ~1.27: breakout, slightly wider
+            # Momentum/trend family — tighter thresholds (let profits run)
+            "macd_crossover": 0.40,     # R/R ~2.0: trend, trail early
+            "ma_trend": 0.35,           # R/R ~2.2: strong trend, trail tight
+            "momentum_divergence": 0.45, # R/R ~1.8: moderate
+            # Combo mean-reversion — early trailing (short targets)
+            "rsi_bollinger_combo": 0.35, # R/R ~1.15: mean-reversion dominant
+            "bollinger_stoch_combo": 0.35, # R/R ~1.15: same
+            # Combo momentum — standard trailing
+            "rsi_macd_combo": 0.40,     # R/R ~1.6: mixed
+            "macd_ma_combo": 0.40,      # R/R ~2.0: trend continuation
             "ma_rsi_macd_combo": 0.35,  # Triple confluence: trail tight
-            "rsi_bollinger_combo": 0.55,
-            "macd_ma_combo": 0.40,
         }
         return defaults.get(strategy, 0.50)
 

@@ -230,6 +230,35 @@ def compute_tech_learning(entries: list[dict]) -> dict:
     avg_mae = sum(mae_values) / len(mae_values) if mae_values else 0
     avg_mfe = sum(mfe_values) / len(mfe_values) if mfe_values else 0
 
+    # C2: Trailing effectiveness stats — segment by trailing usage
+    trailed = [e for e in valid if e.get("trailing_level", 0) > 0]
+    non_trailed = [e for e in valid if e.get("trailing_level", 0) == 0]
+    trailing_stats = {}
+    if trailed:
+        trailed_wins = [e for e in trailed if (e.get("pnl_pct") or 0) > 0]
+        trailing_stats["trailed_count"] = len(trailed)
+        trailing_stats["trailed_wr"] = round(len(trailed_wins) / len(trailed) * 100, 1)
+        trailing_stats["trailed_avg_pnl"] = round(
+            sum(e.get("pnl_pct", 0) for e in trailed) / len(trailed), 2
+        )
+        # Breakdown by level
+        for lvl in [1, 2, 3]:
+            at_lvl = [e for e in trailed if e.get("trailing_level") == lvl]
+            if at_lvl:
+                trailing_stats[f"level_{lvl}_count"] = len(at_lvl)
+                trailing_stats[f"level_{lvl}_avg_pnl"] = round(
+                    sum(e.get("pnl_pct", 0) for e in at_lvl) / len(at_lvl), 2
+                )
+    if non_trailed:
+        non_trailed_wins = [e for e in non_trailed if (e.get("pnl_pct") or 0) > 0]
+        trailing_stats["non_trailed_count"] = len(non_trailed)
+        trailing_stats["non_trailed_wr"] = round(
+            len(non_trailed_wins) / len(non_trailed) * 100, 1
+        )
+        trailing_stats["non_trailed_avg_pnl"] = round(
+            sum(e.get("pnl_pct", 0) for e in non_trailed) / len(non_trailed), 2
+        )
+
     result["stats"] = {
         "total_trades": len(valid),
         "sufficient_data": True,
@@ -243,6 +272,7 @@ def compute_tech_learning(entries: list[dict]) -> dict:
         "avg_mfe_pct": round(avg_mfe, 2),
         "wins": len(wins),
         "losses": len(losses),
+        "trailing": trailing_stats,
     }
 
     # ── Helper: weighted adjustment computation ──
@@ -478,7 +508,7 @@ class AgentLearning3(BaseAgent):
 
     name = "learning_3"
     description = "Learning & A/B testing — technical trading strategies"
-    version = "2.1"  # v2.1: persist weekly config to disk
+    version = "2.2"  # v2.2: trailing effectiveness stats (segmented by level)
 
     def __init__(self):
         super().__init__()
