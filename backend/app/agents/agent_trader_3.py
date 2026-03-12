@@ -222,7 +222,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "2.2"  # v2.2: Market hours validation, live entry price fetch, price cross-validation
+    version = "2.3"  # v2.3: Progressive trailing stop (3 paliers), strategy-family R/R profiles
 
     def __init__(self):
         super().__init__()
@@ -466,18 +466,39 @@ class AgentTrader3(BaseAgent):
                 newly_closed.append(pos)
                 continue
 
-            # J2: Trailing stop per-strategy — BEFORE SL check
-            # so trailing-adjusted stop is used in SL evaluation
+            # J2/v2.3: Progressive trailing stop per-strategy — BEFORE SL check
+            # so trailing-adjusted stop is used in SL evaluation.
+            # v2.3: 3 paliers instead of single breakeven jump:
+            #   Palier 1: PnL > activation_pct of target → stop = breakeven (-0.05%)
+            #   Palier 2: PnL > 50% of target → stop = +25% of target
+            #   Palier 3: PnL > 75% of target → stop = +50% of target
             strategy = pos.get("strategy", "")
             trailing_pct = self._get_trailing_threshold(strategy)
-            if target_pct > 0 and pnl_pct > target_pct * trailing_pct:
-                pos["trailing_active"] = True
-                # Move stop to breakeven + small buffer
-                new_stop = -0.1  # Breakeven with 0.1% buffer
-                pos["effective_stop"] = max(
-                    pos.get("effective_stop", -stop_pct),
-                    new_stop
-                )
+            if target_pct > 0 and pnl_pct > 0:
+                progress = pnl_pct / target_pct  # How far towards target (0.0-1.0+)
+                new_stop = None
+                if progress >= 0.75:
+                    # Palier 3: lock in 50% of target
+                    new_stop = target_pct * 0.50
+                    pos["trailing_active"] = True
+                    pos["trailing_level"] = 3
+                elif progress >= 0.50:
+                    # Palier 2: lock in 25% of target
+                    new_stop = target_pct * 0.25
+                    pos["trailing_active"] = True
+                    pos["trailing_level"] = 2
+                elif progress >= trailing_pct:
+                    # Palier 1: breakeven (original activation threshold)
+                    new_stop = -0.05  # Near-breakeven with tiny buffer
+                    pos["trailing_active"] = True
+                    pos["trailing_level"] = 1
+
+                if new_stop is not None:
+                    # Only tighten, never loosen
+                    pos["effective_stop"] = max(
+                        pos.get("effective_stop", -stop_pct),
+                        new_stop
+                    )
 
             # Check stop hit (uses potentially trailed effective_stop)
             effective_stop = pos.get("effective_stop", -stop_pct)

@@ -1174,6 +1174,32 @@ def _detect_macd_ma_combo(indicators: dict) -> dict | None:
     }
 
 
+# ── Strategy R/R profiles (v2.4) ─────────────────────────────────
+# (target_atr_mult, stop_atr_mult) — determines R/R ratio per strategy family
+#
+# Mean-reversion strategies: tighter target (ATR×1.2), wider stop (ATR×1.2)
+#   → R/R ~1.0 but higher hit rate (price reverts to mean)
+# Momentum/trend strategies: wider target (ATR×2.0), standard stop (ATR×1.0)
+#   → R/R ~2.0, let profits run on strong directional moves
+# Combo strategies: inherit from dominant component
+STRATEGY_RR_PROFILES = {
+    # Mean-reversion family — target closer, stop wider (forgiving)
+    "rsi_reversal":         (1.2, 1.2),   # R/R ~1.0
+    "stochastic_reversal":  (1.2, 1.2),   # R/R ~1.0
+    "bollinger_squeeze":    (1.4, 1.1),   # R/R ~1.27 (breakout can run)
+    # Momentum/trend family — let profits run
+    "macd_crossover":       (2.0, 1.0),   # R/R ~2.0
+    "ma_trend":             (2.2, 1.0),   # R/R ~2.2 (strongest trend signal)
+    "momentum_divergence":  (1.8, 1.0),   # R/R ~1.8
+    # Combo: mean-reversion dominant
+    "rsi_bollinger_combo":  (1.3, 1.2),   # R/R ~1.08
+    "bollinger_stoch_combo": (1.3, 1.2),  # R/R ~1.08
+    # Combo: momentum dominant
+    "rsi_macd_combo":       (1.6, 1.0),   # R/R ~1.6 (mixed)
+    "macd_ma_combo":        (2.0, 1.0),   # R/R ~2.0 (trend continuation)
+    "ma_rsi_macd_combo":    (2.0, 1.0),   # R/R ~2.0 (triple confluence = conviction)
+}
+
 # ── Regime-strategy compatibility (J3) ──────────────────────────
 # Some strategies work better in trending markets, others in ranging
 STRATEGY_REGIME_PREFERENCE = {
@@ -1574,14 +1600,20 @@ def score_technical_setups(tickers: dict | None = None,
             # Compute final score with strategy weight, volume, and regime
             final_score = min(100, setup["score"] * strategy_weight * volume_boost * regime_mult)
 
-            # Compute target and stop from ATR
+            # Compute target and stop from ATR — per strategy family
             atr_mult = info.get("atr_mult", 1.0)
             target_pct = 0.0
             stop_pct = 0.0
             if atr and last_close > 0:
                 atr_pct = atr / last_close * 100
-                target_pct = round(atr_pct * 1.5 * atr_mult, 2)
-                stop_pct = round(atr_pct * 1.0 * atr_mult, 2)
+                # v2.4: Strategy-family R/R profiles
+                # Mean-reversion: tighter target (more likely to hit), wider stop
+                # Momentum/trend: let profits run, standard stop
+                target_mult, stop_mult = STRATEGY_RR_PROFILES.get(
+                    strategy_name, (1.5, 1.0)
+                )
+                target_pct = round(atr_pct * target_mult * atr_mult, 2)
+                stop_pct = round(atr_pct * stop_mult * atr_mult, 2)
 
             # P4/F10: Confidence = signal quality, not just score * 0.9
             # F10: Normalize signal count by strategy type to avoid combo bias
@@ -1710,7 +1742,7 @@ class AgentScoring3(BaseAgent):
 
     name = "scoring_3"
     description = "Technical indicators scoring — multi-strategy, multi-timeframe"
-    version = "2.3"  # v2.3: Configurable params, parallel intraday, pivot_type fix, log exceptions
+    version = "2.4"  # v2.4: Strategy-family R/R profiles (mean-reversion vs momentum)
 
     def __init__(self):
         super().__init__()
