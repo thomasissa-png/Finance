@@ -274,6 +274,8 @@ def collect_rss_news() -> list[NewsItem]:
             url = futures[future]
             try:
                 result = future.result(timeout=15)
+                if not result:
+                    logger.warning("RSS feed returned 0 items: %s", url)
                 items.extend(result)
                 completed_count += 1
             except TimeoutError:
@@ -305,6 +307,8 @@ def collect_early_signal_news() -> list[NewsItem]:
     executor = ThreadPoolExecutor(max_workers=8)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
+    feeds_with_items = []
+    feeds_empty = []
     try:
         for future in as_completed(futures, timeout=40):
             url = futures[future]
@@ -312,6 +316,9 @@ def collect_early_signal_news() -> list[NewsItem]:
                 result = future.result(timeout=15)
                 if result:
                     items.extend(result)
+                    feeds_with_items.append(url.split("/")[2])  # domain only
+                else:
+                    feeds_empty.append(url.split("/")[2])
                 completed_count += 1
             except TimeoutError:
                 logger.warning("Early-signal feed TIMEOUT (15s) for %s", url)
@@ -323,8 +330,16 @@ def collect_early_signal_news() -> list[NewsItem]:
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
+    # Per-feed diagnostics: which feeds returned items, which were empty
+    if feeds_with_items:
+        logger.info("Early-signal feeds with items (%d): %s",
+                     len(feeds_with_items), ", ".join(feeds_with_items))
+    if feeds_empty:
+        logger.warning("Early-signal feeds returning 0 items (%d/%d): %s",
+                        len(feeds_empty), len(EARLY_SIGNAL_FEEDS), ", ".join(feeds_empty))
     if items:
-        logger.info("Collected %d early-signal news items", len(items))
+        logger.info("Collected %d early-signal news items from %d/%d feeds",
+                     len(items), len(feeds_with_items), len(EARLY_SIGNAL_FEEDS))
     elif EARLY_SIGNAL_FEEDS:
         logger.warning("Early-signal collection returned 0 items from %d feeds", len(EARLY_SIGNAL_FEEDS))
     return items
@@ -473,13 +488,27 @@ def collect_all_news() -> list[NewsItem]:
                 tracker.record_failure(name, phase, exc, latency)
             return []
 
-    # Sequential: each source completes (including thread cleanup) before next starts
-    # Phase 0 sources are individually tracked in data_apis.collect_structured_data()
-    structured_news = _safe_collect(collect_structured_data, "structured_data", "phase0")
-    early_news = _safe_collect(collect_early_signal_news, "early_signal", "phase1")
+    # Phase 0 (structured APIs) and Phase 1 (early-signal RSS) run in parallel:
+    # they create independent ThreadPools internally (5 + 8 workers = 13 max threads).
+    # This saves 30-60s vs sequential execution on every scan.
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    phase_executor = _TPE(max_workers=2)
+    try:
+        f_structured = phase_executor.submit(_safe_collect, collect_structured_data, "structured_data", "phase0")
+        f_early = phase_executor.submit(_safe_collect, collect_early_signal_news, "early_signal", "phase1")
+        structured_news = f_structured.result(timeout=180)
+        early_news = f_early.result(timeout=180)
+    except Exception as exc:
+        logger.warning("Parallel phase collection error: %s", exc)
+        structured_news = f_structured.result() if f_structured.done() else []
+        early_news = f_early.result() if f_early.done() else []
+    finally:
+        phase_executor.shutdown(wait=False, cancel_futures=True)
+
     # yfinance news disabled 2026-03-10: returns 0 items in 43s (sequential fetch, empty API responses)
     # yfinance is still used for price data (market_data.py fallback), just not for news collection
     yf_news: list = []
+    # Phase 3 runs after Phase 0+1 complete (needs all items for proper dedup)
     rss_news = _safe_collect(collect_rss_news, "rss_mainstream", "phase3")
 
     # Log per-source results for diagnostics (helps debug "0 news" issues)

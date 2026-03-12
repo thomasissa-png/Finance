@@ -497,6 +497,8 @@ EARLY_SIGNAL_FEEDS = [
     # USDA / FAO — rapports sur les recoltes et stocks
     # nass.usda.gov/rss SSL errors since 2026-03. USDA data covered by USDA NASS/WASDE APIs in data_apis.py.
     "https://www.fao.org/feeds/fao-newsroom-rss",                   # FAO: food security, agriculture, crop reports
+    "https://www.world-grain.com/ext/rss",                            # World-Grain: wheat, flour, grain markets, crop conditions
+    "https://news.icm.agriculture.com/rss/latest",                    # Ag-Markets (ICM): crop news, USDA commentary, ag commodities
     # Geopolitique — OSINT, conflits, sanctions, defense
     # defense.gov redirects to war.gov since 2025. Single entry (was 2 — redundant fallback wasted a thread).
     "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # war.gov (ex Defense.gov): military ops, geopolitics
@@ -541,6 +543,10 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "nass": 1.1,
     "FAO": 1.05,
     "fao.org": 1.05,
+    "World-Grain": 1.05,        # Phase 1: wheat/grain specialist
+    "world-grain.com": 1.05,
+    "Ag-Markets": 1.05,         # Phase 1: ag commodity news
+    "agriculture.com": 1.05,
     "NOAA": 1.1,
     "NCEI": 1.1,
     "ncei": 1.1,
