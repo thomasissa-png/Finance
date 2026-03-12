@@ -30,12 +30,20 @@ import logging
 import math
 import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
 from .base import BaseAgent, AgentStatus
 
 logger = logging.getLogger(__name__)
+
+# Activation date — Learning 4 only starts after this date
+# Configurable via LEARNING4_ACTIVATION_DATE env var (format: YYYY-MM-DD)
+_l4_activation_str = os.environ.get("LEARNING4_ACTIVATION_DATE", "2026-04-01")
+try:
+    ACTIVATION_DATE = date.fromisoformat(_l4_activation_str)
+except ValueError:
+    ACTIVATION_DATE = date(2026, 4, 1)
 
 # Minimum completed trades before learning activates
 MIN_HISTORY_TRADES = 30
@@ -480,7 +488,7 @@ class AgentLearning4(BaseAgent):
 
     name = "learning_4"
     description = "Learning & optimisation — meta/ensemble trading"
-    version = "2.1"  # v2.1: persist weekly config to disk
+    version = "2.2"  # v2.2: activation date 2026-04-01
 
     def __init__(self):
         super().__init__()
@@ -501,6 +509,20 @@ class AgentLearning4(BaseAgent):
         Called after Journal 4 runs.
         Returns dict with learning results.
         """
+        # Check activation date
+        if date.today() < ACTIVATION_DATE:
+            self._set_status(AgentStatus.IDLE,
+                             f"Activation {ACTIVATION_DATE.isoformat()}")
+            self.log("Learning 4 not yet activated", {
+                "activation_date": ACTIVATION_DATE.isoformat(),
+                "today": date.today().isoformat(),
+            })
+            return {
+                "adjustments": {}, "anomalies": [],
+                "stats": {}, "dimensions_updated": 0,
+                "reason": "not_yet_activated",
+            }
+
         self._set_status(AgentStatus.WORKING, "Recalculating meta learning")
 
         start = time.monotonic()
@@ -785,6 +807,8 @@ class AgentLearning4(BaseAgent):
         Recalculates if cache is invalid.
         v8.4 fix: Thread-safe cache access via lock.
         """
+        if date.today() < ACTIVATION_DATE:
+            return {}
         with self._cache_lock:
             if not self._cache_valid or self._cached_adjustments is None:
                 from .agent_journal_4 import _load_journal_entries
@@ -811,4 +835,6 @@ class AgentLearning4(BaseAgent):
             "has_weekly_config": self._weekly_config is not None,
             "config_version": (self._weekly_config or {}).get("config_version", 0),
             "target_win_rate": TARGET_WIN_RATE,
+            "activation_date": ACTIVATION_DATE.isoformat(),
+            "is_active": date.today() >= ACTIVATION_DATE,
         }

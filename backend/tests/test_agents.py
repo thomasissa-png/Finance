@@ -1673,7 +1673,7 @@ class TestTeam4V2Learning4:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_learning_4 import AgentLearning4
-        assert AgentLearning4.version == "2.1"
+        assert AgentLearning4.version == "2.2"
 
     def test_metrics_include_weekly(self):
         """Metrics should include weekly config info."""
@@ -2122,7 +2122,7 @@ class TestLearning34WeeklyConfigPersistence:
 
     def test_learning4_version_bumped(self):
         from backend.app.agents.agent_learning_4 import AgentLearning4
-        assert AgentLearning4.version == "2.1"
+        assert AgentLearning4.version == "2.2"
 
 
 class TestPerformanceCascadeFailure:
