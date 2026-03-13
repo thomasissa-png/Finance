@@ -95,7 +95,7 @@ _TICKER_MAP: dict[str, tuple[str, dict]] = {
     # Energy — no collision confirmed, but type=commodities added for safety
     "CL=F": ("CL1", {"type": "commodities"}),    # WTI Crude (front month)
     "BZ=F": ("CO1", {"type": "commodities"}),     # Brent Crude (front month)
-    "NG=F": ("NG/USD", {}),     # Natural Gas (forex-style symbol, no collision)
+    "NG=F": ("NG1", {"type": "commodities"}),  # Natural Gas (front month, type needed to avoid collision)
     # Precious metals — forex-style symbols, no collision
     "GC=F": ("XAU/USD", {}),    # Gold
     "SI=F": ("XAG/USD", {}),    # Silver
