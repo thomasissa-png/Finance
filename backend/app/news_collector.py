@@ -488,22 +488,14 @@ def collect_all_news() -> list[NewsItem]:
                 tracker.record_failure(name, phase, exc, latency)
             return []
 
-    # Phase 0 (structured APIs) and Phase 1 (early-signal RSS) run in parallel:
-    # they create independent ThreadPools internally (5 + 8 workers = 13 max threads).
-    # This saves 30-60s vs sequential execution on every scan.
-    from concurrent.futures import ThreadPoolExecutor as _TPE
-    phase_executor = _TPE(max_workers=2)
-    try:
-        f_structured = phase_executor.submit(_safe_collect, collect_structured_data, "structured_data", "phase0")
-        f_early = phase_executor.submit(_safe_collect, collect_early_signal_news, "early_signal", "phase1")
-        structured_news = f_structured.result(timeout=180)
-        early_news = f_early.result(timeout=180)
-    except Exception as exc:
-        logger.warning("Parallel phase collection error: %s", exc)
-        structured_news = f_structured.result() if f_structured.done() else []
-        early_news = f_early.result() if f_early.done() else []
-    finally:
-        phase_executor.shutdown(wait=False, cancel_futures=True)
+    # SEQUENTIAL execution: each source completes (including thread cleanup) before
+    # the next starts. Both collect_structured_data() and collect_early_signal_news()
+    # create their own ThreadPoolExecutors internally (3 + 8 workers). Running them
+    # in parallel caused nested thread pools (15+ threads) which exhausted Replit
+    # resources, causing all feeds to timeout and return 0 items.
+    # DO NOT parallelize — the 30-60s savings is not worth losing all news data.
+    structured_news = _safe_collect(collect_structured_data, "structured_data", "phase0")
+    early_news = _safe_collect(collect_early_signal_news, "early_signal", "phase1")
 
     # yfinance news disabled 2026-03-10: returns 0 items in 43s (sequential fetch, empty API responses)
     # yfinance is still used for price data (market_data.py fallback), just not for news collection

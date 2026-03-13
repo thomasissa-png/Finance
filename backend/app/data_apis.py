@@ -3316,9 +3316,11 @@ def collect_structured_data() -> list[NewsItem]:
         ("google_news", fetch_google_news_rss),
     ]
 
-    # max_workers=5: 20 sources / 5 workers = ~4 waves (~80s instead of ~140s).
-    # Each source uses HTTP I/O (not CPU), safe to have 5 concurrent on Replit.
-    executor = ThreadPoolExecutor(max_workers=5)
+    # max_workers=3: Replit kills process on too many concurrent threads.
+    # 20 sources / 3 workers = ~7 waves, but safer on constrained environments.
+    # DO NOT increase — when combined with early_signal (8 workers) running
+    # after this completes, total thread count stays manageable.
+    executor = ThreadPoolExecutor(max_workers=3)
     # Track start time per future for latency measurement
     _start_times: dict = {}
     for name, fn in sources:
