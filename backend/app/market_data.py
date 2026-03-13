@@ -687,6 +687,7 @@ def fetch_price(ticker: str, bypass_cache: bool = False) -> float | None:
     # Fallback: yfinance
     if price is None:
         try:
+            import yfinance as yf
             t = yf.Ticker(ticker)
             info = t.fast_info if hasattr(t, "fast_info") else t.info
             price = float(info.get("lastPrice") or info.get("regularMarketPrice") or 0)

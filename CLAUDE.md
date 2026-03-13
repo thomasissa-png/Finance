@@ -295,7 +295,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
   - **Indices** : TOUS blacklistés → yfinance only (^FCHI, ^GDAXI, ^FTSE, ^N225 = 404 sur TD; ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX = non dispo free tier)
   - **Forex** : EURUSD=X→EUR/USD, USDJPY=X→USD/JPY, GBPUSD=X→GBP/USD, USDCHF=X→USD/CHF, EURJPY=X→EUR/JPY, AUDUSD=X→AUD/USD, USDCNH=X→USD/CNH (pas de collision, pas de `type` nécessaire)
   - **Paris stocks** : TTE.PA→TTE, MC.PA→MC, BNP.PA→BNP, etc. (mic_code=XPAR)
-  - **Energie** : CL=F→CL1, BZ=F→CO1, NG=F→NG/USD (pas de collision)
+  - **Energie** : CL=F→CL1, BZ=F→CO1, NG=F→NG1 (tous avec `type=commodities`)
   - **Metaux précieux** : GC=F→XAU/USD, SI=F→XAG/USD, PL=F→XPT/USD, PA=F→XPD/USD (forex-style, pas de collision)
   - **Base metals** : HG=F→HG1 (**avec `type=commodities`** — sans ça, TD retourne Homag Group AG ~25€ au lieu du cuivre ~5.90$)
   - **Agriculture sans collision** : ZC=F→C_1, ZW=F→W_1, ZS=F→S_1, CT=F→CT1
