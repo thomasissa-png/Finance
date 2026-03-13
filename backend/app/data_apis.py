@@ -68,14 +68,14 @@ def fetch_eia_data() -> list[NewsItem]:
                 resp = requests.get(url_v1, timeout=REQUEST_TIMEOUT)
 
             if resp.status_code != 200:
-                logger.debug("EIA API error for %s: %d", series_id, resp.status_code)
+                logger.warning("EIA API error for %s: HTTP %d", series_id, resp.status_code)
                 continue
 
             data = resp.json()
 
             # Check for API error in response body
             if data.get("error"):
-                logger.debug("EIA API returned error for %s: %s", series_id, data["error"])
+                logger.warning("EIA API returned error for %s: %s", series_id, data["error"])
                 continue
 
             # Parse v1 response format
@@ -151,10 +151,12 @@ def fetch_eia_data() -> list[NewsItem]:
             ))
 
         except Exception as exc:
-            logger.debug("EIA fetch error for %s: %s", series_id, exc)
+            logger.warning("EIA fetch error for %s: %s", series_id, exc)
 
     if items:
         logger.info("Fetched %d EIA data points", len(items))
+    else:
+        logger.info("EIA returned 0 items (all series changes < 0.5%% threshold or fetch errors)")
     return items
 
 
@@ -729,7 +731,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
                     ))
 
         except Exception as exc:
-            logger.debug("Weather fetch error for %s: %s", zone["name"], exc)
+            logger.warning("Weather fetch error for %s: %s", zone["name"], exc)
 
     if items:
         logger.info("Generated %d weather alerts from %d zones", len(items), len(AGRICULTURAL_ZONES))
@@ -1017,7 +1019,7 @@ def fetch_gnews_targeted() -> list[NewsItem]:
             }
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
-                logger.debug("GNews API error for '%s': %d", query_cfg["q"], resp.status_code)
+                logger.warning("GNews API error for '%s': HTTP %d", query_cfg["q"], resp.status_code)
                 continue
 
             data = resp.json()
@@ -1059,10 +1061,13 @@ def fetch_gnews_targeted() -> list[NewsItem]:
                 ))
 
         except Exception as exc:
-            logger.debug("GNews fetch error for '%s': %s", query_cfg["q"], exc)
+            logger.warning("GNews fetch error for '%s': %s", query_cfg["q"], exc)
 
     if items:
-        logger.info("Fetched %d targeted news from GNews (%d queries)", len(items), len(GNEWS_QUERIES))
+        logger.info("Fetched %d targeted news from GNews (%d queries)", len(items), len(queries_this_scan))
+    else:
+        logger.warning("GNews returned 0 items from %d queries (API key present, check individual query logs)",
+                       len(queries_this_scan))
     return items
 
 
@@ -1233,7 +1238,7 @@ def fetch_usda_crop_data() -> list[NewsItem]:
             ))
 
         except Exception as exc:
-            logger.debug("USDA fetch error for %s: %s", q["commodity_desc"], exc)
+            logger.warning("USDA fetch error for %s: %s", q["commodity_desc"], exc)
 
     if items:
         logger.info("Fetched %d USDA data points (%d seasonal queries)", len(items), len(queries))
@@ -1516,7 +1521,7 @@ def fetch_cot_data() -> list[NewsItem]:
                 ))
 
     except Exception as exc:
-        logger.debug("COT data fetch error: %s", exc)
+        logger.warning("COT data fetch error: %s", exc)
 
     if items:
         logger.info("Fetched %d COT positioning alerts", len(items))
@@ -1821,7 +1826,7 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
 
         if resp.status_code != 200:
-            logger.debug("NASA EONET API error: %d", resp.status_code)
+            logger.warning("NASA EONET API error: HTTP %d", resp.status_code)
             return []
 
         data = resp.json()
@@ -1893,7 +1898,7 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
             ))
 
     except Exception as exc:
-        logger.debug("NASA EONET fetch error: %s", exc)
+        logger.warning("NASA EONET fetch error: %s", exc)
 
     if items:
         logger.info("Fetched %d NASA EONET natural events", len(items))
@@ -2002,7 +2007,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                         news_zone="europe",
                     ))
     except Exception as exc:
-        logger.debug("GIE AGSI EU fetch error: %s", exc)
+        logger.warning("GIE AGSI EU fetch error: %s", exc)
 
     # ── Country-level data (detect regional stress masked by aggregate) ──
     for country_code, country_name in AGSI_COUNTRIES.items():
@@ -2044,7 +2049,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                     news_zone=_zone_slug(country_name),
                 ))
         except Exception as exc:
-            logger.debug("GIE AGSI %s fetch error: %s", country_code, exc)
+            logger.warning("GIE AGSI %s fetch error: %s", country_code, exc)
 
     if items:
         logger.info("Fetched %d GIE AGSI gas storage data points", len(items))
@@ -2204,7 +2209,7 @@ def fetch_usda_wasde() -> list[NewsItem]:
             ))
 
         except Exception as exc:
-            logger.debug("WASDE fetch error for %s %s: %s",
+            logger.warning("WASDE fetch error for %s %s: %s",
                          q["commodity_desc"], q["statisticcat_desc"], exc)
 
     if items:
@@ -2312,7 +2317,7 @@ def fetch_fedwatch_implied() -> list[NewsItem]:
                 pass  # Forward month data not always available
 
     except Exception as exc:
-        logger.debug("FedWatch fetch error: %s", exc)
+        logger.warning("FedWatch fetch error: %s", exc)
 
     if items:
         logger.info("Generated %d FedWatch rate signals", len(items))
@@ -2433,7 +2438,7 @@ def fetch_shfe_inventories() -> list[NewsItem]:
                 logger.debug("SHFE metal check error for %s: %s", metal["name"], exc)
 
     except Exception as exc:
-        logger.debug("SHFE inventory fetch error: %s", exc)
+        logger.warning("SHFE inventory fetch error: %s", exc)
 
     if items:
         logger.info("Generated %d SHFE/LME metal inventory signals", len(items))
@@ -2556,7 +2561,7 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
                     break
 
     except Exception as exc:
-        logger.debug("WOAH disease alert fetch error: %s", exc)
+        logger.warning("WOAH disease alert fetch error: %s", exc)
 
     if items:
         logger.info("Fetched %d WOAH animal disease alerts", len(items))
@@ -2682,7 +2687,7 @@ def fetch_satellite_ndvi() -> list[NewsItem]:
                     ))
 
         except Exception as exc:
-            logger.debug("Satellite NDVI fetch error for %s: %s", zone["name"], exc)
+            logger.warning("Satellite NDVI fetch error for %s: %s", zone["name"], exc)
 
     if items:
         logger.info("Generated %d satellite vegetation stress alerts", len(items))
@@ -2772,7 +2777,7 @@ def fetch_freight_index() -> list[NewsItem]:
             ))
 
     except Exception as exc:
-        logger.debug("Freight index fetch error: %s", exc)
+        logger.warning("Freight index fetch error: %s", exc)
 
     if items:
         logger.info("Generated %d freight/shipping alerts", len(items))
@@ -2841,7 +2846,7 @@ def fetch_lme_inventory_proxy() -> list[NewsItem]:
                         ))
 
         except Exception as exc:
-            logger.debug("LME proxy fetch error for %s: %s", metal["name"], exc)
+            logger.warning("LME proxy fetch error for %s: %s", metal["name"], exc)
 
     if items:
         logger.info("Generated %d LME inventory proxy alerts", len(items))
@@ -3048,7 +3053,7 @@ def fetch_usda_export_sales() -> list[NewsItem]:
                             ))
                             break
     except Exception as exc:
-        logger.debug("USDA export sales fetch error: %s", exc)
+        logger.warning("USDA export sales fetch error: %s", exc)
 
     if items:
         logger.info("Fetched %d USDA export sales alerts", len(items))
@@ -3146,7 +3151,7 @@ def fetch_plant_disease_alerts() -> list[NewsItem]:
                 ))
 
         except Exception as exc:
-            logger.debug("Plant disease alert fetch error for %s: %s",
+            logger.warning("Plant disease alert fetch error for %s: %s",
                         disease_cfg["disease"], exc)
 
     if items:
@@ -3263,7 +3268,7 @@ def fetch_google_news_rss() -> list[NewsItem]:
                 ))
 
         except Exception as exc:
-            logger.debug("Google News RSS fetch error for '%s': %s",
+            logger.warning("Google News RSS fetch error for '%s': %s",
                         query_cfg.get("q", ""), exc)
 
     if items:
@@ -3327,6 +3332,7 @@ def collect_structured_data() -> list[NewsItem]:
         f = executor.submit(fn)
         _start_times[f] = (name, time.monotonic())
     futures = _start_times
+    source_item_counts: dict[str, int] = {}
     try:
         for future in as_completed(futures, timeout=120):
             source_name, start_t = futures[future]
@@ -3334,30 +3340,71 @@ def collect_structured_data() -> list[NewsItem]:
             try:
                 items = future.result(timeout=45)
                 all_items.extend(items)
+                source_item_counts[source_name] = len(items)
+                if len(items) == 0:
+                    logger.info("Structured source '%s' returned 0 items (%.0fms)",
+                               source_name, latency_ms)
                 if tracker:
                     tracker.record_success(source_name, "phase0", len(items), latency_ms)
             except TimeoutError:
                 logger.warning("Structured data source '%s' TIMEOUT (45s)", source_name)
+                source_item_counts[source_name] = -1  # timeout marker
                 if tracker:
                     tracker.record_failure(source_name, "phase0", "Timeout (45s per-source)", latency_ms)
             except Exception as exc:
                 logger.warning("Structured data source '%s' failed: %s", source_name, exc)
+                source_item_counts[source_name] = -2  # error marker
                 if tracker:
                     tracker.record_failure(source_name, "phase0", exc, latency_ms)
     except TimeoutError:
-        logger.warning("Structured data collection timed out, some sources skipped")
-        # Record timeout for sources that didn't complete
+        completed_sources = {futures[f][0] for f in futures if f.done()}
+        skipped = [n for n, _ in sources if n not in completed_sources]
+        logger.warning("Structured data collection timed out (120s). "
+                       "Completed: %s. Skipped: %s",
+                       sorted(completed_sources), skipped)
         if tracker:
-            completed_sources = {futures[f][0] for f in futures if f.done()}
-            for name, _ in sources:
-                if name not in completed_sources:
-                    tracker.record_failure(name, "phase0", "Timeout (120s global)")
+            for name in skipped:
+                tracker.record_failure(name, "phase0", "Timeout (120s global)")
     finally:
-        # wait=True: ensure threads are joined before returning to caller,
-        # preventing zombie threads from overlapping with the next collection phase.
-        executor.shutdown(wait=True, cancel_futures=True)
+        # wait=False: do NOT block on slow sources (e.g., gnews makes 24 sequential
+        # HTTP calls = up to 360s). Items from completed futures are already in
+        # all_items. Slow sources continue in background and self-terminate via
+        # their per-request REQUEST_TIMEOUT=15s.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    # Diagnostic: per-source completion status for debugging 0-item scans
+    completed_names = {futures[f][0] for f in futures if f.done()}
+    not_done = [n for n, _ in sources if n not in completed_names]
+    if not_done:
+        logger.warning("Structured sources still running at return: %s", not_done)
+
+    # Per-source summary for diagnostics
+    sources_with_items = {k: v for k, v in source_item_counts.items() if v > 0}
+    sources_empty = {k: v for k, v in source_item_counts.items() if v == 0}
+    sources_failed = {k: v for k, v in source_item_counts.items() if v < 0}
+    logger.info("Structured data per-source: items=%s, empty=%s, failed=%s, not_started=%s",
+                sources_with_items or "none",
+                list(sources_empty.keys()) or "none",
+                list(sources_failed.keys()) or "none",
+                not_done or "none")
 
     if all_items:
-        logger.info("Total structured data collected: %d items", len(all_items))
+        logger.info("Total structured data collected: %d items from %d/%d sources",
+                    len(all_items), len(sources_with_items), len(sources))
+    else:
+        # Critical diagnostic: 0 items despite having sources
+        has_keys = []
+        if os.environ.get("EIA_API_KEY"):
+            has_keys.append("EIA")
+        if os.environ.get("GNEWS_API_KEY"):
+            has_keys.append("GNews")
+        if os.environ.get("USDA_API_KEY"):
+            has_keys.append("USDA")
+        logger.warning("Structured data returned 0 items! "
+                      "Completed: %d/%d sources. API keys present: %s. "
+                      "Failed/timed out: %s. Not started: %s",
+                      len(completed_names), len(sources), has_keys or "none",
+                      list(sources_failed.keys()) or "none",
+                      not_done or "none")
 
     return all_items

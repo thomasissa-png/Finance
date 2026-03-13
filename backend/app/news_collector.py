@@ -507,6 +507,18 @@ def collect_all_news() -> list[NewsItem]:
     logger.info("News sources: structured=%d, early-signal=%d, yfinance=%d, rss=%d",
                 len(structured_news), len(early_news), len(yf_news), len(rss_news))
 
+    # Critical alert when structured data returns 0 items
+    if not structured_news:
+        import os as _os
+        keys = [k for k in ("EIA_API_KEY", "GNEWS_API_KEY", "USDA_API_KEY", "GIE_AGSI_API_KEY")
+                if _os.environ.get(k)]
+        logger.warning(
+            "ALERT: structured_news=0 items! API keys present: %s. "
+            "Check data_apis.py logs for per-source errors.",
+            keys or "NONE (no API keys configured)")
+    if not early_news:
+        logger.warning("ALERT: early_signal_news=0 items! Check early-signal feed logs.")
+
     all_items = structured_news + early_news + yf_news + rss_news
 
     # (#1) Pre-filter old news before sending to Claude
