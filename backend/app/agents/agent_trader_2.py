@@ -72,6 +72,19 @@ PER_FETCH_TIMEOUT_S = 15
 # P9: History pruning — keep 1 year instead of hard cap 50
 HISTORY_MAX_AGE_DAYS = 365
 
+# v8.0: Time-decay — reduce confidence when no news confirm the position
+# After CONFIDENCE_DECAY_START_DAYS without confirming news, confidence drops
+# by CONFIDENCE_DECAY_PER_DAY each day. Below CONFIDENCE_CLOSE_THRESHOLD → close.
+CONFIDENCE_DECAY_START_DAYS = 3  # Grace period before decay starts
+CONFIDENCE_DECAY_PER_DAY = 12   # Points of confidence lost per day (7 days ≈ kills a 100-conf position)
+CONFIDENCE_CLOSE_THRESHOLD = 15  # Close position when confidence drops below this
+
+# v8.0: Momentum reversal — if the last N flips on a ticker are all losses,
+# reduce the signal threshold to make it easier to flip direction.
+# This prevents staying stuck in a losing direction.
+LOSING_STREAK_FLIP_COUNT = 3    # How many consecutive losing flips to trigger
+LOSING_STREAK_THRESHOLD_MULT = 0.5  # Halve the flip threshold on losing streak
+
 # Persistence file (JSON fallback)
 POSITIONS_FILE = Path(os.getenv("DATA_DIR", "data")) / "trend_positions.json"
 
@@ -225,7 +238,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "7.9"  # v7.9: Fix oscillation — Scoring 1 fallback damping (0.4×), hysteresis on flip threshold
+    version = "8.0"  # v8.0: Time-decay confidence (7j sans news → close), momentum reversal on losing streak
 
     def __init__(self):
         super().__init__()
@@ -347,7 +360,14 @@ class AgentTrader2(BaseAgent):
                     continue
 
                 ticker_news = relevant_news.get(ticker, [])
+
+                # v8.0: Time-decay — if no news for this ticker, decay confidence
                 if not ticker_news:
+                    decay_change = self._apply_confidence_decay(ticker, positions[ticker])
+                    if decay_change:
+                        changes.append(decay_change)
+                        positions[ticker] = decay_change["new_position"]
+                        self._position_changes_total += 1
                     continue
 
                 change = self.execute(
@@ -772,6 +792,7 @@ class AgentTrader2(BaseAgent):
         # v7.9: Hysteresis — positions held longer need stronger signals to flip.
         # Prevents churning when signals oscillate near the threshold.
         # Scale: 1.0× at 0h, up to 1.5× after 24h, capped at 1.5×
+        # v8.0: Losing streak multiplier — if last N flips all losses, lower threshold
         base_threshold = 20.0 * signal_cal.get("threshold_adj", 1.0)
         entry_time_str = current_position.get("entry_time", "")
         hysteresis_mult = 1.0
@@ -783,7 +804,9 @@ class AgentTrader2(BaseAgent):
                 hysteresis_mult = min(1.5, 1.0 + 0.5 * min(hours_held, 24) / 24)
             except (ValueError, TypeError):
                 pass
-        change_threshold = base_threshold * hysteresis_mult
+        # v8.0: Losing streak → lower threshold to exit bad direction faster
+        streak_mult = self._check_losing_streak(current_position.get("ticker", ""), current_position)
+        change_threshold = base_threshold * hysteresis_mult * streak_mult
         if signal_strength >= change_threshold:
             return self._make_change(
                 ticker, current_position, suggested_dir,
@@ -802,6 +825,102 @@ class AgentTrader2(BaseAgent):
             f"Maintien {current_dir} avec confiance réduite."
         )
         return None
+
+    def _apply_confidence_decay(self, ticker: str, position: dict) -> dict | None:
+        """v8.0: Decay confidence when no news confirm the position.
+
+        If no news for this ticker in the current scan, check how long since
+        the last evaluation. After CONFIDENCE_DECAY_START_DAYS, reduce
+        confidence by CONFIDENCE_DECAY_PER_DAY per day elapsed.
+
+        If confidence drops below CONFIDENCE_CLOSE_THRESHOLD, close the
+        position back to NEUTRAL — the signal has gone stale.
+
+        Returns a change dict (position closed) or None (just decayed).
+        """
+        direction = position.get("direction", "NEUTRAL")
+        if direction == "NEUTRAL":
+            return None
+
+        confidence = position.get("confidence", 50)
+        last_eval = position.get("last_evaluation")
+        if not last_eval:
+            return None
+
+        try:
+            last_eval_dt = datetime.fromisoformat(last_eval)
+        except (ValueError, TypeError):
+            return None
+
+        days_silent = (datetime.now(timezone.utc) - last_eval_dt).total_seconds() / 86400
+
+        if days_silent < CONFIDENCE_DECAY_START_DAYS:
+            return None  # Grace period
+
+        # Decay: points lost = rate × (days beyond grace period)
+        decay_days = days_silent - CONFIDENCE_DECAY_START_DAYS
+        decay_amount = int(CONFIDENCE_DECAY_PER_DAY * decay_days)
+        new_confidence = max(0, confidence - decay_amount)
+        position["confidence"] = new_confidence
+        position["reasoning"] = (
+            f"Confiance en déclin — aucune news depuis {days_silent:.1f}j "
+            f"(confiance {confidence} → {new_confidence})"
+        )
+
+        if new_confidence < CONFIDENCE_CLOSE_THRESHOLD:
+            # Close the position — signal is stale
+            self.log_decision(f"TIME DECAY CLOSE — {ticker}", {
+                "ticker": ticker,
+                "direction": direction,
+                "days_silent": round(days_silent, 1),
+                "confidence_was": confidence,
+                "confidence_now": new_confidence,
+                "threshold": CONFIDENCE_CLOSE_THRESHOLD,
+            })
+            return self._make_change(
+                ticker, position, "NEUTRAL",
+                f"Fermeture time-decay — aucune news depuis {days_silent:.1f}j, "
+                f"confiance {new_confidence} < seuil {CONFIDENCE_CLOSE_THRESHOLD}",
+                [], 0.0,
+            )
+
+        logger.info("T2 confidence decay: %s %s → %d (silent %.1f days)",
+                     ticker, direction, new_confidence, days_silent)
+        return None
+
+    def _check_losing_streak(self, ticker: str, position: dict) -> float:
+        """v8.0: Check if ticker has a losing streak → lower flip threshold.
+
+        If the last LOSING_STREAK_FLIP_COUNT flips were all losses (pnl < 0),
+        return a multiplier < 1.0 that reduces the change_threshold,
+        making it easier to flip direction.
+
+        Returns multiplier (1.0 = normal, LOSING_STREAK_THRESHOLD_MULT on streak).
+        """
+        history = position.get("history", [])
+        if len(history) < LOSING_STREAK_FLIP_COUNT:
+            return 1.0
+
+        # Check last N flips (most recent first)
+        recent = history[:LOSING_STREAK_FLIP_COUNT]
+        all_losses = all(
+            h.get("pnl_pct", 0) < 0
+            for h in recent
+            if h.get("from_direction", "NEUTRAL") != "NEUTRAL"
+        )
+
+        # Need at least LOSING_STREAK_FLIP_COUNT actual non-NEUTRAL flips
+        actual_flips = [h for h in recent if h.get("from_direction", "NEUTRAL") != "NEUTRAL"]
+        if len(actual_flips) < LOSING_STREAK_FLIP_COUNT:
+            return 1.0
+
+        if all_losses:
+            logger.warning("T2 losing streak on %s: last %d flips all negative → "
+                           "lowering flip threshold (×%.1f)",
+                           ticker, LOSING_STREAK_FLIP_COUNT, LOSING_STREAK_THRESHOLD_MULT)
+            return LOSING_STREAK_THRESHOLD_MULT
+
+        return 1.0
 
     def _make_change(self, ticker: str, position: dict, new_dir: str,
                      reason: str, key_news: list, strength: float) -> dict | None:

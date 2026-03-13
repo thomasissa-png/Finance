@@ -1134,7 +1134,7 @@ class TestTeam3V2Scoring3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_scoring_3 import AgentScoring3
-        assert AgentScoring3.version == "2.5"
+        assert AgentScoring3.version == "2.6"
 
     def test_stochastic_reversal_detector(self):
         """T3: Stochastic reversal should detect oversold conditions."""
@@ -1179,10 +1179,10 @@ class TestTeam3V2Trader3:
         assert trader._check_correlation_conflict("AAPL", "SHORT", active) is False
 
     def test_trailing_threshold_per_strategy(self):
-        """J2: Trailing stop threshold should vary by strategy."""
+        """J2/v2.5: Momentum trails later (0.50) > mean-reversion (0.35)."""
         from backend.app.agents.agent_trader_3 import AgentTrader3
         trader = AgentTrader3()
-        assert trader._get_trailing_threshold("ma_trend") < trader._get_trailing_threshold("rsi_reversal")
+        assert trader._get_trailing_threshold("ma_trend") > trader._get_trailing_threshold("rsi_reversal")
 
     def test_dynamic_max_per_strategy(self):
         """J4: Validated strategies should get higher budget."""
@@ -1198,7 +1198,7 @@ class TestTeam3V2Trader3:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_3 import AgentTrader3
-        assert AgentTrader3.version == "2.4"
+        assert AgentTrader3.version == "2.5"
 
 
 class TestTeam3V2Journal3:
@@ -1513,13 +1513,16 @@ class TestTeam4V2Trader4:
         assert "trader_4" in versions
 
     def test_tp_sl_config_exists(self):
-        """P3: TP/SL configuration should exist."""
+        """P3/v2.2: TP/SL configuration should exist (ATR-based SL)."""
         from backend.app.agents.agent_trader_4 import (
-            TP_PCT_BY_CONFLUENCE, SL_PCT, TRAILING_ACTIVATION_PCT
+            TP_PCT_BY_CONFLUENCE, SL_FLOOR_PCT, SL_ATR_MULT,
+            TRAILING_ACTIVATION_PCT, TRAILING_ATR_MULT
         )
         assert TP_PCT_BY_CONFLUENCE[3] > TP_PCT_BY_CONFLUENCE[2]
-        assert SL_PCT > 0
+        assert SL_FLOOR_PCT > 0
+        assert SL_ATR_MULT > 0
         assert TRAILING_ACTIVATION_PCT > 0
+        assert TRAILING_ATR_MULT > 0
 
     def test_max_hold_hours_72(self):
         """P7: Max hold hours should be 72 (0-3 days)."""
@@ -1528,7 +1531,7 @@ class TestTeam4V2Trader4:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_4 import AgentTrader4
-        assert AgentTrader4.version == "2.1"
+        assert AgentTrader4.version == "2.2"
 
     def test_metrics_include_activation(self):
         """P8: Metrics should include activation info."""
@@ -1942,7 +1945,7 @@ class TestTrader4TrailingStopPersistence:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_4 import AgentTrader4
-        assert AgentTrader4.version == "2.1"
+        assert AgentTrader4.version == "2.2"
 
 
 class TestTrader3TrailingStopPersistence:
@@ -2047,7 +2050,7 @@ class TestTrader2Fixes:
 
     def test_version_bumped(self):
         from backend.app.agents.agent_trader_2 import AgentTrader2
-        assert AgentTrader2.version == "7.9"
+        assert AgentTrader2.version == "8.0"
 
 
 class TestLearning2SnapshotContamination:

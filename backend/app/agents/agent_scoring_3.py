@@ -1183,17 +1183,19 @@ def _detect_macd_ma_combo(indicators: dict) -> dict | None:
 #   → R/R ~2.0, let profits run on strong directional moves
 # Combo strategies: inherit from dominant component
 STRATEGY_RR_PROFILES = {
-    # Mean-reversion family — target closer, stop wider (forgiving)
-    "rsi_reversal":         (1.2, 1.2),   # R/R ~1.0
-    "stochastic_reversal":  (1.2, 1.2),   # R/R ~1.0
-    "bollinger_squeeze":    (1.4, 1.1),   # R/R ~1.27 (breakout can run)
+    # Mean-reversion family — tighter stops to improve R/R.
+    # v2.6: stop_mult reduced from 1.2→0.9 — old R/R ~1.0 was break-even after spread.
+    # New R/R ~1.3-1.7 gives positive expectancy even at 50% win rate.
+    "rsi_reversal":         (1.2, 0.9),   # R/R ~1.33 (was 1.0)
+    "stochastic_reversal":  (1.2, 0.9),   # R/R ~1.33 (was 1.0)
+    "bollinger_squeeze":    (1.4, 0.9),   # R/R ~1.56 (was 1.27)
     # Momentum/trend family — let profits run
     "macd_crossover":       (2.0, 1.0),   # R/R ~2.0
     "ma_trend":             (2.2, 1.0),   # R/R ~2.2 (strongest trend signal)
     "momentum_divergence":  (1.8, 1.0),   # R/R ~1.8
-    # Combo: mean-reversion dominant (target raised to maintain R/R > 1.0 after fees)
-    "rsi_bollinger_combo":  (1.5, 1.2),   # R/R ~1.25 (net ~1.1 after spread)
-    "bollinger_stoch_combo": (1.5, 1.2),  # R/R ~1.25 (net ~1.1 after spread)
+    # Combo: mean-reversion dominant — stop reduced from 1.2→0.9
+    "rsi_bollinger_combo":  (1.5, 0.9),   # R/R ~1.67 (was 1.25)
+    "bollinger_stoch_combo": (1.5, 0.9),  # R/R ~1.67 (was 1.25)
     # Combo: momentum dominant
     "rsi_macd_combo":       (1.6, 1.0),   # R/R ~1.6 (mixed)
     "macd_ma_combo":        (2.0, 1.0),   # R/R ~2.0 (trend continuation)
@@ -1742,7 +1744,7 @@ class AgentScoring3(BaseAgent):
 
     name = "scoring_3"
     description = "Technical indicators scoring — multi-strategy, multi-timeframe"
-    version = "2.5"  # v2.5: Mean-reversion combo target raised (R/R > 1.0 after fees)
+    version = "2.6"  # v2.6: Mean-reversion R/R fix (stop 1.2→0.9), R/R ~1.3-1.7 instead of ~1.0
 
     def __init__(self):
         super().__init__()

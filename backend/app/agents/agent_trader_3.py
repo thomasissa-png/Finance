@@ -44,8 +44,28 @@ logger = logging.getLogger(__name__)
 # Maximum simultaneous positions
 MAX_POSITIONS = 10
 
-# Max holding period in days
+# Max holding period in days (default, overridden per-strategy)
 MAX_HOLDING_DAYS = 3
+
+# v2.5: Per-strategy max holding hours — momentum/trend need more time,
+# mean-reversion should exit faster.
+STRATEGY_MAX_HOLDING_HOURS = {
+    # Mean-reversion: target is close → if not hit in 48h, signal is stale
+    "rsi_reversal": 48,
+    "stochastic_reversal": 48,
+    "bollinger_squeeze": 72,     # Breakout can develop slower
+    # Momentum/trend: needs time to play out
+    "macd_crossover": 96,        # 4 days
+    "ma_trend": 120,             # 5 days (strongest trend signal)
+    "momentum_divergence": 96,   # 4 days
+    # Combo mean-reversion: shorter
+    "rsi_bollinger_combo": 48,
+    "bollinger_stoch_combo": 48,
+    # Combo momentum: longer
+    "rsi_macd_combo": 72,
+    "macd_ma_combo": 96,
+    "ma_rsi_macd_combo": 96,
+}
 
 # Minimum score to take a trade
 MIN_TRADE_SCORE = 45.0
@@ -222,7 +242,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "2.4"  # v2.4: Audit fixes — trailing level monotone, mean-reversion thresholds, effective_stop_at_close
+    version = "2.5"  # v2.5: Per-strategy expiry (48-120h), momentum Tier1 trailing at 50%
 
     def __init__(self):
         super().__init__()
@@ -514,8 +534,10 @@ class AgentTrader3(BaseAgent):
                 newly_closed.append(pos)
                 continue
 
-            # Check max holding period
-            if holding_hours > MAX_HOLDING_DAYS * 24:
+            # Check max holding period (v2.5: per-strategy instead of global)
+            max_hours = STRATEGY_MAX_HOLDING_HOURS.get(
+                strategy, MAX_HOLDING_DAYS * 24)
+            if holding_hours > max_hours:
                 pos["result"] = "EXPIRED"
                 pos["pnl_pct"] = round(pnl_pct, 2)
                 pos["close_time"] = now.isoformat()
@@ -542,21 +564,23 @@ class AgentTrader3(BaseAgent):
                 return overrides[strategy]
 
         defaults = {
-            # Mean-reversion family — lower thresholds (short targets need early trailing)
-            "rsi_reversal": 0.35,       # R/R ~1.0: activate early to protect gains
-            "stochastic_reversal": 0.35, # R/R ~1.0: same logic
-            "bollinger_squeeze": 0.40,  # R/R ~1.27: breakout, slightly wider
-            # Momentum/trend family — tighter thresholds (let profits run)
-            "macd_crossover": 0.40,     # R/R ~2.0: trend, trail early
-            "ma_trend": 0.35,           # R/R ~2.2: strong trend, trail tight
-            "momentum_divergence": 0.45, # R/R ~1.8: moderate
+            # Mean-reversion family — early activation to protect short-target gains
+            "rsi_reversal": 0.35,
+            "stochastic_reversal": 0.35,
+            "bollinger_squeeze": 0.40,
+            # v2.5: Momentum/trend family — LATER activation (0.50) to let profits run.
+            # Previously 0.35-0.45 caused premature breakeven-stop on retracements.
+            # With target 2.0×ATR, activating at 50% means ~1.0×ATR profit before trailing.
+            "macd_crossover": 0.50,
+            "ma_trend": 0.50,
+            "momentum_divergence": 0.50,
             # Combo mean-reversion — early trailing (short targets)
-            "rsi_bollinger_combo": 0.35, # R/R ~1.15: mean-reversion dominant
-            "bollinger_stoch_combo": 0.35, # R/R ~1.15: same
-            # Combo momentum — standard trailing
-            "rsi_macd_combo": 0.40,     # R/R ~1.6: mixed
-            "macd_ma_combo": 0.40,      # R/R ~2.0: trend continuation
-            "ma_rsi_macd_combo": 0.35,  # Triple confluence: trail tight
+            "rsi_bollinger_combo": 0.35,
+            "bollinger_stoch_combo": 0.35,
+            # v2.5: Combo momentum — later activation
+            "rsi_macd_combo": 0.45,
+            "macd_ma_combo": 0.50,
+            "ma_rsi_macd_combo": 0.45,  # Triple confluence: moderate
         }
         return defaults.get(strategy, 0.50)
 

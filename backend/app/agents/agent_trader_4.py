@@ -70,15 +70,19 @@ HISTORY_MAX_AGE_DAYS = 365
 # P7 fix: Max hold hours aligned at 72h (0-3 days as per spec)
 MAX_HOLD_HOURS = 72
 
-# P3 fix: TP/SL configuration
-# TP/SL are percentages relative to entry price
+# P3 fix: TP/SL configuration — percentages relative to entry price
+# v2.2: These are now MINIMUM floors. Actual SL/trailing are ATR-based:
+#   SL = max(SL_FLOOR_PCT, ATR_5d_pct × SL_ATR_MULT)
+#   trailing_distance = max(TRAILING_FLOOR_PCT, ATR_5d_pct × TRAILING_ATR_MULT)
 TP_PCT_BY_CONFLUENCE = {
     3: 3.0,    # 3% target for full confluence
     2: 2.0,    # 2% target for partial confluence
 }
-SL_PCT = 1.5       # 1.5% stop-loss (applies to all)
+SL_FLOOR_PCT = 1.0         # Minimum SL (never tighter than this even for low-vol)
+SL_ATR_MULT = 1.5          # SL = 1.5× ATR (gives room for normal volatility)
 TRAILING_ACTIVATION_PCT = 1.0   # Activate trailing after 1% profit
-TRAILING_DISTANCE_PCT = 0.7     # Trail 0.7% behind peak
+TRAILING_FLOOR_PCT = 0.5   # Minimum trailing distance
+TRAILING_ATR_MULT = 0.8    # Trail distance = 0.8× ATR
 
 # Activation date — Team 4 only starts trading after this date
 # Configurable via TEAM4_ACTIVATION_DATE env var (format: YYYY-MM-DD)
@@ -225,6 +229,37 @@ def _fetch_current_price(ticker: str, bypass_cache: bool = False) -> float | Non
     return None
 
 
+def _fetch_atr_pct(ticker: str) -> float:
+    """v2.2: Fetch 5-day ATR as a percentage of current price.
+
+    Returns ATR/price × 100 (e.g., 2.5 means 2.5% daily range).
+    Returns a conservative default (2.0%) if data unavailable.
+    """
+    try:
+        from ..market_data import fetch_history
+        bars = fetch_history(ticker, period="1mo")
+        if bars is None or len(bars) < 6:
+            return 2.0  # Default: assume 2% daily range
+
+        # Wilder ATR: use last 5 bars
+        trs = []
+        for i in range(1, min(6, len(bars))):
+            high = bars.iloc[i]["High"]
+            low = bars.iloc[i]["Low"]
+            prev_close = bars.iloc[i - 1]["Close"]
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            trs.append(tr)
+
+        atr = sum(trs) / len(trs)
+        price = bars.iloc[-1]["Close"]
+        if price <= 0:
+            return 2.0
+        return round(atr / price * 100, 2)
+    except Exception as exc:
+        logger.warning("ATR fetch failed for %s: %s — using 2.0%% default", ticker, exc)
+        return 2.0
+
+
 def _check_correlation_conflict(ticker: str, direction: str,
                                  positions: dict) -> bool:
     """P5: Check if opening this position conflicts with existing correlated positions.
@@ -284,7 +319,7 @@ class AgentTrader4(BaseAgent):
 
     name = "trader_4"
     description = "Meta trading — confluence-driven ensemble positions"
-    version = "2.1"  # v2.1: trailing stop persistence fix, stale stop_price fix
+    version = "2.2"  # v2.2: ATR-based SL/trailing, per-strategy expiry profile
 
     def __init__(self):
         super().__init__()
@@ -558,6 +593,7 @@ class AgentTrader4(BaseAgent):
         """P3: Check TP, trailing stop, then SL for an open position.
 
         Order: TP → Trailing → SL (trailing evaluated BEFORE SL).
+        v2.2: SL and trailing distance are ATR-based (stored at open, cached in pos).
         """
         entry_price = pos.get("entry_price")
         current_price = pos.get("current_price")
@@ -577,6 +613,17 @@ class AgentTrader4(BaseAgent):
         stop_price = pos.get("stop_price")
         peak_price = pos.get("peak_price", current_price)
 
+        # v2.2: ATR-based parameters (stored at open, fallback to fetch)
+        atr_pct = pos.get("atr_pct")
+        if atr_pct is None:
+            atr_pct = _fetch_atr_pct(ticker)
+            pos["atr_pct"] = atr_pct  # Cache for future checks
+
+        # v2.2: ATR-based SL = max(floor, ATR × mult)
+        sl_pct = max(SL_FLOOR_PCT, atr_pct * SL_ATR_MULT)
+        # v2.2: ATR-based trailing distance = max(floor, ATR × mult)
+        trail_dist_pct = max(TRAILING_FLOOR_PCT, atr_pct * TRAILING_ATR_MULT)
+
         # 1. TP check
         if pnl_pct >= tp_pct:
             return self._close_position(
@@ -589,10 +636,10 @@ class AgentTrader4(BaseAgent):
         if pnl_pct >= TRAILING_ACTIVATION_PCT:
             if direction == "LONG":
                 new_peak = max(peak_price or current_price, current_price)
-                new_stop = new_peak * (1 - TRAILING_DISTANCE_PCT / 100)
+                new_stop = new_peak * (1 - trail_dist_pct / 100)
             else:
                 new_peak = min(peak_price or current_price, current_price)
-                new_stop = new_peak * (1 + TRAILING_DISTANCE_PCT / 100)
+                new_stop = new_peak * (1 + trail_dist_pct / 100)
 
             pos["peak_price"] = new_peak
             if stop_price is None or (direction == "LONG" and new_stop > stop_price) \
@@ -602,22 +649,22 @@ class AgentTrader4(BaseAgent):
         # 3. SL check (uses CURRENT stop_price after trailing update, not stale capture)
         effective_stop = pos.get("stop_price")
         if effective_stop is None:
-            # Default SL
+            # Default SL (v2.2: ATR-based instead of fixed)
             if direction == "LONG":
-                effective_stop = entry_price * (1 - SL_PCT / 100)
+                effective_stop = entry_price * (1 - sl_pct / 100)
             else:
-                effective_stop = entry_price * (1 + SL_PCT / 100)
+                effective_stop = entry_price * (1 + sl_pct / 100)
 
         if direction == "LONG" and current_price <= effective_stop:
             return self._close_position(
                 ticker, pos,
-                f"SL_HIT: {pnl_pct:.2f}% (stop={effective_stop:.4f})",
+                f"SL_HIT: {pnl_pct:.2f}% (stop={effective_stop:.4f}, SL={sl_pct:.1f}% ATR-based)",
                 "SL_HIT"
             )
         elif direction == "SHORT" and current_price >= effective_stop:
             return self._close_position(
                 ticker, pos,
-                f"SL_HIT: {pnl_pct:.2f}% (stop={effective_stop:.4f})",
+                f"SL_HIT: {pnl_pct:.2f}% (stop={effective_stop:.4f}, SL={sl_pct:.1f}% ATR-based)",
                 "SL_HIT"
             )
 
@@ -717,14 +764,18 @@ class AgentTrader4(BaseAgent):
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
+        # v2.2: Fetch ATR for ATR-based SL/trailing
+        atr_pct = _fetch_atr_pct(ticker)
+        sl_pct = max(SL_FLOOR_PCT, atr_pct * SL_ATR_MULT)
+
         # P3: Calculate TP/SL prices
         tp_pct = TP_PCT_BY_CONFLUENCE.get(confluence_level, 2.0)
         if direction == "LONG":
             tp_price = price * (1 + tp_pct / 100) if price else None
-            sl_price = price * (1 - SL_PCT / 100) if price else None
+            sl_price = price * (1 - sl_pct / 100) if price else None
         else:
             tp_price = price * (1 - tp_pct / 100) if price else None
-            sl_price = price * (1 + SL_PCT / 100) if price else None
+            sl_price = price * (1 + sl_pct / 100) if price else None
 
         new_position = {
             "ticker": ticker,
@@ -753,7 +804,8 @@ class AgentTrader4(BaseAgent):
             "stop_price": round(sl_price, 4) if sl_price else None,
             "peak_price": price,
             "tp_pct": tp_pct,
-            "sl_pct": SL_PCT,
+            "sl_pct": round(sl_pct, 2),
+            "atr_pct": atr_pct,  # v2.2: cached for trailing distance
             # P6: Agent versions
             "agent_versions": _get_agent_versions(),
             "signal_renewal_count": 0,
