@@ -217,3 +217,40 @@ def test_collect_structured_data_returns_list():
         result = collect_structured_data()
     assert isinstance(result, list)
     assert len(result) == 0
+
+
+def test_structured_source_names_match_config():
+    """All source= values in data_apis.py must be in STRUCTURED_SOURCES.
+
+    Mismatched names cause _filter_old_news() to use the 8h default instead of
+    18h, silently dropping overnight structured data (Bug 12, 2026-03-13).
+    """
+    from backend.app.config import STRUCTURED_SOURCES
+
+    # Source names actually used in data_apis.py fetch_* functions
+    actual_sources = {
+        "EIA",                    # fetch_eia_data
+        "Open-Meteo",             # fetch_weather_alerts
+        "USDA",                   # fetch_usda_crop_data, fetch_usda_wasde
+        "USDA FAS",               # fetch_usda_export_sales
+        "CFTC",                   # fetch_cot_data
+        "Options Flow",           # fetch_options_unusual_activity
+        "NASA EONET",             # fetch_nasa_eonet_events
+        "GIE AGSI",               # fetch_gie_agsi_data
+        "FedWatch",               # fetch_fedwatch_implied
+        "SHFE",                   # fetch_shfe_inventories
+        "WOAH",                   # fetch_woah_disease_alerts
+        "NASA POWER",             # fetch_satellite_ndvi
+        "Freight Index",          # fetch_freight_index
+        "LME Proxy",              # fetch_lme_inventory_proxy
+        "Shipping Proxy",         # fetch_chokepoint_monitoring
+        "Dark Pool Proxy",        # fetch_dark_pool_signals
+        "Plant Disease Monitor",  # fetch_plant_disease_alerts
+        "GNews",                  # fetch_gnews_targeted
+        "Google News",            # fetch_google_news_rss
+    }
+    missing = actual_sources - STRUCTURED_SOURCES
+    assert not missing, (
+        f"Source names used in data_apis.py but NOT in STRUCTURED_SOURCES: {missing}. "
+        f"Items from these sources will be filtered as 'old' after 8h instead of 18h."
+    )

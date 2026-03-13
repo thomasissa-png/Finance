@@ -26,8 +26,24 @@ NEWS_MAX_AGE_HOURS = 8  # Ignorer les news de plus de 8h (ex 6h — elargi pour 
 # These publish at fixed schedules — a USDA report at 22:00 UTC is still relevant at 07:50 CET
 STRUCTURED_SOURCE_MAX_AGE_HOURS = 18
 # Sources that use the extended window
-STRUCTURED_SOURCES = {"EIA", "USDA", "USDA FAS", "NOAA", "Open-Meteo", "CFTC", "GIE_AGSI",
-                      "NASA_EONET", "NASA_POWER", "WOAH", "SHFE", "FedWatch", "GNEWS"}
+# Source names MUST match the `source=` field set in data_apis.py fetch functions.
+# Mismatches cause _filter_old_news() to use 8h max age instead of 18h, silently
+# dropping overnight structured data (e.g., USDA report at 22h dropped at 07:50 scan).
+STRUCTURED_SOURCES = {
+    "EIA", "USDA", "USDA FAS", "NOAA", "Open-Meteo", "CFTC",
+    "GIE AGSI",          # space, not underscore (matches data_apis.py)
+    "NASA EONET",        # space, not underscore
+    "NASA POWER",        # space, not underscore
+    "WOAH", "SHFE", "FedWatch",
+    "GNews",             # fetch_gnews_targeted uses "GNews" as fallback source name
+    "Google News",       # fetch_google_news_rss uses "Google News"
+    "Freight Index",     # fetch_freight_index
+    "LME Proxy",         # fetch_lme_inventory_proxy
+    "Shipping Proxy",    # fetch_chokepoint_monitoring
+    "Dark Pool Proxy",   # fetch_dark_pool_signals
+    "Plant Disease Monitor",  # fetch_plant_disease_alerts
+    "Options Flow",      # fetch_options_unusual_activity
+}
 NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h
 MIN_SCORE_THRESHOLD = 20  # Score minimum pour recommander un trade (ex 25 — capte les signaux mid-range)
 

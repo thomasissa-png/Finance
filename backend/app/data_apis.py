@@ -1037,7 +1037,10 @@ def fetch_gnews_targeted() -> list[NewsItem]:
                     except ValueError:
                         pass
 
-                source_name = article.get("source", {}).get("name", "GNews")
+                # Always use "GNews" as source (not article publisher name like
+                # "Reuters" or "Bloomberg") — must match STRUCTURED_SOURCES in config.py
+                # for _filter_old_news() to apply the 18h window instead of 8h.
+                # Article publisher is included in the title by GNews API.
 
                 # GNews weight varies by query category:
                 # weather/commodity queries produce higher-edge results (physical signals)
@@ -1052,7 +1055,7 @@ def fetch_gnews_targeted() -> list[NewsItem]:
 
                 items.append(NewsItem(
                     title=title,
-                    source=source_name,
+                    source="GNews",
                     url=article.get("url", ""),
                     published=published,
                     related_tickers=query_cfg["tickers"],
