@@ -50,7 +50,7 @@ def fetch_eia_data() -> list[NewsItem]:
     """
     api_key = os.environ.get("EIA_API_KEY", "")
     if not api_key:
-        logger.debug("EIA_API_KEY not set — skipping EIA data")
+        logger.warning("EIA_API_KEY not set — skipping EIA data")
         return []
 
     items: list[NewsItem] = []
@@ -554,10 +554,23 @@ def fetch_weather_alerts() -> list[NewsItem]:
     and wind extremes (hurricanes for Gulf).
     Frost/heat alerts are only generated during the growing season.
     Drought thresholds are zone-specific.
+
+    Makes 16 sequential HTTP calls (one per zone). Time-capped at 60s
+    to avoid blocking the pool for other structured data sources.
     """
+    WEATHER_MAX_SECONDS = 60
+    weather_start = time.monotonic()
     items: list[NewsItem] = []
+    zones_checked = 0
 
     for zone in AGRICULTURAL_ZONES:
+        # Time budget check
+        elapsed = time.monotonic() - weather_start
+        if elapsed >= WEATHER_MAX_SECONDS:
+            logger.warning("Weather time budget exhausted (%.0fs) after %d/%d zones",
+                           elapsed, zones_checked, len(AGRICULTURAL_ZONES))
+            break
+
         try:
             # Fetch 7-day forecast + last 7 days history
             url = "https://api.open-meteo.com/v1/forecast"
@@ -732,6 +745,8 @@ def fetch_weather_alerts() -> list[NewsItem]:
 
         except Exception as exc:
             logger.warning("Weather fetch error for %s: %s", zone["name"], exc)
+        finally:
+            zones_checked += 1
 
     if items:
         logger.info("Generated %d weather alerts from %d zones", len(items), len(AGRICULTURAL_ZONES))
@@ -979,11 +994,19 @@ def fetch_gnews_targeted() -> list[NewsItem]:
     Rotation: 25 queries per scan (4 scans/day = 100 req/day exact).
     With 28+ queries total, we rotate the extra queries across scans
     using hour-based indexing so every query runs at least once per day.
+
+    IMPORTANT: This function makes 22+ sequential HTTP calls. It runs inside
+    collect_structured_data()'s ThreadPoolExecutor and must complete within
+    GNEWS_MAX_SECONDS to avoid blocking other sources. Queries stop early
+    if the time budget is exhausted.
     """
     api_key = os.environ.get("GNEWS_API_KEY", "")
     if not api_key:
-        logger.debug("GNEWS_API_KEY not set — skipping GNews")
+        logger.warning("GNEWS_API_KEY not set — skipping GNews")
         return []
+
+    GNEWS_MAX_SECONDS = 60  # Hard cap: stop making queries after this
+    gnews_start = time.monotonic()
 
     items: list[NewsItem] = []
     seen_titles: set[str] = set()
@@ -1007,7 +1030,15 @@ def fetch_gnews_targeted() -> list[NewsItem]:
     else:
         queries_this_scan = GNEWS_QUERIES
 
+    queries_completed = 0
     for query_cfg in queries_this_scan:
+        # Time budget check: stop early to avoid blocking the pool for other sources
+        elapsed = time.monotonic() - gnews_start
+        if elapsed >= GNEWS_MAX_SECONDS:
+            logger.warning("GNews time budget exhausted (%.0fs >= %ds) after %d/%d queries, %d items collected",
+                           elapsed, GNEWS_MAX_SECONDS, queries_completed, len(queries_this_scan), len(items))
+            break
+
         try:
             url = "https://gnews.io/api/v4/search"
             params = {
@@ -1018,6 +1049,7 @@ def fetch_gnews_targeted() -> list[NewsItem]:
                 "sortby": "publishedAt",
             }
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            queries_completed += 1
             if resp.status_code != 200:
                 logger.warning("GNews API error for '%s': HTTP %d", query_cfg["q"], resp.status_code)
                 continue
@@ -1169,7 +1201,7 @@ def fetch_usda_crop_data() -> list[NewsItem]:
     """
     api_key = os.environ.get("USDA_API_KEY", "")
     if not api_key:
-        logger.debug("USDA_API_KEY not set — skipping USDA data")
+        logger.warning("USDA_API_KEY not set — skipping USDA data")
         return []
 
     items: list[NewsItem] = []
@@ -1958,7 +1990,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
     """
     api_key = os.environ.get("GIE_AGSI_API_KEY", "")
     if not api_key:
-        logger.debug("GIE_AGSI_API_KEY not set — skipping EU gas storage data")
+        logger.warning("GIE_AGSI_API_KEY not set — skipping EU gas storage data")
         return []
 
     items: list[NewsItem] = []
@@ -2076,7 +2108,7 @@ def fetch_usda_wasde() -> list[NewsItem]:
     """
     api_key = os.environ.get("USDA_API_KEY", "")
     if not api_key:
-        logger.debug("USDA_API_KEY not set — skipping WASDE data")
+        logger.warning("USDA_API_KEY not set — skipping WASDE data")
         return []
 
     items: list[NewsItem] = []
@@ -3324,11 +3356,12 @@ def collect_structured_data() -> list[NewsItem]:
         ("google_news", fetch_google_news_rss),
     ]
 
-    # max_workers=3: Replit kills process on too many concurrent threads.
-    # 20 sources / 3 workers = ~7 waves, but safer on constrained environments.
-    # DO NOT increase — when combined with early_signal (8 workers) running
-    # after this completes, total thread count stays manageable.
-    executor = ThreadPoolExecutor(max_workers=3)
+    # max_workers=8: Safe since collect_all_news() now runs sources SEQUENTIALLY
+    # (structured → early_signal → rss), so this executor is fully shut down
+    # before the next starts. With 20 sources, 8 workers = ~3 waves of 15-20s.
+    # Previously 3 workers caused pool starvation: gnews (22 sequential HTTP calls,
+    # up to 330s) and weather (16 calls) hogged 2/3 slots, starving other sources.
+    executor = ThreadPoolExecutor(max_workers=8)
     # Track start time per future for latency measurement
     _start_times: dict = {}
     for name, fn in sources:
@@ -3360,6 +3393,16 @@ def collect_structured_data() -> list[NewsItem]:
                 if tracker:
                     tracker.record_failure(source_name, "phase0", exc, latency_ms)
     except TimeoutError:
+        # Global timeout hit. Collect results from any futures that completed
+        # during the timeout but weren't yielded by as_completed yet.
+        for f, (name, start_t) in futures.items():
+            if f.done() and name not in source_item_counts:
+                try:
+                    items = f.result(timeout=0)
+                    all_items.extend(items)
+                    source_item_counts[name] = len(items)
+                except Exception:
+                    source_item_counts[name] = -2
         completed_sources = {futures[f][0] for f in futures if f.done()}
         skipped = [n for n, _ in sources if n not in completed_sources]
         logger.warning("Structured data collection timed out (120s). "
@@ -3369,10 +3412,9 @@ def collect_structured_data() -> list[NewsItem]:
             for name in skipped:
                 tracker.record_failure(name, "phase0", "Timeout (120s global)")
     finally:
-        # wait=False: do NOT block on slow sources (e.g., gnews makes 24 sequential
-        # HTTP calls = up to 360s). Items from completed futures are already in
-        # all_items. Slow sources continue in background and self-terminate via
-        # their per-request REQUEST_TIMEOUT=15s.
+        # wait=False: do NOT block on slow sources. cancel_futures=True cancels
+        # futures still QUEUED (not started), but running futures self-terminate
+        # via their per-request REQUEST_TIMEOUT=15s.
         executor.shutdown(wait=False, cancel_futures=True)
 
     # Diagnostic: per-source completion status for debugging 0-item scans
