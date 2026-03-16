@@ -809,7 +809,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     # ── Supply chain ──
     {
         "q": "\"port congestion\" OR \"shipping disruption\" OR \"canal blocked\"",
-        "tickers": [],
+        "tickers": ["CL=F", "ZW=F", "HG=F"],  # shipping affects energy, grains, metals
         "category": "supply_chain",
     },
     {
@@ -861,7 +861,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     },
     # ── Soft commodities ──
     {
-        "q": "cocoa Ghana OR \"Ivory Coast\" crop OR disease",
+        "q": "cocoa Ghana OR \"Ivory Coast\" OR \"cocoa disease\" OR \"swollen shoot\"",
         "tickers": ["CC=F"],
         "category": "commodity",
         "zone": "west_africa",
@@ -878,7 +878,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     },
     # ── Portuguese (Brazil early signal) ──
     {
-        "q": "geada OR seca cafe OR cacau OR milho OR soja",
+        "q": "geada cafe OR seca safra OR cacau colheita OR ferrugem OR \"geada negra\"",
         "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F", "CC=F"],
         "category": "weather",
         "lang": "pt",
@@ -982,6 +982,14 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "copper smelter OR \"treatment charges\" OR TCRC",
         "tickers": ["HG=F"],
         "category": "commodity",
+    },
+    # CONAB — Brazilian crop agency, publishes before USDA for Brazil
+    {
+        "q": "CONAB safra OR producao soja OR milho OR cafe",
+        "tickers": ["ZS=F", "ZC=F", "KC=F", "SB=F"],
+        "category": "commodity",
+        "lang": "pt",
+        "zone": "brazil",
     },
 ]
 
