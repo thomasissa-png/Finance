@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 # ── Timeouts for all HTTP requests ────────────────────────────────────
 REQUEST_TIMEOUT = 15  # seconds
 
+# ── Per-source diagnostics from last structured data collection ──────
+_last_structured_diag: dict[str, dict] = {}
+
+
+def get_last_structured_diagnostics() -> dict[str, dict]:
+    """Get per-source diagnostics from the last collect_structured_data() run.
+
+    Called by agent_news.py to log results to agent_logs (DB) for frontend visibility.
+    """
+    return dict(_last_structured_diag)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 1. EIA API — US energy stocks and production
@@ -3451,5 +3462,21 @@ def collect_structured_data() -> list[NewsItem]:
                       len(completed_names), len(sources), has_keys or "none",
                       list(sources_failed.keys()) or "none",
                       not_done or "none")
+
+    # Store per-source diagnostics for agent_news DB logging
+    global _last_structured_diag
+    diag: dict[str, dict] = {}
+    for name, count in source_item_counts.items():
+        if count > 0:
+            diag[name] = {"status": "ok", "items": count}
+        elif count == 0:
+            diag[name] = {"status": "empty", "items": 0}
+        elif count == -1:
+            diag[name] = {"status": "timeout", "items": 0}
+        else:
+            diag[name] = {"status": "error", "items": 0}
+    for name in not_done:
+        diag[name] = {"status": "not_started", "items": 0}
+    _last_structured_diag = diag
 
     return all_items

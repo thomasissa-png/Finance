@@ -106,6 +106,23 @@ _SLOW_FEEDS: set[str] = {
     "war.gov",
 }
 
+# ── Per-feed diagnostics from last collection run ────────────────────
+# Populated by collect_rss_news() and collect_early_signal_news(),
+# read by agent_news.py to log failures to agent_logs (DB).
+_last_rss_diag: dict[str, dict] = {}
+_last_early_diag: dict[str, dict] = {}
+
+
+def get_last_collection_diagnostics() -> dict:
+    """Get per-feed diagnostics from the last collect_all_news() run.
+
+    Called by agent_news.py to log results to agent_logs (DB) for frontend visibility.
+    """
+    return {
+        "rss_feeds": dict(_last_rss_diag),
+        "early_signal_feeds": dict(_last_early_diag),
+    }
+
 # Browser User-Agent — many feeds (CNBC, gCaptain, BoE) return 403
 # when they see the default "python-requests/x.y.z" User-Agent.
 _RSS_HEADERS = {
@@ -214,56 +231,58 @@ def _fetch_rss_feed(feed_url: str) -> list[NewsItem]:
 
     Uses requests.get() with a timeout instead of feedparser.parse(url)
     to avoid indefinite blocking on unresponsive servers.
+
+    Raises on HTTP/network errors so the caller can track error details
+    per-feed (error type, HTTP status code, etc.) for DB logging.
     """
     items: list[NewsItem] = []
-    try:
-        # Use shorter connect timeout (3s) for known-slow feeds to fail fast
-        is_slow = any(domain in feed_url for domain in _SLOW_FEEDS)
-        timeout = (3, RSS_FETCH_TIMEOUT) if is_slow else RSS_FETCH_TIMEOUT
-        resp = requests.get(feed_url, timeout=timeout, headers=_RSS_HEADERS,
-                            allow_redirects=True)
-        resp.raise_for_status()
-        feed = feedparser.parse(resp.content)
-        feed_title = feed.feed.get("title", feed_url)
-        for entry in feed.entries[:20]:
-            title = entry.get("title", "")
-            if not title:
-                continue
+    # Use shorter connect timeout (3s) for known-slow feeds to fail fast
+    is_slow = any(domain in feed_url for domain in _SLOW_FEEDS)
+    timeout = (3, RSS_FETCH_TIMEOUT) if is_slow else RSS_FETCH_TIMEOUT
+    resp = requests.get(feed_url, timeout=timeout, headers=_RSS_HEADERS,
+                        allow_redirects=True)
+    resp.raise_for_status()
+    feed = feedparser.parse(resp.content)
+    feed_title = feed.feed.get("title", feed_url)
+    for entry in feed.entries[:20]:
+        title = entry.get("title", "")
+        if not title:
+            continue
 
-            published = None
-            if hasattr(entry, "published_parsed") and entry.published_parsed:
-                published = datetime(
-                    *entry.published_parsed[:6], tzinfo=timezone.utc
-                )
+        published = None
+        if hasattr(entry, "published_parsed") and entry.published_parsed:
+            published = datetime(
+                *entry.published_parsed[:6], tzinfo=timezone.utc
+            )
 
-            # Extract description/summary for Claude context
-            desc = entry.get("summary", "") or entry.get("description", "")
-            # Strip HTML tags and truncate
-            if desc:
-                desc = re.sub(r"<[^>]+>", " ", desc).strip()
-                desc = " ".join(desc.split())  # normalize whitespace
-                if len(desc) > 200:
-                    desc = desc[:197] + "..."
+        # Extract description/summary for Claude context
+        desc = entry.get("summary", "") or entry.get("description", "")
+        # Strip HTML tags and truncate
+        if desc:
+            desc = re.sub(r"<[^>]+>", " ", desc).strip()
+            desc = " ".join(desc.split())  # normalize whitespace
+            if len(desc) > 200:
+                desc = desc[:197] + "..."
 
-            # P1 Audit Scoring: infer tickers from headline keywords
-            inferred_tickers = _infer_tickers_from_title(title)
+        # P1 Audit Scoring: infer tickers from headline keywords
+        inferred_tickers = _infer_tickers_from_title(title)
 
-            items.append(NewsItem(
-                title=title,
-                source=feed_title,
-                url=entry.get("link", ""),
-                published=published,
-                related_tickers=inferred_tickers,
-                source_weight=_get_source_weight(feed_title),
-                description=desc,
-            ))
-    except Exception as exc:
-        logger.warning("RSS error for %s: %s", feed_url, exc)
+        items.append(NewsItem(
+            title=title,
+            source=feed_title,
+            url=entry.get("link", ""),
+            published=published,
+            related_tickers=inferred_tickers,
+            source_weight=_get_source_weight(feed_title),
+            description=desc,
+        ))
     return items
 
 
 def collect_rss_news() -> list[NewsItem]:
     """Fetch news from configured RSS feeds in parallel."""
+    global _last_rss_diag
+    _last_rss_diag = {}
     items: list[NewsItem] = []
 
     executor = ThreadPoolExecutor(max_workers=5)
@@ -272,19 +291,35 @@ def collect_rss_news() -> list[NewsItem]:
     try:
         for future in as_completed(futures, timeout=30):
             url = futures[future]
+            domain = url.split("/")[2] if len(url.split("/")) > 2 else url
             try:
                 result = future.result(timeout=15)
                 if not result:
                     logger.warning("RSS feed returned 0 items: %s", url)
                 items.extend(result)
                 completed_count += 1
+                _last_rss_diag[domain] = {
+                    "status": "ok" if result else "empty",
+                    "items": len(result),
+                }
             except TimeoutError:
                 logger.warning("RSS feed TIMEOUT (15s) for %s", url)
+                _last_rss_diag[domain] = {"status": "timeout", "items": 0}
             except Exception as exc:
                 logger.warning("RSS feed error for %s: %s", url, exc)
+                _last_rss_diag[domain] = {
+                    "status": "error", "items": 0,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:150],
+                }
     except TimeoutError:
         logger.warning("RSS collection global TIMEOUT (30s), %d/%d feeds completed",
                        completed_count, len(RSS_FEEDS))
+        # Mark remaining feeds as global_timeout
+        for url in RSS_FEEDS:
+            domain = url.split("/")[2] if len(url.split("/")) > 2 else url
+            if domain not in _last_rss_diag:
+                _last_rss_diag[domain] = {"status": "global_timeout", "items": 0}
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -298,8 +333,10 @@ def collect_early_signal_news() -> list[NewsItem]:
     """Fetch news from early-signal feeds (meteo, OSINT, agri, shipping).
 
     These are Phase 1 sources — raw data before mainstream interpretation.
-    Failures are silently logged (these feeds are best-effort, many may 404).
+    Failures are logged with error details for DB diagnostics.
     """
+    global _last_early_diag
+    _last_early_diag = {}
     items: list[NewsItem] = []
 
     # Workers at 8 (up from 5) to fetch all 20 feeds faster in parallel.
@@ -312,21 +349,36 @@ def collect_early_signal_news() -> list[NewsItem]:
     try:
         for future in as_completed(futures, timeout=40):
             url = futures[future]
+            domain = url.split("/")[2] if len(url.split("/")) > 2 else url
             try:
                 result = future.result(timeout=15)
                 if result:
                     items.extend(result)
-                    feeds_with_items.append(url.split("/")[2])  # domain only
+                    feeds_with_items.append(domain)
                 else:
-                    feeds_empty.append(url.split("/")[2])
+                    feeds_empty.append(domain)
                 completed_count += 1
+                _last_early_diag[domain] = {
+                    "status": "ok" if result else "empty",
+                    "items": len(result),
+                }
             except TimeoutError:
                 logger.warning("Early-signal feed TIMEOUT (15s) for %s", url)
+                _last_early_diag[domain] = {"status": "timeout", "items": 0}
             except Exception as exc:
                 logger.warning("Early-signal feed error for %s: %s", url, exc)
+                _last_early_diag[domain] = {
+                    "status": "error", "items": 0,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:150],
+                }
     except TimeoutError:
         logger.warning("Early-signal collection global TIMEOUT (40s), %d/%d feeds completed",
                        completed_count, len(EARLY_SIGNAL_FEEDS))
+        for url in EARLY_SIGNAL_FEEDS:
+            domain = url.split("/")[2] if len(url.split("/")) > 2 else url
+            if domain not in _last_early_diag:
+                _last_early_diag[domain] = {"status": "global_timeout", "items": 0}
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -503,9 +555,34 @@ def collect_all_news() -> list[NewsItem]:
     # Phase 3 runs after Phase 0+1 complete (needs all items for proper dedup)
     rss_news = _safe_collect(collect_rss_news, "rss_mainstream", "phase3")
 
+    # --- Inject event-detected headlines from event scanner cache ---
+    # The event scanner reads early-signal feeds every 10 min. If a feed
+    # works at event check time but times out at scan time, those headlines
+    # are lost. This injects cached headlines as a supplementary source.
+    event_news: list[NewsItem] = []
+    try:
+        from .event_scanner import get_cached_headlines
+        cached = get_cached_headlines()
+        for h in cached:
+            tickers = _infer_tickers_from_title(h.get("title", ""))
+            source = h.get("source", "Event Scanner")
+            event_news.append(NewsItem(
+                title=h["title"],
+                source=source,
+                url=h.get("url", ""),
+                published=h.get("published") or datetime.now(timezone.utc),
+                related_tickers=tickers,
+                source_weight=_get_source_weight(source),
+                description=h.get("description", ""),
+            ))
+        if event_news:
+            logger.info("Injected %d headlines from event scanner cache", len(event_news))
+    except Exception as exc:
+        logger.warning("Failed to inject event headlines: %s", exc)
+
     # Log per-source results for diagnostics (helps debug "0 news" issues)
-    logger.info("News sources: structured=%d, early-signal=%d, yfinance=%d, rss=%d",
-                len(structured_news), len(early_news), len(yf_news), len(rss_news))
+    logger.info("News sources: structured=%d, early-signal=%d, yfinance=%d, rss=%d, event_cache=%d",
+                len(structured_news), len(early_news), len(yf_news), len(rss_news), len(event_news))
 
     # Critical alert when structured data returns 0 items
     if not structured_news:
@@ -519,7 +596,7 @@ def collect_all_news() -> list[NewsItem]:
     if not early_news:
         logger.warning("ALERT: early_signal_news=0 items! Check early-signal feed logs.")
 
-    all_items = structured_news + early_news + yf_news + rss_news
+    all_items = structured_news + early_news + yf_news + rss_news + event_news
 
     # (#1) Pre-filter old news before sending to Claude
     all_items = _filter_old_news(all_items)
@@ -531,7 +608,7 @@ def collect_all_news() -> list[NewsItem]:
     unique = _pre_filter_for_scoring(unique)
 
     logger.info(
-        "Collected %d news for scoring (%d structured, %d early-signal, %d yfinance, %d rss, after pre-filter & dedup)",
-        len(unique), len(structured_news), len(early_news), len(yf_news), len(rss_news),
+        "Collected %d news for scoring (%d structured, %d early-signal, %d yfinance, %d rss, %d event_cache, after pre-filter & dedup)",
+        len(unique), len(structured_news), len(early_news), len(yf_news), len(rss_news), len(event_news),
     )
     return unique

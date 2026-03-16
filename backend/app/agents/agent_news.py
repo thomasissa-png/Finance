@@ -202,7 +202,83 @@ class AgentNews(BaseAgent):
 
     def _collect_all_news(self):
         from ..news_collector import collect_all_news
-        return collect_all_news()
+        items = collect_all_news()
+
+        # Log per-feed/per-source diagnostics to agent_logs (DB)
+        # so failures are visible in the frontend, not just stdout
+        try:
+            self._log_collection_diagnostics()
+        except Exception as exc:
+            self.log("Diagnostics logging failed", {"error": str(exc)[:200]}, level="WARN")
+
+        return items
+
+    def _log_collection_diagnostics(self):
+        """Log per-feed and per-source collection diagnostics to agent_logs (DB).
+
+        This is the key fix for Bug 14: when feeds fail silently, the only trace
+        was in stdout logs. Now failures are logged to the agent_logs DB table
+        and visible in the frontend via the News agent page.
+        """
+        from ..news_collector import get_last_collection_diagnostics
+        from ..data_apis import get_last_structured_diagnostics
+
+        # --- RSS mainstream feeds ---
+        diag = get_last_collection_diagnostics()
+        rss = diag.get("rss_feeds", {})
+        if rss:
+            failed = {k: v for k, v in rss.items() if v.get("status") not in ("ok",)}
+            ok_count = len(rss) - len(failed)
+            if failed:
+                self.log("RSS feed failures", {
+                    "failed": {k: f"{v.get('status')}"
+                               + (f" ({v.get('error_type', '')})" if v.get("error_type") else "")
+                               for k, v in failed.items()},
+                    "ok_count": ok_count,
+                    "total": len(rss),
+                }, level="WARN")
+            elif ok_count == 0:
+                self.log("ALL RSS feeds failed", {"total": len(rss)}, level="ERROR")
+
+        # --- Early-signal feeds ---
+        early = diag.get("early_signal_feeds", {})
+        if early:
+            failed = {k: v for k, v in early.items() if v.get("status") not in ("ok",)}
+            ok_count = len(early) - len(failed)
+            if failed:
+                self.log("Early-signal feed failures", {
+                    "failed": {k: f"{v.get('status')}"
+                               + (f" ({v.get('error_type', '')})" if v.get("error_type") else "")
+                               for k, v in failed.items()},
+                    "ok_count": ok_count,
+                    "total": len(early),
+                }, level="WARN")
+
+        # --- Structured data (per-source detail) ---
+        struct = get_last_structured_diagnostics()
+        if struct:
+            ok = {k: v.get("items", 0) for k, v in struct.items() if v.get("status") == "ok"}
+            empty = [k for k, v in struct.items() if v.get("status") == "empty"]
+            failed = {k: v.get("status") for k, v in struct.items()
+                      if v.get("status") not in ("ok", "empty")}
+            not_started = [k for k, v in struct.items() if v.get("status") == "not_started"]
+            total_items = sum(v.get("items", 0) for v in struct.values())
+
+            # Always log structured data results — critical for debugging 0-item scans
+            if failed or not_started or not ok:
+                level = "ERROR" if not ok else "WARN"
+                self.log("Structured data diagnostic", {
+                    "ok_sources": ok or "none",
+                    "empty_sources": empty or "none",
+                    "failed_sources": failed or "none",
+                    "not_started": not_started or "none",
+                    "total_items": total_items,
+                }, level=level)
+            elif total_items > 0:
+                self.log("Structured data OK", {
+                    "sources": ok,
+                    "total_items": total_items,
+                })
 
     def _dedup_news(self, news_items):
         from ..news_collector import _jaccard_similarity

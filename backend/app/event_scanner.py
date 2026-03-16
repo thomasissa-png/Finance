@@ -11,7 +11,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import feedparser
@@ -142,6 +142,44 @@ _MAX_SEEN = 500  # Prevent unbounded growth
 _last_keyword_trigger: dict[str, float] = {}
 _KEYWORD_COOLDOWN = 600  # 10 minutes in seconds
 
+# ── Headline cache for injection into main scan ──────────────────────
+# The event scanner reads early-signal feeds every 10 min. If a feed works
+# at 06:21 but times out at the 06:56 main scan, those headlines are lost.
+# This cache stores ALL headlines read by the event scanner so they can be
+# injected into collect_all_news() as a supplementary source.
+_headline_cache: list[dict] = []
+_headline_cache_lock = threading.Lock()
+_HEADLINE_CACHE_MAX = 500
+_HEADLINE_CACHE_MAX_AGE_S = 8 * 3600  # 8 hours
+
+
+def _cache_headlines(headlines: list[dict]) -> None:
+    """Cache headlines from event scanner for injection into main scan."""
+    if not headlines:
+        return
+    now = time.time()
+    with _headline_cache_lock:
+        for h in headlines:
+            h["cached_at"] = now
+        _headline_cache.extend(headlines)
+        # Prune old entries
+        cutoff = now - _HEADLINE_CACHE_MAX_AGE_S
+        _headline_cache[:] = [h for h in _headline_cache if h.get("cached_at", 0) > cutoff]
+        # Cap size
+        if len(_headline_cache) > _HEADLINE_CACHE_MAX:
+            _headline_cache[:] = _headline_cache[-_HEADLINE_CACHE_MAX:]
+
+
+def get_cached_headlines(max_age_hours: float = 8.0) -> list[dict]:
+    """Get cached headlines from recent event scanner runs.
+
+    Called by collect_all_news() to inject event-detected headlines
+    into the main scan pipeline. Non-destructive — dedup handles duplicates.
+    """
+    cutoff = time.time() - max_age_hours * 3600
+    with _headline_cache_lock:
+        return [dict(h) for h in _headline_cache if h.get("cached_at", 0) > cutoff]
+
 
 def _check_headline_for_triggers(title: str) -> list[tuple[str, str]]:
     """Check if a headline contains high-impact keywords.
@@ -156,32 +194,64 @@ def _check_headline_for_triggers(title: str) -> list[tuple[str, str]]:
     return matches
 
 
-def _fetch_feed_triggers(feed_url: str, seen: set[str]) -> list[dict]:
-    """Fetch a single feed and extract trigger matches — designed to run in a thread."""
-    results: list[dict] = []
+def _fetch_feed_triggers(feed_url: str, seen: set[str]) -> tuple[list[dict], list[dict]]:
+    """Fetch a single feed and return (trigger_matches, all_headlines).
+
+    trigger_matches: headlines matching high-impact keywords (unseen only)
+    all_headlines: ALL headlines from the feed (cached for main scan injection)
+    """
+    triggers: list[dict] = []
+    all_headlines: list[dict] = []
     try:
         resp = requests.get(feed_url, timeout=15, headers=_RSS_HEADERS)
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
+        feed_title = feed.feed.get("title", feed_url)
         for entry in feed.entries[:10]:
             title = entry.get("title", "")
-            if not title or title in seen:
+            if not title:
                 continue
 
+            # Parse published date for cache
+            published = None
+            if hasattr(entry, "published_parsed") and entry.published_parsed:
+                published = datetime(
+                    *entry.published_parsed[:6], tzinfo=timezone.utc)
+
+            # Extract description for Claude context
+            desc = entry.get("summary", "") or entry.get("description", "")
+            if desc:
+                desc = re.sub(r"<[^>]+>", " ", desc).strip()
+                desc = " ".join(desc.split())
+                if len(desc) > 200:
+                    desc = desc[:197] + "..."
+
+            # Cache ALL headlines for injection into main scan
+            all_headlines.append({
+                "title": title,
+                "source": feed_title,
+                "url": entry.get("link", ""),
+                "published": published,
+                "description": desc,
+            })
+
+            # Check for trigger keywords (only unseen headlines)
+            if title in seen:
+                continue
             matches = _check_headline_for_triggers(title)
             if matches:
                 keywords = [m[0] for m in matches]
                 categories = list(set(m[1] for m in matches))
-                results.append({
+                triggers.append({
                     "title": title,
-                    "source": feed.feed.get("title", feed_url),
+                    "source": feed_title,
                     "url": entry.get("link", ""),
                     "keywords": keywords,
                     "categories": categories,
                 })
     except Exception as exc:
         logger.debug("Event scan feed error %s: %s", feed_url, exc)
-    return results
+    return triggers, all_headlines
 
 
 def scan_feeds_for_triggers() -> list[dict]:
@@ -209,6 +279,7 @@ def scan_feeds_for_triggers() -> list[dict]:
     # Global timeout increased to 60s (from 30s) — allows more feeds to complete
     # N6: Collect all results first, then update _seen_headlines under lock
     all_results: list[dict] = []
+    all_cached_headlines: list[dict] = []
     executor = ThreadPoolExecutor(max_workers=5)
     futures = {executor.submit(_fetch_feed_triggers, url, seen_snapshot): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
@@ -216,9 +287,10 @@ def scan_feeds_for_triggers() -> list[dict]:
         for future in as_completed(futures, timeout=60):
             url = futures[future]
             try:
-                results = future.result(timeout=20)
+                feed_triggers, feed_headlines = future.result(timeout=20)
                 completed_count += 1
-                all_results.extend(results)
+                all_results.extend(feed_triggers)
+                all_cached_headlines.extend(feed_headlines)
             except TimeoutError:
                 logger.warning("Event scan: feed timeout (20s) for %s", url)
             except Exception as exc:
@@ -228,6 +300,14 @@ def scan_feeds_for_triggers() -> list[dict]:
                        completed_count, len(futures))
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
+
+    # Cache ALL headlines for injection into next main scan
+    # Even if no triggers matched, the headlines are valuable if RSS feeds
+    # fail at main scan time (the main issue reported in Bug 14)
+    _cache_headlines(all_cached_headlines)
+    if all_cached_headlines:
+        logger.info("Event scanner cached %d headlines from %d/%d feeds",
+                     len(all_cached_headlines), completed_count, len(EARLY_SIGNAL_FEEDS))
 
     # N6: Update _seen_headlines under lock after thread pool completes
     if all_results:
