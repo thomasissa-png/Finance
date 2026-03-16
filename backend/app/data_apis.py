@@ -785,24 +785,24 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     # ═══════════════════════════════════════════════════════════════════
     # ── Weather ──
     {
-        "q": "frost OR freeze OR \"cold wave\" crop",
+        "q": "\"crop frost\" OR \"freeze warning\" OR \"cold wave\" agriculture",
         "tickers": ["KC=F", "ZC=F", "ZW=F", "SB=F"],
         "category": "weather",
     },
     {
-        "q": "drought OR \"crop failure\" OR \"harvest loss\"",
+        "q": "\"crop drought\" OR \"crop failure\" OR \"harvest loss\"",
         "tickers": ["ZC=F", "ZW=F", "ZS=F", "CC=F"],
         "category": "weather",
     },
     {
-        "q": "hurricane OR \"tropical storm\" Gulf oil",
+        "q": "hurricane OR \"tropical storm\" \"Gulf of Mexico\" oil",
         "tickers": ["CL=F", "NG=F"],
         "category": "weather",
         "zone": "gulf_of_mexico",
     },
     # ── Geopolitical ──
     {
-        "q": "oil sanctions OR embargo OR \"military strike\"",
+        "q": "\"oil sanctions\" OR \"oil embargo\" OR \"military strike\" oil",
         "tickers": ["CL=F", "BZ=F", "GC=F"],
         "category": "geopolitical",
     },
@@ -813,34 +813,34 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "category": "supply_chain",
     },
     {
-        "q": "copper mine strike OR halt OR disruption",
+        "q": "\"copper mine\" strike OR \"copper mine\" halt OR \"copper production\" disruption",
         "tickers": ["HG=F"],
         "category": "supply_chain",
     },
     {
-        "q": "platinum OR palladium \"South Africa\" OR Nornickel",
+        "q": "\"platinum mine\" OR \"palladium mine\" \"South Africa\" OR Nornickel",
         "tickers": ["PL=F", "PA=F"],
         "category": "supply_chain",
         "zone": "south_africa",
     },
     {
-        "q": "\"Baltic dry\" OR \"freight rate\" shipping",
+        "q": "\"Baltic dry index\" OR \"freight rate\" OR \"shipping cost\"",
         "tickers": ["HG=F"],
         "category": "supply_chain",
     },
     {
-        "q": "fertilizer OR potash OR phosphate shortage",
+        "q": "\"fertilizer shortage\" OR \"potash price\" OR \"phosphate supply\"",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "supply_chain",
     },
     # ── Commodity ──
     {
-        "q": "OPEC production cut OR quota",
+        "q": "OPEC \"production cut\" OR OPEC quota OR OPEC output",
         "tickers": ["CL=F", "BZ=F"],
         "category": "commodity",
     },
     {
-        "q": "wheat OR corn OR soybean USDA report",
+        "q": "\"USDA report\" wheat OR corn OR soybean",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "commodity",
     },
@@ -850,7 +850,7 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "category": "commodity",
     },
     {
-        "q": "\"natural gas\" storage OR TTF OR LNG Europe",
+        "q": "\"natural gas\" storage OR \"TTF price\" OR \"LNG Europe\"",
         "tickers": ["NG=F"],
         "category": "commodity",
     },
@@ -867,12 +867,12 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "zone": "west_africa",
     },
     {
-        "q": "cotton drought OR monsoon OR \"export ban\"",
+        "q": "\"cotton crop\" drought OR \"cotton export\" ban OR cotton monsoon",
         "tickers": ["CT=F"],
         "category": "commodity",
     },
     {
-        "q": "\"orange juice\" OR citrus Florida OR Brazil freeze",
+        "q": "\"orange juice\" price OR citrus freeze OR \"Florida citrus\"",
         "tickers": ["OJ=F"],
         "category": "weather",
     },
@@ -886,32 +886,32 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     },
     # ── Regional / chokepoints ──
     {
-        "q": "\"Suez Canal\" OR Suez blocked OR disruption",
+        "q": "\"Suez Canal\" blocked OR \"Suez Canal\" disruption OR \"Suez Canal\" closure",
         "tickers": ["CL=F", "BZ=F", "NG=F"],
         "category": "supply_chain",
         "zone": "suez",
     },
     {
-        "q": "China commodity demand OR stimulus OR import",
+        "q": "China \"commodity demand\" OR China \"commodity imports\" OR \"China stimulus\" metals",
         "tickers": ["HG=F", "CL=F", "ZS=F", "GC=F"],
         "category": "commodity",
         "zone": "china",
     },
     {
-        "q": "Europe \"energy crisis\" OR \"gas shortage\" OR pipeline",
+        "q": "Europe \"energy crisis\" OR \"gas shortage\" OR \"gas pipeline\" disruption",
         "tickers": ["NG=F", "CL=F"],
         "category": "supply_chain",
         "zone": "europe",
     },
     {
-        "q": "Houthi OR \"Red Sea\" attack OR tanker Iran Israel",
+        "q": "Houthi OR \"Red Sea\" shipping OR tanker attack Iran",
         "tickers": ["CL=F", "BZ=F", "GC=F"],
         "category": "geopolitical",
         "zone": "middle_east",
     },
     # ── Export bans (extra queries, rotated) ──
     {
-        "q": "India rice OR wheat \"export ban\" OR restriction",
+        "q": "India rice \"export ban\" OR India wheat \"export ban\" OR India grain restriction",
         "tickers": ["ZW=F", "ZC=F", "SB=F"],
         "category": "commodity",
         "zone": "india",
@@ -923,69 +923,69 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "zone": "indonesia",
     },
     {
-        "q": "Russia OR Ukraine wheat export OR \"grain corridor\"",
+        "q": "Russia wheat export OR Ukraine wheat export OR \"grain corridor\"",
         "tickers": ["ZW=F", "ZC=F"],
         "category": "commodity",
         "zone": "black_sea",
     },
     # ── China signals ──
     {
-        "q": "China PMI OR Caixin manufacturing",
+        "q": "\"China PMI\" OR \"Caixin manufacturing\" OR \"Caixin PMI\"",
         "tickers": ["HG=F", "CL=F", "^GSPC"],
         "category": "macro",
         "zone": "china",
     },
     {
-        "q": "PBOC \"rate cut\" OR RRR OR yuan stimulus",
+        "q": "PBOC \"rate cut\" OR \"PBOC RRR\" OR \"yuan devaluation\" OR \"yuan stimulus\"",
         "tickers": ["AUDUSD=X", "HG=F", "GC=F"],
         "category": "central_bank_subtle",
         "zone": "china",
     },
     {
-        "q": "Argentina peso OR \"capital controls\" OR soybean export",
+        "q": "\"Argentina peso\" OR \"Argentina capital controls\" OR \"Argentina soybean\" export",
         "tickers": ["ZS=F", "ZW=F", "ZC=F"],
         "category": "regulatory",
         "zone": "argentina",
     },
     # ── Producer-specific ──
     {
-        "q": "Vietnam coffee OR robusta drought OR harvest",
+        "q": "\"Vietnam coffee\" OR \"robusta drought\" OR \"Vietnam harvest\" coffee",
         "tickers": ["KC=F"],
         "category": "commodity",
         "zone": "vietnam",
     },
     {
-        "q": "Congo OR DRC OR Zambia copper mine",
+        "q": "\"DRC copper\" OR \"Zambia copper\" OR \"Congo cobalt\" mine",
         "tickers": ["HG=F"],
         "category": "supply_chain",
         "zone": "drc_zambia",
     },
     {
-        "q": "Chile copper Codelco OR Escondida OR strike",
+        "q": "\"Chile copper\" OR Codelco OR Escondida strike OR \"copper strike\"",
         "tickers": ["HG=F"],
         "category": "supply_chain",
         "zone": "chile",
     },
     {
-        "q": "Cameroon OR Nigeria cocoa harvest OR smuggling",
+        "q": "\"Cameroon cocoa\" OR \"Nigeria cocoa\" harvest OR smuggling",
         "tickers": ["CC=F"],
         "category": "commodity",
         "zone": "cameroon_nigeria",
     },
     {
-        "q": "Santos port Brazil coffee OR congestion OR strike",
+        "q": "\"Santos port\" coffee OR \"Santos port\" congestion OR \"Brazil port\" strike",
         "tickers": ["KC=F", "SB=F", "ZS=F"],
         "category": "supply_chain",
         "zone": "brazil",
     },
     {
-        "q": "copper smelter OR \"treatment charges\" OR TCRC",
+        "q": "\"copper smelter\" OR \"treatment charges\" copper OR \"TC/RC\" copper",
         "tickers": ["HG=F"],
         "category": "commodity",
     },
     # CONAB — Brazilian crop agency, publishes before USDA for Brazil
     {
-        "q": "CONAB safra OR producao soja OR milho OR cafe",
+        "q": "CONAB safra OR \"CONAB producao\" OR \"CONAB soja\" OR \"CONAB milho\"",
         "tickers": ["ZS=F", "ZC=F", "KC=F", "SB=F"],
         "category": "commodity",
         "lang": "pt",
@@ -1031,9 +1031,22 @@ def _gnews_fetch_one(query_cfg: dict, api_key: str) -> tuple[list[NewsItem], dic
         "geopolitical": 0.85,
     }.get(cat, 0.85)
 
+    # Post-fetch noise filter: skip articles clearly unrelated to commodities/finance
+    _NOISE_KEYWORDS = {
+        "oscar", "oscars", "grammy", "grammys", "emmy", "emmys", "ncaa", "nfl",
+        "nba", "nhl", "mlb", "super bowl", "world cup", "champions league",
+        "box office", "movie", "album", "celebrity", "kardashian", "taylor swift",
+        "netflix", "disney", "marvel", "star wars", "video game", "playstation",
+        "xbox", "nintendo", "tiktok", "instagram", "youtube", "spotify",
+    }
+
     for article in articles:
         title = article.get("title", "")
         if not title:
+            continue
+
+        title_lower = title.lower()
+        if any(noise in title_lower for noise in _NOISE_KEYWORDS):
             continue
 
         published = None
@@ -3372,36 +3385,37 @@ def collect_structured_data() -> list[NewsItem]:
 
     all_items: list[NewsItem] = []
     sources = [
-        ("weather", fetch_weather_alerts),
+        # Slow sources first (start immediately in wave 1 to maximize parallelism)
+        ("weather", fetch_weather_alerts),          # ~60s (24 zones)
+        ("gnews", fetch_gnews_targeted),            # ~40s (25 HTTP calls internally)
+        ("ndvi", fetch_satellite_ndvi),             # ~60s (11 zones)
+        # Medium sources (wave 1-2)
         ("eia", fetch_eia_data),
-        ("gnews", fetch_gnews_targeted),
         ("usda", fetch_usda_crop_data),
         ("wasde", fetch_usda_wasde),
         ("cot", fetch_cot_data),
         ("options", fetch_options_unusual_activity),
-        ("eonet", fetch_nasa_eonet_events),
         ("agsi", fetch_gie_agsi_data),
+        ("google_news", fetch_google_news_rss),
+        ("usda_export", fetch_usda_export_sales),
+        ("plant_disease", fetch_plant_disease_alerts),
+        # Fast sources (wave 2, ~5-15s each)
+        ("eonet", fetch_nasa_eonet_events),
         ("fedwatch", fetch_fedwatch_implied),
         ("shfe", fetch_shfe_inventories),
-        # New sources (P1-5, P2-2, P2-3, P2-4, P3-1, P3-5)
         ("woah", fetch_woah_disease_alerts),
-        ("ndvi", fetch_satellite_ndvi),
         ("freight", fetch_freight_index),
         ("lme_proxy", fetch_lme_inventory_proxy),
         ("chokepoint", fetch_chokepoint_monitoring),
         ("dark_pool", fetch_dark_pool_signals),
-        # Team 2 audit: new sources for commodity coverage gaps
-        ("usda_export", fetch_usda_export_sales),
-        ("plant_disease", fetch_plant_disease_alerts),
-        ("google_news", fetch_google_news_rss),
     ]
 
-    # max_workers=8: Safe since collect_all_news() now runs sources SEQUENTIALLY
-    # (structured → early_signal → rss), so this executor is fully shut down
-    # before the next starts. With 20 sources, 8 workers = ~3 waves of 15-20s.
-    # Previously 3 workers caused pool starvation: gnews (22 sequential HTTP calls,
-    # up to 330s) and weather (16 calls) hogged 2/3 slots, starving other sources.
-    executor = ThreadPoolExecutor(max_workers=8)
+    # max_workers=12: With 20 sources, 12 workers = 2 waves instead of 3.
+    # Previously 8 workers caused "not_started" when slow sources (weather 60s,
+    # ndvi 120s, gnews 40s) filled the first wave, leaving 12 sources queued
+    # past the 180s global timeout. 12 workers ensures all sources START within
+    # the first 2 waves (~45s max queue time).
+    executor = ThreadPoolExecutor(max_workers=12)
     # Track start time per future for latency measurement
     _start_times: dict = {}
     for name, fn in sources:
@@ -3410,7 +3424,7 @@ def collect_structured_data() -> list[NewsItem]:
     futures = _start_times
     source_item_counts: dict[str, int] = {}
     try:
-        for future in as_completed(futures, timeout=120):
+        for future in as_completed(futures, timeout=180):
             source_name, start_t = futures[future]
             latency_ms = (time.monotonic() - start_t) * 1000
             try:
@@ -3445,7 +3459,7 @@ def collect_structured_data() -> list[NewsItem]:
                     source_item_counts[name] = -2
         completed_sources = {futures[f][0] for f in futures if f.done()}
         skipped = [n for n, _ in sources if n not in completed_sources]
-        logger.warning("Structured data collection timed out (120s). "
+        logger.warning("Structured data collection timed out (180s). "
                        "Completed: %s. Skipped: %s",
                        sorted(completed_sources), skipped)
         if tracker:
