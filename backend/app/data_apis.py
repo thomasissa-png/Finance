@@ -8,6 +8,7 @@ All APIs are free-tier and optional (env var keys).
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -776,264 +777,300 @@ def fetch_weather_alerts() -> list[NewsItem]:
 # 25 queries: 16 consolidated + 3 soft commodities + 2 livestock + 4 new (v3.2)
 # 4 scans/day × 25 queries = 100 req/day, exactly at free tier limit
 GNEWS_QUERIES: list[dict[str, Any]] = [
-    # ── Weather: consolidated frost + coffee frost into one ──
+    # ═══════════════════════════════════════════════════════════════════
+    # GNews API v4 uses AND by default for multiple words.
+    # "frost freeze crop" requires ALL 3 words in one article → very few results.
+    # Fix: use OR between related terms, quotes for exact phrases.
+    # Keep queries to 2-4 meaningful terms max for broad coverage.
+    # ═══════════════════════════════════════════════════════════════════
+    # ── Weather ──
     {
-        "q": "frost freeze crop damage coffee cold wave",
+        "q": "frost OR freeze OR \"cold wave\" crop",
         "tickers": ["KC=F", "ZC=F", "ZW=F", "SB=F"],
         "category": "weather",
     },
-    # ── Weather: drought (merged with harvest failure — same signal) ──
     {
-        "q": "drought crop failure harvest loss shortage",
+        "q": "drought OR \"crop failure\" OR \"harvest loss\"",
         "tickers": ["ZC=F", "ZW=F", "ZS=F", "CC=F"],
         "category": "weather",
     },
     {
-        "q": "hurricane tropical storm Gulf Mexico offshore oil",
+        "q": "hurricane OR \"tropical storm\" Gulf oil",
         "tickers": ["CL=F", "NG=F"],
         "category": "weather",
         "zone": "gulf_of_mexico",
     },
-    # ── Geopolitical (consolidated into 1 query to free a slot for PGM) ──
+    # ── Geopolitical ──
     {
-        "q": "oil sanctions military strike missile pipeline embargo conflict",
+        "q": "oil sanctions OR embargo OR \"military strike\"",
         "tickers": ["CL=F", "BZ=F", "GC=F"],
         "category": "geopolitical",
     },
     # ── Supply chain ──
     {
-        "q": "port congestion shipping disruption canal blocked",
+        "q": "\"port congestion\" OR \"shipping disruption\" OR \"canal blocked\"",
         "tickers": [],
         "category": "supply_chain",
     },
     {
-        "q": "copper mine strike production halt supply disruption",
+        "q": "copper mine strike OR halt OR disruption",
         "tickers": ["HG=F"],
         "category": "supply_chain",
     },
-    # ── PGM (Platinum Group Metals) — dedicated query ──
     {
-        "q": "Eskom load shedding platinum Nornickel sanctions palladium mine South Africa",
+        "q": "platinum OR palladium \"South Africa\" OR Nornickel",
         "tickers": ["PL=F", "PA=F"],
         "category": "supply_chain",
         "zone": "south_africa",
     },
     {
-        "q": "Baltic dry index shipping freight rate",
-        "tickers": ["HG=F"],  # BDI = proxy industrial activity
+        "q": "\"Baltic dry\" OR \"freight rate\" shipping",
+        "tickers": ["HG=F"],
         "category": "supply_chain",
     },
     {
-        "q": "fertilizer potash phosphate shortage sanctions",
+        "q": "fertilizer OR potash OR phosphate shortage",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "supply_chain",
     },
-    # ── Commodity (consolidated to save GNews quota) ──
+    # ── Commodity ──
     {
-        "q": "OPEC production cut output quota",
+        "q": "OPEC production cut OR quota",
         "tickers": ["CL=F", "BZ=F"],
         "category": "commodity",
     },
     {
-        "q": "wheat corn soybean crop report USDA",
+        "q": "wheat OR corn OR soybean USDA report",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "commodity",
     },
     {
-        "q": "gold reserve central bank buying selling reserve",
+        "q": "\"gold reserves\" OR \"central bank\" gold buying",
         "tickers": ["GC=F", "SI=F"],
         "category": "commodity",
     },
     {
-        "q": "natural gas storage Europe TTF LNG palm oil export Indonesia",
-        "tickers": ["NG=F", "ZS=F"],
+        "q": "\"natural gas\" storage OR TTF OR LNG Europe",
+        "tickers": ["NG=F"],
         "category": "commodity",
     },
     {
-        "q": "wheat rust crop disease avian flu African swine fever BSE livestock",
+        "q": "\"avian flu\" OR \"swine fever\" OR \"wheat rust\" OR \"crop disease\"",
         "tickers": ["ZW=F", "ZC=F", "LE=F", "HE=F"],
         "category": "commodity",
     },
-    # ── Cocoa, Cotton, Orange Juice — high-edge soft commodities ──
+    # ── Soft commodities ──
     {
-        "q": "cocoa crop Ghana Ivory Coast disease swollen shoot drought",
+        "q": "cocoa Ghana OR \"Ivory Coast\" crop OR disease",
         "tickers": ["CC=F"],
         "category": "commodity",
         "zone": "west_africa",
     },
     {
-        "q": "cotton crop drought Texas India monsoon export ban",
+        "q": "cotton drought OR monsoon OR \"export ban\"",
         "tickers": ["CT=F"],
         "category": "commodity",
-        "zone": "",
     },
     {
-        "q": "orange juice citrus greening Florida freeze Brazil harvest",
+        "q": "\"orange juice\" OR citrus Florida OR Brazil freeze",
         "tickers": ["OJ=F"],
         "category": "weather",
     },
-    # ── Portuguese queries for Brazil (12-24h earlier than English media) ──
+    # ── Portuguese (Brazil early signal) ──
     {
-        "q": "geada cafe cacau seca milho soja safra quebra frio",
+        "q": "geada OR seca cafe OR cacau OR milho OR soja",
         "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F", "CC=F"],
         "category": "weather",
         "lang": "pt",
         "zone": "brazil",
     },
-    # ── v3.2: New queries for uncovered niches ──
-    # Suez Canal disruption (replaces dead RSS feed — HTML page, not RSS)
+    # ── Regional / chokepoints ──
     {
-        "q": "Suez Canal disruption blocked tanker transit delay",
+        "q": "\"Suez Canal\" OR Suez blocked OR disruption",
         "tickers": ["CL=F", "BZ=F", "NG=F"],
         "category": "supply_chain",
         "zone": "suez",
     },
-    # China commodity demand (key driver for metals, agri, energy)
     {
-        "q": "China commodity demand stimulus import surge slowdown",
+        "q": "China commodity demand OR stimulus OR import",
         "tickers": ["HG=F", "CL=F", "ZS=F", "GC=F"],
         "category": "commodity",
         "zone": "china",
     },
-    # EU energy crisis (covers NG=F, TTE.PA via chain reaction)
     {
-        "q": "Europe energy crisis gas shortage pipeline sabotage winter",
+        "q": "Europe \"energy crisis\" OR \"gas shortage\" OR pipeline",
         "tickers": ["NG=F", "CL=F"],
         "category": "supply_chain",
         "zone": "europe",
     },
-    # Middle East tensions (oil + gold safe haven)
     {
-        "q": "Iran Israel Houthi Red Sea attack tanker strike",
+        "q": "Houthi OR \"Red Sea\" attack OR tanker Iran Israel",
         "tickers": ["CL=F", "BZ=F", "GC=F"],
         "category": "geopolitical",
         "zone": "middle_east",
     },
-    # ── P1-6: Export ban queries (moves de 5-15% en 24h) ──
-    # India rice export ban — India = 40% of global rice exports
+    # ── Export bans (extra queries, rotated) ──
     {
-        "q": "India rice export ban restriction wheat sugar",
+        "q": "India rice OR wheat \"export ban\" OR restriction",
         "tickers": ["ZW=F", "ZC=F", "SB=F"],
         "category": "commodity",
         "zone": "india",
     },
-    # Indonesia palm oil export ban — Indonesia = 55% of global palm oil
     {
-        "q": "Indonesia palm oil export ban levy DMO biodiesel mandate",
+        "q": "Indonesia \"palm oil\" export ban OR levy",
         "tickers": ["ZS=F", "SB=F"],
         "category": "commodity",
         "zone": "indonesia",
     },
-    # Russia/Ukraine grain export ban/restriction
     {
-        "q": "Russia wheat export ban quota Black Sea grain corridor Ukraine",
+        "q": "Russia OR Ukraine wheat export OR \"grain corridor\"",
         "tickers": ["ZW=F", "ZC=F"],
         "category": "commodity",
         "zone": "black_sea",
     },
-    # ── P2-1: China demand signals (RSS-supplementing GNews queries) ──
+    # ── China signals ──
     {
-        "q": "China PMI Caixin manufacturing contraction expansion factory",
+        "q": "China PMI OR Caixin manufacturing",
         "tickers": ["HG=F", "CL=F", "^GSPC"],
         "category": "macro",
         "zone": "china",
     },
-    # China central bank intervention
     {
-        "q": "PBOC rate cut RRR reserve yuan devaluation stimulus",
+        "q": "PBOC \"rate cut\" OR RRR OR yuan stimulus",
         "tickers": ["AUDUSD=X", "HG=F", "GC=F"],
         "category": "central_bank_subtle",
         "zone": "china",
     },
-    # ── P3-3: Government gazette — regulatory/export bans ──
     {
-        "q": "Argentina peso capital controls grain export tax soybean",
+        "q": "Argentina peso OR \"capital controls\" OR soybean export",
         "tickers": ["ZS=F", "ZW=F", "ZC=F"],
         "category": "regulatory",
         "zone": "argentina",
     },
-    # ── Team 2 audit: targeted queries for uncovered producers ──
-    # Vietnam coffee — #1 robusta, harvest issues directly impact KC=F
+    # ── Producer-specific ──
     {
-        "q": "Vietnam coffee robusta harvest drought Central Highlands Dak Lak",
+        "q": "Vietnam coffee OR robusta drought OR harvest",
         "tickers": ["KC=F"],
         "category": "commodity",
         "zone": "vietnam",
     },
-    # DRC/Zambia copper — political instability, power shortage, mine disruption
     {
-        "q": "Congo DRC copper mine Zambia power shortage cobalt Katanga",
+        "q": "Congo OR DRC OR Zambia copper mine",
         "tickers": ["HG=F"],
         "category": "supply_chain",
         "zone": "drc_zambia",
     },
-    # Chile copper — mine disruption, labor, water stress
     {
-        "q": "Chile copper mine Codelco Escondida strike water BHP",
+        "q": "Chile copper Codelco OR Escondida OR strike",
         "tickers": ["HG=F"],
         "category": "supply_chain",
         "zone": "chile",
     },
-    # Cameroon/Nigeria cocoa — #4-5 producers, disease, logistics
     {
-        "q": "Cameroon Nigeria cocoa harvest black pod smuggling port",
+        "q": "Cameroon OR Nigeria cocoa harvest OR smuggling",
         "tickers": ["CC=F"],
         "category": "commodity",
         "zone": "cameroon_nigeria",
     },
-    # Port Santos — largest coffee export port + Brazil ag exports
     {
-        "q": "Santos port Brazil coffee congestion strike logistics export",
+        "q": "Santos port Brazil coffee OR congestion OR strike",
         "tickers": ["KC=F", "SB=F", "ZS=F"],
         "category": "supply_chain",
         "zone": "brazil",
     },
-    # Copper smelter / treatment charges — key supply signal
     {
-        "q": "copper smelter shutdown treatment charges TCRC concentrate",
+        "q": "copper smelter OR \"treatment charges\" OR TCRC",
         "tickers": ["HG=F"],
         "category": "commodity",
     },
 ]
 
 
+def _gnews_fetch_one(query_cfg: dict, api_key: str) -> tuple[list[NewsItem], dict]:
+    """Fetch results for a single GNews query. Returns (items, diagnostic).
+
+    Runs inside ThreadPoolExecutor — must be thread-safe.
+    """
+    url = "https://gnews.io/api/v4/search"
+    params = {
+        "q": query_cfg["q"],
+        "token": api_key,
+        "lang": query_cfg.get("lang", "en"),
+        "max": 5,
+        "sortby": "publishedAt",
+    }
+    diag: dict = {"query": query_cfg["q"][:60], "status": "ok"}
+
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    if resp.status_code != 200:
+        body_preview = resp.text[:200] if resp.text else "(empty)"
+        diag["status"] = f"http_{resp.status_code}"
+        diag["body"] = body_preview
+        return [], diag
+
+    data = resp.json()
+    total_articles = data.get("totalArticles", 0)
+    articles = data.get("articles", [])
+    diag["total_articles"] = total_articles
+    diag["returned"] = len(articles)
+
+    items: list[NewsItem] = []
+    cat = query_cfg.get("category", "other")
+    gnews_weight = {
+        "weather": 1.0,
+        "commodity": 0.95,
+        "supply_chain": 0.95,
+        "geopolitical": 0.85,
+    }.get(cat, 0.85)
+
+    for article in articles:
+        title = article.get("title", "")
+        if not title:
+            continue
+
+        published = None
+        pub_str = article.get("publishedAt")
+        if pub_str:
+            try:
+                published = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        items.append(NewsItem(
+            title=title,
+            source="GNews",
+            url=article.get("url", ""),
+            description=article.get("description", ""),
+            published=published,
+            related_tickers=query_cfg["tickers"],
+            source_weight=gnews_weight,
+            news_zone=query_cfg.get("zone", ""),
+        ))
+
+    return items, diag
+
+
 def fetch_gnews_targeted() -> list[NewsItem]:
     """Fetch targeted news from GNews API using commodity/geopolitical queries.
 
-    This gives us focused, recent news that RSS feeds might miss.
-    Limited to 100 req/day on free tier.
-    Rotation: 25 queries per scan (4 scans/day = 100 req/day exact).
-    With 28+ queries total, we rotate the extra queries across scans
-    using hour-based indexing so every query runs at least once per day.
-
-    IMPORTANT: This function makes 22+ sequential HTTP calls. It runs inside
-    collect_structured_data()'s ThreadPoolExecutor and must complete within
-    GNEWS_MAX_SECONDS to avoid blocking other sources. Queries stop early
-    if the time budget is exhausted.
+    Uses OR operators in queries for broad coverage (AND is GNews default).
+    Parallel execution (5 workers) to fit 25 queries within time budget.
+    Limited to 100 req/day on free tier → 25 queries/scan × 4 scans.
     """
     api_key = os.environ.get("GNEWS_API_KEY", "")
     if not api_key:
         logger.warning("GNEWS_API_KEY not set — skipping GNews")
         return []
 
-    # Budget must be LESS than collect_structured_data's per-source timeout (45s)
-    # so the function self-terminates cleanly instead of being killed mid-request.
-    GNEWS_MAX_SECONDS = 40
     gnews_start = time.monotonic()
-
-    items: list[NewsItem] = []
-    seen_titles: set[str] = set()
 
     # Rotate queries: 25 per scan max to stay within 100/day free tier
     max_queries_per_scan = 25
     total_queries = len(GNEWS_QUERIES)
     if total_queries > max_queries_per_scan:
-        # Use hour-based rotation to distribute extra queries across scans
-        scan_index = datetime.now(timezone.utc).hour % 4  # 0-3 for 4 scans/day
-        # Always include first 22 (core queries), rotate the rest
+        scan_index = datetime.now(timezone.utc).hour % 4
         core_queries = GNEWS_QUERIES[:22]
         extra_queries = GNEWS_QUERIES[22:]
-        # Distribute extras: each scan gets a subset
         extra_per_scan = max(1, len(extra_queries) // 4 + 1)
         start = scan_index * extra_per_scan
         selected_extras = extra_queries[start:start + min(extra_per_scan, max_queries_per_scan - len(core_queries))]
@@ -1043,96 +1080,63 @@ def fetch_gnews_targeted() -> list[NewsItem]:
     else:
         queries_this_scan = GNEWS_QUERIES
 
-    queries_completed = 0
+    # Parallel execution: 5 workers × ~3s/request = 25 queries in ~15s
+    # (was sequential: 25 × 2-3s = 50-75s, always exceeding 40s budget)
+    items: list[NewsItem] = []
+    seen_titles: set[str] = set()
     http_errors = 0
-    for query_cfg in queries_this_scan:
-        # Time budget check: stop early to avoid blocking the pool for other sources
-        elapsed = time.monotonic() - gnews_start
-        if elapsed >= GNEWS_MAX_SECONDS:
-            logger.warning("GNews time budget exhausted (%.0fs >= %ds) after %d/%d queries, %d items collected",
-                           elapsed, GNEWS_MAX_SECONDS, queries_completed, len(queries_this_scan), len(items))
-            break
+    queries_ok = 0
+    first_diag_logged = False
 
-        try:
-            url = "https://gnews.io/api/v4/search"
-            params = {
-                "q": query_cfg["q"],
-                "token": api_key,
-                "lang": query_cfg.get("lang", "en"),
-                "max": 5,  # 5 results per query
-                "sortby": "publishedAt",
-            }
-            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            queries_completed += 1
-            if resp.status_code != 200:
-                http_errors += 1
-                # Log body on first error for debugging (rate limit, invalid key, etc.)
-                if http_errors == 1:
-                    body_preview = resp.text[:200] if resp.text else "(empty)"
-                    logger.warning("GNews API error for '%s': HTTP %d — %s",
-                                   query_cfg["q"], resp.status_code, body_preview)
-                elif http_errors <= 3:
-                    logger.warning("GNews API error for '%s': HTTP %d", query_cfg["q"], resp.status_code)
-                # If ALL queries fail with same HTTP error, stop early (bad key or rate limit)
-                if http_errors >= 5 and http_errors == queries_completed:
-                    logger.error("GNews: %d/%d queries failed with HTTP errors — stopping (likely bad API key or rate limit)",
-                                 http_errors, queries_completed)
-                    break
-                continue
+    executor = ThreadPoolExecutor(max_workers=5)
+    try:
+        future_to_query = {
+            executor.submit(_gnews_fetch_one, qcfg, api_key): qcfg
+            for qcfg in queries_this_scan
+        }
 
-            data = resp.json()
-            for article in data.get("articles", []):
-                title = article.get("title", "")
-                if not title or title in seen_titles:
+        for future in as_completed(future_to_query, timeout=40):
+            try:
+                query_items, diag = future.result(timeout=5)
+
+                # Log first response for diagnostics (success or error)
+                if not first_diag_logged:
+                    first_diag_logged = True
+                    logger.info("GNews first response: %s", diag)
+
+                if diag["status"] != "ok":
+                    http_errors += 1
+                    if http_errors <= 3:
+                        logger.warning("GNews HTTP error: %s", diag)
                     continue
-                seen_titles.add(title)
 
-                published = None
-                pub_str = article.get("publishedAt")
-                if pub_str:
-                    try:
-                        published = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
-                    except ValueError:
-                        pass
+                queries_ok += 1
+                for item in query_items:
+                    if item.title not in seen_titles:
+                        seen_titles.add(item.title)
+                        items.append(item)
 
-                # Always use "GNews" as source (not article publisher name like
-                # "Reuters" or "Bloomberg") — must match STRUCTURED_SOURCES in config.py
-                # for _filter_old_news() to apply the 18h window instead of 8h.
-                # Article publisher is included in the title by GNews API.
+            except Exception as exc:
+                http_errors += 1
+                qcfg = future_to_query[future]
+                if http_errors <= 3:
+                    logger.warning("GNews fetch error for '%s': %s",
+                                   qcfg["q"][:40], exc)
 
-                # GNews weight varies by query category:
-                # weather/commodity queries produce higher-edge results (physical signals)
-                # geopolitical queries are more mainstream (lower edge)
-                cat = query_cfg.get("category", "other")
-                gnews_weight = {
-                    "weather": 1.0,       # Physical signals via GNews = good edge
-                    "commodity": 0.95,    # Commodity searches = moderate edge
-                    "supply_chain": 0.95, # Supply chain = moderate edge
-                    "geopolitical": 0.85, # Geopolitical headlines = lower edge (algos watch these)
-                }.get(cat, 0.85)
+    except TimeoutError:
+        logger.warning("GNews parallel execution hit 40s timeout after %d OK + %d errors, %d items",
+                       queries_ok, http_errors, len(items))
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
-                items.append(NewsItem(
-                    title=title,
-                    source="GNews",
-                    url=article.get("url", ""),
-                    published=published,
-                    related_tickers=query_cfg["tickers"],
-                    source_weight=gnews_weight,
-                    news_zone=query_cfg.get("zone", ""),
-                ))
-
-        except Exception as exc:
-            logger.warning("GNews fetch error for '%s': %s", query_cfg["q"], exc)
-
+    elapsed = time.monotonic() - gnews_start
     if items:
         logger.info("Fetched %d targeted news from GNews (%d/%d queries OK, %d HTTP errors, %.0fs)",
-                     len(items), queries_completed - http_errors, len(queries_this_scan),
-                     http_errors, time.monotonic() - gnews_start)
+                     len(items), queries_ok, len(queries_this_scan), http_errors, elapsed)
     else:
-        logger.warning("GNews returned 0 items from %d queries (%d completed, %d HTTP errors, %.0fs). "
-                       "API key present=%s",
-                       len(queries_this_scan), queries_completed, http_errors,
-                       time.monotonic() - gnews_start, bool(api_key))
+        logger.warning("GNews returned 0 items from %d queries (%d OK, %d HTTP errors, %.0fs). "
+                       "API key present=%s. Check first response diagnostic above.",
+                       len(queries_this_scan), queries_ok, http_errors, elapsed, bool(api_key))
     return items
 
 
@@ -3351,8 +3355,6 @@ def collect_structured_data() -> list[NewsItem]:
 
     v5.2: Each source call is tracked by source_monitor for health reporting.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     # Import tracker lazily to avoid circular imports
     try:
         from .source_monitor import get_tracker
