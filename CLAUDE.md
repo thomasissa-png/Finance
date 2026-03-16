@@ -42,7 +42,7 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 ### Versions actuelles
 | Agent | Version | Dernier changement |
 |-------|---------|-------------------|
-| News | 7.7 | news_zone on EIA/USDA/SHFE sources |
+| News | 7.8 | GNews noise filter (quoted phrases + blocklist), structured sources pool fix |
 | Scoring | 7.6 | S1-P2 signal accumulator race fix, S1-P4 fallback validation |
 | Scoring 2 | 8.2 | Thread-safe tokens, LRU cache cap, dead code cleanup, fallback validation |
 | Scoring 3 | 2.3 | Configurable params, parallel intraday, pivot_type fix, log exceptions |
@@ -337,7 +337,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 
 #### 8. Audit speculateur v3.5 — 17 ameliorations
 - **6 nouvelles sources data** : WOAH (maladies animales), NASA POWER (satellite NDVI), Freight proxy (BDRY ETF), LME inventory proxy (metal ETFs), Chokepoint monitoring (tanker ETFs), Dark pool signals (volume/price divergence)
-- **GNews** : +6 queries (export bans Inde/Indonesie/Russie, Chine PMI/PBOC, Argentine), consolidation 8→5 commodity queries, rotation intelligente 28 queries / 4 scans (100 req/jour)
+- **GNews** : +6 queries (export bans Inde/Indonesie/Russie, Chine PMI/PBOC, Argentine), consolidation 8→5 commodity queries, rotation intelligente 35 queries / 4 scans (100 req/jour). Queries resserrées avec guillemets composés (v7.8) + filtre post-fetch anti-bruit (entertainment/sport blocklist). +1 query CONAB (Brésil, portugais)
 - **5 RSS feeds** : Caixin, Xinhua, Chinese govt, US Federal Register (ITC), EUR-Lex
 - **2 nouveaux actifs** : USDCNH=X (yuan offshore), URA (uranium ETF) → 41 total
 - **Cooldown adaptatif** : weather/supply_chain=1j, commodity=2j, default=3j (au lieu de 3j fixe)
@@ -347,7 +347,7 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **Correlation** : +groupe china_proxy (USDCNH, HG=F, AUDUSD), chain reactions USDCNH↔HG/AUD
 - **Event scanner** : frequence 15→10 min
 - **Dynamic correlation** : skip computation si static group couvre deja la paire
-- **collect_structured_data()** : 11→17 sources, timeout 90→120s
+- **collect_structured_data()** : 11→20 sources, max_workers 8→12, timeout 120→180s, sources réordonnées (slow-first)
 
 #### 9. Audit decision v4.0 — 19 ameliorations (audit complet du pipeline de decisions)
 - **A1** : Bug fix `impacted` variable utilisee avant definition dans news_scorer.py
@@ -613,6 +613,12 @@ L'auditeur s'appelle manuellement via l'API ou Claude Code :
 - **Multi-timeframe** : intraday 1h en parallèle (5 threads, timeout 30s) pour les top 10 setups
 - **Mise à jour CLAUDE.md** : versions agents synchronisées avec le code (6 agents avaient évolué)
 
+#### 28. GNews Noise Fix + Structured Sources Pool Fix v7.8
+- **GNews bruit (Oscar/NCAA)** : toutes les 35 queries resserrées avec guillemets composés pour forcer le contexte commodity. `"frost"` → `"crop frost"`, `"copper mine strike"` → `"copper mine" strike`, etc. Filtre post-fetch blocklist (30+ mots entertainment/sport : oscar, ncaa, nfl, netflix...) pour rejeter les articles parasites.
+- **GNews +1 query CONAB** (Brésil, portugais) : crop agency brésilienne, publie avant USDA pour le Brésil. +1 fix cocoa (`"cocoa disease"` au lieu de `disease` nu), +1 fix port congestion (ajout tickers CL=F/ZW=F/HG=F).
+- **Sources structurées "not_started"** : `max_workers` 8→12 (2 vagues au lieu de 3), timeout global 120→180s, sources réordonnées slow-first (weather, gnews, ndvi en tête). Cause racine : 20 sources avec 8 workers = 3 vagues, les sources lentes (weather 60s, ndvi 60s) bloquaient la vague 3 avant le timeout.
+- **Scoring 1 + Scoring 2 compatibilité GNews vérifiée** : source_weight injecté par catégorie, news_zone flow complet, STRUCTURED_SOURCES 18h window, keyword pre-filter OK.
+
 ### Etat actuel des fichiers cles
 - `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
 - `backend/app/agents/registry.py` : 21 singletons (4 équipes + infra + perf + audit), run_scan_pipeline (News→Scoring→per-team branches), helpers pour toutes les équipes
@@ -717,7 +723,7 @@ Module `data_apis.py` — 17 sources de donnees numeriques que Claude peut inter
   - Ble condition : toute l'annee (winter wheat)
   - Delta WoW : calcul automatique semaine vs semaine, flag [SWING MAJEUR] si >= 5pp
 - **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 28 queries avec rotation
-  - **Core queries** (22, toujours executees) : frost/freeze, oil/sanctions, port/shipping, copper/mine, BDI/freight, OPEC, cereals USDA, gold reserves, nat gas/TTF, palm oil/China, hurricane/Gulf, cocoa, cotton, OJ/citrus, PGM, portugais x2, disease/blight, fertilizer, avian flu, cattle disease, ASF
+  - **Core queries** (22, toujours executees) : "crop frost"/"freeze warning", "oil sanctions"/"oil embargo", port/shipping, "copper mine" strike, "Baltic dry index", OPEC "production cut", "USDA report" wheat/corn, gold reserves, "natural gas" storage/"TTF price", China "commodity demand", hurricane "Gulf of Mexico", cocoa Ghana, "cotton crop", "orange juice"/citrus, PGM mines, portugais (geada/seca/ferrugem), disease (avian flu/swine fever/wheat rust), "fertilizer shortage"
   - **Extra queries** (6, rotation par scan) : India rice/wheat/sugar export ban, Indonesia palm oil export, Russia/Ukraine wheat/Black Sea, China PMI Caixin, PBOC rate/RRR/yuan, Argentina peso/capital controls
   - **Rotation** : 22 core + ~2 extras/scan × 4 scans = ~96 req/jour (dans le plafond 100)
   - v3.5: consolidation 8→5 commodity queries pour liberer 3 slots
@@ -1188,7 +1194,7 @@ Groupes d'actifs correles pour eviter les doubles expositions :
 ## Performance (optimisations v3.1)
 
 ### Backend — Parallelisation I/O
-- **collect_structured_data()** : 17 sources API en parallele (ThreadPoolExecutor, max_workers=8, timeout 120s)
+- **collect_structured_data()** : 20 sources API en parallele (ThreadPoolExecutor, max_workers=12, timeout 180s). Sources réordonnées : lentes d'abord (weather, gnews, ndvi) pour maximiser le parallélisme
 - **collect_all_news()** : 4 sources (structured, early-signal, yfinance, rss) en parallele
 - **_fetch_market_context()** : 9 appels yfinance en parallele (VIX + indices + trends)
 - **select_trade()** : pre-fetch de tous les prix candidats en parallele avant evaluation
