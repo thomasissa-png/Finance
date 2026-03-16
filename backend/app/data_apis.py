@@ -1016,7 +1016,9 @@ def fetch_gnews_targeted() -> list[NewsItem]:
         logger.warning("GNEWS_API_KEY not set — skipping GNews")
         return []
 
-    GNEWS_MAX_SECONDS = 60  # Hard cap: stop making queries after this
+    # Budget must be LESS than collect_structured_data's per-source timeout (45s)
+    # so the function self-terminates cleanly instead of being killed mid-request.
+    GNEWS_MAX_SECONDS = 40
     gnews_start = time.monotonic()
 
     items: list[NewsItem] = []
@@ -1042,6 +1044,7 @@ def fetch_gnews_targeted() -> list[NewsItem]:
         queries_this_scan = GNEWS_QUERIES
 
     queries_completed = 0
+    http_errors = 0
     for query_cfg in queries_this_scan:
         # Time budget check: stop early to avoid blocking the pool for other sources
         elapsed = time.monotonic() - gnews_start
@@ -1062,7 +1065,19 @@ def fetch_gnews_targeted() -> list[NewsItem]:
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
             queries_completed += 1
             if resp.status_code != 200:
-                logger.warning("GNews API error for '%s': HTTP %d", query_cfg["q"], resp.status_code)
+                http_errors += 1
+                # Log body on first error for debugging (rate limit, invalid key, etc.)
+                if http_errors == 1:
+                    body_preview = resp.text[:200] if resp.text else "(empty)"
+                    logger.warning("GNews API error for '%s': HTTP %d — %s",
+                                   query_cfg["q"], resp.status_code, body_preview)
+                elif http_errors <= 3:
+                    logger.warning("GNews API error for '%s': HTTP %d", query_cfg["q"], resp.status_code)
+                # If ALL queries fail with same HTTP error, stop early (bad key or rate limit)
+                if http_errors >= 5 and http_errors == queries_completed:
+                    logger.error("GNews: %d/%d queries failed with HTTP errors — stopping (likely bad API key or rate limit)",
+                                 http_errors, queries_completed)
+                    break
                 continue
 
             data = resp.json()
@@ -1110,10 +1125,14 @@ def fetch_gnews_targeted() -> list[NewsItem]:
             logger.warning("GNews fetch error for '%s': %s", query_cfg["q"], exc)
 
     if items:
-        logger.info("Fetched %d targeted news from GNews (%d queries)", len(items), len(queries_this_scan))
+        logger.info("Fetched %d targeted news from GNews (%d/%d queries OK, %d HTTP errors, %.0fs)",
+                     len(items), queries_completed - http_errors, len(queries_this_scan),
+                     http_errors, time.monotonic() - gnews_start)
     else:
-        logger.warning("GNews returned 0 items from %d queries (API key present, check individual query logs)",
-                       len(queries_this_scan))
+        logger.warning("GNews returned 0 items from %d queries (%d completed, %d HTTP errors, %.0fs). "
+                       "API key present=%s",
+                       len(queries_this_scan), queries_completed, http_errors,
+                       time.monotonic() - gnews_start, bool(api_key))
     return items
 
 

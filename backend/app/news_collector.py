@@ -339,19 +339,22 @@ def collect_early_signal_news() -> list[NewsItem]:
     _last_early_diag = {}
     items: list[NewsItem] = []
 
-    # Workers at 8 (up from 5) to fetch all 20 feeds faster in parallel.
-    # Global timeout 40s (down from 90s): per-feed timeout is 10s, 8 workers = 3 rounds max.
+    # Workers at 8 to fetch 19 feeds in parallel (~3 waves).
+    # Global timeout 90s: Replit DNS is slow (3-10s connect), SSL handshakes add latency.
+    # With 10s per-feed HTTP timeout, worst case = ceil(19/8)*10 = 30s, but DNS cold-starts
+    # on Replit push many feeds to their full 10s timeout, so 40s was too tight (18/19 feeds
+    # hit global_timeout). 90s gives 3x margin for slow networking.
     executor = ThreadPoolExecutor(max_workers=8)
     futures = {executor.submit(_fetch_rss_feed, url): url for url in EARLY_SIGNAL_FEEDS}
     completed_count = 0
     feeds_with_items = []
     feeds_empty = []
     try:
-        for future in as_completed(futures, timeout=40):
+        for future in as_completed(futures, timeout=90):
             url = futures[future]
             domain = url.split("/")[2] if len(url.split("/")) > 2 else url
             try:
-                result = future.result(timeout=15)
+                result = future.result(timeout=12)
                 if result:
                     items.extend(result)
                     feeds_with_items.append(domain)
@@ -373,7 +376,7 @@ def collect_early_signal_news() -> list[NewsItem]:
                     "error": str(exc)[:150],
                 }
     except TimeoutError:
-        logger.warning("Early-signal collection global TIMEOUT (40s), %d/%d feeds completed",
+        logger.warning("Early-signal collection global TIMEOUT (90s), %d/%d feeds completed",
                        completed_count, len(EARLY_SIGNAL_FEEDS))
         for url in EARLY_SIGNAL_FEEDS:
             domain = url.split("/")[2] if len(url.split("/")) > 2 else url

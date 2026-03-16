@@ -103,7 +103,7 @@ class AgentTrader(BaseAgent):
                         "news_headline": rec.news_headline if rec.news_headline else None,
                         "news_category": rec.news_category,
                         "news_zone": rec.news_zone or None,
-                        "reasoning": rec.reasoning[:200] if rec.reasoning else None,
+                        "reasoning": rec.catalyst[:200] if rec.catalyst else None,
                         "learning_multiplier": round(rec.learning_multiplier, 3) if rec.learning_multiplier else None,
                     })
 
