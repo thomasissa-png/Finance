@@ -780,216 +780,240 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
     # ═══════════════════════════════════════════════════════════════════
     # GNews API v4 uses AND by default for multiple words.
     # "frost freeze crop" requires ALL 3 words in one article → very few results.
-    # Fix: use OR between related terms, quotes for exact phrases.
-    # Keep queries to 2-4 meaningful terms max for broad coverage.
     # ═══════════════════════════════════════════════════════════════════
+    # GNews query syntax reminder:
+    #   - A B     = A AND B (implicit AND between bare words)
+    #   - A OR B  = either A or B
+    #   - "A B"   = exact phrase match
+    #   - CRITICAL: `"X" OR Y Z` = ("X") OR (Y AND Z) — OR breaks scope!
+    #     Every OR branch must be self-contained with enough context.
+    # Budget: 21 core + 16 extra = 37 total. 21 + 4/scan = 25/scan × 4 = 100/day.
+    # ═══════════════════════════════════════════════════════════════════
+    #
+    # ── CORE QUERIES (21) — always executed ─────────────────────────
+    #
     # ── Weather ──
-    {
-        "q": "\"crop frost\" OR \"freeze warning\" OR \"cold wave\" agriculture",
+    {   # #0: frost/freeze — agriculture context forced on each branch
+        "q": "\"crop frost\" OR \"freeze warning\" agriculture OR \"cold snap\" crops",
         "tickers": ["KC=F", "ZC=F", "ZW=F", "SB=F"],
         "category": "weather",
     },
-    {
+    {   # #1: drought — self-contextualised phrases
         "q": "\"crop drought\" OR \"crop failure\" OR \"harvest loss\"",
         "tickers": ["ZC=F", "ZW=F", "ZS=F", "CC=F"],
         "category": "weather",
     },
-    {
-        "q": "hurricane OR \"tropical storm\" \"Gulf of Mexico\" oil",
+    {   # #2: hurricane — energy context on each branch
+        "q": "hurricane \"Gulf of Mexico\" OR \"tropical storm\" oil OR hurricane offshore",
         "tickers": ["CL=F", "NG=F"],
         "category": "weather",
         "zone": "gulf_of_mexico",
     },
     # ── Geopolitical ──
-    {
-        "q": "\"oil sanctions\" OR \"oil embargo\" OR \"military strike\" oil",
+    {   # #3: oil geopolitics
+        "q": "\"oil sanctions\" OR \"oil embargo\" OR \"military strike\" energy",
         "tickers": ["CL=F", "BZ=F", "GC=F"],
         "category": "geopolitical",
     },
+    {   # #4: Red Sea / Middle East shipping
+        "q": "Houthi OR \"Red Sea\" shipping OR tanker attack",
+        "tickers": ["CL=F", "BZ=F", "GC=F"],
+        "category": "geopolitical",
+        "zone": "middle_east",
+    },
     # ── Supply chain ──
-    {
+    {   # #5: port/shipping disruptions
         "q": "\"port congestion\" OR \"shipping disruption\" OR \"canal blocked\"",
-        "tickers": ["CL=F", "ZW=F", "HG=F"],  # shipping affects energy, grains, metals
+        "tickers": ["CL=F", "ZW=F", "HG=F"],
         "category": "supply_chain",
     },
-    {
-        "q": "\"copper mine\" strike OR \"copper mine\" halt OR \"copper production\" disruption",
+    {   # #6: copper supply — merged mine + smelter (was 2 queries)
+        "q": "\"copper mine\" strike OR \"copper smelter\" OR \"copper production\" disruption",
         "tickers": ["HG=F"],
         "category": "supply_chain",
     },
-    {
-        "q": "\"platinum mine\" OR \"palladium mine\" \"South Africa\" OR Nornickel",
+    {   # #7: PGM mines
+        "q": "\"platinum mine\" OR \"palladium mine\" OR Nornickel",
         "tickers": ["PL=F", "PA=F"],
         "category": "supply_chain",
         "zone": "south_africa",
     },
-    {
-        "q": "\"Baltic dry index\" OR \"freight rate\" OR \"shipping cost\"",
-        "tickers": ["HG=F"],
-        "category": "supply_chain",
-    },
-    {
+    {   # #8: fertilizer
         "q": "\"fertilizer shortage\" OR \"potash price\" OR \"phosphate supply\"",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "supply_chain",
     },
     # ── Commodity ──
-    {
+    {   # #9: OPEC
         "q": "OPEC \"production cut\" OR OPEC quota OR OPEC output",
         "tickers": ["CL=F", "BZ=F"],
         "category": "commodity",
     },
-    {
-        "q": "\"USDA report\" wheat OR corn OR soybean",
+    {   # #10: USDA — forced context on each branch (was: corn/soybean bare)
+        "q": "\"USDA report\" OR \"USDA wheat\" OR \"USDA corn\" OR \"USDA soybean\"",
         "tickers": ["ZC=F", "ZW=F", "ZS=F"],
         "category": "commodity",
     },
-    {
+    {   # #11: gold
         "q": "\"gold reserves\" OR \"central bank\" gold buying",
         "tickers": ["GC=F", "SI=F"],
         "category": "commodity",
     },
-    {
+    {   # #12: natural gas
         "q": "\"natural gas\" storage OR \"TTF price\" OR \"LNG Europe\"",
         "tickers": ["NG=F"],
         "category": "commodity",
     },
-    {
+    {   # #13: livestock & crop disease — all exact phrases
         "q": "\"avian flu\" OR \"swine fever\" OR \"wheat rust\" OR \"crop disease\"",
         "tickers": ["ZW=F", "ZC=F", "LE=F", "HE=F"],
         "category": "commodity",
     },
-    # ── Soft commodities ──
-    {
-        "q": "cocoa Ghana OR \"Ivory Coast\" OR \"cocoa disease\" OR \"swollen shoot\"",
+    {   # #14: cocoa West Africa — forced context (was: "Ivory Coast" bare)
+        "q": "\"cocoa Ghana\" OR \"cocoa Ivory Coast\" OR \"cocoa disease\" OR \"swollen shoot\"",
         "tickers": ["CC=F"],
         "category": "commodity",
         "zone": "west_africa",
     },
-    {
-        "q": "\"cotton crop\" drought OR \"cotton export\" ban OR cotton monsoon",
+    # ── Soft commodities ──
+    {   # #15: cotton — context on each branch
+        "q": "\"cotton crop\" drought OR \"cotton export\" ban OR \"cotton price\"",
         "tickers": ["CT=F"],
         "category": "commodity",
     },
-    {
-        "q": "\"orange juice\" price OR citrus freeze OR \"Florida citrus\"",
+    {   # #16: OJ/citrus
+        "q": "\"orange juice\" price OR \"citrus freeze\" OR \"Florida citrus\"",
         "tickers": ["OJ=F"],
         "category": "weather",
     },
     # ── Portuguese (Brazil early signal) ──
-    {
-        "q": "geada cafe OR seca safra OR cacau colheita OR ferrugem OR \"geada negra\"",
+    {   # #17: PT — ferrugem forced with cafe context
+        "q": "\"geada cafe\" OR \"seca safra\" OR \"ferrugem cafe\" OR \"geada negra\" OR \"cacau seca\"",
         "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F", "CC=F"],
         "category": "weather",
         "lang": "pt",
         "zone": "brazil",
     },
     # ── Regional / chokepoints ──
-    {
+    {   # #18: Suez
         "q": "\"Suez Canal\" blocked OR \"Suez Canal\" disruption OR \"Suez Canal\" closure",
         "tickers": ["CL=F", "BZ=F", "NG=F"],
         "category": "supply_chain",
         "zone": "suez",
     },
-    {
-        "q": "China \"commodity demand\" OR China \"commodity imports\" OR \"China stimulus\" metals",
+    {   # #19: China commodity demand — context forced per branch
+        "q": "China \"commodity demand\" OR China \"commodity imports\" OR China \"copper demand\"",
         "tickers": ["HG=F", "CL=F", "ZS=F", "GC=F"],
         "category": "commodity",
         "zone": "china",
     },
-    {
+    {   # #20: Europe energy
         "q": "Europe \"energy crisis\" OR \"gas shortage\" OR \"gas pipeline\" disruption",
         "tickers": ["NG=F", "CL=F"],
         "category": "supply_chain",
         "zone": "europe",
     },
-    {
-        "q": "Houthi OR \"Red Sea\" shipping OR tanker attack Iran",
-        "tickers": ["CL=F", "BZ=F", "GC=F"],
-        "category": "geopolitical",
-        "zone": "middle_east",
-    },
-    # ── Export bans (extra queries, rotated) ──
-    {
-        "q": "India rice \"export ban\" OR India wheat \"export ban\" OR India grain restriction",
+    #
+    # ── EXTRA QUERIES (16) — rotated, ~4 per scan ──────────────────
+    #
+    # ── Export bans / regulatory ──
+    {   # #21: India grain bans
+        "q": "India rice \"export ban\" OR India wheat \"export ban\" OR India sugar restriction",
         "tickers": ["ZW=F", "ZC=F", "SB=F"],
         "category": "commodity",
         "zone": "india",
     },
-    {
-        "q": "Indonesia \"palm oil\" export ban OR levy",
+    {   # #22: Indonesia palm oil — fixed: was "levy" bare
+        "q": "Indonesia \"palm oil\" export OR Indonesia \"palm oil\" ban OR Indonesia \"palm oil\" levy",
         "tickers": ["ZS=F", "SB=F"],
         "category": "commodity",
         "zone": "indonesia",
     },
-    {
+    {   # #23: Black Sea grain
         "q": "Russia wheat export OR Ukraine wheat export OR \"grain corridor\"",
         "tickers": ["ZW=F", "ZC=F"],
         "category": "commodity",
         "zone": "black_sea",
     },
     # ── China signals ──
-    {
+    {   # #24: China PMI
         "q": "\"China PMI\" OR \"Caixin manufacturing\" OR \"Caixin PMI\"",
         "tickers": ["HG=F", "CL=F", "^GSPC"],
         "category": "macro",
         "zone": "china",
     },
-    {
+    {   # #25: PBOC
         "q": "PBOC \"rate cut\" OR \"PBOC RRR\" OR \"yuan devaluation\" OR \"yuan stimulus\"",
         "tickers": ["AUDUSD=X", "HG=F", "GC=F"],
         "category": "central_bank_subtle",
         "zone": "china",
     },
-    {
+    # ── Producer-specific ──
+    {   # #26: Argentina
         "q": "\"Argentina peso\" OR \"Argentina capital controls\" OR \"Argentina soybean\" export",
         "tickers": ["ZS=F", "ZW=F", "ZC=F"],
         "category": "regulatory",
         "zone": "argentina",
     },
-    # ── Producer-specific ──
-    {
+    {   # #27: Vietnam coffee
         "q": "\"Vietnam coffee\" OR \"robusta drought\" OR \"Vietnam harvest\" coffee",
         "tickers": ["KC=F"],
         "category": "commodity",
         "zone": "vietnam",
     },
-    {
-        "q": "\"DRC copper\" OR \"Zambia copper\" OR \"Congo cobalt\" mine",
-        "tickers": ["HG=F"],
-        "category": "supply_chain",
-        "zone": "drc_zambia",
-    },
-    {
-        "q": "\"Chile copper\" OR Codelco OR Escondida strike OR \"copper strike\"",
+    {   # #28: copper producers — merged DRC + Chile (was 2 queries)
+        "q": "\"DRC copper\" OR \"Zambia copper\" OR \"Chile copper\" OR Codelco",
         "tickers": ["HG=F"],
         "category": "supply_chain",
         "zone": "chile",
     },
-    {
-        "q": "\"Cameroon cocoa\" OR \"Nigeria cocoa\" harvest OR smuggling",
+    {   # #29: cocoa Africa — fixed: smuggling with context
+        "q": "\"Cameroon cocoa\" OR \"Nigeria cocoa\" OR \"cocoa smuggling\"",
         "tickers": ["CC=F"],
         "category": "commodity",
         "zone": "cameroon_nigeria",
     },
-    {
+    {   # #30: Santos port
         "q": "\"Santos port\" coffee OR \"Santos port\" congestion OR \"Brazil port\" strike",
         "tickers": ["KC=F", "SB=F", "ZS=F"],
         "category": "supply_chain",
         "zone": "brazil",
     },
-    {
-        "q": "\"copper smelter\" OR \"treatment charges\" copper OR \"TC/RC\" copper",
-        "tickers": ["HG=F"],
-        "category": "commodity",
-    },
-    # CONAB — Brazilian crop agency, publishes before USDA for Brazil
-    {
-        "q": "CONAB safra OR \"CONAB producao\" OR \"CONAB soja\" OR \"CONAB milho\"",
+    {   # #31: CONAB
+        "q": "\"CONAB safra\" OR \"CONAB producao\" OR \"CONAB soja\" OR \"CONAB milho\"",
         "tickers": ["ZS=F", "ZC=F", "KC=F", "SB=F"],
         "category": "commodity",
         "lang": "pt",
         "zone": "brazil",
+    },
+    # ── NEW: gaps identified by audit ──
+    {   # #32: Colombia coffee — 2nd producer, was missing entirely
+        "q": "\"Colombia coffee\" OR \"Colombian coffee\" drought OR \"Colombia harvest\"",
+        "tickers": ["KC=F"],
+        "category": "commodity",
+        "zone": "colombia",
+    },
+    {   # #33: EU cocoa regulation — deforestation law = supply shock CC=F
+        "q": "\"EU deforestation\" cocoa OR \"cocoa regulation\" OR \"EUDR cocoa\"",
+        "tickers": ["CC=F"],
+        "category": "regulatory",
+        "zone": "europe",
+    },
+    {   # #34: sugar Brazil/India — was missing. Brazil ethanol + India bans
+        "q": "\"Brazil sugar\" OR \"India sugar\" export OR \"ethanol mandate\" Brazil",
+        "tickers": ["SB=F"],
+        "category": "commodity",
+        "zone": "brazil",
+    },
+    {   # #35: uranium/nuclear — URA had zero GNews coverage
+        "q": "\"uranium price\" OR \"nuclear fuel\" OR \"uranium mine\" OR \"uranium enrichment\"",
+        "tickers": ["URA"],
+        "category": "geopolitical",
+    },
+    {   # #36: Baltic dry + shipping (T1+T2 need)
+        "q": "\"Baltic dry index\" OR \"bulk freight\" OR \"dry bulk shipping\"",
+        "tickers": ["HG=F", "ZW=F", "ZC=F"],
+        "category": "supply_chain",
     },
 ]
 
@@ -1090,8 +1114,8 @@ def fetch_gnews_targeted() -> list[NewsItem]:
     total_queries = len(GNEWS_QUERIES)
     if total_queries > max_queries_per_scan:
         scan_index = datetime.now(timezone.utc).hour % 4
-        core_queries = GNEWS_QUERIES[:22]
-        extra_queries = GNEWS_QUERIES[22:]
+        core_queries = GNEWS_QUERIES[:21]
+        extra_queries = GNEWS_QUERIES[21:]
         extra_per_scan = max(1, len(extra_queries) // 4 + 1)
         start = scan_index * extra_per_scan
         selected_extras = extra_queries[start:start + min(extra_per_scan, max_queries_per_scan - len(core_queries))]
