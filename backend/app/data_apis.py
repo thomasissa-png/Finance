@@ -822,9 +822,9 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "zone": "middle_east",
     },
     # ── Supply chain ──
-    {   # #5: port/shipping disruptions
+    {   # #5: port/shipping disruptions — CC=F added (Abidjan/San Pedro cocoa ports)
         "q": "\"port congestion\" OR \"shipping disruption\" OR \"canal blocked\"",
-        "tickers": ["CL=F", "ZW=F", "HG=F"],
+        "tickers": ["CL=F", "ZW=F", "HG=F", "CC=F"],
         "category": "supply_chain",
     },
     {   # #6: copper supply — merged mine + smelter (was 2 queries)
@@ -929,10 +929,10 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "category": "commodity",
         "zone": "indonesia",
     },
-    {   # #23: Black Sea grain
-        "q": "Russia wheat export OR Ukraine wheat export OR \"grain corridor\"",
+    {   # #23: Black Sea grain + Australia — geopolitical for wheat supply
+        "q": "Russia wheat export OR Ukraine wheat export OR \"grain corridor\" OR \"Australia drought\" wheat",
         "tickers": ["ZW=F", "ZC=F"],
-        "category": "commodity",
+        "category": "geopolitical",
         "zone": "black_sea",
     },
     # ── China signals ──
@@ -1014,6 +1014,18 @@ GNEWS_QUERIES: list[dict[str, Any]] = [
         "q": "\"Baltic dry index\" OR \"bulk freight\" OR \"dry bulk shipping\"",
         "tickers": ["HG=F", "ZW=F", "ZC=F"],
         "category": "supply_chain",
+    },
+    {   # #37: copper weather — Chile/Peru flooding, hydro disruption, mine landslide
+        "q": "Chile flooding mine OR Peru rain copper OR \"copper mine\" landslide OR \"hydro power\" Chile",
+        "tickers": ["HG=F"],
+        "category": "weather",
+        "zone": "chile",
+    },
+    {   # #38: cocoa supply chain — grinding, processing, Abidjan port
+        "q": "\"cocoa grinding\" OR \"cocoa processing\" shortage OR \"Abidjan port\" cocoa",
+        "tickers": ["CC=F"],
+        "category": "supply_chain",
+        "zone": "west_africa",
     },
 ]
 
