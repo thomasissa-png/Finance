@@ -315,7 +315,7 @@ class TestAgentAuditor:
 
     def test_all_audit_profiles_present(self):
         from backend.app.agents.agent_auditor import AUDIT_PROFILES
-        expected = {"news", "scoring", "scoring_2", "scoring_3", "scoring_4", "trader_1", "trader_2", "trader_3", "trader_4", "journal", "journal_2", "journal_3", "journal_4", "learning", "learning_2", "learning_3", "learning_4", "ux", "infrastructure", "performance", "auditor"}
+        expected = {"news", "scoring", "scoring_2", "scoring_3", "scoring_4", "trader_1", "trader_2", "trader_3", "trader_4", "journal", "journal_2", "journal_3", "journal_4", "learning", "learning_2", "learning_3", "learning_4", "ux", "infrastructure", "performance", "auditor", "news_for_trader_1", "news_for_trader_2"}
         assert set(AUDIT_PROFILES.keys()) == expected
 
     def test_ux_profile_has_checks(self):

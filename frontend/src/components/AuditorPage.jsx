@@ -9,6 +9,7 @@ const AUDIT_TARGETS = [
   "journal", "journal_2", "journal_3", "journal_4",
   "learning", "learning_2", "learning_3", "learning_4",
   "infrastructure", "performance", "auditor",
+  "news_for_trader_1", "news_for_trader_2",
 ];
 
 const TARGET_TEAMS = {
@@ -32,6 +33,8 @@ const TARGET_TEAMS = {
   infrastructure: "Partagé",
   performance: "Partagé",
   auditor: "Partagé",
+  news_for_trader_1: "Cross-audit",
+  news_for_trader_2: "Cross-audit",
 };
 
 function ScoreCircle({ score }) {

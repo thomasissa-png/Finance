@@ -304,6 +304,30 @@ AUDIT_PROFILES = {
             "log_analysis",          # L'auditeur utilise-t-il les logs de chaque agent ?
         ],
     },
+    "news_for_trader_1": {
+        "expertise": "Expert news trading intraday, 15+ ans — audite la couverture GNews du point de vue du Trader 1 (41 actifs, day trading)",
+        "checks": [
+            "ticker_coverage",       # Chaque actif a-t-il au moins une query GNews directe ou chain reaction ?
+            "category_coverage",     # Les catégories à edge (weather, supply_chain, commodity, geopolitical) sont-elles couvertes ?
+            "gnews_syntax",          # Les queries GNews ont-elles des bugs OR/AND (mots nus, branches sans contexte) ?
+            "scored_news_relevance", # Les news scorées récentes couvrent-elles les tickers Trader 1 ?
+            "signal_to_noise",       # Ratio articles pertinents vs bruit dans les scans récents
+            "freshness_for_intraday", # Les news sont-elles assez fraîches pour du day trading (<2h) ?
+            "chain_reaction_reach",  # Les chain reactions étendent-elles la couverture aux actifs sans query directe ?
+        ],
+    },
+    "news_for_trader_2": {
+        "expertise": "Expert trend following commodities, 15+ ans — audite la couverture GNews du point de vue du Trader 2 (HG=F, CC=F, KC=F, ZW=F)",
+        "checks": [
+            "ticker_coverage_depth", # Chaque ticker T2 a-t-il assez de queries dédiées (weather, supply, demand, regulatory) ?
+            "category_balance",      # Les catégories pertinentes (weather, supply_chain, commodity, regulatory) sont-elles couvertes par ticker ?
+            "producer_coverage",     # Les pays producteurs clés sont-ils couverts (Chile/DRC pour HG, Ghana/IC pour CC, etc.) ?
+            "gnews_syntax",          # Les queries GNews ont-elles des bugs OR/AND pour les tickers T2 ?
+            "scored_news_for_trend", # Les news scorées récentes contiennent-elles assez de signaux trend (high signal_reliability, structural categories) ?
+            "structural_freshness",  # Les données structurelles (USDA, NOAA) arrivent-elles avec le bon lookback (18h) ?
+            "accumulation_signal",   # Les news récentes génèrent-elles assez de signal directionnel pour le seuil de flip ?
+        ],
+    },
 }
 
 
@@ -389,6 +413,8 @@ class AgentAuditor(BaseAgent):
                 "infrastructure": self._audit_infrastructure,
                 "performance": self._audit_performance,
                 "auditor": self._audit_self,
+                "news_for_trader_1": self._audit_news_for_trader_1,
+                "news_for_trader_2": self._audit_news_for_trader_2,
             }
             audit_fn = audit_dispatch.get(target_agent)
             if audit_fn:
@@ -2705,6 +2731,531 @@ class AgentAuditor(BaseAgent):
         tests.append("test_performance_trend_computation")
         tests.append("test_performance_alert_thresholds")
         tests.append("test_performance_ranking_logic")
+
+    # ── Cross-agent audits: News from Trader perspective ────────────
+
+    def _audit_news_for_trader_1(self, report: dict, focus: str | None):
+        """Audit News agent from Trader 1's perspective — 41 assets, intraday day trading."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        # 1. Ticker coverage — does every Trader 1 asset have at least one GNews query or chain reaction?
+        try:
+            from ..config import ASSETS, CHAIN_REACTIONS
+            from ..data_apis import GNEWS_QUERIES
+
+            all_tickers = {a.ticker for a in ASSETS}
+            # Build set of tickers directly covered by GNews queries
+            gnews_covered = set()
+            for q in GNEWS_QUERIES:
+                for t in q.get("tickers", []):
+                    gnews_covered.add(t)
+            # Add chain reaction targets
+            chain_covered = set()
+            for source, targets in CHAIN_REACTIONS.items():
+                if source in gnews_covered:
+                    for target in targets:
+                        chain_covered.add(target["ticker"] if isinstance(target, dict) else target)
+
+            total_covered = gnews_covered | chain_covered
+            uncovered = all_tickers - total_covered
+            coverage_pct = len(total_covered & all_tickers) / max(1, len(all_tickers)) * 100
+
+            findings.append({
+                "area": "ticker_coverage",
+                "status": "OK" if coverage_pct >= 80 else "WARN" if coverage_pct >= 60 else "CRITICAL",
+                "detail": (f"{len(total_covered & all_tickers)}/{len(all_tickers)} tickers couverts "
+                           f"({len(gnews_covered & all_tickers)} direct GNews, "
+                           f"{len(chain_covered & all_tickers - gnews_covered)} via chain reactions). "
+                           f"Non couverts: {sorted(uncovered) if uncovered else 'aucun'}"),
+            })
+            scores["ticker_coverage"] = min(10, coverage_pct / 10)
+
+            if uncovered:
+                improvements.append({
+                    "priority": "MEDIUM",
+                    "agent": "news",
+                    "action": f"Ajouter des queries GNews ou chain reactions pour: {', '.join(sorted(uncovered))}",
+                    "rationale": "Trader 1 ne peut pas trader ces actifs sans signal GNews ni chain reaction",
+                })
+        except Exception as exc:
+            scores["ticker_coverage"] = 3
+            findings.append({"area": "ticker_coverage", "status": "ERROR", "detail": str(exc)})
+
+        # 2. Category coverage — are high-edge categories well represented?
+        try:
+            from ..data_apis import GNEWS_QUERIES
+            high_edge_cats = {"weather", "supply_chain", "commodity", "geopolitical"}
+            cat_counts = {}
+            for q in GNEWS_QUERIES:
+                cat = q.get("category", "other")
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+            covered_cats = high_edge_cats & set(cat_counts.keys())
+            missing_cats = high_edge_cats - set(cat_counts.keys())
+            total_high_edge = sum(cat_counts.get(c, 0) for c in high_edge_cats)
+
+            findings.append({
+                "area": "category_coverage",
+                "status": "OK" if len(covered_cats) == len(high_edge_cats) else "WARN",
+                "detail": (f"High-edge categories: {dict((c, cat_counts.get(c, 0)) for c in high_edge_cats)}. "
+                           f"Total high-edge queries: {total_high_edge}/{len(GNEWS_QUERIES)}. "
+                           f"Missing: {missing_cats if missing_cats else 'aucune'}"),
+            })
+            scores["category_coverage"] = 10 if not missing_cats and total_high_edge >= 15 else 7 if not missing_cats else 4
+        except Exception as exc:
+            scores["category_coverage"] = 5
+            findings.append({"area": "category_coverage", "status": "ERROR", "detail": str(exc)})
+
+        # 3. GNews syntax audit — check for bare OR branches that produce noise
+        try:
+            import re
+            from ..data_apis import GNEWS_QUERIES
+            syntax_issues = []
+            for i, q in enumerate(GNEWS_QUERIES):
+                query = q["q"]
+                branches = re.split(r'\s+OR\s+', query)
+                for branch in branches:
+                    branch = branch.strip()
+                    words = branch.split()
+                    has_quotes = '"' in branch
+                    # Single bare word (no quotes, not a proper noun / ultra-niche term)
+                    if len(words) == 1 and not has_quotes:
+                        word = words[0]
+                        # Whitelist ultra-niche proper nouns that are OK bare
+                        niche_ok = {"Houthi", "Nornickel", "Codelco", "Escondida", "OPEC", "CONAB", "PBOC"}
+                        if word not in niche_ok:
+                            syntax_issues.append(f"#{i}: bare word '{word}' in query '{query[:60]}'")
+
+            status = "OK" if not syntax_issues else "WARN" if len(syntax_issues) <= 2 else "CRITICAL"
+            findings.append({
+                "area": "gnews_syntax",
+                "status": status,
+                "detail": f"{len(syntax_issues)} bare OR branches détectées" +
+                          (f": {'; '.join(syntax_issues[:5])}" if syntax_issues else " — toutes les branches ont du contexte"),
+            })
+            scores["gnews_syntax"] = max(0, 10 - len(syntax_issues) * 2)
+
+            for issue in syntax_issues[:3]:
+                improvements.append({
+                    "priority": "HIGH",
+                    "agent": "news",
+                    "action": f"Fix GNews syntax: {issue}",
+                    "rationale": "Mot nu dans un OR = bruit massif (articles sport, entertainment, etc.)",
+                })
+        except Exception as exc:
+            scores["gnews_syntax"] = 5
+            findings.append({"area": "gnews_syntax", "status": "ERROR", "detail": str(exc)})
+
+        # 4. Scored news relevance — do recent scans have news for Trader 1 tickers?
+        try:
+            from ..scan_history import load_scan_history
+            from ..config import ASSETS
+            history = load_scan_history()
+            recent = history[-20:] if len(history) > 20 else history
+
+            t1_tickers = {a.ticker for a in ASSETS}
+            ticker_hit_count: dict[str, int] = {}
+            total_scored = 0
+
+            for scan in recent:
+                for news in scan.get("all_scored_news", []):
+                    total_scored += 1
+                    for ticker in news.get("impacted_tickers", []):
+                        if ticker in t1_tickers:
+                            ticker_hit_count[ticker] = ticker_hit_count.get(ticker, 0) + 1
+
+            tickers_with_hits = len(ticker_hit_count)
+            top_tickers = sorted(ticker_hit_count.items(), key=lambda x: -x[1])[:10]
+
+            findings.append({
+                "area": "scored_news_relevance",
+                "status": "OK" if tickers_with_hits >= 15 else "WARN" if tickers_with_hits >= 5 else "CRITICAL",
+                "detail": (f"{tickers_with_hits}/{len(t1_tickers)} tickers touchés dans les {len(recent)} derniers scans "
+                           f"({total_scored} news scorées). Top: {top_tickers[:5]}"),
+            })
+            scores["scored_news_relevance"] = min(10, tickers_with_hits / (len(t1_tickers) / 10))
+        except Exception as exc:
+            scores["scored_news_relevance"] = 3
+            findings.append({"area": "scored_news_relevance", "status": "ERROR", "detail": str(exc)})
+
+        # 5. Signal-to-noise ratio — ratio of tradeable scores (>20) vs noise (<20)
+        try:
+            from ..scan_history import load_scan_history
+            history = load_scan_history()
+            recent = history[-20:] if len(history) > 20 else history
+
+            total = 0
+            tradeable = 0
+            for scan in recent:
+                for news in scan.get("all_scored_news", []):
+                    s = news.get("total_score") or news.get("score", 0)
+                    if s > 0:
+                        total += 1
+                        if s >= 20:
+                            tradeable += 1
+
+            ratio = tradeable / max(1, total) * 100
+            findings.append({
+                "area": "signal_to_noise",
+                "status": "OK" if ratio >= 20 else "WARN" if ratio >= 10 else "CRITICAL",
+                "detail": f"{tradeable}/{total} news avec score >= 20 ({ratio:.0f}%). Objectif: >= 20%",
+            })
+            scores["signal_to_noise"] = min(10, ratio / 5)  # 50% = 10/10
+        except Exception as exc:
+            scores["signal_to_noise"] = 5
+            findings.append({"area": "signal_to_noise", "status": "ERROR", "detail": str(exc)})
+
+        # 6. Freshness for intraday — news must be <2h for day trading edge
+        try:
+            from ..scan_history import load_scan_history
+            history = load_scan_history()
+            recent = history[-20:] if len(history) > 20 else history
+
+            ages = []
+            for scan in recent:
+                for news in scan.get("all_scored_news", []):
+                    age = news.get("age_hours")
+                    if age is not None:
+                        ages.append(age)
+
+            if ages:
+                fresh_pct = sum(1 for a in ages if a < 2) / len(ages) * 100
+                avg_age = sum(ages) / len(ages)
+                findings.append({
+                    "area": "freshness_for_intraday",
+                    "status": "OK" if fresh_pct >= 30 else "WARN" if fresh_pct >= 15 else "CRITICAL",
+                    "detail": f"<2h: {fresh_pct:.0f}%, avg age: {avg_age:.1f}h (n={len(ages)}). Intraday needs >=30% fresh",
+                })
+                scores["freshness_for_intraday"] = min(10, fresh_pct / 5)  # 50%+ = 10
+            else:
+                scores["freshness_for_intraday"] = 3
+                findings.append({"area": "freshness_for_intraday", "status": "WARN", "detail": "No age data"})
+        except Exception as exc:
+            scores["freshness_for_intraday"] = 5
+            findings.append({"area": "freshness_for_intraday", "status": "ERROR", "detail": str(exc)})
+
+        # 7. Chain reaction reach — does the chain extend coverage to uncovered assets?
+        try:
+            from ..config import ASSETS, CHAIN_REACTIONS
+            from ..data_apis import GNEWS_QUERIES
+
+            gnews_direct = set()
+            for q in GNEWS_QUERIES:
+                for t in q.get("tickers", []):
+                    gnews_direct.add(t)
+
+            all_tickers = {a.ticker for a in ASSETS}
+            no_gnews = all_tickers - gnews_direct
+            chain_reaches = set()
+            for source, targets in CHAIN_REACTIONS.items():
+                if source in gnews_direct:
+                    for tgt in targets:
+                        t = tgt["ticker"] if isinstance(tgt, dict) else tgt
+                        if t in no_gnews:
+                            chain_reaches.add(t)
+
+            still_uncovered = no_gnews - chain_reaches
+            findings.append({
+                "area": "chain_reaction_reach",
+                "status": "OK" if len(still_uncovered) <= 5 else "WARN",
+                "detail": (f"{len(no_gnews)} tickers sans GNews direct. "
+                           f"Chain reactions couvrent {len(chain_reaches)}: {sorted(chain_reaches)}. "
+                           f"Toujours non couverts: {sorted(still_uncovered)}"),
+            })
+            scores["chain_reaction_reach"] = max(0, 10 - len(still_uncovered))
+        except Exception as exc:
+            scores["chain_reaction_reach"] = 5
+            findings.append({"area": "chain_reaction_reach", "status": "ERROR", "detail": str(exc)})
+
+        self._analyze_agent_errors(findings, scores, improvements, "news")
+        tests.append("test_gnews_all_trader1_tickers_covered")
+        tests.append("test_gnews_no_bare_or_branches")
+        tests.append("test_gnews_high_edge_categories_present")
+
+    def _audit_news_for_trader_2(self, report: dict, focus: str | None):
+        """Audit News agent from Trader 2's perspective — HG=F, CC=F, KC=F, ZW=F trend following."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        T2_TICKERS = {"HG=F": "Cuivre", "CC=F": "Cacao", "KC=F": "Café", "ZW=F": "Blé"}
+        T2_NEEDED_DIMS = {
+            "HG=F": {"weather", "supply_chain", "commodity", "geopolitical", "regulatory"},
+            "CC=F": {"weather", "supply_chain", "commodity", "regulatory"},
+            "KC=F": {"weather", "supply_chain", "commodity"},
+            "ZW=F": {"weather", "supply_chain", "commodity", "geopolitical", "regulatory"},
+        }
+        T2_KEY_PRODUCERS = {
+            "HG=F": ["Chile", "DRC", "Zambia", "Peru", "China"],
+            "CC=F": ["Ghana", "Ivory Coast", "Cameroon", "Nigeria", "Indonesia"],
+            "KC=F": ["Brazil", "Vietnam", "Colombia", "Ethiopia", "Honduras"],
+            "ZW=F": ["Russia", "Ukraine", "Australia", "Canada", "India"],
+        }
+
+        # 1. Ticker coverage depth — how many queries per T2 ticker?
+        try:
+            from ..data_apis import GNEWS_QUERIES
+            ticker_query_count: dict[str, list[int]] = {t: [] for t in T2_TICKERS}
+            for i, q in enumerate(GNEWS_QUERIES):
+                for t in q.get("tickers", []):
+                    if t in ticker_query_count:
+                        ticker_query_count[t].append(i)
+
+            min_queries = min(len(v) for v in ticker_query_count.values())
+            details = {t: len(v) for t, v in ticker_query_count.items()}
+            weak_tickers = [t for t, v in ticker_query_count.items() if len(v) < 4]
+
+            findings.append({
+                "area": "ticker_coverage_depth",
+                "status": "OK" if min_queries >= 4 else "WARN" if min_queries >= 2 else "CRITICAL",
+                "detail": f"Queries par ticker T2: {details}. Min recommandé: 4. Faibles: {weak_tickers or 'aucun'}",
+            })
+            scores["ticker_coverage_depth"] = min(10, min_queries * 2)
+
+            for t in weak_tickers:
+                improvements.append({
+                    "priority": "HIGH",
+                    "agent": "news",
+                    "action": f"Ajouter des queries GNews pour {t} ({T2_TICKERS[t]}) — actuellement {len(ticker_query_count[t])} queries",
+                    "rationale": f"Trader 2 suit {t} en trend following, {len(ticker_query_count[t])} queries insuffisant pour couvrir weather+supply+demand",
+                })
+        except Exception as exc:
+            scores["ticker_coverage_depth"] = 3
+            findings.append({"area": "ticker_coverage_depth", "status": "ERROR", "detail": str(exc)})
+
+        # 2. Category balance — for each T2 ticker, which dimensions are covered?
+        try:
+            from ..data_apis import GNEWS_QUERIES
+            from ..agents.agent_trader_2 import RELEVANT_CATEGORIES
+
+            ticker_cats: dict[str, set[str]] = {t: set() for t in T2_TICKERS}
+            for q in GNEWS_QUERIES:
+                cat = q.get("category", "other")
+                for t in q.get("tickers", []):
+                    if t in ticker_cats:
+                        ticker_cats[t].add(cat)
+
+            gaps = {}
+            for ticker, needed in T2_NEEDED_DIMS.items():
+                missing = needed - ticker_cats.get(ticker, set())
+                if missing:
+                    gaps[ticker] = missing
+
+            total_missing = sum(len(v) for v in gaps.values())
+            findings.append({
+                "area": "category_balance",
+                "status": "OK" if total_missing == 0 else "WARN" if total_missing <= 3 else "CRITICAL",
+                "detail": (f"Couverture catégorielle par ticker: "
+                           f"{dict((t, sorted(c)) for t, c in ticker_cats.items())}. "
+                           f"Gaps: {dict((t, sorted(m)) for t, m in gaps.items()) if gaps else 'aucun'}"),
+            })
+            scores["category_balance"] = max(0, 10 - total_missing * 1.5)
+
+            for ticker, missing in gaps.items():
+                for cat in missing:
+                    improvements.append({
+                        "priority": "HIGH" if cat in ("weather", "supply_chain") else "MEDIUM",
+                        "agent": "news",
+                        "action": f"Ajouter une query GNews '{cat}' pour {ticker} ({T2_TICKERS[ticker]})",
+                        "rationale": f"Trader 2 a besoin de signaux {cat} pour le trend following sur {ticker}",
+                    })
+        except Exception as exc:
+            scores["category_balance"] = 5
+            findings.append({"area": "category_balance", "status": "ERROR", "detail": str(exc)})
+
+        # 3. Producer coverage — key producing countries for each T2 ticker
+        try:
+            from ..data_apis import GNEWS_QUERIES
+            import re
+
+            producer_hits: dict[str, list[str]] = {t: [] for t in T2_TICKERS}
+            producer_missing: dict[str, list[str]] = {t: [] for t in T2_TICKERS}
+
+            for ticker, producers in T2_KEY_PRODUCERS.items():
+                for producer in producers:
+                    found = False
+                    for q in GNEWS_QUERIES:
+                        if ticker in q.get("tickers", []):
+                            # Check if producer name appears in query text or zone
+                            query_text = q["q"].lower() + " " + q.get("zone", "").lower()
+                            if producer.lower() in query_text:
+                                found = True
+                                break
+                    if found:
+                        producer_hits[ticker].append(producer)
+                    else:
+                        producer_missing[ticker].append(producer)
+
+            total_missing_producers = sum(len(v) for v in producer_missing.values())
+            total_producers = sum(len(v) for v in T2_KEY_PRODUCERS.values())
+            coverage = (total_producers - total_missing_producers) / max(1, total_producers) * 100
+
+            findings.append({
+                "area": "producer_coverage",
+                "status": "OK" if coverage >= 70 else "WARN" if coverage >= 50 else "CRITICAL",
+                "detail": (f"Couverture producteurs: {coverage:.0f}% ({total_producers - total_missing_producers}/{total_producers}). "
+                           f"Manquants: {dict((t, m) for t, m in producer_missing.items() if m) or 'aucun'}"),
+            })
+            scores["producer_coverage"] = min(10, coverage / 10)
+
+            for ticker, missing in producer_missing.items():
+                if missing:
+                    improvements.append({
+                        "priority": "MEDIUM",
+                        "agent": "news",
+                        "action": f"Ajouter couverture producteur pour {ticker}: {', '.join(missing)}",
+                        "rationale": f"Pays producteurs clés sans query GNews — risque de manquer des signaux supply pour {T2_TICKERS[ticker]}",
+                    })
+        except Exception as exc:
+            scores["producer_coverage"] = 5
+            findings.append({"area": "producer_coverage", "status": "ERROR", "detail": str(exc)})
+
+        # 4. GNews syntax — same check but filtered to T2 queries only
+        try:
+            import re
+            from ..data_apis import GNEWS_QUERIES
+            syntax_issues = []
+            for i, q in enumerate(GNEWS_QUERIES):
+                # Only check queries that impact T2 tickers
+                if not any(t in T2_TICKERS for t in q.get("tickers", [])):
+                    continue
+                query = q["q"]
+                branches = re.split(r'\s+OR\s+', query)
+                for branch in branches:
+                    branch = branch.strip()
+                    words = branch.split()
+                    has_quotes = '"' in branch
+                    if len(words) == 1 and not has_quotes:
+                        niche_ok = {"Houthi", "Nornickel", "Codelco", "Escondida", "OPEC", "CONAB", "PBOC"}
+                        if words[0] not in niche_ok:
+                            syntax_issues.append(f"#{i}: bare '{words[0]}' in '{query[:50]}'")
+
+            findings.append({
+                "area": "gnews_syntax",
+                "status": "OK" if not syntax_issues else "CRITICAL",
+                "detail": f"{len(syntax_issues)} bare OR branches dans les queries T2" +
+                          (f": {'; '.join(syntax_issues)}" if syntax_issues else ""),
+            })
+            scores["gnews_syntax"] = max(0, 10 - len(syntax_issues) * 3)
+        except Exception as exc:
+            scores["gnews_syntax"] = 5
+            findings.append({"area": "gnews_syntax", "status": "ERROR", "detail": str(exc)})
+
+        # 5. Scored news for trend — recent news with structural categories for T2 tickers
+        try:
+            from ..scan_history import load_scan_history
+            history = load_scan_history()
+            recent = history[-20:] if len(history) > 20 else history
+
+            structural_cats = {"weather", "supply_chain", "commodity", "geopolitical", "regulatory"}
+            t2_signals = 0
+            t2_structural = 0
+            t2_high_reliability = 0
+            total_scored = 0
+
+            for scan in recent:
+                for news in scan.get("all_scored_news", []):
+                    total_scored += 1
+                    tickers = news.get("impacted_tickers", [])
+                    if any(t in T2_TICKERS for t in tickers):
+                        t2_signals += 1
+                        cat = news.get("news_category", "other")
+                        if cat in structural_cats:
+                            t2_structural += 1
+                        rel = news.get("signal_reliability", 50)
+                        if rel >= 70:
+                            t2_high_reliability += 1
+
+            findings.append({
+                "area": "scored_news_for_trend",
+                "status": "OK" if t2_structural >= 5 else "WARN" if t2_structural >= 2 else "CRITICAL",
+                "detail": (f"{t2_signals} news touchant les tickers T2 dans {len(recent)} scans "
+                           f"(dont {t2_structural} structurelles, {t2_high_reliability} haute fiabilité). "
+                           f"Total scorées: {total_scored}"),
+            })
+            scores["scored_news_for_trend"] = min(10, t2_structural)
+        except Exception as exc:
+            scores["scored_news_for_trend"] = 3
+            findings.append({"area": "scored_news_for_trend", "status": "ERROR", "detail": str(exc)})
+
+        # 6. Structural freshness — structured sources should use 18h lookback, not 8h
+        try:
+            from ..config import STRUCTURED_SOURCE_MAX_AGE_HOURS, STRUCTURED_SOURCES
+
+            has_extended_lookback = STRUCTURED_SOURCE_MAX_AGE_HOURS >= 12
+            structured_count = len(STRUCTURED_SOURCES) if hasattr(STRUCTURED_SOURCES, '__len__') else 0
+
+            findings.append({
+                "area": "structural_freshness",
+                "status": "OK" if has_extended_lookback else "CRITICAL",
+                "detail": (f"STRUCTURED_SOURCE_MAX_AGE_HOURS={STRUCTURED_SOURCE_MAX_AGE_HOURS}h "
+                           f"({structured_count} sources structurées). "
+                           f"Trend following a besoin de >=12h lookback pour données overnight (USDA, NOAA)"),
+            })
+            scores["structural_freshness"] = 10 if has_extended_lookback else 3
+        except Exception as exc:
+            scores["structural_freshness"] = 5
+            findings.append({"area": "structural_freshness", "status": "ERROR", "detail": str(exc)})
+
+        # 7. Accumulation signal — do recent scans produce enough directional signal for T2 flip threshold?
+        try:
+            from ..scan_history import load_scan_history
+            from ..agents.agent_trader_2 import RELEVANT_CATEGORIES
+            history = load_scan_history()
+            recent = history[-20:] if len(history) > 20 else history
+
+            # Simulate signal accumulation per ticker
+            ticker_signals: dict[str, dict[str, float]] = {t: {"LONG": 0, "SHORT": 0, "count": 0} for t in T2_TICKERS}
+            for scan in recent:
+                for news in scan.get("all_scored_news", []):
+                    cat = news.get("news_category", "other")
+                    if cat not in RELEVANT_CATEGORIES:
+                        continue
+                    direction = news.get("direction", "NEUTRAL")
+                    if direction == "NEUTRAL":
+                        continue
+                    score = news.get("total_score") or news.get("score", 0)
+                    for t in news.get("impacted_tickers", []):
+                        if t in ticker_signals:
+                            ticker_signals[t][direction] = ticker_signals[t].get(direction, 0) + score
+                            ticker_signals[t]["count"] = ticker_signals[t].get("count", 0) + 1
+
+            # Check if any ticker has enough signal to potentially trigger a flip (threshold ~20)
+            tickers_with_signal = sum(
+                1 for t, s in ticker_signals.items()
+                if abs(s.get("LONG", 0) - s.get("SHORT", 0)) > 0 or s.get("count", 0) > 0
+            )
+            strong_signals = sum(
+                1 for t, s in ticker_signals.items()
+                if max(s.get("LONG", 0), s.get("SHORT", 0)) >= 20
+            )
+
+            detail_parts = []
+            for t in sorted(T2_TICKERS.keys()):
+                s = ticker_signals[t]
+                net = s.get("LONG", 0) - s.get("SHORT", 0)
+                cnt = s.get("count", 0)
+                detail_parts.append(f"{t}: {cnt} news, net={net:+.0f}")
+
+            findings.append({
+                "area": "accumulation_signal",
+                "status": "OK" if strong_signals >= 2 else "WARN" if tickers_with_signal >= 2 else "CRITICAL",
+                "detail": (f"{tickers_with_signal}/4 tickers avec signal, {strong_signals}/4 au-dessus du seuil de flip (20). "
+                           f"Détail: {'; '.join(detail_parts)}"),
+            })
+            scores["accumulation_signal"] = min(10, tickers_with_signal * 2 + strong_signals)
+        except Exception as exc:
+            scores["accumulation_signal"] = 3
+            findings.append({"area": "accumulation_signal", "status": "ERROR", "detail": str(exc)})
+
+        self._analyze_agent_errors(findings, scores, improvements, "news")
+        tests.append("test_gnews_all_t2_tickers_have_4_plus_queries")
+        tests.append("test_gnews_t2_category_balance_weather_supply_commodity")
+        tests.append("test_gnews_t2_producer_coverage")
 
     def _audit_self(self, report: dict, focus: str | None):
         """Auto-audit — meta-analysis of the auditor's own capabilities."""
