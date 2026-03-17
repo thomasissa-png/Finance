@@ -386,7 +386,10 @@ def collect_early_signal_news() -> list[NewsItem]:
             if domain not in _last_early_diag:
                 _last_early_diag[domain] = {"status": "global_timeout", "items": 0}
     finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        # wait=True: Block until all RSS threads finish (bounded by 10s HTTP
+        # timeout). Prevents zombie threads from overlapping with next phase
+        # (RSS mainstream), which caused connection saturation on Replit.
+        executor.shutdown(wait=True, cancel_futures=True)
 
     # Per-feed diagnostics: which feeds returned items, which were empty
     if feeds_with_items:
@@ -546,12 +549,13 @@ def collect_all_news() -> list[NewsItem]:
                 tracker.record_failure(name, phase, exc, latency)
             return []
 
-    # SEQUENTIAL execution: each source completes (including thread cleanup) before
-    # the next starts. Both collect_structured_data() and collect_early_signal_news()
-    # create their own ThreadPoolExecutors internally (3 + 8 workers). Running them
-    # in parallel caused nested thread pools (15+ threads) which exhausted Replit
-    # resources, causing all feeds to timeout and return 0 items.
-    # DO NOT parallelize — the 30-60s savings is not worth losing all news data.
+    # SEQUENTIAL execution with thread cleanup between phases.
+    # Each phase (structured=20 workers, early-signal=8, RSS=5) uses
+    # executor.shutdown(wait=True) to ensure all threads die BEFORE the
+    # next phase starts. Without this, zombie threads from phase N overlap
+    # with phase N+1, causing up to 33 concurrent HTTP connections that
+    # saturate Replit networking (global_timeout on RSS feeds).
+    # DO NOT parallelize — sequential + cleanup is critical for Replit.
     structured_news = _safe_collect(collect_structured_data, "structured_data", "phase0")
     early_news = _safe_collect(collect_early_signal_news, "early_signal", "phase1")
 

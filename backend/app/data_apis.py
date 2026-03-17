@@ -3476,7 +3476,7 @@ def collect_structured_data() -> list[NewsItem]:
     futures = _start_times
     source_item_counts: dict[str, int] = {}
     try:
-        for future in as_completed(futures, timeout=180):
+        for future in as_completed(futures, timeout=75):
             source_name, start_t = futures[future]
             latency_ms = (time.monotonic() - start_t) * 1000
             try:
@@ -3511,17 +3511,21 @@ def collect_structured_data() -> list[NewsItem]:
                     source_item_counts[name] = -2
         completed_sources = {futures[f][0] for f in futures if f.done()}
         skipped = [n for n, _ in sources if n not in completed_sources]
-        logger.warning("Structured data collection timed out (180s). "
+        logger.warning("Structured data collection timed out (75s). "
                        "Completed: %s. Skipped: %s",
                        sorted(completed_sources), skipped)
         if tracker:
             for name in skipped:
                 tracker.record_failure(name, "phase0", "Timeout (120s global)")
     finally:
-        # wait=False: do NOT block on slow sources. cancel_futures=True cancels
-        # futures still QUEUED (not started), but running futures self-terminate
-        # via their per-request REQUEST_TIMEOUT=15s.
-        executor.shutdown(wait=False, cancel_futures=True)
+        # wait=True: BLOCK until all threads finish. With 20 workers and 45s
+        # per-source time budgets, threads self-terminate within 45s of start.
+        # After the 75s global timeout, most are already done — wait ensures
+        # zombie threads don't overlap with early-signal/RSS phases (which
+        # caused 33 concurrent HTTP connections saturating Replit networking).
+        # cancel_futures=True cancels any still-queued futures (shouldn't
+        # happen with 20 workers for 20 sources, but defensive).
+        executor.shutdown(wait=True, cancel_futures=True)
 
     # Diagnostic: per-source completion status for debugging 0-item scans
     completed_names = {futures[f][0] for f in futures if f.done()}
