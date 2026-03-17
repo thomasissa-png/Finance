@@ -104,6 +104,9 @@ RSS_FETCH_TIMEOUT = 10
 _SLOW_FEEDS: set[str] = {
     "hellenicshippingnews.com",
     "war.gov",
+    "www.cnbc.com",        # CDN throttles non-browser requests
+    "feeds.bbci.co.uk",    # Geo-restricted or slow from Replit IPs
+    "pancanal.com",        # Recurring SSL errors
 }
 
 # ── Per-feed diagnostics from last collection run ────────────────────
@@ -289,7 +292,7 @@ def collect_rss_news() -> list[NewsItem]:
     futures = {executor.submit(_fetch_rss_feed, url): url for url in RSS_FEEDS}
     completed_count = 0
     try:
-        for future in as_completed(futures, timeout=30):
+        for future in as_completed(futures, timeout=45):
             url = futures[future]
             domain = url.split("/")[2] if len(url.split("/")) > 2 else url
             try:
@@ -313,7 +316,7 @@ def collect_rss_news() -> list[NewsItem]:
                     "error": str(exc)[:150],
                 }
     except TimeoutError:
-        logger.warning("RSS collection global TIMEOUT (30s), %d/%d feeds completed",
+        logger.warning("RSS collection global TIMEOUT (45s), %d/%d feeds completed",
                        completed_count, len(RSS_FEEDS))
         # Mark remaining feeds as global_timeout
         for url in RSS_FEEDS:
