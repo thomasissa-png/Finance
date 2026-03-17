@@ -570,7 +570,7 @@ def fetch_weather_alerts() -> list[NewsItem]:
     Makes 16 sequential HTTP calls (one per zone). Time-capped at 60s
     to avoid blocking the pool for other structured data sources.
     """
-    WEATHER_MAX_SECONDS = 60
+    WEATHER_MAX_SECONDS = 45
     weather_start = time.monotonic()
     items: list[NewsItem] = []
     zones_checked = 0
@@ -1708,8 +1708,13 @@ def fetch_options_unusual_activity() -> list[NewsItem]:
     }
 
     items: list[NewsItem] = []
+    _deadline = time.monotonic() + 45  # Hard budget: 45s total for all tickers
 
     for ticker, name in options_tickers.items():
+        if time.monotonic() > _deadline:
+            logger.info("Options: time budget exhausted after %d/%d tickers",
+                        len(items), len(options_tickers))
+            break
         try:
             stock = yf.Ticker(ticker)
             expirations = stock.options
@@ -2737,10 +2742,15 @@ def fetch_satellite_ndvi() -> list[NewsItem]:
     """
     items: list[NewsItem] = []
     current_month = datetime.now(timezone.utc).month
+    _deadline = time.monotonic() + 45  # Hard budget: 45s total for all zones
 
     for zone in NDVI_MONITORING_ZONES:
         if current_month not in zone["growing_months"]:
             continue
+        if time.monotonic() > _deadline:
+            logger.info("NDVI: time budget exhausted after %d items from %d zones",
+                        len(items), len(NDVI_MONITORING_ZONES))
+            break
 
         try:
             # Use MODIS/VIIRS NDVI via NASA FIRMS or EOSDIS
@@ -3343,8 +3353,13 @@ def fetch_google_news_rss() -> list[NewsItem]:
 
     items: list[NewsItem] = []
     seen: set[str] = set()
+    _deadline = time.monotonic() + 45  # Hard budget: 45s total for all queries
 
     for query_cfg in GOOGLE_NEWS_QUERIES:
+        if time.monotonic() > _deadline:
+            logger.info("Google News RSS: time budget exhausted after %d items from %d queries",
+                        len(items), len(GOOGLE_NEWS_QUERIES))
+            break
         try:
             query = query_cfg["q"].replace(" ", "+")
             rss_url = f"https://news.google.com/rss/search?q={query}&hl=en&gl=US&ceid=US:en"
@@ -3446,12 +3461,13 @@ def collect_structured_data() -> list[NewsItem]:
         ("dark_pool", fetch_dark_pool_signals),
     ]
 
-    # max_workers=12: With 20 sources, 12 workers = 2 waves instead of 3.
-    # Previously 8 workers caused "not_started" when slow sources (weather 60s,
-    # ndvi 120s, gnews 40s) filled the first wave, leaving 12 sources queued
-    # past the 180s global timeout. 12 workers ensures all sources START within
-    # the first 2 waves (~45s max queue time).
-    executor = ThreadPoolExecutor(max_workers=12)
+    # max_workers=20: One worker per source — zero queuing. Previously 12 workers
+    # caused "not_started" because slow sources (options ~150s for 51 yfinance calls,
+    # ndvi ~120s for 11 NASA calls, google_news ~90s for 11 RSS calls) monopolized
+    # workers while fast sources sat in queue past the 180s global timeout.
+    # 20 workers = all sources start within 1-2 seconds. I/O-bound threads have
+    # minimal CPU/memory overhead even on constrained Replit environments.
+    executor = ThreadPoolExecutor(max_workers=20)
     # Track start time per future for latency measurement
     _start_times: dict = {}
     for name, fn in sources:
