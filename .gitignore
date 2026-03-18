@@ -1,29 +1,16 @@
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-
-# Virtual Environment
-venv/
-env/
-ENV/
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-
-# Data & Cache
-data/
-*.csv
-*.xlsx
-cache/
-
-# Logs
+*.egg-info/
+dist/
+build/
+.env
+*.db
+node_modules/
+frontend/dist/
+.vite/
 *.log
-
-# OS
 .DS_Store
-Thumbs.db
+venv/
+
+# Runtime data — NEVER commit, created automatically at startup
+data/

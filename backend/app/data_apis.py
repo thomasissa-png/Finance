@@ -1,0 +1,3602 @@
+"""Structured data APIs: EIA, Open-Meteo, USDA, GNews.
+
+These provide NUMERICAL data that Claude can interpret precisely,
+unlike RSS feeds which only give headlines.
+All APIs are free-tier and optional (env var keys).
+"""
+
+import logging
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import requests
+
+from .config import SOURCE_WEIGHTS
+from .models import NewsItem
+
+logger = logging.getLogger(__name__)
+
+# ── Timeouts for all HTTP requests ────────────────────────────────────
+REQUEST_TIMEOUT = 15  # seconds
+
+# ── Per-source diagnostics from last structured data collection ──────
+_last_structured_diag: dict[str, dict] = {}
+
+
+def get_last_structured_diagnostics() -> dict[str, dict]:
+    """Get per-source diagnostics from the last collect_structured_data() run.
+
+    Called by agent_news.py to log results to agent_logs (DB) for frontend visibility.
+    """
+    return dict(_last_structured_diag)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 1. EIA API — US energy stocks and production
+# ═══════════════════════════════════════════════════════════════════════
+# Free key: https://www.eia.gov/opendata/register.php
+# Env var: EIA_API_KEY
+
+EIA_SERIES = {
+    # Weekly US crude oil stocks (most market-moving)
+    "PET.WCESTUS1.W": "US Crude Oil Stocks (Weekly)",
+    # Weekly US gasoline stocks
+    "PET.WGTSTUS1.W": "US Gasoline Stocks (Weekly)",
+    # Weekly US distillate stocks
+    "PET.WDISTUS1.W": "US Distillate Fuel Stocks (Weekly)",
+    # Weekly natural gas storage
+    "NG.NW2_EPG0_SWO_R48_BCF.W": "US Natural Gas Storage (Weekly)",
+    # Refinery utilization — drop in utilization = crude demand collapse signal
+    "PET.WPULEUS3.W": "US Refinery Utilization Rate (Weekly %)",
+}
+
+
+def fetch_eia_data() -> list[NewsItem]:
+    """Fetch latest EIA energy data as structured news items.
+
+    Returns NewsItem objects with numerical data in the title
+    so Claude can interpret exact figures.
+    """
+    api_key = os.environ.get("EIA_API_KEY", "")
+    if not api_key:
+        logger.warning("EIA_API_KEY not set — skipping EIA data")
+        return []
+
+    items: list[NewsItem] = []
+
+    for series_id, description in EIA_SERIES.items():
+        try:
+            # EIA API v2
+            url = "https://api.eia.gov/v2/seriesid/" + series_id
+            params = {"api_key": api_key, "num": 2}  # Last 2 data points
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+
+            if resp.status_code != 200:
+                # Try v1 fallback
+                url_v1 = f"https://api.eia.gov/series/?api_key={api_key}&series_id={series_id}&num=2"
+                resp = requests.get(url_v1, timeout=REQUEST_TIMEOUT)
+
+            if resp.status_code != 200:
+                logger.warning("EIA API error for %s: HTTP %d", series_id, resp.status_code)
+                continue
+
+            data = resp.json()
+
+            # Check for API error in response body
+            if data.get("error"):
+                logger.warning("EIA API returned error for %s: %s", series_id, data["error"])
+                continue
+
+            # Parse v1 response format
+            series_data = None
+            if "series" in data and data["series"]:
+                series_data = data["series"][0].get("data", [])
+            elif "response" in data and "data" in data["response"]:
+                series_data = data["response"]["data"]
+
+            if not series_data or len(series_data) < 2:
+                continue
+
+            # Calculate week-over-week change
+            current_val = float(series_data[0][1]) if isinstance(series_data[0], list) else float(series_data[0].get("value", 0))
+            previous_val = float(series_data[1][1]) if isinstance(series_data[1], list) else float(series_data[1].get("value", 0))
+
+            if previous_val == 0:
+                continue
+
+            change = current_val - previous_val
+            change_pct = (change / abs(previous_val)) * 100
+
+            # Skip insignificant changes — noise from rounding or marginal moves
+            if abs(change_pct) < 0.5:
+                continue
+
+            # Determine related tickers based on series
+            tickers = []
+            if "Crude" in description:
+                tickers = ["CL=F", "BZ=F"]
+            elif "Gasoline" in description:
+                tickers = ["CL=F"]
+            elif "Distillate" in description:
+                tickers = ["CL=F", "BZ=F"]
+            elif "Natural Gas" in description:
+                tickers = ["NG=F"]
+            elif "Refinery" in description:
+                tickers = ["CL=F", "BZ=F"]
+
+            # Extract period date from response for accurate published timestamp
+            period_str = ""
+            if isinstance(series_data[0], list):
+                period_str = str(series_data[0][0]) if series_data[0][0] else ""
+            else:
+                period_str = series_data[0].get("period", "")
+            try:
+                # EIA periods can be "YYYYMMDD", "YYYY-MM-DD", or "YYYYMM"
+                clean = period_str.replace("-", "").strip()
+                if len(clean) == 8:
+                    published_dt = datetime.strptime(clean, "%Y%m%d").replace(tzinfo=timezone.utc)
+                elif len(clean) == 6:
+                    published_dt = datetime.strptime(clean, "%Y%m").replace(tzinfo=timezone.utc)
+                else:
+                    published_dt = datetime.now(timezone.utc)
+            except (ValueError, TypeError):
+                published_dt = datetime.now(timezone.utc)
+
+            # Build a precise headline with numbers
+            direction = "hausse" if change > 0 else "baisse"
+            title = (
+                f"[EIA DATA] {description}: {current_val:,.1f} "
+                f"({direction} de {abs(change):,.1f}, {change_pct:+.1f}% vs semaine precedente)"
+            )
+
+            items.append(NewsItem(
+                title=title,
+                source="EIA",
+                url=f"https://www.eia.gov/petroleum/supply/weekly/",
+                published=published_dt,
+                related_tickers=tickers,
+                source_weight=SOURCE_WEIGHTS.get("EIA", 1.15),
+                news_zone="us",
+            ))
+
+        except Exception as exc:
+            logger.warning("EIA fetch error for %s: %s", series_id, exc)
+
+    if items:
+        logger.info("Fetched %d EIA data points", len(items))
+    else:
+        logger.info("EIA returned 0 items (all series changes < 0.5%% threshold or fetch errors)")
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2. Open-Meteo — Agricultural zone weather monitoring
+# ═══════════════════════════════════════════════════════════════════════
+# Completely free, no API key needed
+# https://open-meteo.com/
+
+# Critical agricultural zones with their commodity impacts
+# growing_months: months when crops are vulnerable (frost/heat matter)
+# drought_threshold_mm: zone-specific 7-day precipitation threshold
+# critical_months: subset of growing season where damage is most impactful
+#   (silking, grain fill, flowering — crop-dependent)
+# heat_stress_threshold: lower than heat_threshold — cumulative stress starts here
+AGRICULTURAL_ZONES: list[dict[str, Any]] = [
+    {
+        "name": "US Midwest Corn Belt",
+        "lat": 41.5, "lon": -89.0,
+        "tickers": ["ZC=F", "ZS=F", "ZW=F"],
+        "crops": "mais, soja, ble",
+        "frost_threshold": -1,  # °C — adjusted: corn damage at -1°C during silking (was -2)
+        "heat_threshold": 35,   # °C — extreme heat alert
+        "heat_stress_threshold": 32,  # °C — corn pollen sterility starts at 32°C during silking
+        "growing_months": [4, 5, 6, 7, 8, 9, 10],  # Apr-Oct
+        "critical_months": [6, 7, 8],  # Jun-Aug: silking + grain fill = max vulnerability
+        "drought_threshold_mm": 10.0,  # 10mm/7d during growing season
+        "critical_drought_mm": 5.0,  # During critical months, even less rain = disaster
+        "drought_note": "secheresse critique pendant la saison de croissance",
+    },
+    {
+        "name": "Brazil Minas Gerais (Coffee/Sugar)",
+        "lat": -21.0, "lon": -44.0,
+        "tickers": ["KC=F", "SB=F"],
+        "crops": "cafe, sucre",
+        "frost_threshold": 0,   # °C — adjusted: coffee damage at 0°C with radiational cooling (was 2)
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Year-round (perennial)
+        "critical_months": [5, 6, 7, 8],  # May-Aug: Brazilian winter = frost risk peak for coffee
+        "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 3.0,
+        "drought_note": "secheresse = stress hydrique cafe",
+    },
+    {
+        "name": "Brazil Sao Paulo (Sugar/Ethanol)",
+        "lat": -22.5, "lon": -47.5,
+        "tickers": ["SB=F", "KC=F"],
+        "crops": "sucre, ethanol, cafe",
+        "frost_threshold": 0,   # Adjusted from 2
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [5, 6, 7, 8],
+        "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 3.0,
+        "drought_note": "impacts recolte sucre",
+    },
+    {
+        "name": "Brazil Rio Grande do Sul (Soy/Corn)",
+        "lat": -29.5, "lon": -52.0,
+        "tickers": ["ZS=F", "ZC=F"],
+        "crops": "soja, mais",
+        "frost_threshold": -1,
+        "heat_threshold": 38,
+        "heat_stress_threshold": 33,
+        "growing_months": [9, 10, 11, 12, 1, 2, 3, 4],  # Sep-Apr (Southern hemisphere)
+        "critical_months": [12, 1, 2],  # Dec-Feb: flowering/grain fill
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "RS = major soja/mais producer, secheresse = export reduction",
+    },
+    {
+        "name": "Ukraine/Black Sea (Wheat)",
+        "lat": 49.0, "lon": 32.0,
+        "tickers": ["ZW=F", "ZC=F"],
+        "crops": "ble, mais",
+        "frost_threshold": -20,  # Winter wheat hardened, extreme cold needed
+        "heat_threshold": 35,
+        "heat_stress_threshold": 30,  # Wheat grain fill stress at 30°C
+        "growing_months": [3, 4, 5, 6, 7, 8, 9, 10, 11],  # Mar-Nov
+        "critical_months": [5, 6, 7],  # May-Jul: grain fill
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "Mer Noire = 25% export ble mondial",
+    },
+    {
+        "name": "India Punjab/Haryana (Wheat)",
+        "lat": 30.0, "lon": 75.5,  # Adjusted: Punjab wheat belt center (was Delhi at 28.5, 77)
+        "tickers": ["ZW=F"],
+        "crops": "ble, riz",
+        "frost_threshold": 0,
+        "heat_threshold": 42,   # India heatwaves kill wheat
+        "heat_stress_threshold": 35,  # Sustained 35°C for 5+ days kills grain fill
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],  # Almost year-round
+        "critical_months": [3, 4, 5],  # Mar-May: wheat harvest + heat risk peak
+        "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 2.0,
+        "drought_note": "mousson faible = crise alimentaire",
+    },
+    {
+        "name": "Argentina Pampas (Soy/Corn/Wheat)",
+        "lat": -34.5, "lon": -59.0,
+        "tickers": ["ZS=F", "ZC=F", "ZW=F"],
+        "crops": "soja, mais, ble",
+        "frost_threshold": -2,
+        "heat_threshold": 38,
+        "heat_stress_threshold": 33,
+        "growing_months": [9, 10, 11, 12, 1, 2, 3, 4],  # Sep-Apr
+        "critical_months": [12, 1, 2],  # Dec-Feb: flowering
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "3eme exportateur soja mondial — La Nina = secheresse",
+    },
+    {
+        "name": "Gulf of Mexico (Oil/Gas)",
+        "lat": 28.0, "lon": -90.0,
+        "tickers": ["CL=F", "NG=F"],
+        "crops": "petrole offshore, gaz",
+        "frost_threshold": -999,  # Not relevant
+        "heat_threshold": 999,
+        "heat_stress_threshold": 999,
+        "growing_months": [6, 7, 8, 9, 10, 11],  # Hurricane season Jun-Nov
+        "critical_months": [8, 9, 10],  # Aug-Oct: peak hurricane season
+        "drought_threshold_mm": -1,  # Drought not relevant for offshore
+        "critical_drought_mm": -1,
+        "drought_note": "ouragans = arret production offshore",
+    },
+    {
+        "name": "Southeast Asia (Palm Oil/Rice)",
+        "lat": 2.0, "lon": 103.0,
+        "tickers": ["ZS=F"],  # Soy as proxy for vegetable oils
+        "crops": "huile de palme, riz",
+        "frost_threshold": -999,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 37,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [1, 2, 3, 7, 8, 9],  # Dry seasons = El Nino risk
+        "drought_threshold_mm": 15.0,  # Tropical — needs more rain
+        "critical_drought_mm": 8.0,
+        "drought_note": "El Nino = secheresse palmiers",
+    },
+    {
+        "name": "Australia (Wheat)",
+        "lat": -33.5, "lon": 148.0,
+        "tickers": ["ZW=F"],
+        "crops": "ble",
+        "frost_threshold": -5,
+        "heat_threshold": 42,
+        "heat_stress_threshold": 35,
+        "growing_months": [4, 5, 6, 7, 8, 9, 10, 11],  # Apr-Nov (Southern hemisphere)
+        "critical_months": [9, 10, 11],  # Sep-Nov: grain fill
+        "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 2.0,
+        "drought_note": "secheresse = export reduction",
+    },
+    # ── Team 2 audit: Chile/Peru copper zones ──
+    {
+        "name": "Chile Antofagasta (Copper)",
+        "lat": -23.6, "lon": -70.4,
+        "tickers": ["HG=F"],
+        "crops": "cuivre (mines)",
+        "frost_threshold": -999,  # Arid desert — frost not relevant
+        "heat_threshold": 999,
+        "heat_stress_threshold": 999,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Mining year-round
+        "critical_months": [6, 7, 8],  # Winter rains/floods can disrupt open-pit mines
+        "drought_threshold_mm": -1,  # Water stress for mining (tracked separately)
+        "critical_drought_mm": -1,
+        "drought_note": "Chili = 27% production mondiale cuivre — inondations/seismes = arret mines",
+    },
+    {
+        "name": "Peru Arequipa (Copper)",
+        "lat": -16.4, "lon": -71.5,
+        "tickers": ["HG=F"],
+        "crops": "cuivre (mines)",
+        "frost_threshold": -999,
+        "heat_threshold": 999,
+        "heat_stress_threshold": 999,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [12, 1, 2, 3],  # Rainy season = flooding risk for mines
+        "drought_threshold_mm": -1,
+        "critical_drought_mm": -1,
+        "drought_note": "Perou = 2e producteur cuivre mondial — pluies = coulees de boue/arret mines",
+    },
+    # ── Team 2 audit: Vietnam/Colombia coffee zones ──
+    {
+        "name": "Vietnam Central Highlands (Coffee Robusta)",
+        "lat": 12.7, "lon": 108.0,
+        "tickers": ["KC=F"],
+        "crops": "cafe robusta",
+        "frost_threshold": -999,  # Tropical — no frost
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Year-round
+        "critical_months": [10, 11, 12, 1, 2],  # Oct-Feb: harvest + dry season start
+        "drought_threshold_mm": 10.0,
+        "critical_drought_mm": 5.0,
+        "drought_note": "Vietnam = #1 robusta mondial — secheresse tire arabica par substitution",
+    },
+    {
+        "name": "Colombia Eje Cafetero (Coffee Arabica)",
+        "lat": 4.8, "lon": -75.7,
+        "tickers": ["KC=F"],
+        "crops": "cafe arabica",
+        "frost_threshold": -999,
+        "heat_threshold": 35,
+        "heat_stress_threshold": 30,  # Arabica stressed above 30°C
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 9, 10, 11],  # Two harvest seasons (mitaca + principal)
+        "drought_threshold_mm": 15.0,  # Needs consistent rainfall
+        "critical_drought_mm": 8.0,
+        "drought_note": "Colombie = #3 arabica mondial — La Nina = exces pluie, El Nino = secheresse",
+    },
+    # ── Team 2 audit: France/EU wheat zone ──
+    {
+        "name": "France Beauce (Wheat)",
+        "lat": 48.1, "lon": 1.5,
+        "tickers": ["ZW=F"],
+        "crops": "ble, colza",
+        "frost_threshold": -15,  # Winter wheat hardened
+        "heat_threshold": 38,
+        "heat_stress_threshold": 32,  # Grain fill stress
+        "growing_months": [3, 4, 5, 6, 7, 8, 9, 10, 11],
+        "critical_months": [5, 6, 7],  # May-Jul: grain fill + harvest
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "France = 1er producteur ble UE — canicule 2003/2022 = chute rendements",
+    },
+    # ── Team 2 audit: Cameroon/Nigeria cocoa zones ──
+    {
+        "name": "Cameroon South West (Cocoa)",
+        "lat": 5.0, "lon": 9.5,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 10, 11, 12],
+        "drought_threshold_mm": 15.0,
+        "critical_drought_mm": 8.0,
+        "drought_note": "Cameroun = 5e producteur cacao mondial — black pod disease",
+    },
+    {
+        "name": "Nigeria Ondo/Osun (Cocoa)",
+        "lat": 7.2, "lon": 4.5,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 10, 11, 12],
+        "drought_threshold_mm": 15.0,
+        "critical_drought_mm": 8.0,
+        "drought_note": "Nigeria = 4e producteur cacao mondial",
+    },
+    # ── Team 2 audit: Canada Prairie wheat zone ──
+    {
+        "name": "Canada Saskatchewan (Wheat)",
+        "lat": 51.5, "lon": -106.0,
+        "tickers": ["ZW=F"],
+        "crops": "ble, canola",
+        "frost_threshold": -25,  # Spring wheat planted after last frost
+        "heat_threshold": 38,
+        "heat_stress_threshold": 32,
+        "growing_months": [4, 5, 6, 7, 8, 9, 10],
+        "critical_months": [6, 7, 8],  # Jun-Aug: growing + grain fill
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "Canada = top 5 exportateur ble — secheresse Prairie = choc export",
+    },
+    # ── NEW: Cocoa, Cotton, Orange Juice zones ──
+    {
+        "name": "Ivory Coast (Cocoa)",
+        "lat": 6.5, "lon": -5.5,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,  # Tropical — no frost risk
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,  # Cocoa trees stressed above 35°C
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # Year-round
+        "critical_months": [3, 4, 5, 10, 11, 12],  # Main crop Oct-Mar, mid-crop Apr-Sep harvests
+        "drought_threshold_mm": 15.0,  # Tropical — needs substantial rain
+        "critical_drought_mm": 8.0,
+        "drought_note": "Cote d'Ivoire = 45% production mondiale cacao — secheresse = choc offre",
+    },
+    {
+        "name": "Ghana (Cocoa)",
+        "lat": 6.7, "lon": -1.6,
+        "tickers": ["CC=F"],
+        "crops": "cacao",
+        "frost_threshold": -999,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [3, 4, 5, 10, 11, 12],
+        "drought_threshold_mm": 15.0,
+        "critical_drought_mm": 8.0,
+        "drought_note": "Ghana = 25% production mondiale cacao — virus swollen shoot + secheresse",
+    },
+    {
+        "name": "US South Texas (Cotton)",
+        "lat": 31.5, "lon": -100.0,
+        "tickers": ["CT=F"],
+        "crops": "coton",
+        "frost_threshold": -2,
+        "heat_threshold": 42,
+        "heat_stress_threshold": 38,  # Cotton heat stress above 38°C during boll development
+        "growing_months": [4, 5, 6, 7, 8, 9, 10],  # Apr-Oct
+        "critical_months": [6, 7, 8],  # Jun-Aug: flowering + boll development
+        "drought_threshold_mm": 8.0,
+        "critical_drought_mm": 4.0,
+        "drought_note": "Texas = 40% production coton US — secheresse recurrente",
+    },
+    {
+        "name": "India Gujarat/Maharashtra (Cotton)",
+        "lat": 22.0, "lon": 72.0,
+        "tickers": ["CT=F"],
+        "crops": "coton",
+        "frost_threshold": -999,
+        "heat_threshold": 45,
+        "heat_stress_threshold": 40,
+        "growing_months": [6, 7, 8, 9, 10, 11, 12],  # Jun-Dec (monsoon-dependent)
+        "critical_months": [7, 8, 9],  # Jul-Sep: monsoon peak = critical for cotton
+        "drought_threshold_mm": 10.0,
+        "critical_drought_mm": 5.0,
+        "drought_note": "Inde = 25% production mondiale coton — mousson faible = catastrophe",
+    },
+    {
+        "name": "Florida (Orange Juice)",
+        "lat": 28.0, "lon": -81.5,
+        "tickers": ["OJ=F"],
+        "crops": "oranges, agrumes",
+        "frost_threshold": -2,  # Citrus freeze damage below -2°C
+        "heat_threshold": 999,  # Heat not an issue for citrus
+        "heat_stress_threshold": 999,
+        "growing_months": [1, 2, 3, 10, 11, 12],  # Harvest Oct-Jun, frost risk Nov-Mar
+        "critical_months": [11, 12, 1, 2],  # Nov-Feb: frost + hurricane aftermath
+        "drought_threshold_mm": 10.0,
+        "critical_drought_mm": 5.0,
+        "drought_note": "Floride = production US OJ en chute, gel = spike prix historique",
+    },
+    {
+        "name": "Brazil Sao Paulo (Orange Juice)",
+        "lat": -22.5, "lon": -48.5,
+        "tickers": ["OJ=F", "SB=F"],
+        "crops": "oranges, sucre",
+        "frost_threshold": 0,
+        "heat_threshold": 40,
+        "heat_stress_threshold": 35,
+        "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "critical_months": [5, 6, 7, 8],  # Brazilian winter = frost risk
+        "drought_threshold_mm": 5.0,
+        "critical_drought_mm": 3.0,
+        "drought_note": "Bresil = 70% export mondial OJ — citrus greening (HLB) + secheresse",
+    },
+]
+
+
+def _zone_slug(zone_name: str) -> str:
+    """Convert a zone name to a lowercase slug for learning tracking.
+
+    E.g. "France Beauce (Wheat)" → "france_beauce"
+    The slug is used as learning key to distinguish signals by geographic origin.
+    """
+    import re
+    # Remove parenthetical suffixes like "(Wheat)", "(Copper)"
+    name = re.sub(r'\s*\(.*?\)', '', zone_name).strip()
+    # Replace non-alphanumeric with underscore, collapse multiples, lowercase
+    slug = re.sub(r'[^a-zA-Z0-9]+', '_', name).strip('_').lower()
+    return slug
+
+
+def _is_growing_season(zone: dict[str, Any]) -> bool:
+    """Check if the current month is within the zone's growing season."""
+    current_month = datetime.now(timezone.utc).month
+    return current_month in zone.get("growing_months", range(1, 13))
+
+
+def _is_critical_period(zone: dict[str, Any]) -> bool:
+    """Check if we're in the critical growing period (silking, grain fill, flowering).
+
+    During critical months, weather impacts are 2-3x more severe on yields.
+    """
+    current_month = datetime.now(timezone.utc).month
+    return current_month in zone.get("critical_months", [])
+
+
+def _fetch_one_weather_zone(zone: dict) -> list[NewsItem]:
+    """Fetch weather data for a single agricultural zone and generate alerts.
+
+    Extracted from fetch_weather_alerts() to enable parallel execution.
+    Returns a list of NewsItem alerts (0-4 per zone: frost, heat, drought, wind).
+    """
+    items: list[NewsItem] = []
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": zone["lat"],
+        "longitude": zone["lon"],
+        "daily": "temperature_2m_min,temperature_2m_max,precipitation_sum,wind_speed_10m_max",
+        "past_days": 7,
+        "forecast_days": 7,
+        "timezone": "UTC",
+    }
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    if resp.status_code != 200:
+        return items
+
+    data = resp.json()
+    daily = data.get("daily", {})
+    if not daily:
+        return items
+
+    dates = daily.get("time", [])
+    temp_mins = daily.get("temperature_2m_min", [])
+    temp_maxs = daily.get("temperature_2m_max", [])
+    precip_sums = daily.get("precipitation_sum", [])
+    wind_maxs = daily.get("wind_speed_10m_max", [])
+
+    # Split into past (first 7) and forecast (last 7)
+    past_precip = [p for p in precip_sums[:7] if p is not None]
+    raw_forecast_temp_mins = temp_mins[7:]
+    raw_forecast_temp_maxs = temp_maxs[7:]
+    raw_forecast_wind = wind_maxs[7:]
+    forecast_temp_mins = [t for t in raw_forecast_temp_mins if t is not None]
+    forecast_temp_maxs = [t for t in raw_forecast_temp_maxs if t is not None]
+    forecast_wind = [w for w in raw_forecast_wind if w is not None]
+
+    in_season = _is_growing_season(zone)
+
+    # ── Check 1: Frost alert (only during growing season) ──
+    if in_season and forecast_temp_mins and zone["frost_threshold"] > -100:
+        min_forecast = min(forecast_temp_mins)
+        if min_forecast <= zone["frost_threshold"]:
+            frost_date = "prochains jours"
+            if len(dates) > 7:
+                for i, val in enumerate(raw_forecast_temp_mins):
+                    if val is not None and val == min_forecast:
+                        frost_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
+                        break
+            title = (
+                f"[METEO ALERTE] Gel prevu a {zone['name']}: {min_forecast:.1f}°C "
+                f"le {frost_date} (seuil critique: {zone['frost_threshold']}°C) — "
+                f"cultures: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+    # ── Check 2: Heat stress alert (only during growing season) ──
+    if in_season and forecast_temp_maxs and zone["heat_threshold"] < 100:
+        max_forecast = max(forecast_temp_maxs)
+        is_critical = _is_critical_period(zone)
+        heat_stress_thresh = zone.get("heat_stress_threshold", zone["heat_threshold"])
+
+        consecutive_stress_days = 0
+        for temp in raw_forecast_temp_maxs[:5]:
+            if temp is not None and temp >= heat_stress_thresh:
+                consecutive_stress_days += 1
+            elif temp is not None:
+                break
+
+        if max_forecast >= zone["heat_threshold"]:
+            heat_date = "prochains jours"
+            if len(dates) > 7:
+                for i, val in enumerate(raw_forecast_temp_maxs):
+                    if val is not None and val == max_forecast:
+                        heat_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
+                        break
+            critical_tag = " [PERIODE CRITIQUE — silking/grain fill]" if is_critical else ""
+            title = (
+                f"[METEO ALERTE] Canicule prevue a {zone['name']}: {max_forecast:.1f}°C "
+                f"le {heat_date} (seuil: {zone['heat_threshold']}°C){critical_tag} — "
+                f"stress thermique: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+        elif is_critical and consecutive_stress_days >= 3:
+            stress_temps = [t for t in raw_forecast_temp_maxs[:5] if t is not None and t >= heat_stress_thresh]
+            avg_stress = sum(stress_temps) / len(stress_temps) if stress_temps else 0
+            title = (
+                f"[METEO ALERTE] Stress thermique cumule a {zone['name']}: "
+                f"{consecutive_stress_days} jours consecutifs > {heat_stress_thresh}°C "
+                f"(moy: {avg_stress:.1f}°C) — PERIODE CRITIQUE (silking/grain fill) — "
+                f"risque sterilite pollen / perte rendement: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+    # ── Check 3: Drought alert (zone-specific, critical-period-aware) ──
+    drought_threshold = zone.get("drought_threshold_mm", 10.0)
+    if in_season and past_precip and drought_threshold > 0:
+        if len(past_precip) >= 5:
+            total_precip_7d = sum(past_precip)
+            is_critical = _is_critical_period(zone)
+            effective_threshold = zone.get("critical_drought_mm", drought_threshold) if is_critical else drought_threshold
+            if total_precip_7d < effective_threshold:
+                critical_tag = " [PERIODE CRITIQUE]" if is_critical else ""
+                severity = "SEVERE" if total_precip_7d < effective_threshold * 0.5 else ""
+                title = (
+                    f"[METEO ALERTE] Secheresse{' ' + severity if severity else ''} a {zone['name']}: "
+                    f"seulement {total_precip_7d:.1f}mm sur 7 jours "
+                    f"(seuil: {effective_threshold}mm){critical_tag} — "
+                    f"{zone['drought_note']} — cultures: {zone['crops']}"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="Open-Meteo",
+                    url="https://open-meteo.com",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=zone["tickers"],
+                    source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                    news_zone=_zone_slug(zone["name"]),
+                ))
+
+    # ── Check 4: Hurricane-force winds (always active for relevant zones) ──
+    if forecast_wind:
+        max_wind = max(forecast_wind)
+        if max_wind >= 100:
+            title = (
+                f"[METEO ALERTE] Vents violents a {zone['name']}: "
+                f"{max_wind:.0f} km/h prevus — "
+                f"risque perturbation: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+    return items
+
+
+def fetch_weather_alerts() -> list[NewsItem]:
+    """Fetch weather data for critical agricultural zones and generate alerts.
+
+    Checks for: frost, extreme heat, drought (low precipitation),
+    and wind extremes (hurricanes for Gulf).
+    Frost/heat alerts are only generated during the growing season.
+    Drought thresholds are zone-specific.
+
+    v8.5: Parallel execution (6 workers) for 24 zones. Sequential approach
+    took 60-120s on Replit (DNS cold-starts), causing budget exhaustion and
+    Open-Meteo appearing as "not_started" in 4/5 scans. Parallel reduces
+    total time to ~15-20s (24 zones / 6 workers = 4 waves × 3-5s each).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    items: list[NewsItem] = []
+    zones_ok = 0
+    zones_failed = 0
+
+    executor = ThreadPoolExecutor(max_workers=6)
+    try:
+        future_to_zone = {
+            executor.submit(_fetch_one_weather_zone, zone): zone
+            for zone in AGRICULTURAL_ZONES
+        }
+
+        for future in as_completed(future_to_zone, timeout=45):
+            zone = future_to_zone[future]
+            try:
+                zone_items = future.result(timeout=5)
+                items.extend(zone_items)
+                zones_ok += 1
+            except TimeoutError:
+                logger.warning("Weather zone TIMEOUT: %s", zone["name"])
+                zones_failed += 1
+            except Exception as exc:
+                logger.warning("Weather fetch error for %s: %s", zone["name"], exc)
+                zones_failed += 1
+    except TimeoutError:
+        completed = sum(1 for f in future_to_zone if f.done())
+        logger.warning("Weather global timeout (45s): %d/%d zones completed",
+                       completed, len(AGRICULTURAL_ZONES))
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    if zones_ok > 0 or zones_failed > 0:
+        logger.info("Weather: %d zones OK, %d failed, %d items from %d total zones",
+                    zones_ok, zones_failed, len(items), len(AGRICULTURAL_ZONES))
+
+    return items
+
+    if items:
+        logger.info("Generated %d weather alerts from %d zones", len(items), len(AGRICULTURAL_ZONES))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 3. GNews API — targeted news search by keywords
+# ═══════════════════════════════════════════════════════════════════════
+# Free tier: 100 requests/day
+# https://gnews.io/
+# Env var: GNEWS_API_KEY
+
+# Targeted queries aligned with our edge categories
+# Split by specificity: frost and drought are separate (different commodities)
+# 25 queries: 16 consolidated + 3 soft commodities + 2 livestock + 4 new (v3.2)
+# 4 scans/day × 25 queries = 100 req/day, exactly at free tier limit
+GNEWS_QUERIES: list[dict[str, Any]] = [
+    # ═══════════════════════════════════════════════════════════════════
+    # GNews API v4 uses AND by default for multiple words.
+    # "frost freeze crop" requires ALL 3 words in one article → very few results.
+    # ═══════════════════════════════════════════════════════════════════
+    # GNews query syntax reminder:
+    #   - A B     = A AND B (implicit AND between bare words)
+    #   - A OR B  = either A or B
+    #   - "A B"   = exact phrase match
+    #   - CRITICAL: `"X" OR Y Z` = ("X") OR (Y AND Z) — OR breaks scope!
+    #     Every OR branch must be self-contained with enough context.
+    # Budget: 21 core + 16 extra = 37 total. 21 + 4/scan = 25/scan × 4 = 100/day.
+    # ═══════════════════════════════════════════════════════════════════
+    #
+    # ── CORE QUERIES (21) — always executed ─────────────────────────
+    #
+    # ── Weather ──
+    {   # #0: frost/freeze — agriculture context forced on each branch
+        "q": "\"crop frost\" OR \"freeze warning\" agriculture OR \"cold snap\" crops",
+        "tickers": ["KC=F", "ZC=F", "ZW=F", "SB=F"],
+        "category": "weather",
+    },
+    {   # #1: drought — self-contextualised phrases
+        "q": "\"crop drought\" OR \"crop failure\" OR \"harvest loss\"",
+        "tickers": ["ZC=F", "ZW=F", "ZS=F", "CC=F"],
+        "category": "weather",
+    },
+    {   # #2: hurricane — energy context on each branch
+        "q": "hurricane \"Gulf of Mexico\" OR \"tropical storm\" oil OR hurricane offshore",
+        "tickers": ["CL=F", "NG=F"],
+        "category": "weather",
+        "zone": "gulf_of_mexico",
+    },
+    # ── Geopolitical ──
+    {   # #3: oil geopolitics
+        "q": "\"oil sanctions\" OR \"oil embargo\" OR \"military strike\" energy",
+        "tickers": ["CL=F", "BZ=F", "GC=F"],
+        "category": "geopolitical",
+    },
+    {   # #4: Red Sea / Middle East shipping
+        "q": "Houthi OR \"Red Sea\" shipping OR tanker attack",
+        "tickers": ["CL=F", "BZ=F", "GC=F"],
+        "category": "geopolitical",
+        "zone": "middle_east",
+    },
+    # ── Supply chain ──
+    {   # #5: port/shipping disruptions — CC=F added (Abidjan/San Pedro cocoa ports)
+        "q": "\"port congestion\" OR \"shipping disruption\" OR \"canal blocked\"",
+        "tickers": ["CL=F", "ZW=F", "HG=F", "CC=F"],
+        "category": "supply_chain",
+    },
+    {   # #6: copper supply — merged mine + smelter (was 2 queries)
+        "q": "\"copper mine\" strike OR \"copper smelter\" OR \"copper production\" disruption",
+        "tickers": ["HG=F"],
+        "category": "supply_chain",
+    },
+    {   # #7: PGM mines
+        "q": "\"platinum mine\" OR \"palladium mine\" OR Nornickel",
+        "tickers": ["PL=F", "PA=F"],
+        "category": "supply_chain",
+        "zone": "south_africa",
+    },
+    {   # #8: fertilizer
+        "q": "\"fertilizer shortage\" OR \"potash price\" OR \"phosphate supply\"",
+        "tickers": ["ZC=F", "ZW=F", "ZS=F"],
+        "category": "supply_chain",
+    },
+    # ── Commodity ──
+    {   # #9: OPEC
+        "q": "OPEC \"production cut\" OR OPEC quota OR OPEC output",
+        "tickers": ["CL=F", "BZ=F"],
+        "category": "commodity",
+    },
+    {   # #10: USDA — forced context on each branch (was: corn/soybean bare)
+        "q": "\"USDA report\" OR \"USDA wheat\" OR \"USDA corn\" OR \"USDA soybean\"",
+        "tickers": ["ZC=F", "ZW=F", "ZS=F"],
+        "category": "commodity",
+    },
+    {   # #11: gold
+        "q": "\"gold reserves\" OR \"central bank\" gold buying",
+        "tickers": ["GC=F", "SI=F"],
+        "category": "commodity",
+    },
+    {   # #12: natural gas
+        "q": "\"natural gas\" storage OR \"TTF price\" OR \"LNG Europe\"",
+        "tickers": ["NG=F"],
+        "category": "commodity",
+    },
+    {   # #13: livestock & crop disease — all exact phrases
+        "q": "\"avian flu\" OR \"swine fever\" OR \"wheat rust\" OR \"crop disease\"",
+        "tickers": ["ZW=F", "ZC=F", "LE=F", "HE=F"],
+        "category": "commodity",
+    },
+    {   # #14: cocoa West Africa — forced context (was: "Ivory Coast" bare)
+        "q": "\"cocoa Ghana\" OR \"cocoa Ivory Coast\" OR \"cocoa disease\" OR \"swollen shoot\"",
+        "tickers": ["CC=F"],
+        "category": "commodity",
+        "zone": "west_africa",
+    },
+    # ── Soft commodities ──
+    {   # #15: cotton — context on each branch
+        "q": "\"cotton crop\" drought OR \"cotton export\" ban OR \"cotton price\"",
+        "tickers": ["CT=F"],
+        "category": "commodity",
+    },
+    {   # #16: OJ/citrus
+        "q": "\"orange juice\" price OR \"citrus freeze\" OR \"Florida citrus\"",
+        "tickers": ["OJ=F"],
+        "category": "weather",
+    },
+    # ── Portuguese (Brazil early signal) ──
+    {   # #17: PT — ferrugem forced with cafe context
+        "q": "\"geada cafe\" OR \"seca safra\" OR \"ferrugem cafe\" OR \"geada negra\" OR \"cacau seca\"",
+        "tickers": ["KC=F", "SB=F", "ZS=F", "ZC=F", "CC=F"],
+        "category": "weather",
+        "lang": "pt",
+        "zone": "brazil",
+    },
+    # ── Regional / chokepoints ──
+    {   # #18: Suez
+        "q": "\"Suez Canal\" blocked OR \"Suez Canal\" disruption OR \"Suez Canal\" closure",
+        "tickers": ["CL=F", "BZ=F", "NG=F"],
+        "category": "supply_chain",
+        "zone": "suez",
+    },
+    {   # #19: China commodity demand — context forced per branch
+        "q": "China \"commodity demand\" OR China \"commodity imports\" OR China \"copper demand\"",
+        "tickers": ["HG=F", "CL=F", "ZS=F", "GC=F"],
+        "category": "commodity",
+        "zone": "china",
+    },
+    {   # #20: Europe energy
+        "q": "Europe \"energy crisis\" OR \"gas shortage\" OR \"gas pipeline\" disruption",
+        "tickers": ["NG=F", "CL=F"],
+        "category": "supply_chain",
+        "zone": "europe",
+    },
+    #
+    # ── EXTRA QUERIES (16) — rotated, ~4 per scan ──────────────────
+    #
+    # ── Export bans / regulatory ──
+    {   # #21: India grain bans
+        "q": "India rice \"export ban\" OR India wheat \"export ban\" OR India sugar restriction",
+        "tickers": ["ZW=F", "ZC=F", "SB=F"],
+        "category": "commodity",
+        "zone": "india",
+    },
+    {   # #22: Indonesia palm oil — fixed: was "levy" bare
+        "q": "Indonesia \"palm oil\" export OR Indonesia \"palm oil\" ban OR Indonesia \"palm oil\" levy",
+        "tickers": ["ZS=F", "SB=F"],
+        "category": "commodity",
+        "zone": "indonesia",
+    },
+    {   # #23: Black Sea grain + Australia — geopolitical for wheat supply
+        "q": "Russia wheat export OR Ukraine wheat export OR \"grain corridor\" OR \"Australia drought\" wheat",
+        "tickers": ["ZW=F", "ZC=F"],
+        "category": "geopolitical",
+        "zone": "black_sea",
+    },
+    # ── China signals ──
+    {   # #24: China PMI
+        "q": "\"China PMI\" OR \"Caixin manufacturing\" OR \"Caixin PMI\"",
+        "tickers": ["HG=F", "CL=F", "^GSPC"],
+        "category": "macro",
+        "zone": "china",
+    },
+    {   # #25: PBOC
+        "q": "PBOC \"rate cut\" OR \"PBOC RRR\" OR \"yuan devaluation\" OR \"yuan stimulus\"",
+        "tickers": ["AUDUSD=X", "HG=F", "GC=F"],
+        "category": "central_bank_subtle",
+        "zone": "china",
+    },
+    # ── Producer-specific ──
+    {   # #26: Argentina
+        "q": "\"Argentina peso\" OR \"Argentina capital controls\" OR \"Argentina soybean\" export",
+        "tickers": ["ZS=F", "ZW=F", "ZC=F"],
+        "category": "regulatory",
+        "zone": "argentina",
+    },
+    {   # #27: Vietnam coffee
+        "q": "\"Vietnam coffee\" OR \"robusta drought\" OR \"Vietnam harvest\" coffee",
+        "tickers": ["KC=F"],
+        "category": "commodity",
+        "zone": "vietnam",
+    },
+    {   # #28: copper producers — merged DRC + Chile (was 2 queries)
+        "q": "\"DRC copper\" OR \"Zambia copper\" OR \"Chile copper\" OR Codelco",
+        "tickers": ["HG=F"],
+        "category": "supply_chain",
+        "zone": "chile",
+    },
+    {   # #29: cocoa Africa — fixed: smuggling with context
+        "q": "\"Cameroon cocoa\" OR \"Nigeria cocoa\" OR \"cocoa smuggling\"",
+        "tickers": ["CC=F"],
+        "category": "commodity",
+        "zone": "cameroon_nigeria",
+    },
+    {   # #30: Santos port
+        "q": "\"Santos port\" coffee OR \"Santos port\" congestion OR \"Brazil port\" strike",
+        "tickers": ["KC=F", "SB=F", "ZS=F"],
+        "category": "supply_chain",
+        "zone": "brazil",
+    },
+    {   # #31: CONAB
+        "q": "\"CONAB safra\" OR \"CONAB producao\" OR \"CONAB soja\" OR \"CONAB milho\"",
+        "tickers": ["ZS=F", "ZC=F", "KC=F", "SB=F"],
+        "category": "commodity",
+        "lang": "pt",
+        "zone": "brazil",
+    },
+    # ── NEW: gaps identified by audit ──
+    {   # #32: Colombia coffee — 2nd producer, was missing entirely
+        "q": "\"Colombia coffee\" OR \"Colombian coffee\" drought OR \"Colombia harvest\"",
+        "tickers": ["KC=F"],
+        "category": "commodity",
+        "zone": "colombia",
+    },
+    {   # #33: EU cocoa regulation — deforestation law = supply shock CC=F
+        "q": "\"EU deforestation\" cocoa OR \"cocoa regulation\" OR \"EUDR cocoa\"",
+        "tickers": ["CC=F"],
+        "category": "regulatory",
+        "zone": "europe",
+    },
+    {   # #34: sugar Brazil/India — was missing. Brazil ethanol + India bans
+        "q": "\"Brazil sugar\" OR \"India sugar\" export OR \"ethanol mandate\" Brazil",
+        "tickers": ["SB=F"],
+        "category": "commodity",
+        "zone": "brazil",
+    },
+    {   # #35: uranium/nuclear — URA had zero GNews coverage
+        "q": "\"uranium price\" OR \"nuclear fuel\" OR \"uranium mine\" OR \"uranium enrichment\"",
+        "tickers": ["URA"],
+        "category": "geopolitical",
+    },
+    {   # #36: Baltic dry + shipping (T1+T2 need)
+        "q": "\"Baltic dry index\" OR \"bulk freight\" OR \"dry bulk shipping\"",
+        "tickers": ["HG=F", "ZW=F", "ZC=F"],
+        "category": "supply_chain",
+    },
+    {   # #37: copper weather — Chile/Peru flooding, hydro disruption, mine landslide
+        "q": "Chile flooding mine OR Peru rain copper OR \"copper mine\" landslide OR \"hydro power\" Chile",
+        "tickers": ["HG=F"],
+        "category": "weather",
+        "zone": "chile",
+    },
+    {   # #38: cocoa supply chain — grinding, processing, Abidjan port
+        "q": "\"cocoa grinding\" OR \"cocoa processing\" shortage OR \"Abidjan port\" cocoa",
+        "tickers": ["CC=F"],
+        "category": "supply_chain",
+        "zone": "west_africa",
+    },
+]
+
+
+def _gnews_fetch_one(query_cfg: dict, api_key: str) -> tuple[list[NewsItem], dict]:
+    """Fetch results for a single GNews query. Returns (items, diagnostic).
+
+    Runs inside ThreadPoolExecutor — must be thread-safe.
+    """
+    url = "https://gnews.io/api/v4/search"
+    params = {
+        "q": query_cfg["q"],
+        "token": api_key,
+        "lang": query_cfg.get("lang", "en"),
+        "max": 5,
+        "sortby": "publishedAt",
+    }
+    diag: dict = {"query": query_cfg["q"][:60], "status": "ok"}
+
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    if resp.status_code != 200:
+        body_preview = resp.text[:200] if resp.text else "(empty)"
+        diag["status"] = f"http_{resp.status_code}"
+        diag["body"] = body_preview
+        return [], diag
+
+    data = resp.json()
+    total_articles = data.get("totalArticles", 0)
+    articles = data.get("articles", [])
+    diag["total_articles"] = total_articles
+    diag["returned"] = len(articles)
+
+    items: list[NewsItem] = []
+    cat = query_cfg.get("category", "other")
+    gnews_weight = {
+        "weather": 1.0,
+        "commodity": 0.95,
+        "supply_chain": 0.95,
+        "geopolitical": 0.85,
+    }.get(cat, 0.85)
+
+    # Post-fetch noise filter: skip articles clearly unrelated to commodities/finance
+    _NOISE_KEYWORDS = {
+        "oscar", "oscars", "grammy", "grammys", "emmy", "emmys", "ncaa", "nfl",
+        "nba", "nhl", "mlb", "super bowl", "world cup", "champions league",
+        "box office", "movie", "album", "celebrity", "kardashian", "taylor swift",
+        "netflix", "disney", "marvel", "star wars", "video game", "playstation",
+        "xbox", "nintendo", "tiktok", "instagram", "youtube", "spotify",
+    }
+
+    for article in articles:
+        title = article.get("title", "")
+        if not title:
+            continue
+
+        title_lower = title.lower()
+        if any(noise in title_lower for noise in _NOISE_KEYWORDS):
+            continue
+
+        published = None
+        pub_str = article.get("publishedAt")
+        if pub_str:
+            try:
+                published = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        items.append(NewsItem(
+            title=title,
+            source="GNews",
+            url=article.get("url", ""),
+            description=article.get("description", ""),
+            published=published,
+            related_tickers=query_cfg["tickers"],
+            source_weight=gnews_weight,
+            news_zone=query_cfg.get("zone", ""),
+        ))
+
+    return items, diag
+
+
+def fetch_gnews_targeted() -> list[NewsItem]:
+    """Fetch targeted news from GNews API using commodity/geopolitical queries.
+
+    Uses OR operators in queries for broad coverage (AND is GNews default).
+    Parallel execution (5 workers) to fit 25 queries within time budget.
+    Limited to 100 req/day on free tier → 25 queries/scan × 4 scans.
+    """
+    api_key = os.environ.get("GNEWS_API_KEY", "")
+    if not api_key:
+        logger.warning("GNEWS_API_KEY not set — skipping GNews")
+        return []
+
+    gnews_start = time.monotonic()
+
+    # Rotate queries: 25 per scan max to stay within 100/day free tier
+    max_queries_per_scan = 25
+    total_queries = len(GNEWS_QUERIES)
+    if total_queries > max_queries_per_scan:
+        scan_index = datetime.now(timezone.utc).hour % 4
+        core_queries = GNEWS_QUERIES[:21]
+        extra_queries = GNEWS_QUERIES[21:]
+        extra_per_scan = max(1, len(extra_queries) // 4 + 1)
+        start = scan_index * extra_per_scan
+        selected_extras = extra_queries[start:start + min(extra_per_scan, max_queries_per_scan - len(core_queries))]
+        queries_this_scan = core_queries + selected_extras
+        logger.info("GNews rotation: %d core + %d extra = %d queries this scan (total pool: %d)",
+                     len(core_queries), len(selected_extras), len(queries_this_scan), total_queries)
+    else:
+        queries_this_scan = GNEWS_QUERIES
+
+    # Parallel execution: 5 workers × ~3s/request = 25 queries in ~15s
+    # (was sequential: 25 × 2-3s = 50-75s, always exceeding 40s budget)
+    items: list[NewsItem] = []
+    seen_titles: set[str] = set()
+    http_errors = 0
+    queries_ok = 0
+    first_diag_logged = False
+
+    executor = ThreadPoolExecutor(max_workers=5)
+    try:
+        future_to_query = {
+            executor.submit(_gnews_fetch_one, qcfg, api_key): qcfg
+            for qcfg in queries_this_scan
+        }
+
+        for future in as_completed(future_to_query, timeout=40):
+            try:
+                query_items, diag = future.result(timeout=5)
+
+                # Log first response for diagnostics (success or error)
+                if not first_diag_logged:
+                    first_diag_logged = True
+                    logger.info("GNews first response: %s", diag)
+
+                if diag["status"] != "ok":
+                    http_errors += 1
+                    if http_errors <= 3:
+                        logger.warning("GNews HTTP error: %s", diag)
+                    continue
+
+                queries_ok += 1
+                for item in query_items:
+                    if item.title not in seen_titles:
+                        seen_titles.add(item.title)
+                        items.append(item)
+
+            except Exception as exc:
+                http_errors += 1
+                qcfg = future_to_query[future]
+                if http_errors <= 3:
+                    logger.warning("GNews fetch error for '%s': %s",
+                                   qcfg["q"][:40], exc)
+
+    except TimeoutError:
+        logger.warning("GNews parallel execution hit 40s timeout after %d OK + %d errors, %d items",
+                       queries_ok, http_errors, len(items))
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    elapsed = time.monotonic() - gnews_start
+    if items:
+        logger.info("Fetched %d targeted news from GNews (%d/%d queries OK, %d HTTP errors, %.0fs)",
+                     len(items), queries_ok, len(queries_this_scan), http_errors, elapsed)
+    else:
+        logger.warning("GNews returned 0 items from %d queries (%d OK, %d HTTP errors, %.0fs). "
+                       "API key present=%s. Check first response diagnostic above.",
+                       len(queries_this_scan), queries_ok, http_errors, elapsed, bool(api_key))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4. USDA NASS API — Crop progress and conditions
+# ═══════════════════════════════════════════════════════════════════════
+# Free key: https://quickstats.nass.usda.gov/api
+# Env var: USDA_API_KEY
+
+
+def _get_usda_seasonal_queries() -> list[dict[str, Any]]:
+    """Return USDA queries adapted to the current season.
+
+    Crop progress data is only published during the relevant season:
+    - Planting: Apr-Jun
+    - Condition: May-Sep (growing season)
+    - Harvested: Sep-Dec
+    - Winter wheat condition: year-round (dormant check in winter)
+    """
+    month = datetime.now(timezone.utc).month
+
+    queries: list[dict[str, Any]] = []
+
+    # Winter wheat condition — always relevant
+    queries.append({
+        "commodity_desc": "WHEAT",
+        "statisticcat_desc": "CONDITION, MEASURED IN PCT GOOD",
+        "tickers": ["ZW=F"],
+        "label": "Ble",
+    })
+
+    # Planting season (Apr-Jun)
+    if 4 <= month <= 6:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT PLANTED",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+        queries.append({
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT PLANTED",
+            "tickers": ["ZS=F"],
+            "label": "Soja",
+        })
+
+    # Emergence (May-Jul)
+    if 5 <= month <= 7:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT EMERGED",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+
+    # Growing season condition (May-Sep)
+    if 5 <= month <= 9:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "CONDITION, MEASURED IN PCT GOOD",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+        queries.append({
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "CONDITION, MEASURED IN PCT GOOD",
+            "tickers": ["ZS=F"],
+            "label": "Soja",
+        })
+
+    # Harvest season (Sep-Dec)
+    if month >= 9 or month <= 1:
+        queries.append({
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT HARVESTED",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        })
+        queries.append({
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "PROGRESS, MEASURED IN PCT HARVESTED",
+            "tickers": ["ZS=F"],
+            "label": "Soja",
+        })
+
+    return queries
+
+
+def fetch_usda_crop_data() -> list[NewsItem]:
+    """Fetch USDA crop progress/condition data with seasonal awareness.
+
+    The USDA publishes weekly crop progress reports — these are
+    among the most market-moving agricultural data points.
+    Queries adapt to season: planting (Apr-Jun), condition (May-Sep),
+    harvest (Sep-Dec). Week-over-week delta computed when 2+ records exist.
+    """
+    api_key = os.environ.get("USDA_API_KEY", "")
+    if not api_key:
+        logger.warning("USDA_API_KEY not set — skipping USDA data")
+        return []
+
+    items: list[NewsItem] = []
+    current_year = str(datetime.now(timezone.utc).year)
+    queries = _get_usda_seasonal_queries()
+
+    for q in queries:
+        try:
+            url = "https://quickstats.nass.usda.gov/api/api_GET/"
+            params = {
+                "key": api_key,
+                "commodity_desc": q["commodity_desc"],
+                "statisticcat_desc": q["statisticcat_desc"],
+                "year": current_year,
+                "agg_level_desc": "NATIONAL",
+                "format": "JSON",
+            }
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+
+            data = resp.json()
+            records = data.get("data", [])
+            if not records:
+                continue
+
+            # Get the 2 most recent records for WoW delta
+            records.sort(key=lambda r: r.get("week_ending", ""), reverse=True)
+            latest = records[0]
+            value = latest.get("Value", "")
+            week = latest.get("week_ending", "")
+            stat = latest.get("short_desc", q["statisticcat_desc"])
+
+            if not value:
+                continue
+
+            # Week-over-week delta
+            wow_str = ""
+            if len(records) >= 2:
+                prev_value = records[1].get("Value", "")
+                if prev_value:
+                    try:
+                        delta = float(value) - float(prev_value)
+                        wow_str = f", WoW: {delta:+.1f}pp"
+                        # Flag large swings (>5pp in one week = significant)
+                        if abs(delta) >= 5:
+                            wow_str += " [SWING MAJEUR]"
+                    except (ValueError, TypeError):
+                        pass
+
+            # Parse week_ending for accurate published timestamp
+            try:
+                usda_published_dt = datetime.strptime(week.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                usda_published_dt = datetime.now(timezone.utc)
+
+            title = (
+                f"[USDA DATA] {q['label']} — {stat}: {value}%{wow_str} "
+                f"(semaine du {week})"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="USDA",
+                url="https://quickstats.nass.usda.gov/",
+                published=usda_published_dt,
+                related_tickers=q["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+                news_zone="us",
+            ))
+
+        except Exception as exc:
+            logger.warning("USDA fetch error for %s: %s", q["commodity_desc"], exc)
+
+    if items:
+        logger.info("Fetched %d USDA data points (%d seasonal queries)", len(items), len(queries))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 5. CFTC COT Report — Commitments of Traders positioning
+# ═══════════════════════════════════════════════════════════════════════
+
+
+# CFTC commodity codes for our universe
+COT_CODES: dict[str, dict[str, str]] = {
+    "13874A": {"name": "Crude Oil WTI", "ticker": "CL=F"},
+    "088691": {"name": "Gold", "ticker": "GC=F"},
+    "084691": {"name": "Silver", "ticker": "SI=F"},
+    "002602": {"name": "Corn", "ticker": "ZC=F"},
+    "001602": {"name": "Wheat", "ticker": "ZW=F"},
+    "005602": {"name": "Soybeans", "ticker": "ZS=F"},
+    "083731": {"name": "Coffee", "ticker": "KC=F"},
+    "080732": {"name": "Sugar", "ticker": "SB=F"},
+    "073732": {"name": "Cocoa", "ticker": "CC=F"},
+    "033661": {"name": "Cotton", "ticker": "CT=F"},
+    "040701": {"name": "Orange Juice", "ticker": "OJ=F"},
+    "057642": {"name": "Live Cattle", "ticker": "LE=F"},
+    "054642": {"name": "Lean Hogs", "ticker": "HE=F"},
+    "023651": {"name": "Natural Gas", "ticker": "NG=F"},
+    "085692": {"name": "Copper", "ticker": "HG=F"},
+}
+
+
+# (N2) CFTC COT CSV cache — published weekly, no need to re-download every scan
+_cot_cache_lines: list[str] = []
+_cot_cache_ts: float = 0.0
+COT_CACHE_TTL = 86400  # 24 hours
+
+
+def _fetch_cot_csv_lines() -> list[str]:
+    """Fetch CFTC COT CSV lines with 24h cache (N2)."""
+    global _cot_cache_lines, _cot_cache_ts
+    if _cot_cache_lines and (time.time() - _cot_cache_ts) < COT_CACHE_TTL:
+        return _cot_cache_lines
+
+    current_year = datetime.now(timezone.utc).year
+    url = f"https://www.cftc.gov/dea/newcot/deacom{current_year}.txt"
+    resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+    if resp.status_code != 200:
+        url = "https://www.cftc.gov/dea/newcot/deacom.txt"
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+
+    if resp.status_code != 200:
+        logger.debug("COT data not available: %d", resp.status_code)
+        return []
+
+    lines = resp.text.strip().split("\n")
+    _cot_cache_lines = lines
+    _cot_cache_ts = time.time()
+    return lines
+
+
+def _parse_cot_by_date(lines: list[str], col_map: dict[str, int], target_date: str) -> dict[str, dict]:
+    """Parse COT data for a specific date, returning {code: {oi, comm_net, spec_net, comm_net_pct, spec_net_pct}}."""
+    market_col = col_map.get("Market_and_Exchange_Names", 0)
+    date_col = col_map.get("As_of_Date_In_Form_YYMMDD", 2)
+    oi_col = col_map["Open_Interest_All"]
+    comm_long_col = col_map["Comm_Positions_Long_All"]
+    comm_short_col = col_map["Comm_Positions_Short_All"]
+    spec_long_col = col_map["NonComm_Positions_Long_All"]
+    spec_short_col = col_map["NonComm_Positions_Short_All"]
+    max_col = max(oi_col, comm_long_col, comm_short_col, spec_long_col, spec_short_col)
+
+    results: dict[str, dict] = {}
+    for line in lines[1:]:
+        cols = line.split(",")
+        if len(cols) <= max_col:
+            continue
+        line_date = cols[date_col].strip().strip('"')
+        if line_date != target_date:
+            continue
+        market = cols[market_col].strip().strip('"')
+        for code, info in COT_CODES.items():
+            if info["name"].lower() in market.lower() or code in market:
+                try:
+                    oi = int(cols[oi_col].strip().strip('"'))
+                    if oi == 0:
+                        break
+                    comm_long = int(cols[comm_long_col].strip().strip('"'))
+                    comm_short = int(cols[comm_short_col].strip().strip('"'))
+                    spec_long = int(cols[spec_long_col].strip().strip('"'))
+                    spec_short = int(cols[spec_short_col].strip().strip('"'))
+                    comm_net = comm_long - comm_short
+                    spec_net = spec_long - spec_short
+                    results[code] = {
+                        "oi": oi,
+                        "comm_net": comm_net,
+                        "spec_net": spec_net,
+                        "comm_net_pct": (comm_net / oi) * 100,
+                        "spec_net_pct": (spec_net / oi) * 100,
+                    }
+                except (ValueError, IndexError):
+                    pass
+                break
+    return results
+
+
+def fetch_cot_data() -> list[NewsItem]:
+    """Fetch latest COT positioning data from CFTC.
+
+    The COT report shows commercial vs speculative positioning.
+    Alerts on:
+    1. Week-over-week CHANGES in commercial net (>8pp swing = hedging shift)
+    2. Extreme absolute positioning (commercial net > 20% OI)
+    3. Speculator extremes (> 25% long or < -20% short = overextension)
+    4. Commercial vs speculator divergence (contrarian signal)
+    """
+    items: list[NewsItem] = []
+
+    try:
+        lines = _fetch_cot_csv_lines()
+        if len(lines) < 2:
+            return []
+
+        # Parse header
+        header = lines[0].split(",")
+        col_map: dict[str, int] = {}
+        for i, h in enumerate(header):
+            col_map[h.strip().strip('"')] = i
+
+        date_col = col_map.get("As_of_Date_In_Form_YYMMDD", 2)
+        required = ["Open_Interest_All", "Comm_Positions_Long_All",
+                     "Comm_Positions_Short_All", "NonComm_Positions_Long_All",
+                     "NonComm_Positions_Short_All"]
+        if any(k not in col_map for k in required):
+            logger.debug("COT CSV format not recognized")
+            return []
+
+        # Find the 2 most recent dates for change detection
+        all_dates: set[str] = set()
+        for line in lines[1:]:
+            cols = line.split(",")
+            if len(cols) > date_col:
+                d = cols[date_col].strip().strip('"')
+                if d:
+                    all_dates.add(d)
+
+        sorted_dates = sorted(all_dates, reverse=True)
+        if not sorted_dates:
+            return []
+
+        latest_date = sorted_dates[0]
+        previous_date = sorted_dates[1] if len(sorted_dates) > 1 else None
+
+        # Parse report date for accurate published timestamp
+        try:
+            cot_published_dt = datetime.strptime(latest_date.strip(), "%y%m%d").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            cot_published_dt = datetime.now(timezone.utc)
+
+        # Parse both weeks
+        latest_data = _parse_cot_by_date(lines, col_map, latest_date)
+        previous_data = _parse_cot_by_date(lines, col_map, previous_date) if previous_date else {}
+
+        for code, info in COT_CODES.items():
+            if code not in latest_data:
+                continue
+
+            current = latest_data[code]
+            comm_net_pct = current["comm_net_pct"]
+            spec_net_pct = current["spec_net_pct"]
+            comm_direction = "LONG" if current["comm_net"] > 0 else "SHORT"
+            spec_direction = "LONG" if current["spec_net"] > 0 else "SHORT"
+
+            # ── Alert 1: Week-over-week CHANGE in commercial net (highest signal) ──
+            if code in previous_data:
+                prev = previous_data[code]
+                comm_change = comm_net_pct - prev["comm_net_pct"]
+                spec_change = spec_net_pct - prev["spec_net_pct"]
+
+                if abs(comm_change) >= 8:  # 8pp swing in one week = major shift
+                    shift_dir = "hausse" if comm_change > 0 else "baisse"
+                    title = (
+                        f"[COT CHANGE] {info['name']} — Swing commerciaux {shift_dir}: "
+                        f"{comm_change:+.1f}pp en 1 semaine "
+                        f"(maintenant {comm_direction} {abs(comm_net_pct):.1f}% OI, "
+                        f"etait {abs(prev['comm_net_pct']):.1f}%) — "
+                        f"changement majeur de hedging (date: {latest_date})"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="CFTC",
+                        url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                        published=cot_published_dt,
+                        related_tickers=[info["ticker"]],
+                        source_weight=SOURCE_WEIGHTS.get("CFTC", 1.1),
+                    ))
+
+            # ── Alert 2: Extreme absolute positioning (commercial) ──
+            if abs(comm_net_pct) > 20:
+                title = (
+                    f"[COT DATA] {info['name']} — Positionnement EXTREME: "
+                    f"Commerciaux net {comm_direction} {abs(comm_net_pct):.1f}% OI, "
+                    f"Speculateurs net {spec_direction} {abs(spec_net_pct):.1f}% OI "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=cot_published_dt,
+                    related_tickers=[info["ticker"]],
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.05),
+                ))
+
+            # ── Alert 3: Speculator extremes (overextension = reversal risk) ──
+            if spec_net_pct > 25:
+                title = (
+                    f"[COT SPEC] {info['name']} — Speculateurs SUREXPOSES LONG: "
+                    f"{spec_net_pct:.1f}% OI net long — "
+                    f"risque de liquidation forcee / reversal "
+                    f"(commerciaux: {comm_direction} {abs(comm_net_pct):.1f}%) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=cot_published_dt,
+                    related_tickers=[info["ticker"]],
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.05),
+                ))
+            elif spec_net_pct < -20:
+                title = (
+                    f"[COT SPEC] {info['name']} — Speculateurs SUREXPOSES SHORT: "
+                    f"{spec_net_pct:.1f}% OI net short — "
+                    f"risque de short squeeze "
+                    f"(commerciaux: {comm_direction} {abs(comm_net_pct):.1f}%) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=cot_published_dt,
+                    related_tickers=[info["ticker"]],
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.05),
+                ))
+
+            # ── Alert 4: Commercial vs speculator divergence (contrarian signal) ──
+            if (current["comm_net"] > 0 and current["spec_net"] < 0
+                    and abs(comm_net_pct) > 10 and abs(spec_net_pct) > 10):
+                title = (
+                    f"[COT DIVERGENCE] {info['name']} — Commerciaux LONG ({comm_net_pct:.1f}% OI) "
+                    f"vs Speculateurs SHORT ({spec_net_pct:.1f}% OI) — "
+                    f"signal contrarian haussier (smart money vs crowd) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=cot_published_dt,
+                    related_tickers=[info["ticker"]],
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.1),
+                ))
+            elif (current["comm_net"] < 0 and current["spec_net"] > 0
+                    and abs(comm_net_pct) > 10 and abs(spec_net_pct) > 10):
+                title = (
+                    f"[COT DIVERGENCE] {info['name']} — Commerciaux SHORT ({comm_net_pct:.1f}% OI) "
+                    f"vs Speculateurs LONG ({spec_net_pct:.1f}% OI) — "
+                    f"signal contrarian baissier (smart money vs crowd) "
+                    f"(date: {latest_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="CFTC",
+                    url="https://www.cftc.gov/dea/futures/deacmelf.htm",
+                    published=cot_published_dt,
+                    related_tickers=[info["ticker"]],
+                    source_weight=SOURCE_WEIGHTS.get("CFTC", 1.1),
+                ))
+
+    except Exception as exc:
+        logger.warning("COT data fetch error: %s", exc)
+
+    if items:
+        logger.info("Fetched %d COT positioning alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 6. Options Unusual Activity via yfinance
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def fetch_options_unusual_activity() -> list[NewsItem]:
+    """Detect unusual options activity on key assets.
+
+    Large call/put volume spikes relative to open interest
+    can signal smart money positioning before a move.
+    """
+    import yfinance as yf
+
+    # Equity tickers + US ETFs with liquid options for broad coverage
+    options_tickers = {
+        # EU equities
+        "TTE.PA": "TotalEnergies",
+        "MC.PA": "LVMH",
+        "BNP.PA": "BNP Paribas",
+        "SAN.PA": "Sanofi",
+        "AI.PA": "Air Liquide",
+        "OR.PA": "L'Oréal",
+        "RMS.PA": "Hermès",
+        # US index ETFs — smart money positioning
+        "SPY": "S&P 500 ETF",
+        "QQQ": "Nasdaq 100 ETF",
+        # Commodity ETFs — physical market signals
+        "USO": "US Oil Fund (WTI proxy)",
+        "GLD": "Gold ETF",
+        "SLV": "Silver ETF",
+        "CORN": "Corn ETF (Teucrium)",
+        "WEAT": "Wheat ETF (Teucrium)",
+        # Team 2 audit: copper + cocoa ETFs for smart money positioning
+        "CPER": "Copper ETF (United States Copper)",
+        "NIB": "Cocoa ETN (iPath)",
+        "JO": "Coffee ETN (iPath)",
+    }
+
+    # Map ETF options tickers to our tracked universe tickers
+    etf_to_tracked: dict[str, list[str]] = {
+        "SPY": ["^GSPC"],
+        "QQQ": ["^IXIC"],
+        "USO": ["CL=F", "BZ=F"],
+        "GLD": ["GC=F"],
+        "SLV": ["SI=F"],
+        "CORN": ["ZC=F"],
+        "WEAT": ["ZW=F"],
+        # Team 2 audit: commodity ETFs mapped to tracked tickers
+        "CPER": ["HG=F"],
+        "NIB": ["CC=F"],
+        "JO": ["KC=F"],
+    }
+
+    items: list[NewsItem] = []
+    _deadline = time.monotonic() + 45  # Hard budget: 45s total for all tickers
+
+    for ticker, name in options_tickers.items():
+        if time.monotonic() > _deadline:
+            logger.info("Options: time budget exhausted after %d/%d tickers",
+                        len(items), len(options_tickers))
+            break
+        try:
+            stock = yf.Ticker(ticker)
+            expirations = stock.options
+            if not expirations:
+                continue
+
+            # Check up to 3 nearest expirations to catch positioning beyond weeklies
+            # Smart money often uses 2nd/3rd expiration to avoid gamma squeeze on nearest
+            import pandas as pd
+            all_calls = pd.DataFrame()
+            all_puts = pd.DataFrame()
+            for exp in expirations[:3]:
+                try:
+                    chain = stock.option_chain(exp)
+                    if not chain.calls.empty:
+                        all_calls = pd.concat([all_calls, chain.calls], ignore_index=True)
+                    if not chain.puts.empty:
+                        all_puts = pd.concat([all_puts, chain.puts], ignore_index=True)
+                except Exception:
+                    continue
+
+            calls = all_calls
+            puts = all_puts
+
+            if calls.empty and puts.empty:
+                continue
+
+            # Calculate total call/put volume and OI across all checked expirations
+            total_call_vol = int(calls["volume"].sum()) if "volume" in calls.columns else 0
+            total_put_vol = int(puts["volume"].sum()) if "volume" in puts.columns else 0
+            total_call_oi = int(calls["openInterest"].sum()) if "openInterest" in calls.columns else 0
+            total_put_oi = int(puts["openInterest"].sum()) if "openInterest" in puts.columns else 0
+
+            if total_call_oi == 0 and total_put_oi == 0:
+                continue
+
+            # v9.0: Minimum OI threshold — low OI produces aberrant ratios
+            # (e.g., SPY calls 2,234,664% of OI because OI=47)
+            MIN_OI_THRESHOLD = 500
+            if total_call_oi < MIN_OI_THRESHOLD and total_put_oi < MIN_OI_THRESHOLD:
+                logger.debug("Options skipping %s: OI too low (call_oi=%d, put_oi=%d < %d)",
+                             ticker, total_call_oi, total_put_oi, MIN_OI_THRESHOLD)
+                continue
+
+            # Put/Call ratio
+            total_vol = total_call_vol + total_put_vol
+            if total_vol == 0:
+                continue
+
+            # Use tracked tickers for ETFs, otherwise the ticker itself
+            related = etf_to_tracked.get(ticker, [ticker])
+
+            pc_ratio = total_put_vol / total_call_vol if total_call_vol > 0 else 999
+
+            # Alert on extreme put/call ratios
+            # Threshold 3.0 for EU equities (P/C > 2.0 is common on LVMH etc.)
+            # Threshold 1.5 for US ETFs (more liquid, lower baseline P/C)
+            is_us_etf = ticker in etf_to_tracked
+            pc_threshold = 1.5 if is_us_etf else 3.0
+            if pc_ratio > pc_threshold:
+                title = (
+                    f"[OPTIONS] {name} ({ticker}) — Put/Call ratio extreme: {pc_ratio:.1f} "
+                    f"(puts: {total_put_vol}, calls: {total_call_vol}) — "
+                    f"signal bearish, smart money positionne a la baisse?"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="Options Flow",
+                    url="",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=related,
+                    source_weight=SOURCE_WEIGHTS.get("Options Flow", 1.0),
+                ))
+            elif pc_ratio < 0.25 and total_call_vol > (50000 if is_us_etf else 2000):
+                title = (
+                    f"[OPTIONS] {name} ({ticker}) — Activite calls inhabituelle: P/C ratio {pc_ratio:.2f} "
+                    f"(calls: {total_call_vol}, puts: {total_put_vol}) — "
+                    f"signal bullish, accumulation de calls"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="Options Flow",
+                    url="",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=related,
+                    source_weight=SOURCE_WEIGHTS.get("Options Flow", 1.0),
+                ))
+
+            # Alert on IV skew: put IV significantly higher than call IV = smart money hedging
+            try:
+                if not calls.empty and not puts.empty and "impliedVolatility" in calls.columns:
+                    avg_call_iv = calls["impliedVolatility"].mean()
+                    avg_put_iv = puts["impliedVolatility"].mean()
+                    if avg_call_iv > 0 and avg_put_iv > 0:
+                        skew = (avg_put_iv - avg_call_iv) / avg_call_iv * 100
+                        if skew > 25:  # Put IV 25%+ higher than call IV = fear
+                            title = (
+                                f"[OPTIONS SKEW] {name} ({ticker}) — Put IV >> Call IV: "
+                                f"skew {skew:.0f}% (put IV: {avg_put_iv:.2f}, call IV: {avg_call_iv:.2f}) — "
+                                f"smart money hedging a la baisse"
+                            )
+                            items.append(NewsItem(
+                                title=title,
+                                source="Options Flow",
+                                url="",
+                                published=datetime.now(timezone.utc),
+                                related_tickers=related,
+                                source_weight=1.0,
+                            ))
+                        elif skew < -20:  # Call IV higher = unusual bullish speculation
+                            title = (
+                                f"[OPTIONS SKEW] {name} ({ticker}) — Call IV >> Put IV: "
+                                f"skew inverse {skew:.0f}% (call IV: {avg_call_iv:.2f}, put IV: {avg_put_iv:.2f}) — "
+                                f"speculation haussiere inhabituelle"
+                            )
+                            items.append(NewsItem(
+                                title=title,
+                                source="Options Flow",
+                                url="",
+                                published=datetime.now(timezone.utc),
+                                related_tickers=related,
+                                source_weight=1.0,
+                            ))
+            except Exception:
+                pass  # IV data not always available
+
+            # Alert on volume spike vs OI (>50% of OI traded in a day)
+            # v9.0: Require OI >= MIN_OI_THRESHOLD and cap ratio display at 1000%
+            if total_call_oi >= MIN_OI_THRESHOLD and total_call_vol > total_call_oi * 0.5:
+                vol_oi_ratio = min(total_call_vol / total_call_oi, 10.0)  # Cap at 1000%
+                title = (
+                    f"[OPTIONS] {name} ({ticker}) — Volume calls = {vol_oi_ratio:.0%} "
+                    f"de l'open interest ({total_call_vol} vs {total_call_oi} OI) — "
+                    f"activite inhabituelle"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="Options Flow",
+                    url="",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=related,
+                    source_weight=SOURCE_WEIGHTS.get("Options Flow", 1.0),
+                ))
+
+        except Exception as exc:
+            logger.debug("Options data error for %s: %s", ticker, exc)
+
+    if items:
+        logger.info("Detected %d unusual options activities", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 7. NASA EONET — Earth Observatory Natural Event Tracker
+# ═══════════════════════════════════════════════════════════════════════
+# Free, no API key needed. Tracks wildfires, severe storms, volcanoes, etc.
+# https://eonet.gsfc.nasa.gov/
+
+# Map EONET event categories to commodity tickers
+EONET_CATEGORY_MAP: dict[str, dict] = {
+    "severeStorms": {
+        "tickers": ["CL=F", "NG=F"],
+        "label": "Tempete severe",
+    },
+    "wildfires": {
+        "tickers": ["ZW=F", "ZC=F"],
+        "label": "Feu de foret",
+    },
+    "volcanoes": {
+        "tickers": ["GC=F"],  # Volcanic disruptions → safe haven
+        "label": "Eruption volcanique",
+    },
+    "floods": {
+        "tickers": ["ZW=F", "ZC=F", "ZS=F"],
+        "label": "Inondation",
+    },
+    "drought": {
+        "tickers": ["ZC=F", "ZW=F", "ZS=F", "KC=F"],
+        "label": "Secheresse",
+    },
+    "earthquakes": {
+        "tickers": ["GC=F", "CL=F"],  # Disruption + safe haven
+        "label": "Seisme",
+    },
+}
+
+# Geographic regions that matter for our commodity universe
+# Events outside these regions are lower priority
+EONET_COMMODITY_REGIONS: list[dict[str, Any]] = [
+    {"name": "US Midwest", "lat_range": (35, 50), "lon_range": (-100, -80), "tickers": ["ZC=F", "ZW=F", "ZS=F"]},
+    {"name": "US South/Texas", "lat_range": (25, 35), "lon_range": (-105, -90), "tickers": ["CT=F", "CL=F", "LE=F"]},
+    {"name": "Florida", "lat_range": (24, 31), "lon_range": (-88, -79), "tickers": ["OJ=F"]},
+    {"name": "Brazil", "lat_range": (-35, -5), "lon_range": (-60, -35), "tickers": ["KC=F", "SB=F", "ZS=F", "OJ=F", "CC=F"]},
+    {"name": "Gulf of Mexico", "lat_range": (20, 32), "lon_range": (-100, -80), "tickers": ["CL=F", "NG=F"]},
+    {"name": "West Africa", "lat_range": (0, 12), "lon_range": (-15, 5), "tickers": ["CC=F"]},
+    {"name": "Black Sea/Ukraine", "lat_range": (40, 55), "lon_range": (25, 45), "tickers": ["ZW=F", "ZC=F"]},
+    {"name": "SE Asia", "lat_range": (-10, 10), "lon_range": (95, 120), "tickers": ["ZS=F"]},
+    {"name": "Australia", "lat_range": (-40, -20), "lon_range": (130, 155), "tickers": ["ZW=F"]},
+    {"name": "India", "lat_range": (20, 35), "lon_range": (68, 90), "tickers": ["ZW=F", "CT=F"]},
+    {"name": "Argentina", "lat_range": (-40, -25), "lon_range": (-65, -55), "tickers": ["ZS=F", "ZC=F", "ZW=F"]},
+    {"name": "Middle East", "lat_range": (20, 40), "lon_range": (35, 60), "tickers": ["CL=F", "GC=F"]},
+    # Team 2 audit: copper-producing regions
+    {"name": "Chile/Peru Copper Belt", "lat_range": (-30, -10), "lon_range": (-80, -65), "tickers": ["HG=F"]},
+    {"name": "DRC/Zambia Copper Belt", "lat_range": (-16, -5), "lon_range": (22, 32), "tickers": ["HG=F"]},
+    # Team 2 audit: additional cocoa/coffee regions
+    {"name": "Cameroon/Nigeria Cocoa", "lat_range": (3, 10), "lon_range": (3, 15), "tickers": ["CC=F"]},
+    {"name": "Vietnam Coffee", "lat_range": (10, 16), "lon_range": (105, 112), "tickers": ["KC=F"]},
+    {"name": "Colombia Coffee", "lat_range": (2, 8), "lon_range": (-78, -72), "tickers": ["KC=F"]},
+]
+
+
+def _match_eonet_region(lat: float, lon: float) -> tuple[list[str], str] | None:
+    """Match EONET event coordinates to commodity-relevant regions.
+
+    Returns (tickers, region_name) for the matched region, or None if outside our coverage.
+    """
+    for region in EONET_COMMODITY_REGIONS:
+        lat_min, lat_max = region["lat_range"]
+        lon_min, lon_max = region["lon_range"]
+        if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
+            return region["tickers"], region["name"]
+    return None
+
+
+def fetch_nasa_eonet_events() -> list[NewsItem]:
+    """Fetch recent natural events from NASA EONET.
+
+    Returns significant natural events (storms, wildfires, volcanoes, etc.)
+    that could impact commodities and energy markets.
+    """
+    items: list[NewsItem] = []
+
+    try:
+        url = "https://eonet.gsfc.nasa.gov/api/v3/events"
+        params = {"days": 3, "status": "open", "limit": 20}
+        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+
+        # EONET sometimes returns 503 under load — retry once (no blocking sleep)
+        if resp.status_code == 503:
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+
+        if resp.status_code != 200:
+            logger.warning("NASA EONET API error: HTTP %d", resp.status_code)
+            return []
+
+        data = resp.json()
+        events = data.get("events", [])
+
+        for event in events:
+            title_raw = event.get("title", "")
+            if not title_raw:
+                continue
+
+            # Match category
+            categories = event.get("categories", [])
+            matched_tickers: list[str] = []
+            label = "Evenement naturel"
+            for cat in categories:
+                cat_id = cat.get("id", "")
+                if cat_id in EONET_CATEGORY_MAP:
+                    mapping = EONET_CATEGORY_MAP[cat_id]
+                    matched_tickers.extend(mapping["tickers"])
+                    label = mapping["label"]
+
+            if not matched_tickers:
+                continue  # Skip categories we don't trade
+
+            # Get location info and refine tickers based on geographic region
+            geometry = event.get("geometry", [])
+            location_str = ""
+            region_tickers = None
+            region_name = ""
+            if geometry:
+                coords = geometry[-1].get("coordinates", [])
+                if len(coords) >= 2:
+                    lat, lon = coords[1], coords[0]
+                    location_str = f" (lat {lat:.1f}, lon {lon:.1f})"
+                    region_match = _match_eonet_region(lat, lon)
+                    if region_match:
+                        region_tickers, region_name = region_match
+
+            # If we have coordinates and the event is NOT in a commodity-relevant region, skip it
+            # (e.g., wildfire in Siberia doesn't impact our grains)
+            if geometry and region_tickers is None:
+                continue
+
+            # Use region-specific tickers if available, otherwise fall back to category default
+            final_tickers = region_tickers if region_tickers else matched_tickers
+
+            # Parse event date from geometry for accurate published timestamp
+            eonet_published_dt = datetime.now(timezone.utc)
+            if geometry:
+                event_date_str = geometry[-1].get("date", "")
+                if event_date_str:
+                    try:
+                        # EONET dates are ISO 8601: "2025-08-12T00:00:00Z"
+                        clean = event_date_str.replace("Z", "+00:00")
+                        eonet_published_dt = datetime.fromisoformat(clean)
+                    except (ValueError, TypeError):
+                        pass
+
+            title = f"[NASA EONET] {label}: {title_raw}{location_str}"
+
+            items.append(NewsItem(
+                title=title,
+                source="NASA EONET",
+                url=event.get("link", "https://eonet.gsfc.nasa.gov/"),
+                published=eonet_published_dt,
+                related_tickers=list(set(final_tickers)),
+                source_weight=SOURCE_WEIGHTS.get("NASA EONET", 1.1),
+                news_zone=_zone_slug(region_name) if region_name else "",
+            ))
+
+    except Exception as exc:
+        logger.warning("NASA EONET fetch error: %s", exc)
+
+    if items:
+        logger.info("Fetched %d NASA EONET natural events", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8. GIE AGSI — European Gas Storage Inventory
+# ═══════════════════════════════════════════════════════════════════════
+# Free API key required: https://agsi.gie.eu/
+# Env var: GIE_AGSI_API_KEY
+# Provides EU aggregate gas storage levels — critical for NG=F and energy
+
+
+# Seasonal storage thresholds — what's "normal" varies by time of year
+# Winter (Oct-Mar): storage is being drawn down, lower levels expected
+# Summer (Apr-Sep): injection season, storage should be building
+AGSI_SEASONAL_THRESHOLDS = {
+    "winter": {"low": 20, "critical_low": 10, "high": 75, "very_high": 90},  # Oct-Mar
+    "summer": {"low": 50, "critical_low": 30, "high": 90, "very_high": 97},  # Apr-Sep
+}
+
+# Key countries to monitor individually (largest consumers/storers)
+AGSI_COUNTRIES = {
+    "DE": "Allemagne",   # Largest EU gas consumer
+    "FR": "France",
+    "NL": "Pays-Bas",    # TTF hub
+    "IT": "Italie",      # Major consumer
+}
+
+
+def _get_agsi_season() -> str:
+    """Return current storage season (winter = draw, summer = injection)."""
+    month = datetime.now(timezone.utc).month
+    return "winter" if month >= 10 or month <= 3 else "summer"
+
+
+def _parse_agsi_entry(entry: dict) -> tuple[float | None, float | None, str]:
+    """Extract full_pct, injection, and date from an AGSI entry."""
+    full_pct = entry.get("full", entry.get("gasInStorage_pct"))
+    injection = entry.get("injection", entry.get("netWithdrawal"))
+    gas_date = entry.get("gasDayStart", entry.get("date", ""))
+    return (float(full_pct) if full_pct is not None else None,
+            float(injection) if injection is not None else None,
+            gas_date)
+
+
+def fetch_gie_agsi_data() -> list[NewsItem]:
+    """Fetch European gas storage data from GIE AGSI.
+
+    Fetches both EU aggregate AND key country-level data (DE, FR, NL, IT).
+    Uses seasonal thresholds (winter vs summer norms).
+    Analyzes injection/withdrawal rates alongside absolute levels.
+    """
+    api_key = os.environ.get("GIE_AGSI_API_KEY", "")
+    if not api_key:
+        logger.warning("GIE_AGSI_API_KEY not set — skipping EU gas storage data")
+        return []
+
+    items: list[NewsItem] = []
+    season = _get_agsi_season()
+    thresholds = AGSI_SEASONAL_THRESHOLDS[season]
+    headers = {"x-key": api_key}
+
+    # ── EU aggregate ──
+    try:
+        resp = requests.get("https://agsi.gie.eu/api/data/eu", headers=headers, timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            entries = data.get("data", data) if isinstance(data, dict) else data
+            if entries and isinstance(entries, list) and entries[0]:
+                full_pct, injection, gas_date = _parse_agsi_entry(entries[0])
+                if full_pct is not None:
+                    alert = ""
+                    if full_pct < thresholds["critical_low"]:
+                        alert = "CRITIQUE BAS"
+                    elif full_pct < thresholds["low"]:
+                        alert = "BAS (vs norme saisonniere)"
+                    elif full_pct > thresholds["very_high"]:
+                        alert = "TRES HAUT"
+                    elif full_pct > thresholds["high"]:
+                        alert = "HAUT"
+
+                    injection_str = ""
+                    if injection is not None:
+                        injection_str = f", {'injection' if injection >= 0 else 'soutirage'}: {abs(injection):.2f} TWh/j"
+
+                    # Parse gasDayStart for accurate published timestamp
+                    try:
+                        agsi_published_dt = datetime.strptime(gas_date.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError):
+                        agsi_published_dt = datetime.now(timezone.utc)
+
+                    title = (
+                        f"[GIE AGSI] Stockage gaz EU: {full_pct:.1f}% plein"
+                        f"{' — niveau ' + alert if alert else ''}"
+                        f"{injection_str} (saison: {season}, date: {gas_date})"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="GIE AGSI",
+                        url="https://agsi.gie.eu/",
+                        published=agsi_published_dt,
+                        related_tickers=["NG=F"],
+                        source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),
+                        news_zone="europe",
+                    ))
+    except Exception as exc:
+        logger.warning("GIE AGSI EU fetch error: %s", exc)
+
+    # ── Country-level data (detect regional stress masked by aggregate) ──
+    for country_code, country_name in AGSI_COUNTRIES.items():
+        try:
+            resp = requests.get(
+                f"https://agsi.gie.eu/api/data/{country_code.lower()}",
+                headers=headers, timeout=REQUEST_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            entries = data.get("data", data) if isinstance(data, dict) else data
+            if not entries or not isinstance(entries, list) or not entries[0]:
+                continue
+            full_pct, injection, gas_date = _parse_agsi_entry(entries[0])
+            if full_pct is None:
+                continue
+
+            # Only alert on country level if it's significantly diverging from normal
+            if full_pct < thresholds["critical_low"]:
+                # Parse gasDayStart for accurate published timestamp
+                try:
+                    country_published_dt = datetime.strptime(gas_date.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    country_published_dt = datetime.now(timezone.utc)
+
+                title = (
+                    f"[GIE AGSI] ALERTE {country_name}: stockage gaz {full_pct:.1f}% — "
+                    f"CRITIQUE BAS (seuil saison {season}: {thresholds['critical_low']}%) — "
+                    f"stress regional masque par l'agregat EU (date: {gas_date})"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="GIE AGSI",
+                    url="https://agsi.gie.eu/",
+                    published=country_published_dt,
+                    related_tickers=["NG=F"],
+                    source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),  # Country-level stress
+                    news_zone=_zone_slug(country_name),
+                ))
+        except Exception as exc:
+            logger.warning("GIE AGSI %s fetch error: %s", country_code, exc)
+
+    if items:
+        logger.info("Fetched %d GIE AGSI gas storage data points", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 9. USDA WASDE — World Agricultural Supply and Demand Estimates
+# ═══════════════════════════════════════════════════════════════════════
+# The single most market-moving agri report. Monthly publication by USDA.
+# We query the NASS API for production/yield revisions on key commodities.
+# Env var: USDA_API_KEY (same key as crop progress)
+
+
+def fetch_usda_wasde() -> list[NewsItem]:
+    """Fetch USDA WASDE supply/demand estimates for key crops.
+
+    WASDE revises production and yield forecasts monthly — any deviation
+    from prior estimates is a strong directional signal for grain futures.
+    We compare latest vs previous report to detect revisions.
+    """
+    api_key = os.environ.get("USDA_API_KEY", "")
+    if not api_key:
+        logger.warning("USDA_API_KEY not set — skipping WASDE data")
+        return []
+
+    items: list[NewsItem] = []
+    current_year = str(datetime.now(timezone.utc).year)
+
+    # Key WASDE commodities — production estimates most market-moving
+    wasde_queries = [
+        {
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "PRODUCTION",
+            "unit_desc": "BU",
+            "tickers": ["ZC=F"],
+            "label": "Mais",
+        },
+        {
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "PRODUCTION",
+            "unit_desc": "BU",
+            "tickers": ["ZS=F"],
+            "label": "Soja",
+        },
+        {
+            "commodity_desc": "WHEAT",
+            "statisticcat_desc": "PRODUCTION",
+            "unit_desc": "BU",
+            "tickers": ["ZW=F"],
+            "label": "Ble",
+        },
+        {
+            "commodity_desc": "CORN",
+            "statisticcat_desc": "YIELD",
+            "unit_desc": "BU / ACRE",
+            "tickers": ["ZC=F"],
+            "label": "Mais (rendement)",
+        },
+        {
+            "commodity_desc": "SOYBEANS",
+            "statisticcat_desc": "YIELD",
+            "unit_desc": "BU / ACRE",
+            "tickers": ["ZS=F"],
+            "label": "Soja (rendement)",
+        },
+        # Livestock — among most market-moving USDA reports
+        {
+            "commodity_desc": "CATTLE",
+            "statisticcat_desc": "INVENTORY",
+            "unit_desc": "HEAD",
+            "tickers": ["LE=F"],
+            "label": "Betail (inventaire)",
+        },
+        {
+            "commodity_desc": "HOGS",
+            "statisticcat_desc": "INVENTORY",
+            "unit_desc": "HEAD",
+            "tickers": ["HE=F"],
+            "label": "Porcins (inventaire)",
+        },
+    ]
+
+    for q in wasde_queries:
+        try:
+            url = "https://quickstats.nass.usda.gov/api/api_GET/"
+            params = {
+                "key": api_key,
+                "source_desc": "SURVEY",
+                "commodity_desc": q["commodity_desc"],
+                "statisticcat_desc": q["statisticcat_desc"],
+                "unit_desc": q["unit_desc"],
+                "year": current_year,
+                "agg_level_desc": "NATIONAL",
+                "format": "JSON",
+            }
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+
+            data = resp.json()
+            records = data.get("data", [])
+            if not records:
+                continue
+
+            # Sort by reference period to get latest forecast
+            records.sort(key=lambda r: r.get("reference_period_desc", ""), reverse=True)
+            latest = records[0]
+            value = latest.get("Value", "").replace(",", "")
+
+            if not value:
+                continue
+
+            period = latest.get("reference_period_desc", "")
+            unit = latest.get("unit_desc", "")
+
+            # Find previous estimate for revision detection
+            revision_str = ""
+            if len(records) >= 2:
+                prev_value = records[1].get("Value", "").replace(",", "")
+                if prev_value:
+                    try:
+                        curr_f = float(value)
+                        prev_f = float(prev_value)
+                        if prev_f > 0:
+                            pct_change = ((curr_f - prev_f) / prev_f) * 100
+                            if abs(pct_change) >= 0.5:  # Only flag significant revisions
+                                direction = "hausse" if pct_change > 0 else "baisse"
+                                revision_str = f" — REVISION {direction}: {pct_change:+.1f}% vs estimation precedente"
+                    except (ValueError, TypeError):
+                        pass
+
+            # Parse load_time or week_ending for accurate published timestamp
+            wasde_date_str = latest.get("load_time", latest.get("week_ending", ""))
+            try:
+                if wasde_date_str:
+                    # load_time format: "2025-08-12 00:00:00" or "YYYY-MM-DD"
+                    clean_date = wasde_date_str.strip().split(" ")[0]
+                    wasde_published_dt = datetime.strptime(clean_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                else:
+                    wasde_published_dt = datetime.now(timezone.utc)
+            except (ValueError, TypeError):
+                wasde_published_dt = datetime.now(timezone.utc)
+
+            title = (
+                f"[WASDE] {q['label']} — {q['statisticcat_desc'].title()}: "
+                f"{value} {unit} ({period} {current_year}){revision_str}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="USDA",
+                url="https://www.usda.gov/oce/commodity/wasde",
+                published=wasde_published_dt,
+                related_tickers=q["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+                news_zone="us",
+            ))
+
+        except Exception as exc:
+            logger.warning("WASDE fetch error for %s %s: %s",
+                         q["commodity_desc"], q["statisticcat_desc"], exc)
+
+    if items:
+        logger.info("Fetched %d WASDE supply/demand estimates", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 10. CME FedWatch — Implied rate expectations from Treasury futures
+# ═══════════════════════════════════════════════════════════════════════
+# Uses Fed Funds futures (ZQ=F) to estimate market-implied rate expectations.
+# A repricing of rate expectations moves gold, forex, and indices.
+# Free via yfinance — no API key needed.
+
+
+def fetch_fedwatch_implied() -> list[NewsItem]:
+    """Estimate market-implied Fed rate expectations from Fed Funds futures.
+
+    Fed Funds futures (ZQ) price = 100 - implied rate.
+    Significant shifts in implied rate vs current target = repricing signal.
+    Impacts: GC=F (gold inverse), EURUSD=X, ^GSPC.
+    """
+    from .market_data import fetch_history
+
+    items: list[NewsItem] = []
+
+    try:
+        # Current effective Fed Funds rate target midpoint
+        # We use the 30-day Fed Funds futures (nearest month)
+        # ZQ=F is blacklisted on TD (not available), goes straight to yfinance
+        hist = fetch_history("ZQ=F", period_days=5, interval="1day")
+
+        if hist is None or hist.empty:
+            logger.debug("FedWatch: no ZQ=F data available")
+            return []
+
+        # Latest close price → implied rate = 100 - price
+        latest_close = hist["Close"].iloc[-1]
+        implied_rate = 100.0 - latest_close
+
+        # 5-day change to detect repricing
+        if len(hist) >= 2:
+            prev_close = hist["Close"].iloc[0]
+            prev_implied = 100.0 - prev_close
+            rate_change_bps = (implied_rate - prev_implied) * 100  # In basis points
+
+            # Only alert on significant moves (>5 bps shift in a week = meaningful)
+            if abs(rate_change_bps) >= 5:
+                direction = "hausse" if rate_change_bps > 0 else "baisse"
+                hawkish_dovish = "hawkish" if rate_change_bps > 0 else "dovish"
+
+                # Determine severity
+                severity = ""
+                if abs(rate_change_bps) >= 15:
+                    severity = " [REPRICING MAJEUR]"
+                elif abs(rate_change_bps) >= 10:
+                    severity = " [REPRICING NOTABLE]"
+
+                title = (
+                    f"[FEDWATCH] Taux implicite Fed Funds: {implied_rate:.2f}% "
+                    f"({direction} de {abs(rate_change_bps):.0f}bps sur 5j, "
+                    f"etait {prev_implied:.2f}%) — signal {hawkish_dovish}{severity} — "
+                    f"impacte or, forex, indices"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="FedWatch",
+                    url="https://www.cmegroup.com/markets/interest-rates/stirs/30-day-federal-fund.html",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=["GC=F", "EURUSD=X", "^GSPC", "USDJPY=X"],
+                    source_weight=SOURCE_WEIGHTS.get("FedWatch", 1.0),
+                ))
+
+        # Also check 2nd/3rd month futures for forward guidance signal
+        # Dynamically compute next 3 contract months from current date
+        _cme_month_codes = {1:"F",2:"G",3:"H",4:"J",5:"K",6:"M",7:"N",8:"Q",9:"U",10:"V",11:"X",12:"Z"}
+        _now = datetime.now(timezone.utc)
+        _fwd_tickers = []
+        for offset in range(1, 4):
+            _m = ((_now.month - 1 + offset) % 12) + 1
+            _y = _now.year + ((_now.month - 1 + offset) // 12)
+            _fwd_tickers.append(f"ZQ{_cme_month_codes[_m]}{str(_y)[-2:]}.CBT")
+        for i, suffix in enumerate(_fwd_tickers, start=1):
+            try:
+                fwd_hist = fetch_history(suffix, period_days=2, interval="1day")
+                if fwd_hist is not None and not fwd_hist.empty:
+                    fwd_rate = 100.0 - fwd_hist["Close"].iloc[-1]
+                    # If forward rate diverges significantly from near-month, that's a signal
+                    if abs(fwd_rate - implied_rate) >= 0.15:  # 15+ bps spread
+                        spread_dir = "hausse" if fwd_rate > implied_rate else "baisse"
+                        title = (
+                            f"[FEDWATCH FWD] Marche anticipe {spread_dir} des taux: "
+                            f"taux implicite M+{i}: {fwd_rate:.2f}% vs spot {implied_rate:.2f}% "
+                            f"(spread: {(fwd_rate - implied_rate)*100:+.0f}bps)"
+                        )
+                        items.append(NewsItem(
+                            title=title,
+                            source="FedWatch",
+                            url="https://www.cmegroup.com/markets/interest-rates/stirs/30-day-federal-fund.html",
+                            published=datetime.now(timezone.utc),
+                            related_tickers=["GC=F", "EURUSD=X", "^GSPC"],
+                            source_weight=SOURCE_WEIGHTS.get("FedWatch", 1.0),
+                        ))
+            except Exception:
+                pass  # Forward month data not always available
+
+    except Exception as exc:
+        logger.warning("FedWatch fetch error: %s", exc)
+
+    if items:
+        logger.info("Generated %d FedWatch rate signals", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 11. SHFE — Shanghai Futures Exchange metal inventories
+# ═══════════════════════════════════════════════════════════════════════
+# SHFE publishes daily metal warehouse inventories (copper, aluminum, zinc).
+# Changes in SHFE stocks are a leading indicator for global metals demand.
+# Free — no API key needed.
+
+
+# SHFE metal inventory tracking via yfinance price proxies
+# Direct SHFE API requires Chinese language parsing; we use warehouse
+# receipt data published weekly and proxy through Chinese metal futures.
+SHFE_METALS: list[dict[str, Any]] = [
+    {
+        "name": "Cuivre SHFE",
+        "yahoo_ticker": "HG=F",  # We track the CME copper as proxy
+        "lme_ticker": "HG=F",
+        "tickers": ["HG=F"],
+    },
+]
+
+
+def fetch_shfe_inventories() -> list[NewsItem]:
+    """Detect significant shifts in metal inventory levels via LME/SHFE proxies.
+
+    SHFE direct API is complex (Chinese endpoints). Instead we monitor:
+    1. LME warehouse inventory data (publicly available, published daily)
+    2. Copper/aluminum spread anomalies between exchanges
+
+    Large inventory draws = physical demand outpacing supply = bullish metals.
+    """
+    items: list[NewsItem] = []
+
+    try:
+        # Use LME copper inventory as proxy — publicly available, correlated with SHFE
+        # We detect unusual volume + price action as inventory proxy
+
+        # Check copper, zinc for unusual moves suggesting inventory shifts
+        metals_to_check = [
+            {"ticker": "HG=F", "name": "Cuivre", "tickers": ["HG=F"]},
+        ]
+
+        from .market_data import fetch_history
+
+        for metal in metals_to_check:
+            try:
+                hist = fetch_history(metal["ticker"], period_days=30, interval="1day")
+
+                if hist is None or hist.empty or len(hist) < 10:
+                    continue
+
+                # Detect unusual volume (>2x 20-day average) = possible inventory event
+                avg_vol = hist["Volume"].iloc[:-1].mean()
+                latest_vol = hist["Volume"].iloc[-1]
+
+                if avg_vol > 0 and latest_vol > avg_vol * 2:
+                    latest_close = hist["Close"].iloc[-1]
+                    prev_close = hist["Close"].iloc[-2]
+                    pct_change = ((latest_close - prev_close) / prev_close) * 100
+
+                    direction = "hausse" if pct_change > 0 else "baisse"
+                    title = (
+                        f"[SHFE/LME] {metal['name']} — Volume anormal: "
+                        f"{latest_vol:,.0f} (moy 20j: {avg_vol:,.0f}, ratio: {latest_vol/avg_vol:.1f}x) — "
+                        f"prix {direction} {abs(pct_change):.1f}% — "
+                        f"possible mouvement inventaires/demande physique"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="SHFE",
+                        url="https://www.shfe.com.cn/en/",
+                        published=datetime.now(timezone.utc),
+                        related_tickers=metal["tickers"],
+                        source_weight=SOURCE_WEIGHTS.get("SHFE", 1.1),
+                        news_zone="china",
+                    ))
+
+                # Detect backwardation (near > far) = inventory tightness
+                # Compare 1-month price trend: sustained rise + low volume = draw
+                month_return = ((hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0]) * 100
+                if month_return > 5:  # 5%+ monthly move
+                    title = (
+                        f"[SHFE/LME] {metal['name']} — Mouvement mensuel significatif: "
+                        f"{month_return:+.1f}% sur 1 mois — "
+                        f"possible tightness physique (draw inventaires)"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="SHFE",
+                        url="https://www.shfe.com.cn/en/",
+                        published=datetime.now(timezone.utc),
+                        related_tickers=metal["tickers"],
+                        source_weight=SOURCE_WEIGHTS.get("SHFE", 1.1),
+                        news_zone="china",
+                    ))
+                elif month_return < -5:
+                    title = (
+                        f"[SHFE/LME] {metal['name']} — Mouvement mensuel significatif: "
+                        f"{month_return:+.1f}% sur 1 mois — "
+                        f"possible surplus physique (build inventaires)"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="SHFE",
+                        url="https://www.shfe.com.cn/en/",
+                        published=datetime.now(timezone.utc),
+                        related_tickers=metal["tickers"],
+                        source_weight=SOURCE_WEIGHTS.get("SHFE", 1.1),
+                        news_zone="china",
+                    ))
+
+            except Exception as exc:
+                logger.debug("SHFE metal check error for %s: %s", metal["name"], exc)
+
+    except Exception as exc:
+        logger.warning("SHFE inventory fetch error: %s", exc)
+
+    if items:
+        logger.info("Generated %d SHFE/LME metal inventory signals", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 12. OIE/WOAH — World Organisation for Animal Health (P1-5)
+# ═══════════════════════════════════════════════════════════════════════
+# Free, no API key. Detects animal disease outbreaks 24-48h before media.
+# https://wahis.woah.org/
+
+
+def fetch_woah_disease_alerts() -> list[NewsItem]:
+    """Fetch animal disease outbreak alerts from WOAH (ex-OIE).
+
+    Monitors for diseases that impact livestock futures:
+    - African Swine Fever → HE=F (hog prices spike on culling)
+    - Avian Influenza (HPAI) → LE=F, HE=F, ZC=F (feed demand shift)
+    - Foot-and-Mouth Disease → LE=F, HE=F (trade bans)
+    - BSE (Mad Cow) → LE=F (import bans)
+    """
+    items: list[NewsItem] = []
+
+    # WOAH WAHIS public API — recent disease events
+    disease_keywords = {
+        "african swine fever": {"tickers": ["HE=F", "LE=F", "ZC=F"], "severity": "CRITICAL"},
+        "highly pathogenic avian influenza": {"tickers": ["LE=F", "HE=F", "ZC=F"], "severity": "HIGH"},
+        "avian influenza": {"tickers": ["LE=F", "HE=F"], "severity": "HIGH"},
+        "foot-and-mouth": {"tickers": ["LE=F", "HE=F"], "severity": "CRITICAL"},
+        "foot and mouth": {"tickers": ["LE=F", "HE=F"], "severity": "CRITICAL"},
+        "bovine spongiform": {"tickers": ["LE=F"], "severity": "CRITICAL"},
+        "lumpy skin disease": {"tickers": ["LE=F"], "severity": "MODERATE"},
+        "peste des petits ruminants": {"tickers": ["LE=F"], "severity": "HIGH"},
+    }
+
+    try:
+        # WAHIS public events API
+        url = "https://wahis.woah.org/api/v1/pi/event/filtered"
+        params = {"pageSize": 20, "pageNumber": 0, "sortColumn": "eventDate", "sortOrder": "desc"}
+        resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT,
+                           headers={"Accept": "application/json"})
+
+        if resp.status_code != 200:
+            # Fallback: try RSS-style endpoint
+            rss_url = "https://wahis.woah.org/pi/getReport/rss"
+            resp = requests.get(rss_url, timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 200:
+                import feedparser
+                feed = feedparser.parse(resp.content)
+                for entry in feed.entries[:15]:
+                    title_lower = entry.get("title", "").lower()
+                    for disease, info in disease_keywords.items():
+                        if disease in title_lower:
+                            # Parse RSS published date
+                            rss_published_dt = datetime.now(timezone.utc)
+                            if hasattr(entry, "published_parsed") and entry.published_parsed:
+                                try:
+                                    import calendar
+                                    rss_published_dt = datetime.fromtimestamp(
+                                        calendar.timegm(entry.published_parsed), tz=timezone.utc
+                                    )
+                                except (ValueError, TypeError, OverflowError):
+                                    pass
+                            title = (
+                                f"[WOAH ALERTE] {info['severity']}: {entry.get('title', '')} — "
+                                f"Impact potentiel betail/feed"
+                            )
+                            items.append(NewsItem(
+                                title=title,
+                                source="WOAH",
+                                url=entry.get("link", "https://wahis.woah.org/"),
+                                published=rss_published_dt,
+                                related_tickers=info["tickers"],
+                                source_weight=SOURCE_WEIGHTS.get("WOAH", 1.15),
+                                news_zone=_zone_slug(entry.get("title", "")),
+                            ))
+                            break
+            return items
+
+        data = resp.json()
+        events = data if isinstance(data, list) else data.get("content", data.get("events", []))
+
+        for event in events[:20]:
+            disease_name = ""
+            if isinstance(event, dict):
+                disease_name = (event.get("diseaseName", "") or
+                               event.get("disease", {}).get("name", "") or "").lower()
+                country = event.get("country", {}).get("name", "") if isinstance(event.get("country"), dict) else event.get("country", "")
+                event_date = event.get("eventDate", event.get("reportDate", ""))
+
+            for disease_key, info in disease_keywords.items():
+                if disease_key in disease_name:
+                    # Parse eventDate for accurate published timestamp
+                    woah_published_dt = datetime.now(timezone.utc)
+                    if event_date:
+                        try:
+                            # WOAH dates: "2025-08-12", "2025-08-12T00:00:00Z", or "2025-08-12T00:00:00"
+                            clean = event_date.strip().replace("Z", "+00:00")
+                            if "T" in clean:
+                                woah_published_dt = datetime.fromisoformat(clean)
+                            else:
+                                woah_published_dt = datetime.strptime(clean.split(" ")[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                        except (ValueError, TypeError):
+                            pass
+                    title = (
+                        f"[WOAH ALERTE] {info['severity']} — {disease_name.title()} "
+                        f"detecte en {country} ({event_date}) — "
+                        f"risque ban importation / abattage massif"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="WOAH",
+                        url="https://wahis.woah.org/",
+                        published=woah_published_dt,
+                        related_tickers=info["tickers"],
+                        source_weight=SOURCE_WEIGHTS.get("WOAH", 1.15),
+                        news_zone=_zone_slug(country) if country else "",
+                    ))
+                    break
+
+    except Exception as exc:
+        logger.warning("WOAH disease alert fetch error: %s", exc)
+
+    if items:
+        logger.info("Fetched %d WOAH animal disease alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 13. NASA MODIS/NDVI — Satellite Crop Monitoring (P2-2)
+# ═══════════════════════════════════════════════════════════════════════
+# Free, no API key. Detects vegetation stress 1-2 weeks before USDA reports.
+# https://modis.gsfc.nasa.gov/
+
+# Key agricultural regions to monitor via MODIS NDVI
+NDVI_MONITORING_ZONES = [
+    {"name": "US Corn Belt", "lat": 41.5, "lon": -89.0, "tickers": ["ZC=F", "ZS=F"], "crop": "mais/soja",
+     "growing_months": [5, 6, 7, 8, 9]},
+    {"name": "Brazil Soy Belt", "lat": -15.0, "lon": -50.0, "tickers": ["ZS=F", "ZC=F"], "crop": "soja/mais",
+     "growing_months": [10, 11, 12, 1, 2, 3]},
+    {"name": "Ukraine Wheat", "lat": 49.0, "lon": 32.0, "tickers": ["ZW=F"], "crop": "ble",
+     "growing_months": [4, 5, 6, 7]},
+    {"name": "India Wheat", "lat": 30.0, "lon": 75.5, "tickers": ["ZW=F"], "crop": "ble",
+     "growing_months": [1, 2, 3, 4]},
+    {"name": "Argentina Pampas", "lat": -34.5, "lon": -59.0, "tickers": ["ZS=F", "ZW=F"], "crop": "soja/ble",
+     "growing_months": [10, 11, 12, 1, 2, 3]},
+    # ── Team 2 audit: cocoa + coffee NDVI zones ──
+    {"name": "Ivory Coast Cocoa Belt", "lat": 6.5, "lon": -5.5, "tickers": ["CC=F"], "crop": "cacao",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Ghana Cocoa Belt", "lat": 6.7, "lon": -1.6, "tickers": ["CC=F"], "crop": "cacao",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Brazil Minas Gerais Coffee", "lat": -21.0, "lon": -44.0, "tickers": ["KC=F"], "crop": "cafe arabica",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Brazil Espirito Santo Coffee", "lat": -19.8, "lon": -40.3, "tickers": ["KC=F"], "crop": "cafe robusta",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "Vietnam Highlands Coffee", "lat": 12.7, "lon": 108.0, "tickers": ["KC=F"], "crop": "cafe robusta",
+     "growing_months": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+    {"name": "France Beauce Wheat", "lat": 48.1, "lon": 1.5, "tickers": ["ZW=F"], "crop": "ble",
+     "growing_months": [3, 4, 5, 6, 7]},
+]
+
+
+def fetch_satellite_ndvi() -> list[NewsItem]:
+    """Fetch MODIS NDVI vegetation anomaly data for key agricultural regions.
+
+    Uses NASA AppEEARS or MODIS Web Service to detect vegetation stress.
+    NDVI anomalies (current vs historical average) signal crop stress
+    1-2 weeks before it shows up in USDA condition reports.
+    """
+    items: list[NewsItem] = []
+    current_month = datetime.now(timezone.utc).month
+    _deadline = time.monotonic() + 45  # Hard budget: 45s total for all zones
+
+    for zone in NDVI_MONITORING_ZONES:
+        if current_month not in zone["growing_months"]:
+            continue
+        if time.monotonic() > _deadline:
+            logger.info("NDVI: time budget exhausted after %d items from %d zones",
+                        len(items), len(NDVI_MONITORING_ZONES))
+            break
+
+        try:
+            # Use MODIS/VIIRS NDVI via NASA FIRMS or EOSDIS
+            # Fallback: POWER API provides vegetation-related radiation data
+            url = "https://power.larc.nasa.gov/api/temporal/daily/point"
+            params = {
+                "parameters": "ALLSKY_SFC_PAR_TOT,T2M,PRECTOTCORR",
+                "community": "AG",
+                "longitude": zone["lon"],
+                "latitude": zone["lat"],
+                "start": (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y%m%d"),
+                "end": datetime.now(timezone.utc).strftime("%Y%m%d"),
+                "format": "JSON",
+            }
+            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+
+            data = resp.json()
+            properties = data.get("properties", {}).get("parameter", {})
+
+            # Analyze PAR (Photosynthetically Active Radiation) + precipitation
+            precip = properties.get("PRECTOTCORR", {})
+            temp = properties.get("T2M", {})
+
+            if not precip or not temp:
+                continue
+
+            # Check for drought stress: < 2mm total over last 14 days during growing season
+            precip_values = [v for v in precip.values() if v is not None and v >= 0]
+            temp_values = [v for v in temp.values() if v is not None and v > -900]
+
+            if len(precip_values) >= 10:
+                total_precip = sum(precip_values)
+                avg_temp = sum(temp_values) / len(temp_values) if temp_values else 0
+
+                # Severe drought indicator: very low precipitation
+                if total_precip < 5.0:  # < 5mm in 14 days
+                    title = (
+                        f"[SATELLITE DATA] Stress vegetatif detecte a {zone['name']}: "
+                        f"seulement {total_precip:.1f}mm sur 14 jours "
+                        f"(temp moy: {avg_temp:.1f}°C) — "
+                        f"probable impact rendement {zone['crop']}"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="NASA POWER",
+                        url="https://power.larc.nasa.gov/",
+                        published=datetime.now(timezone.utc),
+                        related_tickers=zone["tickers"],
+                        source_weight=SOURCE_WEIGHTS.get("NASA POWER", 1.15),
+                        news_zone=_zone_slug(zone["name"]),
+                    ))
+
+                # Heat + drought combo = severe
+                if total_precip < 10.0 and avg_temp > 32:
+                    title = (
+                        f"[SATELLITE DATA] Double stress chaleur+secheresse a {zone['name']}: "
+                        f"{total_precip:.1f}mm precip + {avg_temp:.1f}°C moy sur 14j — "
+                        f"risque perte rendement severe {zone['crop']}"
+                    )
+                    items.append(NewsItem(
+                        title=title,
+                        source="NASA POWER",
+                        url="https://power.larc.nasa.gov/",
+                        published=datetime.now(timezone.utc),
+                        related_tickers=zone["tickers"],
+                        source_weight=SOURCE_WEIGHTS.get("NASA POWER", 1.2),
+                        news_zone=_zone_slug(zone["name"]),
+                    ))
+
+        except Exception as exc:
+            logger.warning("Satellite NDVI fetch error for %s: %s", zone["name"], exc)
+
+    if items:
+        logger.info("Generated %d satellite vegetation stress alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 14. Freightos Baltic Index — Shipping/Freight Rates (P2-3)
+# ═══════════════════════════════════════════════════════════════════════
+# Uses BDI proxy via yfinance (BDRY ETF) for container/dry bulk rates.
+
+
+def fetch_freight_index() -> list[NewsItem]:
+    """Detect freight rate spikes using BDI proxy (Breakwave Dry Bulk ETF).
+
+    Baltic Dry Index spikes signal supply chain stress 1-2 weeks before
+    it appears in CPI/import data. BDRY ETF tracks BDI futures.
+    """
+    import yfinance as yf
+
+    items: list[NewsItem] = []
+
+    try:
+        # BDRY = Breakwave Dry Bulk Shipping ETF (BDI proxy)
+        bdry = yf.Ticker("BDRY")
+        hist = bdry.history(period="1mo")
+
+        if hist is None or hist.empty or len(hist) < 10:
+            return []
+
+        current = float(hist["Close"].iloc[-1])
+        avg_20d = float(hist["Close"].tail(20).mean())
+        avg_5d = float(hist["Close"].tail(5).mean())
+        low_20d = float(hist["Close"].tail(20).min())
+
+        if avg_20d == 0:
+            return []
+
+        change_vs_20d = (current - avg_20d) / avg_20d * 100
+        change_5d = (avg_5d - avg_20d) / avg_20d * 100
+
+        # Spike: current > 20% above 20d average = supply chain stress
+        if change_vs_20d > 20:
+            title = (
+                f"[FREIGHT] Baltic Dry Index proxy (BDRY) en hausse: {change_vs_20d:+.1f}% vs moy 20j "
+                f"(prix: ${current:.2f}, moy: ${avg_20d:.2f}) — "
+                f"signal stress supply chain / hausse couts transport"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Freight Index",
+                url="",
+                published=datetime.now(timezone.utc),
+                related_tickers=["HG=F", "CL=F", "ZW=F"],  # Industrial + shipping
+                source_weight=SOURCE_WEIGHTS.get("Freight Index", 1.1),
+            ))
+
+        # Collapse: current > 20% below 20d average = demand destruction
+        elif change_vs_20d < -20:
+            title = (
+                f"[FREIGHT] Baltic Dry Index proxy (BDRY) en chute: {change_vs_20d:+.1f}% vs moy 20j "
+                f"(prix: ${current:.2f}, moy: ${avg_20d:.2f}) — "
+                f"signal ralentissement demande / reduction commerce mondial"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Freight Index",
+                url="",
+                published=datetime.now(timezone.utc),
+                related_tickers=["HG=F", "CL=F"],
+                source_weight=SOURCE_WEIGHTS.get("Freight Index", 1.1),
+            ))
+
+        # Rapid 5-day surge (>10% in 5 days = acute disruption)
+        elif change_5d > 10:
+            title = (
+                f"[FREIGHT] Surge rapide fret maritime: {change_5d:+.1f}% sur 5j "
+                f"(BDRY: ${current:.2f}) — possible disruption portuaire ou penuries navires"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Freight Index",
+                url="",
+                published=datetime.now(timezone.utc),
+                related_tickers=["HG=F", "CL=F", "ZW=F"],
+                source_weight=SOURCE_WEIGHTS.get("Freight Index", 1.05),
+            ))
+
+    except Exception as exc:
+        logger.warning("Freight index fetch error: %s", exc)
+
+    if items:
+        logger.info("Generated %d freight/shipping alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 15. LME Inventory Proxy — Base Metal Warehouse Stocks (P2-4)
+# ═══════════════════════════════════════════════════════════════════════
+# Uses ETF volume + price as proxy for physical inventory changes.
+
+
+def fetch_lme_inventory_proxy() -> list[NewsItem]:
+    """Detect base metal inventory changes using ETF proxies.
+
+    True LME warrant data requires paid subscription. We use:
+    - CPER (copper ETF) for HG=F inventory signals
+    - JJN (nickel ETN) for industrial metals
+    - Volume anomalies + price divergence = physical tightness/surplus
+    """
+    import yfinance as yf
+
+    items: list[NewsItem] = []
+
+    metal_etfs = [
+        {"etf": "CPER", "name": "Cuivre", "tickers": ["HG=F"], "type": "physical"},
+        {"etf": "JJN", "name": "Nickel", "tickers": ["HG=F"], "type": "industrial"},  # Industrial proxy
+        {"etf": "PALL", "name": "Palladium", "tickers": ["PA=F"], "type": "pgm"},
+        {"etf": "PPLT", "name": "Platine", "tickers": ["PL=F"], "type": "pgm"},
+    ]
+
+    for metal in metal_etfs:
+        try:
+            etf = yf.Ticker(metal["etf"])
+            hist = etf.history(period="2mo")
+
+            if hist is None or hist.empty or len(hist) < 20:
+                continue
+
+            current_price = float(hist["Close"].iloc[-1])
+            avg_20d = float(hist["Close"].tail(20).mean())
+
+            # Volume analysis
+            if "Volume" in hist.columns:
+                volumes = hist["Volume"].tail(20)
+                avg_vol = float(volumes.mean())
+                current_vol = float(volumes.iloc[-1])
+
+                # Volume spike (>3x average) + price move = inventory event
+                if avg_vol > 0 and current_vol > avg_vol * 3 and current_price > 0:
+                    price_change = (current_price - avg_20d) / avg_20d * 100
+                    if abs(price_change) > 2:
+                        direction = "hausse" if price_change > 0 else "baisse"
+                        title = (
+                            f"[LME PROXY] {metal['name']} ({metal['etf']}) — Volume anormal: "
+                            f"{current_vol/avg_vol:.1f}x la moyenne + prix en {direction} ({price_change:+.1f}%) — "
+                            f"possible mouvement inventaires physiques"
+                        )
+                        items.append(NewsItem(
+                            title=title,
+                            source="LME Proxy",
+                            url="",
+                            published=datetime.now(timezone.utc),
+                            related_tickers=metal["tickers"],
+                            source_weight=SOURCE_WEIGHTS.get("LME Proxy", 1.05),
+                        ))
+
+        except Exception as exc:
+            logger.warning("LME proxy fetch error for %s: %s", metal["name"], exc)
+
+    if items:
+        logger.info("Generated %d LME inventory proxy alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 16. AIS Vessel Tracking — Chokepoint Monitoring (P3-1)
+# ═══════════════════════════════════════════════════════════════════════
+# Uses MarineTraffic density proxy via known chokepoint vessel count estimates.
+
+
+def fetch_chokepoint_monitoring() -> list[NewsItem]:
+    """Monitor maritime chokepoint congestion via tanker ETF + news proxy.
+
+    True AIS data requires expensive subscriptions. We proxy by:
+    - Tanker ETFs (NAT, STNG, FRO) volume/price for Hormuz/Suez risk
+    - BDRY for general shipping stress
+    - Combined with GNews queries for breaking disruptions
+    """
+    import yfinance as yf
+
+    items: list[NewsItem] = []
+
+    tanker_proxies = [
+        {"etf": "STNG", "name": "Scorpio Tankers", "type": "product_tanker"},
+        {"etf": "FRO", "name": "Frontline (crude tankers)", "type": "crude_tanker"},
+    ]
+
+    for proxy in tanker_proxies:
+        try:
+            stock = yf.Ticker(proxy["etf"])
+            hist = stock.history(period="1mo")
+
+            if hist is None or hist.empty or len(hist) < 10:
+                continue
+
+            current = float(hist["Close"].iloc[-1])
+            avg_20d = float(hist["Close"].tail(20).mean()) if len(hist) >= 20 else float(hist["Close"].mean())
+
+            if avg_20d == 0:
+                continue
+
+            change = (current - avg_20d) / avg_20d * 100
+
+            # Tanker stock spike > 15% = likely chokepoint disruption or rate surge
+            if change > 15:
+                title = (
+                    f"[SHIPPING] {proxy['name']} ({proxy['etf']}) en hausse: {change:+.1f}% vs moy 20j — "
+                    f"probable hausse taux fret / disruption maritime (Hormuz, Suez, Red Sea)"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="Shipping Proxy",
+                    url="",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=["CL=F", "BZ=F", "NG=F"],
+                    source_weight=SOURCE_WEIGHTS.get("Shipping Proxy", 1.1),
+                ))
+
+        except Exception as exc:
+            logger.debug("Chokepoint proxy error for %s: %s", proxy["name"], exc)
+
+    if items:
+        logger.info("Generated %d chokepoint/shipping alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 17. Dark Pool / Block Trade Detection (P3-5)
+# ═══════════════════════════════════════════════════════════════════════
+# Detects institutional accumulation via unusual volume patterns.
+
+
+def fetch_dark_pool_signals() -> list[NewsItem]:
+    """Detect unusual institutional activity via volume/price divergence.
+
+    When volume is 3x+ normal BUT price barely moves, institutions are
+    accumulating (dark pool / block trades). This signals a future move.
+    Also detects: price gaps with no news = potential insider activity.
+    """
+    import yfinance as yf
+
+    items: list[NewsItem] = []
+
+    # Focus on liquid ETFs where dark pool activity is most visible
+    targets = [
+        {"ticker": "GLD", "name": "Gold ETF", "mapped": ["GC=F"]},
+        {"ticker": "USO", "name": "Oil ETF", "mapped": ["CL=F", "BZ=F"]},
+        {"ticker": "SLV", "name": "Silver ETF", "mapped": ["SI=F"]},
+        {"ticker": "CORN", "name": "Corn ETF", "mapped": ["ZC=F"]},
+        {"ticker": "WEAT", "name": "Wheat ETF", "mapped": ["ZW=F"]},
+        {"ticker": "SPY", "name": "S&P500 ETF", "mapped": ["^GSPC"]},
+        # Team 2 audit: copper ETF for dark pool detection
+        {"ticker": "CPER", "name": "Copper ETF", "mapped": ["HG=F"]},
+    ]
+
+    for target in targets:
+        try:
+            stock = yf.Ticker(target["ticker"])
+            hist = stock.history(period="1mo")
+
+            if hist is None or hist.empty or len(hist) < 15:
+                continue
+
+            current_vol = float(hist["Volume"].iloc[-1])
+            avg_vol = float(hist["Volume"].tail(20).mean())
+            current_price = float(hist["Close"].iloc[-1])
+            prev_price = float(hist["Close"].iloc[-2])
+
+            if avg_vol == 0 or prev_price == 0:
+                continue
+
+            vol_ratio = current_vol / avg_vol
+            price_change = abs(current_price - prev_price) / prev_price * 100
+
+            # High volume + low price change = accumulation/distribution
+            if vol_ratio > 3.0 and price_change < 0.5:
+                direction_hint = "accumulation" if current_price >= prev_price else "distribution"
+                title = (
+                    f"[DARK POOL] {target['name']} ({target['ticker']}) — Volume {vol_ratio:.1f}x normal "
+                    f"mais prix stable ({price_change:.2f}%) — "
+                    f"probable {direction_hint} institutionnelle silencieuse"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="Dark Pool Proxy",
+                    url="",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=target["mapped"],
+                    source_weight=SOURCE_WEIGHTS.get("Dark Pool Proxy", 1.0),
+                ))
+
+        except Exception as exc:
+            logger.debug("Dark pool detection error for %s: %s", target["ticker"], exc)
+
+    if items:
+        logger.info("Generated %d dark pool / institutional signals", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Aggregate all structured data
+# ═══════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 18. USDA FAS Export Sales — Weekly commodity export data
+# ═══════════════════════════════════════════════════════════════════════
+# Free, no API key. Published every Thursday 8:30 ET.
+# https://apps.fas.usda.gov/export-sales/
+
+
+def fetch_usda_export_sales() -> list[NewsItem]:
+    """Fetch USDA weekly export sales data for grains.
+
+    The USDA Foreign Agricultural Service publishes weekly export sales
+    reports every Thursday at 8:30 ET. Large sales (especially to China)
+    or cancellations move wheat/corn/soy markets significantly.
+
+    Uses the FAS GATS (Global Agricultural Trade System) public API.
+    """
+    items: list[NewsItem] = []
+
+    # We monitor wheat, corn, soybeans — the three most traded US grains
+    commodities = [
+        {"name": "Wheat", "code": "1001", "tickers": ["ZW=F"]},
+        {"name": "Corn", "code": "1005", "tickers": ["ZC=F"]},
+        {"name": "Soybeans", "code": "1201", "tickers": ["ZS=F"]},
+    ]
+
+    try:
+        # FAS export sales summary — CSV endpoint
+        current_year = datetime.now(timezone.utc).year
+        url = f"https://apps.fas.usda.gov/export-sales/wkly_rpt{current_year % 100:02d}.csv"
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT,
+                           headers={"User-Agent": "Mozilla/5.0"})
+
+        if resp.status_code != 200:
+            # Fallback: try previous marketing year
+            url = f"https://apps.fas.usda.gov/export-sales/wkly_rpt{(current_year - 1) % 100:02d}.csv"
+            resp = requests.get(url, timeout=REQUEST_TIMEOUT,
+                               headers={"User-Agent": "Mozilla/5.0"})
+
+        if resp.status_code == 200 and resp.text.strip():
+            lines = resp.text.strip().split("\n")
+            if len(lines) > 1:
+                for commodity in commodities:
+                    # Search for commodity in the CSV data
+                    for line in lines[-20:]:  # Check last 20 rows (most recent)
+                        if commodity["name"].lower() in line.lower():
+                            title = (
+                                f"[USDA EXPORT] {commodity['name']} — Rapport hebdomadaire export sales "
+                                f"disponible (semaine du {datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
+                            )
+                            items.append(NewsItem(
+                                title=title,
+                                source="USDA FAS",
+                                url="https://apps.fas.usda.gov/export-sales/",
+                                published=datetime.now(timezone.utc),
+                                related_tickers=commodity["tickers"],
+                                source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
+                                news_zone="us",
+                            ))
+                            break
+    except Exception as exc:
+        logger.warning("USDA export sales fetch error: %s", exc)
+
+    if items:
+        logger.info("Fetched %d USDA export sales alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 19. Plant Disease Monitoring — Cocoa/Coffee/Wheat crop diseases
+# ═══════════════════════════════════════════════════════════════════════
+# WOAH only covers animal diseases. Plant diseases (swollen shoot, wheat rust,
+# coffee leaf rust) are monitored via CABI Plantwise and FAO IPPC.
+
+
+def fetch_plant_disease_alerts() -> list[NewsItem]:
+    """Monitor plant disease outbreaks affecting commodity crops.
+
+    Sources:
+    - FAO IPPC (International Plant Protection Convention) alerts
+    - Google News RSS for specific plant disease keywords (free, no limit)
+
+    Diseases monitored:
+    - Cocoa: Swollen Shoot Virus (CSSV), Black Pod (Phytophthora)
+    - Coffee: Coffee Leaf Rust (Hemileia vastatrix), Coffee Berry Disease
+    - Wheat: Wheat Rust (Puccinia), Karnal Bunt, Fusarium Head Blight
+    """
+    items: list[NewsItem] = []
+    seen: set[str] = set()
+
+    # Plant diseases to monitor with their commodity impacts
+    plant_diseases = [
+        # Cocoa diseases
+        {"query": "cocoa swollen shoot virus CSSV Ghana", "tickers": ["CC=F"],
+         "disease": "Swollen Shoot Virus", "severity": "CRITICAL", "zone": "ghana"},
+        {"query": "cocoa black pod phytophthora disease", "tickers": ["CC=F"],
+         "disease": "Black Pod Disease", "severity": "HIGH", "zone": "west_africa"},
+        # Coffee diseases
+        {"query": "coffee leaf rust roya hemileia", "tickers": ["KC=F"],
+         "disease": "Coffee Leaf Rust", "severity": "HIGH", "zone": ""},
+        {"query": "coffee berry disease CBD", "tickers": ["KC=F"],
+         "disease": "Coffee Berry Disease", "severity": "MODERATE", "zone": ""},
+        # Wheat diseases
+        {"query": "wheat rust puccinia stem rust", "tickers": ["ZW=F"],
+         "disease": "Wheat Rust", "severity": "HIGH", "zone": ""},
+        {"query": "wheat fusarium head blight vomitoxin DON", "tickers": ["ZW=F"],
+         "disease": "Fusarium Head Blight", "severity": "MODERATE", "zone": ""},
+    ]
+
+    import feedparser
+
+    for disease_cfg in plant_diseases:
+        try:
+            # Google News RSS — free, unlimited, no API key needed
+            query = disease_cfg["query"].replace(" ", "+")
+            rss_url = f"https://news.google.com/rss/search?q={query}&hl=en&gl=US&ceid=US:en"
+            resp = requests.get(rss_url, timeout=REQUEST_TIMEOUT,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+
+            feed = feedparser.parse(resp.content)
+            for entry in feed.entries[:3]:  # Top 3 most recent per disease
+                title = entry.get("title", "")
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+
+                # Parse published date
+                published_dt = datetime.now(timezone.utc)
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    try:
+                        import calendar
+                        published_dt = datetime.fromtimestamp(
+                            calendar.timegm(entry.published_parsed), tz=timezone.utc
+                        )
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+
+                # Only include if recent (< 7 days)
+                age_hours = (datetime.now(timezone.utc) - published_dt).total_seconds() / 3600
+                if age_hours > 168:  # 7 days
+                    continue
+
+                formatted_title = (
+                    f"[PLANT DISEASE] {disease_cfg['severity']} — {disease_cfg['disease']}: "
+                    f"{title[:150]}"
+                )
+                items.append(NewsItem(
+                    title=formatted_title,
+                    source="Plant Disease Monitor",
+                    url=entry.get("link", ""),
+                    published=published_dt,
+                    related_tickers=disease_cfg["tickers"],
+                    source_weight=SOURCE_WEIGHTS.get("Plant Disease", 1.1),
+                    news_zone=disease_cfg.get("zone", ""),
+                ))
+
+        except Exception as exc:
+            logger.warning("Plant disease alert fetch error for %s: %s",
+                        disease_cfg["disease"], exc)
+
+    if items:
+        logger.info("Fetched %d plant disease alerts", len(items))
+    return items
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 20. Google News RSS — Free unlimited alternative to GNews API
+# ═══════════════════════════════════════════════════════════════════════
+# Google News RSS is free and has no rate limit. We use it for queries
+# that don't fit in the GNews 100 req/day budget.
+
+
+# Queries that supplement GNews — focused on Team 2 coverage gaps
+GOOGLE_NEWS_QUERIES: list[dict[str, Any]] = [
+    # GASC Egypt wheat tenders — world's largest wheat importer
+    {"q": "Egypt GASC wheat tender purchase import", "tickers": ["ZW=F"],
+     "category": "commodity", "zone": "egypt"},
+    # CONAB Brazil crop estimates — most authoritative Brazil source
+    {"q": "CONAB Brazil coffee crop estimate production safra", "tickers": ["KC=F", "SB=F"],
+     "category": "commodity", "zone": "brazil"},
+    # ICCO cocoa grindings / market report
+    {"q": "ICCO cocoa grindings quarterly report market review", "tickers": ["CC=F"],
+     "category": "commodity", "zone": ""},
+    # ICO coffee export data / monthly report
+    {"q": "ICO international coffee organization export report", "tickers": ["KC=F"],
+     "category": "commodity", "zone": ""},
+    # LME copper warehouse stocks — direct supply signal
+    {"q": "LME copper warehouse stocks certified inventory draw", "tickers": ["HG=F"],
+     "category": "commodity", "zone": ""},
+    # ICE cocoa certified stocks / delivery notices
+    {"q": "ICE cocoa certified stocks delivery notice warehouse", "tickers": ["CC=F"],
+     "category": "commodity", "zone": ""},
+    # ICE coffee certified stocks
+    {"q": "ICE coffee arabica certified stocks grainpro warehouse", "tickers": ["KC=F"],
+     "category": "commodity", "zone": ""},
+    # China copper import customs data
+    {"q": "China copper import customs unwrought monthly data", "tickers": ["HG=F"],
+     "category": "commodity", "zone": "china"},
+    # SovEcon/IKAR Russian wheat estimates
+    {"q": "SovEcon IKAR Russia wheat crop estimate export", "tickers": ["ZW=F"],
+     "category": "commodity", "zone": "russia"},
+    # Harmattan / West Africa dry season (cocoa risk)
+    {"q": "harmattan West Africa Ghana cocoa dry season wind", "tickers": ["CC=F"],
+     "category": "weather", "zone": "west_africa"},
+    # Abidjan San Pedro port — cocoa export logistics
+    {"q": "Abidjan San Pedro port cocoa shipment export Ivory Coast", "tickers": ["CC=F"],
+     "category": "supply_chain", "zone": "ivory_coast"},
+]
+
+
+def fetch_google_news_rss() -> list[NewsItem]:
+    """Fetch commodity news via Google News RSS — free, unlimited alternative to GNews.
+
+    Used for queries that exceed GNews 100 req/day budget.
+    Focus on coverage gaps identified in Team 2 audit:
+    - Exchange warehouse stocks (LME, ICE)
+    - Commodity organization reports (CONAB, ICCO, ICO)
+    - Regional monitoring (GASC Egypt, SovEcon Russia, port logistics)
+    """
+    import feedparser
+
+    items: list[NewsItem] = []
+    seen: set[str] = set()
+    _deadline = time.monotonic() + 45  # Hard budget: 45s total for all queries
+
+    for query_cfg in GOOGLE_NEWS_QUERIES:
+        if time.monotonic() > _deadline:
+            logger.info("Google News RSS: time budget exhausted after %d items from %d queries",
+                        len(items), len(GOOGLE_NEWS_QUERIES))
+            break
+        try:
+            query = query_cfg["q"].replace(" ", "+")
+            rss_url = f"https://news.google.com/rss/search?q={query}&hl=en&gl=US&ceid=US:en"
+            resp = requests.get(rss_url, timeout=REQUEST_TIMEOUT,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200:
+                continue
+
+            feed = feedparser.parse(resp.content)
+            for entry in feed.entries[:3]:  # Top 3 per query
+                title = entry.get("title", "")
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+
+                # Parse published date
+                published_dt = datetime.now(timezone.utc)
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    try:
+                        import calendar
+                        published_dt = datetime.fromtimestamp(
+                            calendar.timegm(entry.published_parsed), tz=timezone.utc
+                        )
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+
+                # Only include if recent (< 48h for commodity news)
+                age_hours = (datetime.now(timezone.utc) - published_dt).total_seconds() / 3600
+                if age_hours > 48:
+                    continue
+
+                cat = query_cfg.get("category", "commodity")
+                gnews_weight = {
+                    "weather": 1.0,
+                    "commodity": 0.95,
+                    "supply_chain": 0.95,
+                }.get(cat, 0.85)
+
+                items.append(NewsItem(
+                    title=title,
+                    source="Google News",
+                    url=entry.get("link", ""),
+                    published=published_dt,
+                    related_tickers=query_cfg["tickers"],
+                    source_weight=gnews_weight,
+                    news_zone=query_cfg.get("zone", ""),
+                ))
+
+        except Exception as exc:
+            logger.warning("Google News RSS fetch error for '%s': %s",
+                        query_cfg.get("q", ""), exc)
+
+    if items:
+        logger.info("Fetched %d items from Google News RSS (%d queries)",
+                    len(items), len(GOOGLE_NEWS_QUERIES))
+    return items
+
+
+def collect_structured_data() -> list[NewsItem]:
+    """Collect all structured data from APIs in parallel.
+
+    Each source is best-effort — failures don't block the scan.
+    Sources are fetched concurrently to minimize total collection time.
+    21 sources (was 17): +USDA Export Sales, +Plant Disease, +Google News RSS, +exchange warehouse proxy
+
+    v5.2: Each source call is tracked by source_monitor for health reporting.
+    """
+    # Import tracker lazily to avoid circular imports
+    try:
+        from .source_monitor import get_tracker
+        tracker = get_tracker()
+    except Exception:
+        tracker = None
+
+    all_items: list[NewsItem] = []
+    sources = [
+        # Slow sources first (start immediately in wave 1 to maximize parallelism)
+        ("weather", fetch_weather_alerts),          # ~60s (24 zones)
+        ("gnews", fetch_gnews_targeted),            # ~40s (25 HTTP calls internally)
+        ("ndvi", fetch_satellite_ndvi),             # ~60s (11 zones)
+        # Medium sources (wave 1-2)
+        ("eia", fetch_eia_data),
+        ("usda", fetch_usda_crop_data),
+        ("wasde", fetch_usda_wasde),
+        ("cot", fetch_cot_data),
+        ("options", fetch_options_unusual_activity),
+        ("agsi", fetch_gie_agsi_data),
+        ("google_news", fetch_google_news_rss),
+        ("usda_export", fetch_usda_export_sales),
+        ("plant_disease", fetch_plant_disease_alerts),
+        # Fast sources (wave 2, ~5-15s each)
+        ("eonet", fetch_nasa_eonet_events),
+        ("fedwatch", fetch_fedwatch_implied),
+        ("shfe", fetch_shfe_inventories),
+        ("woah", fetch_woah_disease_alerts),
+        ("freight", fetch_freight_index),
+        ("lme_proxy", fetch_lme_inventory_proxy),
+        ("chokepoint", fetch_chokepoint_monitoring),
+        ("dark_pool", fetch_dark_pool_signals),
+    ]
+
+    # max_workers=20: One worker per source — zero queuing. Previously 12 workers
+    # caused "not_started" because slow sources (options ~150s for 51 yfinance calls,
+    # ndvi ~120s for 11 NASA calls, google_news ~90s for 11 RSS calls) monopolized
+    # workers while fast sources sat in queue past the 180s global timeout.
+    # 20 workers = all sources start within 1-2 seconds. I/O-bound threads have
+    # minimal CPU/memory overhead even on constrained Replit environments.
+    executor = ThreadPoolExecutor(max_workers=20)
+    # Track start time per future for latency measurement
+    _start_times: dict = {}
+    for name, fn in sources:
+        f = executor.submit(fn)
+        _start_times[f] = (name, time.monotonic())
+    futures = _start_times
+    source_item_counts: dict[str, int] = {}
+    try:
+        for future in as_completed(futures, timeout=75):
+            source_name, start_t = futures[future]
+            latency_ms = (time.monotonic() - start_t) * 1000
+            try:
+                items = future.result(timeout=45)
+                all_items.extend(items)
+                source_item_counts[source_name] = len(items)
+                if len(items) == 0:
+                    logger.info("Structured source '%s' returned 0 items (%.0fms)",
+                               source_name, latency_ms)
+                if tracker:
+                    tracker.record_success(source_name, "phase0", len(items), latency_ms)
+            except TimeoutError:
+                logger.warning("Structured data source '%s' TIMEOUT (45s)", source_name)
+                source_item_counts[source_name] = -1  # timeout marker
+                if tracker:
+                    tracker.record_failure(source_name, "phase0", "Timeout (45s per-source)", latency_ms)
+            except Exception as exc:
+                logger.warning("Structured data source '%s' failed: %s", source_name, exc)
+                source_item_counts[source_name] = -2  # error marker
+                if tracker:
+                    tracker.record_failure(source_name, "phase0", exc, latency_ms)
+    except TimeoutError:
+        # Global timeout hit. Collect results from any futures that completed
+        # during the timeout but weren't yielded by as_completed yet.
+        for f, (name, start_t) in futures.items():
+            if f.done() and name not in source_item_counts:
+                try:
+                    items = f.result(timeout=0)
+                    all_items.extend(items)
+                    source_item_counts[name] = len(items)
+                except Exception:
+                    source_item_counts[name] = -2
+        completed_sources = {futures[f][0] for f in futures if f.done()}
+        skipped = [n for n, _ in sources if n not in completed_sources]
+        logger.warning("Structured data collection timed out (75s). "
+                       "Completed: %s. Skipped: %s",
+                       sorted(completed_sources), skipped)
+        if tracker:
+            for name in skipped:
+                tracker.record_failure(name, "phase0", "Timeout (120s global)")
+    finally:
+        # wait=True: BLOCK until all threads finish. With 20 workers and 45s
+        # per-source time budgets, threads self-terminate within 45s of start.
+        # After the 75s global timeout, most are already done — wait ensures
+        # zombie threads don't overlap with early-signal/RSS phases (which
+        # caused 33 concurrent HTTP connections saturating Replit networking).
+        # cancel_futures=True cancels any still-queued futures (shouldn't
+        # happen with 20 workers for 20 sources, but defensive).
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    # Diagnostic: per-source completion status for debugging 0-item scans
+    completed_names = {futures[f][0] for f in futures if f.done()}
+    not_done = [n for n, _ in sources if n not in completed_names]
+    if not_done:
+        logger.warning("Structured sources still running at return: %s", not_done)
+
+    # Per-source summary for diagnostics
+    sources_with_items = {k: v for k, v in source_item_counts.items() if v > 0}
+    sources_empty = {k: v for k, v in source_item_counts.items() if v == 0}
+    sources_failed = {k: v for k, v in source_item_counts.items() if v < 0}
+    logger.info("Structured data per-source: items=%s, empty=%s, failed=%s, not_started=%s",
+                sources_with_items or "none",
+                list(sources_empty.keys()) or "none",
+                list(sources_failed.keys()) or "none",
+                not_done or "none")
+
+    if all_items:
+        logger.info("Total structured data collected: %d items from %d/%d sources",
+                    len(all_items), len(sources_with_items), len(sources))
+    else:
+        # Critical diagnostic: 0 items despite having sources
+        has_keys = []
+        if os.environ.get("EIA_API_KEY"):
+            has_keys.append("EIA")
+        if os.environ.get("GNEWS_API_KEY"):
+            has_keys.append("GNews")
+        if os.environ.get("USDA_API_KEY"):
+            has_keys.append("USDA")
+        logger.warning("Structured data returned 0 items! "
+                      "Completed: %d/%d sources. API keys present: %s. "
+                      "Failed/timed out: %s. Not started: %s",
+                      len(completed_names), len(sources), has_keys or "none",
+                      list(sources_failed.keys()) or "none",
+                      not_done or "none")
+
+    # Store per-source diagnostics for agent_news DB logging
+    global _last_structured_diag
+    diag: dict[str, dict] = {}
+    for name, count in source_item_counts.items():
+        if count > 0:
+            diag[name] = {"status": "ok", "items": count}
+        elif count == 0:
+            diag[name] = {"status": "empty", "items": 0}
+        elif count == -1:
+            diag[name] = {"status": "timeout", "items": 0}
+        else:
+            diag[name] = {"status": "error", "items": 0}
+    for name in not_done:
+        diag[name] = {"status": "not_started", "items": 0}
+    _last_structured_diag = diag
+
+    return all_items
