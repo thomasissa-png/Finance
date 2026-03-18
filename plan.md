@@ -1,249 +1,115 @@
-# Plan: Architecture Multi-Agents v6.0
+# Plan : Refonte Team 3 — Pure Intraday 1H
 
-## Vision
+## Contexte
+- Passer d'un setup daily (70%) + 1H confirmation (30%) à **1H primaire + Daily filtre**
+- Holding max : quelques heures, tout fermé avant 20:00 CET
+- Plan Twelve Data Grow : pas de limite crédits, 8 req/min
+- 1 seul timeframe de signal : **1H**
 
-Transformer le pipeline monolithique actuel (collect → score → select → journal → learn)
-en **6 agents autonomes** qui travaillent en parallèle, chacun avec son domaine d'expertise,
-son propre log d'activité visible dans le frontend, et une communication via un **message bus**
-partagé (table PostgreSQL `agent_messages`).
+## Fichiers impactés
 
-## Les 6 Agents
+### 1. `backend/app/agents/agent_scoring_3.py` — Refonte indicateurs
+**Version : 2.3 → 3.0**
 
-### 1. Agent News (`agent_news.py`)
-**Rôle** : Collecte, curation et fiabilité des sources
-**Hérite de** : `news_collector.py`, `data_apis.py`, `source_monitor.py`, `event_scanner.py`
-**Schedule** : Collecte toutes les 10 min (heures trading), health check continu
-**Actions** :
-- Collecte les news de toutes les sources (RSS, APIs, GNews)
-- Déduplique (Jaccard cross-scan)
-- Évalue la santé des sources (latence, taux d'erreur)
-- Publie les news brutes sur le message bus → Agent Scoring les consomme
-- Revue hebdomadaire dimanche 20h (déjà en place)
+- [ ] **A1** : Changer `TIMEFRAMES` de `["1d", "1h"]` à `["1h"]` (signal unique)
+- [ ] **A2** : Changer `TIMEFRAME_WEIGHTS` de `{"1d": 0.70, "1h": 0.30}` à `{"1h": 1.0}`
+- [ ] **A3** : Raccourcir les périodes indicateurs pour le 1H :
+  - RSI : `[14, 21]` → `[9, 14]`
+  - MACD : `12/26/9` → `5/13/4`
+  - Bollinger : `20/2.0` → `12/1.8`
+  - Stochastic : `14/3` → `9/3`
+  - EMA/SMA : `20/50/200` → `9/21` (EMA only)
+  - ADX : `14` → `10`
+- [ ] **A4** : Changer le fetch primaire :
+  - `fetch_history_batch(tickers, period_days=365, interval="1day")` → `fetch_history_batch(tickers, period_days=7, interval="1h")`
+  - Ajouter un fetch daily séparé (60j) pour le filtre directionnel uniquement
+  - Cacher le daily (1 seul fetch le matin, TTL longue)
+- [ ] **A5** : Supprimer SMA 200 du calcul (inutile en intraday)
+- [ ] **A6** : Ajouter filtre directionnel daily :
+  - SMA 20 daily : LONG autorisé si prix > SMA20, SHORT si prix < SMA20
+  - ADX 14 daily : > 25 → momentum strategies OK, < 20 → mean-reversion seulement
+- [ ] **A7** : Supprimer `_compute_intraday_confirmation()` (plus de confirmation séparée, 1H EST le signal primaire)
+- [ ] **A8** : Ajouter filtre dernier scan (17:00) : ne prendre que des stratégies mean-reversion rapides (RSI, Stochastic) car fenêtre restante < 3h
+- [ ] **A9** : Incrémenter version à `3.0`
 
-**Log visible** : sources interrogées, nb items par source, latence, erreurs, items publiés
+### 2. `backend/app/agents/agent_trader_3.py` — Holdings intraday
+**Version : 2.2 → 3.0**
 
-### 2. Agent Scoring (`agent_scoring.py`)
-**Rôle** : Expert scoring avec 15+ ans d'expertise edge/news trading
-**Hérite de** : `news_scorer.py` (appels Claude API, formule edge-weighted)
-**Trigger** : Réagit quand Agent News publie des news
-**Actions** :
-- Consomme les news brutes depuis le bus
-- Applique le pré-filtrage zero-edge
-- Score via Claude API (surprise, delay, awareness, reliability, magnitude...)
-- Applique la formule edge-weighted
-- Détecte les chain reactions
-- Publie les news scorées sur le bus → Agent Trader les consomme
+- [ ] **B1** : Remplacer `STRATEGY_MAX_HOLDING_HOURS` par des valeurs intraday :
+  - rsi_snap (ex rsi_reversal) : 3h
+  - stoch_reversal : 3h
+  - bollinger_breakout (ex bollinger_squeeze) : 4h
+  - macd_momentum (ex macd_crossover) : 5h
+  - ema_trend (ex ma_trend) : 5h
+  - momentum_divergence : 4h
+  - Combos mean-rev : 3h
+  - Combos momentum : 5h
+- [ ] **B2** : Ajouter **hard deadline 19:45 CET** dans le monitor :
+  - Si heure >= 19:45 → force-close toutes les positions actives (marge 15min avant 20:00)
+  - Résultat : `EOD_CLOSE` (nouveau type, distinct de EXPIRED)
+- [ ] **B3** : Holding max dynamique par scan :
+  - `max_holding = min(deadline_19h45 - entry_time, strategy_max_hours)`
+  - Le plus petit des deux gagne
+- [ ] **B4** : Ajuster TP/SL pour l'intraday (plus serrés) :
+  - Mean-reversion : TP 0.4-0.8%, SL 0.3-0.5%
+  - Momentum : TP 0.6-1.2%, SL 0.4-0.6%
+  - Breakout : TP 0.8-1.5%, SL 0.5-0.8%
+  - Combos : TP 0.6-1.0%, SL 0.3-0.5%
+  - Note : ces fourchettes seront calibrées par ATR, ce sont les bornes
+- [ ] **B5** : Trailing stop activation ajustée :
+  - Mean-reversion : 40% du target
+  - Momentum : 35% du target (abaissé de 50%, fenêtre courte)
+  - Breakout : 30% du target (abaissé de 35%)
+- [ ] **B6** : Filtre scan 17:00 : rejeter les stratégies momentum (holding 5h > fenêtre 2h45)
+- [ ] **B7** : Incrémenter version à `3.0`
 
-**Log visible** : items reçus, items filtrés (zero-edge), scores attribués, tokens utilisés, cache hits
+### 3. `backend/app/agents/agent_journal_3.py` — Clôture intraday
+**Version : 2.1 → 3.0**
 
-### 3. Agent Trader (`agent_trader_1.py`)
-**Rôle** : Expert décision d'investissement, 15+ ans news trading
-**Hérite de** : `trade_selector.py`, `economic_calendar.py`, `position_monitor.py`
-**Trigger** : Réagit quand Agent Scoring publie des scores
-**Actions** :
-- Consomme les news scorées
-- Applique les learning multipliers (reçus de l'Agent Learning)
-- Vérifie calendrier éco, correlation, cooldowns, VIX regime
-- Calibre R/R (ATR, convexe, spread filter)
-- Décide d'investir ou non — documente le raisonnement complet
-- Monitore les positions ouvertes (trailing stop, time stop)
-- Publie les trades exécutés sur le bus → Agent Journal les consomme
+- [ ] **C1** : Remplacer le hardcode `3 * 24` (72h) par le max des STRATEGY_MAX_HOLDING_HOURS importé de trader_3
+- [ ] **C2** : Force-close à 20:00 CET au lieu de compter sur le monitor seul (sécurité)
+- [ ] **C3** : Ajouter le résultat `EOD_CLOSE` dans le tracking (Learning 3 doit le distinguer de EXPIRED)
+- [ ] **C4** : Incrémenter version à `3.0`
 
-**Log visible** : candidats évalués, raisons de rejet, trade sélectionné, sizing, R/R, état positions
+### 4. `backend/app/main.py` — Scheduler
+- [ ] **D1** : Augmenter la fréquence du monitor Trader 3 :
+  - De `minute="10,40"` (2x/heure) à `minute="5,20,35,50"` (4x/heure, toutes les 15min)
+  - Justification : holdings de 1-5h, besoin de granularité pour trailing stop et TP/SL
+- [ ] **D2** : Ajouter un job de force-close à 19:50 CET :
+  - Appelle `run_position_monitor_3()` avec flag `force_close_all=True`
+  - Sécurité pour s'assurer que rien ne reste ouvert
 
-**Extensibilité** : Prêt pour `agent_trader_2.py`, `agent_trader_3.py` (différentes stratégies/profils de risque). Le framework supporte N traders dès le départ.
+### 5. `backend/app/agents/agent_learning_3.py` — Adaptation
+**Version : 2.1 → 3.0**
 
-### 4. Agent Journal (`agent_journal.py`)
-**Rôle** : Documentation et analyse business, expertise spéculation
-**Hérite de** : `journal.py`
-**Schedule** : 22h CET (clôture) + réactif sur trade exécuté
-**Actions** :
-- À chaque trade : note immédiatement le contexte d'entrée
-- À 22h : ferme toutes les positions, calcule P&L réel (15min/1h bars)
-- Calcule MAE/MFE, slippage, realized R/R
-- Analyse la qualité de chaque décision
-- Publie les résultats sur le bus → Agent Learning les consomme
+- [ ] **E1** : Réduire `DECAY_HALF_LIFE_DAYS` de 30 à 15 (intraday = feedback loop plus rapide)
+- [ ] **E2** : Ajouter dimension `scan_time_adj` (07:50 vs 11:15 vs 14:50 vs 17:00) — les scans du matin performent-ils mieux ?
+- [ ] **E3** : Tracker `EOD_CLOSE` comme catégorie de sortie séparée (ni win ni loss, signal calibration)
+- [ ] **E4** : Incrémenter version à `3.0`
 
-**Log visible** : trades fermés, P&L, TP/SL/EXPIRED, métriques qualité, alertes
+### 6. Tests
+- [ ] **F1** : Mettre à jour les tests existants de Scoring 3 (périodes indicateurs, timeframes)
+- [ ] **F2** : Ajouter tests pour le hard deadline 19:45 (EOD_CLOSE)
+- [ ] **F3** : Ajouter tests pour le filtre scan 17:00 (mean-reversion seulement)
+- [ ] **F4** : Ajouter tests pour le holding max dynamique (min de strategy max et deadline)
 
-### 5. Agent Learning (`agent_learning.py`)
-**Rôle** : ML expert, optimisation continue des paramètres
-**Hérite de** : `learning.py`, `backtest.py`
-**Trigger** : Réagit après chaque journal run
-**Actions** :
-- Consomme les résultats du journal
-- Recalcule les 6 dimensions de learning (ticker*cat, session, newscat, regime, direction, delay_bias)
-- Met à jour les multipliers pour l'Agent Trader et l'Agent Scoring
-- Génère le performance summary (alerts-only)
-- Identifie les patterns, anomalies, drifts
-- Publie les ajustements sur le bus → Agent Trader et Agent Scoring les consomment
+### 7. CLAUDE.md
+- [ ] **G1** : Mettre à jour la section Équipe 3 avec les nouveaux paramètres
+- [ ] **G2** : Mettre à jour le tableau des versions agents
 
-**Log visible** : dimensions recalculées, multipliers modifiés, anomalies détectées, recommandations
+## Ordre d'implémentation
+1. Scoring 3 (A1-A9) — fondation, les indicateurs
+2. Trader 3 (B1-B7) — exécution, holdings, exits
+3. Journal 3 (C1-C4) — clôture cohérente
+4. Learning 3 (E1-E4) — adaptation feedback
+5. Scheduler (D1-D2) — fréquence monitor
+6. Tests (F1-F4)
+7. CLAUDE.md (G1-G2)
 
-### 6. Agent UX (`agent_ux/`)
-**Rôle** : Frontend expert, 15 ans UX/flat design
-**C'est le frontend React** redesigné avec une vision agent-centric
-
-## Architecture Technique
-
-### Message Bus (PostgreSQL)
-
-```sql
-CREATE TABLE agent_messages (
-    id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMPTZ DEFAULT NOW(),
-    from_agent VARCHAR(50) NOT NULL,
-    to_agent VARCHAR(50),          -- NULL = broadcast
-    msg_type VARCHAR(50) NOT NULL, -- 'news_collected', 'news_scored', 'trade_executed', etc.
-    payload JSONB NOT NULL,
-    consumed BOOLEAN DEFAULT FALSE
-);
-
-CREATE TABLE agent_logs (
-    id SERIAL PRIMARY KEY,
-    timestamp TIMESTAMPTZ DEFAULT NOW(),
-    agent_name VARCHAR(50) NOT NULL,
-    level VARCHAR(10) DEFAULT 'INFO',  -- INFO, WARN, ERROR, DECISION
-    action VARCHAR(100) NOT NULL,
-    details JSONB,
-    duration_ms INTEGER
-);
-```
-
-### Agent Base Class
-
-```python
-# backend/app/agents/base.py
-class BaseAgent:
-    name: str
-    description: str
-
-    def publish(msg_type, payload, to_agent=None)  # Publie sur le bus
-    def consume(msg_types) -> list                  # Consomme depuis le bus
-    def log(action, details, level="INFO")          # Log structuré visible frontend
-    def get_logs(limit=50) -> list                  # Récupère ses propres logs
-    def run()                                       # Boucle principale (override)
-    def status() -> dict                            # État courant (idle/working/error)
-```
-
-### Structure Fichiers
-
-```
-backend/app/agents/
-├── __init__.py
-├── base.py              # BaseAgent + MessageBus + AgentLog
-├── agent_news.py        # Agent News (collecte + sources)
-├── agent_scoring.py     # Agent Scoring (Claude + formule)
-├── agent_trader.py      # Agent Trader 1 (décision + monitoring)
-├── agent_journal.py     # Agent Journal (clôture + analyse)
-├── agent_learning.py    # Agent Learning (ML + optimisation)
-└── registry.py          # Registre des agents + orchestration
-
-# Les anciens modules restent comme librairies (pas supprimés)
-# Les agents les importent et les orchestrent
-backend/app/
-├── news_collector.py    # → importé par agent_news
-├── data_apis.py         # → importé par agent_news
-├── source_monitor.py    # → importé par agent_news
-├── news_scorer.py       # → importé par agent_scoring
-├── trade_selector.py    # → importé par agent_trader
-├── journal.py           # → importé par agent_journal
-├── learning.py          # → importé par agent_learning
-├── ...
-```
-
-### Nouveaux Endpoints API
-
-```
-GET  /api/agents                    → liste des 6 agents + status
-GET  /api/agents/{name}/logs        → logs structurés d'un agent (paginé)
-GET  /api/agents/{name}/status      → état courant (idle/working/error + dernière action)
-GET  /api/agents/messages           → messages bus récents (debug)
-POST /api/agents/{name}/trigger     → forcer un agent à s'exécuter
-WS   /ws/agents/live                → WebSocket pour updates temps réel (optionnel phase 2)
-```
-
-### Refonte Frontend (Agent UX)
-
-**Layout** : Vue agent-centric avec sidebar + main content
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  ONESHOT NEWS TRADING — Agent Dashboard           [status]  │
-├──────────┬──────────────────────────────────────────────────┤
-│          │                                                  │
-│  AGENTS  │   MAIN CONTENT (tab sélectionné)                │
-│          │                                                  │
-│ ┌──────┐ │   Vue par défaut: Dashboard avec les 6 agents   │
-│ │ News │ │   en cards montrant leur activité en temps réel  │
-│ │  ●   │ │                                                  │
-│ ├──────┤ │   ┌─────────┐ ┌─────────┐ ┌─────────┐          │
-│ │Score │ │   │ Agent   │ │ Agent   │ │ Agent   │          │
-│ │  ●   │ │   │ News    │ │ Scoring │ │ Trader  │          │
-│ ├──────┤ │   │ 42 news │ │ 12 scrd │ │ 1 trade │          │
-│ │Trade │ │   │ 0 err   │ │ 3.2k tk │ │ LONG GC │          │
-│ │  ●   │ │   └─────────┘ └─────────┘ └─────────┘          │
-│ ├──────┤ │   ┌─────────┐ ┌─────────┐ ┌─────────┐          │
-│ │Journl│ │   │ Agent   │ │ Agent   │ │ Agent   │          │
-│ │  ○   │ │   │ Journal │ │ Learning│ │ UX      │          │
-│ ├──────┤ │   │ 3 close │ │ 6 dims  │ │ online  │          │
-│ │Learn │ │   │ +1.2%PnL│ │ 2 alert │ │         │          │
-│ │  ○   │ │   └─────────┘ └─────────┘ └─────────┘          │
-│ ├──────┤ │                                                  │
-│ │  UX  │ │   + Tabs existants en dessous:                  │
-│ │  ●   │ │   [Journal] [Historique] [Performance]          │
-│ └──────┘ │                                                  │
-└──────────┴──────────────────────────────────────────────────┘
-```
-
-**Sidebar gauche** : Les 6 agents avec indicateur d'état (● actif, ○ idle, ✕ erreur)
-- Clic sur un agent → affiche ses logs détaillés dans le main content
-
-**Page Agent Detail** (quand on clique sur un agent dans la sidebar) :
-- Header : nom, description, état, dernière action, durée
-- Timeline : logs structurés scrollables (action, détails, timestamp)
-- Métriques clés en temps réel (spécifiques à chaque agent)
-
-**Onglets existants** conservés et améliorés :
-- Dashboard : overview des 6 agents (cards résumé)
-- Journal : inchangé (enrichi avec les logs de l'Agent Journal)
-- Historique : inchangé
-- Performance : inchangé (enrichi avec insights de l'Agent Learning)
-
-## Plan d'Implémentation (ordre)
-
-### Phase 1 : Infrastructure (agents/base.py + DB)
-1. Créer `backend/app/agents/__init__.py` et `base.py` (BaseAgent, MessageBus, AgentLog)
-2. Ajouter tables `agent_messages` et `agent_logs` dans `database.py`
-3. Créer `registry.py` — registre + orchestration des agents
-
-### Phase 2 : Migration des 5 agents backend
-4. `agent_news.py` — wraps news_collector + data_apis + source_monitor + event_scanner
-5. `agent_scoring.py` — wraps news_scorer
-6. `agent_trader.py` — wraps trade_selector + economic_calendar + position_monitor
-7. `agent_journal.py` — wraps journal
-8. `agent_learning.py` — wraps learning + backtest
-
-### Phase 3 : Intégration main.py
-9. Refactorer `main.py` : remplacer les appels directs par les agents
-10. Refactorer `scheduler.py` : le scheduler orchestre les agents
-11. Ajouter les nouveaux endpoints API (`/api/agents/*`)
-
-### Phase 4 : Refonte Frontend
-12. Nouveau layout avec sidebar agents
-13. Page Agent Detail (logs timeline)
-14. Dashboard agent-centric (6 cards)
-15. Enrichir Journal et Performance avec données agents
-
-### Phase 5 : Multi-Trader
-16. Framework pour N traders (agent_trader_2.py, etc.)
-17. Agrégation des décisions multi-traders dans le dashboard
-
-## Principes
-
-- **Les agents wrappent les modules existants** — pas de réécriture du code métier
-- **Communication async via bus PG** — découplage total
-- **Chaque agent est testable indépendamment**
-- **Le frontend montre TOUT** — transparence totale sur ce que fait chaque agent
-- **Fallback JSON** : le bus marche aussi en JSON si PG est down
-- **Pas de sur-engineering** : les agents sont des classes Python simples, pas un framework complexe
+## Points d'attention
+- Le Daily devient un **filtre** (direction SMA 20, régime ADX), pas un signal. Un seul fetch le matin, caché toute la journée.
+- Le 1H devient le **seul timeframe de signal**. Toutes les stratégies y sont recalibrées.
+- `_compute_intraday_confirmation()` est supprimé — plus besoin de "confirmer" le daily par du 1H.
+- Le monitor passe à 15min de fréquence (4x/h au lieu de 2x/h).
+- Hard deadline 19:45 CET pour le force-close (pas 20:00, marge de sécurité).
+- Budget API : ~4 batch calls par scan (3 groupes 1H + 1 daily caché). Confortable avec le plan Grow.

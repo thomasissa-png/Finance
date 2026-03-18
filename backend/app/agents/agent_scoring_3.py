@@ -3,9 +3,9 @@
 Responsibilities:
 - Computes technical indicator scores for trading signals
 - NOT based on news — Team 3 trades purely on technical indicators
-- Multi-timeframe confluence: daily (primary) + intraday (confirmation)
-- Indicators: RSI (14, 21), MACD (12,26,9), Bollinger Bands (20,2),
-  SMA/EMA crossovers (20/50/200), Stochastic, ADX, Volume analysis
+- v3.0: Pure intraday — 1H primary signal + Daily directional filter
+- Indicators: RSI (9, 14), MACD (5,13,4), Bollinger Bands (12,1.8),
+  EMA crossovers (9/21), Stochastic (9/3), ADX (10), Volume analysis
 - For each ticker in TECH_TICKERS (20 liquid assets)
 - Produces scored trade setups with direction, strategy, score, targets
 - Publishes "tech_scored" on bus -> Trader 3 consumes
@@ -15,7 +15,7 @@ Differences with Scoring 1/2:
 - Scoring 2: evaluates trend relevance for commodity news
 - Scoring 3: evaluates technical setups (indicators, price action)
 - NO Claude API calls — pure computational analysis
-- Multi-timeframe confluence scoring (daily + 1h confirmation)
+- v3.0: 1H-only signal detection, daily used as directional filter only
 """
 
 import logging
@@ -57,11 +57,12 @@ TECH_TICKERS = {
     "TTE.PA":   {"name": "TotalEnergies", "category": "equities", "atr_mult": 1.0},
 }
 
-# ── Multi-timeframe confluence ────────────────────────────────────
-# Primary = daily (strategy detection), confirmation = 1h (entry timing)
-# 4h not used (Twelve Data free tier limits); 15m too noisy for daily strategies
-TIMEFRAMES = ["1d", "1h"]  # Primary + confirmation
-TIMEFRAME_WEIGHTS = {"1d": 0.70, "1h": 0.30}  # Daily dominates
+# ── Timeframe configuration (v3.0 — pure intraday) ──────────────
+# v3.0: 1H is the sole signal timeframe. Daily is used ONLY as a
+# directional filter (SMA 20 trend, ADX regime) — not for signal detection.
+# This aligns indicators with the intraday holding period (1-5 hours).
+TIMEFRAMES = ["1h"]  # Signal timeframe only
+TIMEFRAME_WEIGHTS = {"1h": 1.0}  # 1H is the only signal source
 
 # ── Strategy definitions ──────────────────────────────────────────
 STRATEGIES = {
@@ -80,9 +81,9 @@ STRATEGIES = {
         "description": "Low volatility breakout from Bollinger Band compression",
         "weight": 0.9,
     },
-    "ma_trend": {
-        "name": "MA Trend",
-        "description": "Moving average alignment (20/50/200)",
+    "ema_trend": {
+        "name": "EMA Trend",
+        "description": "EMA 9/21 alignment — intraday trend following",
         "weight": 0.8,
     },
     "momentum_divergence": {
@@ -126,25 +127,29 @@ STRATEGIES = {
     },
 }
 
-# ── Default indicator parameters (overridable via weekly_config) ──
+# ── Default indicator parameters (v3.0 — calibrated for 1H intraday) ──
+# All periods are in 1H bars. RSI 9 = ~9 hours, MACD 5/13/4 = crossover in ~3-5h,
+# Bollinger 12/1.8 = ~12 hours window, EMA 9/21 = intraday trend.
 DEFAULT_PARAMS = {
     "rsi_oversold": 30,
     "rsi_overbought": 70,
-    "rsi_periods": [14, 21],
-    "macd_fast": 12,
-    "macd_slow": 26,
-    "macd_signal": 9,
-    "bb_period": 20,
-    "bb_std": 2.0,
+    "rsi_periods": [9, 14],          # v3.0: was [14, 21] — faster for intraday
+    "macd_fast": 5,                  # v3.0: was 12 — crossover in 3-5h instead of days
+    "macd_slow": 13,                 # v3.0: was 26
+    "macd_signal": 4,                # v3.0: was 9
+    "bb_period": 12,                 # v3.0: was 20 — ~12h window
+    "bb_std": 1.8,                   # v3.0: was 2.0 — tighter for intraday volatility
     "bb_squeeze_threshold": 3.0,
-    "sma_fast": 20,
-    "sma_mid": 50,
-    "sma_slow": 200,
-    "stoch_k": 14,
+    "ema_fast": 9,                   # v3.0: was sma_fast=20 — EMA 9 for intraday
+    "ema_slow": 21,                  # v3.0: was sma_mid=50 — EMA 21 for intraday
+    "stoch_k": 9,                    # v3.0: was 14 — faster stochastic
     "stoch_d": 3,
-    "adx_period": 14,
+    "adx_period": 10,                # v3.0: was 14 — more reactive
     "adx_trend_threshold": 25,
     "min_setup_score": 30.0,
+    # Daily filter params (directional filter only, not signal)
+    "daily_sma_period": 20,          # v3.0: SMA 20 daily for directional filter
+    "daily_adx_period": 14,          # v3.0: ADX 14 daily for regime filter
 }
 
 # Module-level defaults (used by indicator computations)
@@ -156,9 +161,8 @@ MACD_SLOW = DEFAULT_PARAMS["macd_slow"]
 MACD_SIGNAL = DEFAULT_PARAMS["macd_signal"]
 BB_PERIOD = DEFAULT_PARAMS["bb_period"]
 BB_STD = DEFAULT_PARAMS["bb_std"]
-SMA_FAST = DEFAULT_PARAMS["sma_fast"]
-SMA_MID = DEFAULT_PARAMS["sma_mid"]
-SMA_SLOW = DEFAULT_PARAMS["sma_slow"]
+EMA_FAST = DEFAULT_PARAMS["ema_fast"]
+EMA_SLOW = DEFAULT_PARAMS["ema_slow"]
 STOCH_K = DEFAULT_PARAMS["stoch_k"]
 STOCH_D = DEFAULT_PARAMS["stoch_d"]
 ADX_PERIOD = DEFAULT_PARAMS["adx_period"]
@@ -436,15 +440,14 @@ def _compute_atr(highs: list[float], lows: list[float],
 # ── Strategy detection ────────────────────────────────────────────
 
 def _detect_rsi_reversal(indicators: dict) -> dict | None:
-    """Detect RSI reversal setups."""
+    """Detect RSI reversal setups (v3.0: uses RSI 9 + RSI 14 for intraday)."""
     rsi_14 = indicators.get("rsi_14")
-    rsi_21 = indicators.get("rsi_21")
+    rsi_9 = indicators.get("rsi_9")
     adx = indicators.get("adx")
 
     if rsi_14 is None:
         return None
 
-    # F4: Read configurable thresholds from weekly config
     params = indicators.get("_params", {})
     rsi_oversold = params.get("rsi_oversold", RSI_OVERSOLD)
     rsi_overbought = params.get("rsi_overbought", RSI_OVERBOUGHT)
@@ -452,14 +455,13 @@ def _detect_rsi_reversal(indicators: dict) -> dict | None:
     score = 0
     direction = None
 
-    # Oversold reversal (LONG)
+    # Oversold reversal (LONG) — v3.0: RSI 9 is faster trigger, RSI 14 confirms
     if rsi_14 < rsi_oversold:
-        score = 50 + (rsi_oversold - rsi_14) * 2  # Deeper oversold = higher score
+        score = 50 + (rsi_oversold - rsi_14) * 2
         direction = "LONG"
-        # Confirmation: RSI 21 also oversold
-        if rsi_21 is not None and rsi_21 < rsi_oversold + 5:
+        # v3.0: RSI 9 confirmation (faster indicator also oversold)
+        if rsi_9 is not None and rsi_9 < rsi_oversold + 5:
             score += 15
-        # ADX confirmation: ranging market better for reversal
         if adx is not None and adx < ADX_TREND_THRESHOLD:
             score += 10
 
@@ -467,7 +469,7 @@ def _detect_rsi_reversal(indicators: dict) -> dict | None:
     elif rsi_14 > rsi_overbought:
         score = 50 + (rsi_14 - rsi_overbought) * 2
         direction = "SHORT"
-        if rsi_21 is not None and rsi_21 > rsi_overbought - 5:
+        if rsi_9 is not None and rsi_9 > rsi_overbought - 5:
             score += 15
         if adx is not None and adx < ADX_TREND_THRESHOLD:
             score += 10
@@ -481,7 +483,7 @@ def _detect_rsi_reversal(indicators: dict) -> dict | None:
         "score": min(100, round(score, 1)),
         "signals": {
             "rsi_14": rsi_14,
-            "rsi_21": rsi_21,
+            "rsi_9": rsi_9,
             "adx": adx,
         },
     }
@@ -609,55 +611,57 @@ def _detect_bollinger_squeeze(indicators: dict) -> dict | None:
     }
 
 
-def _detect_ma_trend(indicators: dict) -> dict | None:
-    """Detect moving average alignment setups (P5: now uses SMA 200)."""
-    sma_20 = indicators.get("sma_20")
-    sma_50 = indicators.get("sma_50")
-    sma_200 = indicators.get("sma_200")
-    ema_20 = indicators.get("ema_20")
+def _detect_ema_trend(indicators: dict) -> dict | None:
+    """v3.0: Detect EMA 9/21 trend alignment for intraday trading.
+
+    Replaces _detect_ma_trend (SMA 20/50/200) which was calibrated for daily.
+    EMA 9 on 1H = ~9 hours lookback, EMA 21 = ~21 hours (~2.5 sessions).
+    """
+    ema_9 = indicators.get("ema_9")
+    ema_21 = indicators.get("ema_21")
     adx = indicators.get("adx")
     last_close = indicators.get("last_close")
 
-    if sma_20 is None or sma_50 is None or last_close is None:
+    if ema_9 is None or ema_21 is None or last_close is None:
         return None
 
     score = 0
     direction = None
 
-    # Bullish alignment: price > EMA20 > SMA20 > SMA50
-    if last_close > sma_20 > sma_50:
+    # Bullish alignment: price > EMA9 > EMA21
+    if last_close > ema_9 > ema_21:
         direction = "LONG"
         score = 40
-        # EMA20 confirmation
-        if ema_20 is not None and last_close > ema_20:
-            score += 10
-        # Price well above SMA50 (strong trend)
-        if sma_50 > 0:
-            distance = (last_close - sma_50) / sma_50 * 100
-            if distance > 2:
+        # Price distance from EMA21 (strong trend)
+        if ema_21 > 0:
+            distance = (last_close - ema_21) / ema_21 * 100
+            if distance > 0.5:  # >0.5% above EMA21 on 1H = solid trend
                 score += 10
-        # SMA 200 confirmation: full alignment (golden cross confirmed)
-        if sma_200 is not None and sma_50 > sma_200:
-            score += 10
+        # Daily directional filter confirmation
+        daily_filter = indicators.get("_daily_direction")
+        if daily_filter == "LONG":
+            score += 15  # Aligned with daily trend
+        elif daily_filter == "SHORT":
+            score -= 10  # Against daily trend
         # ADX confirms trend
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 15
         elif adx is not None and adx > 20:
             score += 5
 
-    # Bearish alignment: price < EMA20 < SMA20 < SMA50
-    elif last_close < sma_20 < sma_50:
+    # Bearish alignment: price < EMA9 < EMA21
+    elif last_close < ema_9 < ema_21:
         direction = "SHORT"
         score = 40
-        if ema_20 is not None and last_close < ema_20:
-            score += 10
-        if sma_50 > 0:
-            distance = (sma_50 - last_close) / sma_50 * 100
-            if distance > 2:
+        if ema_21 > 0:
+            distance = (ema_21 - last_close) / ema_21 * 100
+            if distance > 0.5:
                 score += 10
-        # SMA 200 confirmation: death cross confirmed
-        if sma_200 is not None and sma_50 < sma_200:
-            score += 10
+        daily_filter = indicators.get("_daily_direction")
+        if daily_filter == "SHORT":
+            score += 15
+        elif daily_filter == "LONG":
+            score -= 10
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 15
         elif adx is not None and adx > 20:
@@ -667,16 +671,15 @@ def _detect_ma_trend(indicators: dict) -> dict | None:
         return None
 
     return {
-        "strategy": "ma_trend",
+        "strategy": "ema_trend",
         "direction": direction,
         "score": min(100, round(score, 1)),
         "signals": {
-            "sma_20": round(sma_20, 4),
-            "sma_50": round(sma_50, 4),
-            "sma_200": round(sma_200, 4) if sma_200 else None,
-            "ema_20": round(ema_20, 4) if ema_20 else None,
+            "ema_9": round(ema_9, 4),
+            "ema_21": round(ema_21, 4),
             "adx": adx,
             "close": round(last_close, 4),
+            "daily_direction": indicators.get("_daily_direction"),
         },
     }
 
@@ -985,55 +988,53 @@ def _detect_bollinger_stoch_combo(indicators: dict) -> dict | None:
 
 
 def _detect_ma_rsi_macd_combo(indicators: dict) -> dict | None:
-    """Triple confluence: MA trend alignment + RSI confirmation + MACD confirmation.
+    """v3.0: Triple confluence: EMA 9/21 trend + RSI confirmation + MACD confirmation.
 
-    LONG: price > SMA20 > SMA50 + RSI > 50 + MACD > signal
-    SHORT: price < SMA20 < SMA50 + RSI < 50 + MACD < signal
+    LONG: price > EMA9 > EMA21 + RSI > 50 + MACD > signal
+    SHORT: price < EMA9 < EMA21 + RSI < 50 + MACD < signal
     All three must agree — highest conviction setup.
     """
-    sma_20 = indicators.get("sma_20")
-    sma_50 = indicators.get("sma_50")
-    ema_20 = indicators.get("ema_20")
+    ema_9 = indicators.get("ema_9")
+    ema_21 = indicators.get("ema_21")
     rsi_14 = indicators.get("rsi_14")
     macd = indicators.get("macd")
     adx = indicators.get("adx")
     last_close = indicators.get("last_close")
 
-    if any(v is None for v in (sma_20, sma_50, rsi_14, macd, last_close)):
+    if any(v is None for v in (ema_9, ema_21, rsi_14, macd, last_close)):
         return None
 
     score = 0
     direction = None
 
     # Bullish triple confluence
-    if last_close > sma_20 > sma_50 and rsi_14 > 50 and macd["macd"] > macd["signal"]:
+    if last_close > ema_9 > ema_21 and rsi_14 > 50 and macd["macd"] > macd["signal"]:
         direction = "LONG"
         score = 65
-        # Stronger RSI
-        if rsi_14 > 55 and rsi_14 < 75:  # Not overbought
+        if rsi_14 > 55 and rsi_14 < 75:
             score += 5
-        # MACD histogram growing
         if macd["histogram"] > macd["prev_histogram"]:
             score += 10
-        # EMA confirms
-        if ema_20 is not None and last_close > ema_20:
-            score += 5
-        # ADX confirms trend
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 10
+        # Daily direction bonus
+        daily_filter = indicators.get("_daily_direction")
+        if daily_filter == "LONG":
+            score += 5
 
     # Bearish triple confluence
-    elif last_close < sma_20 < sma_50 and rsi_14 < 50 and macd["macd"] < macd["signal"]:
+    elif last_close < ema_9 < ema_21 and rsi_14 < 50 and macd["macd"] < macd["signal"]:
         direction = "SHORT"
         score = 65
         if rsi_14 < 45 and rsi_14 > 25:
             score += 5
         if macd["histogram"] < macd["prev_histogram"]:
             score += 10
-        if ema_20 is not None and last_close < ema_20:
-            score += 5
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 10
+        daily_filter = indicators.get("_daily_direction")
+        if daily_filter == "SHORT":
+            score += 5
 
     if direction is None or score < MIN_SETUP_SCORE:
         return None
@@ -1043,8 +1044,8 @@ def _detect_ma_rsi_macd_combo(indicators: dict) -> dict | None:
         "direction": direction,
         "score": min(100, round(score, 1)),
         "signals": {
-            "sma_20": round(sma_20, 4),
-            "sma_50": round(sma_50, 4),
+            "ema_9": round(ema_9, 4),
+            "ema_21": round(ema_21, 4),
             "rsi_14": rsi_14,
             "macd_line": round(macd["macd"], 4),
             "macd_signal": round(macd["signal"], 4),
@@ -1107,25 +1108,24 @@ def _detect_rsi_bollinger_combo(indicators: dict) -> dict | None:
 
 
 def _detect_macd_ma_combo(indicators: dict) -> dict | None:
-    """MACD crossover + MA trend alignment — trend continuation setup.
+    """v3.0: MACD crossover + EMA 9/21 trend alignment — trend continuation setup.
 
-    LONG: MACD bullish cross + price above SMA20 > SMA50
-    SHORT: MACD bearish cross + price below SMA20 < SMA50
+    LONG: MACD bullish cross + price above EMA9 > EMA21
+    SHORT: MACD bearish cross + price below EMA9 < EMA21
     Confirms trend direction with momentum.
     """
     macd = indicators.get("macd")
-    sma_20 = indicators.get("sma_20")
-    sma_50 = indicators.get("sma_50")
+    ema_9 = indicators.get("ema_9")
+    ema_21 = indicators.get("ema_21")
     adx = indicators.get("adx")
     last_close = indicators.get("last_close")
 
-    if any(v is None for v in (macd, sma_20, sma_50, last_close)):
+    if any(v is None for v in (macd, ema_9, ema_21, last_close)):
         return None
 
     score = 0
     direction = None
 
-    # Precompute crossover/momentum flags for both directions
     macd_bull_cross = (macd["prev_macd"] <= macd["prev_signal"]
                        and macd["macd"] > macd["signal"])
     macd_bull_momentum = macd["histogram"] > macd["prev_histogram"] and macd["histogram"] > 0
@@ -1133,19 +1133,18 @@ def _detect_macd_ma_combo(indicators: dict) -> dict | None:
                        and macd["macd"] < macd["signal"])
     macd_bear_momentum = macd["histogram"] < macd["prev_histogram"] and macd["histogram"] < 0
 
-    # Bullish: MACD cross up + MA alignment
-    if (macd_bull_cross or macd_bull_momentum) and last_close > sma_20 > sma_50:
+    # Bullish: MACD cross up + EMA alignment
+    if (macd_bull_cross or macd_bull_momentum) and last_close > ema_9 > ema_21:
         direction = "LONG"
         score = 58
         if macd_bull_cross:
-            score += 10  # Full cross > just momentum
+            score += 10
         if macd["histogram"] > macd["prev_histogram"]:
             score += 5
         if adx is not None and adx > ADX_TREND_THRESHOLD:
             score += 10
 
-    # F5: elif prevents potential double-match
-    elif (macd_bear_cross or macd_bear_momentum) and last_close < sma_20 < sma_50:
+    elif (macd_bear_cross or macd_bear_momentum) and last_close < ema_9 < ema_21:
         direction = "SHORT"
         score = 58
         if macd_bear_cross:
@@ -1166,8 +1165,8 @@ def _detect_macd_ma_combo(indicators: dict) -> dict | None:
             "macd_line": round(macd["macd"], 4),
             "macd_signal": round(macd["signal"], 4),
             "histogram": round(macd["histogram"], 4),
-            "sma_20": round(sma_20, 4),
-            "sma_50": round(sma_50, 4),
+            "ema_9": round(ema_9, 4),
+            "ema_21": round(ema_21, 4),
             "adx": adx,
             "close": round(last_close, 4),
         },
@@ -1191,7 +1190,7 @@ STRATEGY_RR_PROFILES = {
     "bollinger_squeeze":    (1.4, 0.9),   # R/R ~1.56 (was 1.27)
     # Momentum/trend family — let profits run
     "macd_crossover":       (2.0, 1.0),   # R/R ~2.0
-    "ma_trend":             (2.2, 1.0),   # R/R ~2.2 (strongest trend signal)
+    "ema_trend":            (2.2, 1.0),   # R/R ~2.2 (strongest trend signal)
     "momentum_divergence":  (1.8, 1.0),   # R/R ~1.8
     # Combo: mean-reversion dominant — stop reduced from 1.2→0.9
     "rsi_bollinger_combo":  (1.5, 0.9),   # R/R ~1.67 (was 1.25)
@@ -1208,7 +1207,7 @@ STRATEGY_REGIME_PREFERENCE = {
     "rsi_reversal": "ranging",       # Reversal = mean reversion = ranging
     "macd_crossover": "trending",    # Trend-following signal
     "bollinger_squeeze": "ranging",  # Breakout from compression
-    "ma_trend": "trending",          # Trend alignment
+    "ema_trend": "trending",          # EMA 9/21 trend alignment
     "momentum_divergence": None,     # Works in both
     "stochastic_reversal": "ranging",  # Oscillator = ranging
     # Combo strategies
@@ -1372,31 +1371,31 @@ def _compute_all_indicators(ohlcv: dict, params: dict | None = None) -> dict:
         "last_close": closes[-1] if closes else None,
     }
 
-    # RSI
-    indicators["rsi_14"] = _compute_rsi(closes, 14)
-    indicators["rsi_21"] = _compute_rsi(closes, 21)
-    # Prev RSI for divergence (C7: use pivot-based lookback, not fixed 5 bars)
-    # S3-P3: Use proper pivot_type — "low" for bullish, "high" for bearish
-    # We need both for the divergence detector, so fetch both
+    # RSI (v3.0: periods 9 and 14 for intraday)
+    rsi_fast_period = p.get("rsi_periods", RSI_PERIODS)[0]  # 9
+    rsi_slow_period = p.get("rsi_periods", RSI_PERIODS)[-1]  # 14
+    indicators["rsi_14"] = _compute_rsi(closes, rsi_slow_period)
+    indicators["rsi_9"] = _compute_rsi(closes, rsi_fast_period)
+    # Prev RSI for divergence
     rsi_14 = indicators["rsi_14"]
     pivot_type = "any"
     if rsi_14 is not None:
         if rsi_14 < 50:
-            pivot_type = "low"   # Bullish divergence: compare swing lows
+            pivot_type = "low"
         else:
-            pivot_type = "high"  # Bearish divergence: compare swing highs
+            pivot_type = "high"
     pivot_idx = _find_recent_pivot(closes, pivot_type=pivot_type)
     if pivot_idx is not None and pivot_idx > 0:
-        indicators["rsi_prev"] = _compute_rsi(closes[:pivot_idx + 1], 14)
+        indicators["rsi_prev"] = _compute_rsi(closes[:pivot_idx + 1], rsi_slow_period)
         indicators["prev_close"] = closes[pivot_idx]
         indicators["pivot_lookback"] = len(closes) - 1 - pivot_idx
     elif len(closes) > 5:
-        indicators["rsi_prev"] = _compute_rsi(closes[:-5], 14)
+        indicators["rsi_prev"] = _compute_rsi(closes[:-5], rsi_slow_period)
         indicators["prev_close"] = closes[-5] if len(closes) >= 5 else (
             closes[-2] if len(closes) >= 2 else None)
         indicators["pivot_lookback"] = 5
 
-    # MACD (S3-P1: configurable params)
+    # MACD (v3.0: 5/13/4 for intraday)
     indicators["macd"] = _compute_macd(
         closes,
         fast=p.get("macd_fast"),
@@ -1404,21 +1403,21 @@ def _compute_all_indicators(ohlcv: dict, params: dict | None = None) -> dict:
         signal_period=p.get("macd_signal"),
     )
 
-    # Bollinger Bands
+    # Bollinger Bands (v3.0: 12/1.8 for intraday)
     indicators["bollinger"] = _compute_bollinger(closes)
 
-    # Moving Averages (P5: SMA 200 now computed)
-    sma_fast = p.get("sma_fast", SMA_FAST)
-    sma_mid = p.get("sma_mid", SMA_MID)
-    sma_slow = p.get("sma_slow", SMA_SLOW)
-    sma_20 = _compute_sma(closes, sma_fast)
-    sma_50 = _compute_sma(closes, sma_mid)
-    sma_200 = _compute_sma(closes, sma_slow)
-    ema_20 = _compute_ema(closes, sma_fast)
-    indicators["sma_20"] = sma_20[-1] if sma_20 else None
-    indicators["sma_50"] = sma_50[-1] if sma_50 else None
-    indicators["sma_200"] = sma_200[-1] if sma_200 else None
-    indicators["ema_20"] = ema_20[-1] if ema_20 else None
+    # v3.0: EMA 9/21 replace SMA 20/50/200 for intraday
+    ema_fast_period = p.get("ema_fast", EMA_FAST)
+    ema_slow_period = p.get("ema_slow", EMA_SLOW)
+    ema_9 = _compute_ema(closes, ema_fast_period)
+    ema_21 = _compute_ema(closes, ema_slow_period)
+    indicators["ema_9"] = ema_9[-1] if ema_9 else None
+    indicators["ema_21"] = ema_21[-1] if ema_21 else None
+    # Keep sma_20/sma_50 as None for backward compat (unused in v3.0 detectors)
+    indicators["sma_20"] = None
+    indicators["sma_50"] = None
+    indicators["sma_200"] = None
+    indicators["ema_20"] = indicators["ema_21"]  # Alias for compat
 
     # Stochastic (S3-P1: configurable params)
     indicators["stochastic"] = _compute_stochastic(
@@ -1451,8 +1450,17 @@ def _compute_all_indicators(ohlcv: dict, params: dict | None = None) -> dict:
     return indicators
 
 
+# v3.0: Strategies allowed in the last scan (17:00) — only fast mean-reversion
+# because the remaining window is <3h (closes at 19:45)
+LATE_SCAN_STRATEGIES = {
+    "rsi_reversal", "stochastic_reversal",
+    "rsi_bollinger_combo", "bollinger_stoch_combo",
+}
+
+
 def score_technical_setups(tickers: dict | None = None,
-                           weekly_config: dict | None = None) -> dict:
+                           weekly_config: dict | None = None,
+                           scan_hour: int | None = None) -> dict:
     """Compute technical scores for all tickers.
 
     Args:
@@ -1461,6 +1469,8 @@ def score_technical_setups(tickers: dict | None = None,
             - enabled_strategies: list[str] — only run these strategies
             - params: dict — override indicator parameters
             - strategy_weights: dict[str, float] — override strategy weights
+        scan_hour: v3.0 — current hour (CET). If >= 17, only fast
+            mean-reversion strategies are allowed (window <3h).
 
     Returns dict with:
         - setups: list[dict] — all detected setups sorted by score desc
@@ -1475,6 +1485,12 @@ def score_technical_setups(tickers: dict | None = None,
     params = {**DEFAULT_PARAMS, **(config.get("params", {}))}
     enabled = set(config.get("enabled_strategies", list(STRATEGIES.keys())))
     strategy_weight_overrides = config.get("strategy_weights", {})
+
+    # v3.0: Late scan filter — only fast mean-reversion after 17:00 CET
+    if scan_hour is not None and scan_hour >= 17:
+        enabled = enabled & LATE_SCAN_STRATEGIES
+        logger.info("v3.0: Late scan (hour=%d) — restricted to %d fast strategies",
+                     scan_hour, len(enabled))
 
     result = {
         "setups": [],
@@ -1495,7 +1511,7 @@ def score_technical_setups(tickers: dict | None = None,
         "rsi_reversal": _detect_rsi_reversal,
         "macd_crossover": _detect_macd_crossover,
         "bollinger_squeeze": _detect_bollinger_squeeze,
-        "ma_trend": _detect_ma_trend,
+        "ema_trend": _detect_ema_trend,
         "momentum_divergence": _detect_momentum_divergence,
         "stochastic_reversal": _detect_stochastic_reversal,
         # Combo strategies (v2.1)
@@ -1510,26 +1526,34 @@ def score_technical_setups(tickers: dict | None = None,
         if name in enabled
     ]
 
-    # F6: Use fetch_history_batch for efficient parallel fetching (fewer API calls)
+    # v3.0: Fetch 1H data (primary signal) + daily data (directional filter)
     ticker_list = list(target_tickers.keys())
     ohlcv_data: dict[str, dict | None] = {}
+    daily_filters: dict[str, dict] = {}  # {ticker: {"direction": "LONG"/"SHORT", "regime": "trending"/"ranging"}}
+
+    def _validate_df(df):
+        """Clean NaN/Inf from OHLCV DataFrame."""
+        for col in ["Open", "High", "Low", "Close"]:
+            if col in df.columns and df[col].isna().any():
+                df = df.dropna(subset=["Open", "High", "Low", "Close"])
+                break
+        for col in ["Open", "High", "Low", "Close"]:
+            if col in df.columns:
+                inf_mask = df[col].apply(lambda x: not math.isfinite(x))
+                if inf_mask.any():
+                    df = df[~inf_mask]
+        return df
+
     try:
         from ..market_data import fetch_history_batch
-        batch_data = fetch_history_batch(ticker_list, period_days=365, interval="1day")
+
+        # Step 1: Fetch 1H bars (7 days = ~35-50 trading hour bars) — PRIMARY signal
+        batch_1h = fetch_history_batch(ticker_list, period_days=7, interval="1h")
         for ticker in ticker_list:
-            df = batch_data.get(ticker)
-            if df is not None and not df.empty and len(df) >= 30:
-                # F1: Validate no NaN/Inf
-                for col in ["Open", "High", "Low", "Close"]:
-                    if col in df.columns and df[col].isna().any():
-                        df = df.dropna(subset=["Open", "High", "Low", "Close"])
-                        break
-                for col in ["Open", "High", "Low", "Close"]:
-                    if col in df.columns:
-                        inf_mask = df[col].apply(lambda x: not math.isfinite(x))
-                        if inf_mask.any():
-                            df = df[~inf_mask]
-                if len(df) >= 30:
+            df = batch_1h.get(ticker)
+            if df is not None and not df.empty and len(df) >= 15:
+                df = _validate_df(df)
+                if len(df) >= 15:
                     ohlcv_data[ticker] = {
                         "open": list(df["Open"]),
                         "high": list(df["High"]),
@@ -1541,11 +1565,41 @@ def score_technical_setups(tickers: dict | None = None,
                     ohlcv_data[ticker] = None
             else:
                 ohlcv_data[ticker] = None
+
+        # Step 2: Fetch daily bars (60 days) — DIRECTIONAL FILTER only
+        # SMA 20 daily = trend direction, ADX 14 daily = regime
+        batch_daily = fetch_history_batch(ticker_list, period_days=60, interval="1day")
+        daily_sma_period = params.get("daily_sma_period", 20)
+        daily_adx_period = params.get("daily_adx_period", 14)
+        for ticker in ticker_list:
+            df = batch_daily.get(ticker)
+            if df is not None and not df.empty and len(df) >= daily_sma_period:
+                df = _validate_df(df)
+                closes = list(df["Close"])
+                highs = list(df["High"])
+                lows = list(df["Low"])
+                if len(closes) >= daily_sma_period:
+                    sma_daily = _compute_sma(closes, daily_sma_period)
+                    adx_daily = _compute_adx(highs, lows, closes, daily_adx_period)
+                    last_close = closes[-1]
+                    sma_val = sma_daily[-1] if sma_daily else None
+                    direction = None
+                    if sma_val is not None and last_close > sma_val:
+                        direction = "LONG"
+                    elif sma_val is not None and last_close < sma_val:
+                        direction = "SHORT"
+                    regime = "trending" if (adx_daily is not None and adx_daily >= 25) else "ranging"
+                    daily_filters[ticker] = {
+                        "direction": direction,
+                        "regime": regime,
+                        "sma_daily": round(sma_val, 4) if sma_val else None,
+                        "adx_daily": adx_daily,
+                    }
     except Exception as exc:
-        logger.warning("F6: fetch_history_batch failed, falling back to per-ticker: %s", exc)
+        logger.warning("v3.0: fetch_history_batch failed, falling back to per-ticker: %s", exc)
         for t in ticker_list:
             if t not in ohlcv_data:
-                ohlcv_data[t] = _fetch_ohlcv(t, "1y", "1d")
+                ohlcv_data[t] = _fetch_ohlcv(t, "1mo", "1h")
 
     all_setups = []
 
@@ -1559,6 +1613,10 @@ def score_technical_setups(tickers: dict | None = None,
         indicators["_params"] = params
         # F9: Inject ticker category for per-category squeeze thresholds
         indicators["_category"] = info.get("category", "")
+        # v3.0: Inject daily directional filter
+        daily_info = daily_filters.get(ticker, {})
+        indicators["_daily_direction"] = daily_info.get("direction")
+        indicators["_daily_regime"] = daily_info.get("regime", "ranging")
         atr = indicators.get("atr")
         last_close = indicators.get("last_close")
 
@@ -1650,7 +1708,7 @@ def score_technical_setups(tickers: dict | None = None,
                 "regime": regime,
                 "regime_match": (not preferred_regime or preferred_regime == regime),
                 "signals": setup.get("signals", {}),
-                "timeframe": "1d",  # Primary timeframe used
+                "timeframe": "1h",  # v3.0: 1H primary signal timeframe
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -1659,35 +1717,8 @@ def score_technical_setups(tickers: dict | None = None,
     # Sort by score descending
     all_setups.sort(key=lambda s: s["score"], reverse=True)
 
-    # S3-P2: Parallelize intraday confirmation for top setups
-    # (was sequential — up to 150s for 10 tickers, now ~15s)
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    eligible_setups = [s for s in all_setups[:10]
-                       if s["score"] >= params.get("min_setup_score", MIN_SETUP_SCORE)]
-    if eligible_setups:
-        mtf_results: dict[str, float] = {}
-        try:
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = {
-                    executor.submit(_compute_intraday_confirmation,
-                                    s["ticker"], s["direction"]): s["ticker"]
-                    for s in eligible_setups
-                }
-                for future in as_completed(futures, timeout=30):
-                    ticker = futures[future]
-                    try:
-                        mtf_results[ticker] = future.result()
-                    except Exception:
-                        mtf_results[ticker] = 1.0
-        except Exception:
-            pass
-        for setup in eligible_setups:
-            mtf_boost = mtf_results.get(setup["ticker"], 1.0)
-            setup["score"] = round(min(100, setup["score"] * mtf_boost), 1)
-            setup["mtf_confirmation"] = mtf_boost
-
-    # Re-sort after MTF adjustment
-    all_setups.sort(key=lambda s: s["score"], reverse=True)
+    # v3.0: No intraday confirmation needed — 1H IS the primary signal.
+    # Daily directional filter is already injected into indicators above.
 
     result["setups"] = all_setups
 
@@ -1743,8 +1774,8 @@ class AgentScoring3(BaseAgent):
     """
 
     name = "scoring_3"
-    description = "Technical indicators scoring — multi-strategy, multi-timeframe"
-    version = "2.6"  # v2.6: Mean-reversion R/R fix (stop 1.2→0.9), R/R ~1.3-1.7 instead of ~1.0
+    description = "Technical indicators scoring — intraday 1H, multi-strategy"
+    version = "3.0"  # v3.0: Pure intraday — 1H primary signal, daily directional filter, EMA 9/21, MACD 5/13/4, BB 12/1.8
 
     def __init__(self):
         super().__init__()
@@ -1766,6 +1797,13 @@ class AgentScoring3(BaseAgent):
 
         start = time.monotonic()
 
+        # v3.0: Determine current CET hour for late-scan filter
+        try:
+            from zoneinfo import ZoneInfo
+            cet_hour = datetime.now(ZoneInfo("Europe/Paris")).hour
+        except Exception:
+            cet_hour = datetime.now(timezone.utc).hour + 1  # rough CET
+
         try:
             # Compute technical scores with optional weekly config
             tech_data = self.execute(
@@ -1773,6 +1811,7 @@ class AgentScoring3(BaseAgent):
                 score_technical_setups,
                 None,  # tickers (use default)
                 weekly_config,
+                cet_hour,  # v3.0: scan_hour for late-scan filter
             )
 
             self._last_result = tech_data

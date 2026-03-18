@@ -408,18 +408,29 @@ def _run_position_monitor() -> None:
     thread.start()
 
 
-def _run_position_monitor_3() -> None:
-    """V1: Monitor Team 3 positions (TP/SL/trailing) between scans."""
+def _run_position_monitor_3(force_close_all: bool = False) -> None:
+    """V1: Monitor Team 3 positions (TP/SL/trailing) between scans.
+
+    Args:
+        force_close_all: v3.0 — pass True at 19:50 CET to force-close all.
+    """
     def _worker():
         try:
-            result = agents_run_position_monitor_3()
+            result = agents_run_position_monitor_3(force_close_all=force_close_all)
             if result and result.get("closed", 0) > 0:
-                logger.info("Team 3 position monitor closed %d position(s)", result["closed"])
+                logger.info("Team 3 position monitor closed %d position(s)%s",
+                           result["closed"],
+                           " (EOD force-close)" if force_close_all else "")
         except Exception as exc:
             logger.error("Team 3 position monitor failed: %s", exc)
 
     thread = threading.Thread(target=_worker, daemon=True, name="position-monitor-3")
     thread.start()
+
+
+def _run_position_monitor_3_eod() -> None:
+    """v3.0: Force-close all Team 3 positions at 19:50 CET."""
+    _run_position_monitor_3(force_close_all=True)
 
 
 def _run_position_monitor_4() -> None:
@@ -943,7 +954,10 @@ async def lifespan(app: FastAPI):
     bg_scheduler.add_job(_run_position_monitor, CronTrigger(minute="7,37", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor", misfire_grace_time=60)
     # V1: Position monitors for Teams 3 and 4 (TP/SL/trailing between scans)
     # Staggered by 3min to avoid resource contention
-    bg_scheduler.add_job(_run_position_monitor_3, CronTrigger(minute="10,40", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3", misfire_grace_time=60)
+    # v3.0: Monitor every 15min (was 30min) for intraday positions (holdings 1-5h)
+    bg_scheduler.add_job(_run_position_monitor_3, CronTrigger(minute="5,20,35,50", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3", misfire_grace_time=60)
+    # v3.0: Force-close all Team 3 positions at 19:50 CET (hard deadline safety net)
+    bg_scheduler.add_job(_run_position_monitor_3_eod, CronTrigger(hour=19, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_3_eod", misfire_grace_time=300)
     bg_scheduler.add_job(_run_position_monitor_4, CronTrigger(minute="13,43", hour="7-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="position_monitor_4", misfire_grace_time=60)
     # Conditional post-EIA scan: Wednesday 16:45 CET (EIA petroleum report at 16:30)
     bg_scheduler.add_job(_run_post_eia_scan, CronTrigger(hour=16, minute=45, day_of_week="wed", timezone="Europe/Paris"), id="post_eia_scan", misfire_grace_time=60)

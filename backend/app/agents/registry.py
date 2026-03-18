@@ -479,10 +479,14 @@ def run_position_monitor() -> dict:
     return _agents["trader_1"].run_position_monitor()
 
 
-def run_position_monitor_3() -> dict:
-    """V1: Monitor positions via Agent Trader 3 (TP/SL/trailing)."""
+def run_position_monitor_3(force_close_all: bool = False) -> dict:
+    """V1: Monitor positions via Agent Trader 3 (TP/SL/trailing).
+
+    Args:
+        force_close_all: v3.0 — force-close all positions (EOD deadline).
+    """
     _ensure_agents()
-    return _agents["trader_3"].run_position_monitor()
+    return _agents["trader_3"].run_position_monitor(force_close_all=force_close_all)
 
 
 def run_position_monitor_4() -> dict:

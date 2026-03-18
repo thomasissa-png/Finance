@@ -52,8 +52,8 @@ MIN_TRADES_GLOBAL = 10    # For global metrics
 ADJ_MIN = 0.6
 ADJ_MAX = 1.4
 
-# Temporal decay half-life in days
-DECAY_HALF_LIFE_DAYS = 30  # Shorter than trend (30 vs 45) — technical signals evolve faster
+# v3.0: Temporal decay half-life in days — faster for intraday feedback loop
+DECAY_HALF_LIFE_DAYS = 15  # v3.0: was 30 — intraday trades generate faster feedback
 
 # ADX threshold for regime classification
 ADX_TRENDING_THRESHOLD = 25.0
@@ -561,7 +561,7 @@ class AgentLearning3(BaseAgent):
 
     name = "learning_3"
     description = "Learning & A/B testing — technical trading strategies"
-    version = "2.3"  # v2.3: rolling A/B trend, 2D regime (ADX×vol), daily anomaly trigger, activation date
+    version = "3.0"  # v3.0: Intraday decay 15j, EOD_CLOSE tracking, ema_trend replaces ma_trend
 
     def __init__(self):
         super().__init__()

@@ -2,13 +2,9 @@
 
 Strategy:
 - Trades on technical indicator signals (NOT news-based)
-- 5 strategy combinations tested via A/B tracking:
-  1. rsi_reversal: RSI oversold/overbought with confirmation
-  2. macd_crossover: MACD signal cross with trend filter
-  3. bollinger_squeeze: Low volatility breakout
-  4. ma_trend: Moving average alignment
-  5. momentum_divergence: Price/indicator divergence
-- Holding period: hours to 3 days max
+- v3.0: Pure intraday — all positions closed by 19:45 CET
+- 11 strategies (6 simple + 5 combos) on 1H indicators
+- Holding period: 1-5 hours max (hard deadline 19:45 CET)
 - Can hold multiple simultaneous positions (no 1-trade-per-scan limit)
 - Position management: entry, target, stop, trailing stop
 - Tracks realized P&L per strategy for A/B comparison
@@ -16,12 +12,13 @@ Strategy:
 Differences with Trader 1/2:
 - Trader 1: news-based day trading, 0-1 trade per scan, TP/SL intraday
 - Trader 2: news-based trend following on 4 commodities, positions last weeks
-- Trader 3: indicator-based, multi-position, multi-strategy, A/B testing
+- Trader 3: indicator-based, multi-position, multi-strategy, intraday only
 
 Architecture:
 - Consumes scored setups from Agent Scoring 3
 - Consumes Learning 3 adjustments (per strategy, per ticker, per timeframe)
 - Manages positions with entry/target/stop/trailing
+- v3.0: Hard deadline 19:45 CET — force-close with EOD_CLOSE result
 - Persistence: PG table "tech_positions" + JSON fallback
 """
 
@@ -44,27 +41,32 @@ logger = logging.getLogger(__name__)
 # Maximum simultaneous positions
 MAX_POSITIONS = 10
 
-# Max holding period in days (default, overridden per-strategy)
-MAX_HOLDING_DAYS = 3
+# v3.0: Intraday — all positions closed by EOD_DEADLINE_HOUR CET
+MAX_HOLDING_DAYS = 1  # Safety fallback (should never be reached)
 
-# v2.5: Per-strategy max holding hours — momentum/trend need more time,
-# mean-reversion should exit faster.
+# v3.0: Hard deadline for force-close (19:45 CET = 15min safety margin before 20:00)
+EOD_DEADLINE_HOUR = 19
+EOD_DEADLINE_MINUTE = 45
+
+# v3.0: Per-strategy max holding hours — intraday calibrated
+# Mean-reversion: RSI/Stoch signals resolve in 1-3 hours on 1H bars
+# Momentum: MACD/EMA trend signals develop over 3-5 hours on 1H bars
 STRATEGY_MAX_HOLDING_HOURS = {
-    # Mean-reversion: target is close → if not hit in 48h, signal is stale
-    "rsi_reversal": 48,
-    "stochastic_reversal": 48,
-    "bollinger_squeeze": 72,     # Breakout can develop slower
-    # Momentum/trend: needs time to play out
-    "macd_crossover": 96,        # 4 days
-    "ma_trend": 120,             # 5 days (strongest trend signal)
-    "momentum_divergence": 96,   # 4 days
-    # Combo mean-reversion: shorter
-    "rsi_bollinger_combo": 48,
-    "bollinger_stoch_combo": 48,
-    # Combo momentum: longer
-    "rsi_macd_combo": 72,
-    "macd_ma_combo": 96,
-    "ma_rsi_macd_combo": 96,
+    # Mean-reversion: fast signal, quick resolution
+    "rsi_reversal": 3,
+    "stochastic_reversal": 3,
+    "bollinger_squeeze": 4,      # Breakout needs slightly more time
+    # Momentum/trend: needs a few hours to develop
+    "macd_crossover": 5,
+    "ema_trend": 5,              # v3.0: was ma_trend (120h), now EMA 9/21 intraday
+    "momentum_divergence": 4,
+    # Combo mean-reversion: fast
+    "rsi_bollinger_combo": 3,
+    "bollinger_stoch_combo": 3,
+    # Combo momentum: slightly longer
+    "rsi_macd_combo": 4,
+    "macd_ma_combo": 5,
+    "ma_rsi_macd_combo": 5,
 }
 
 # Minimum score to take a trade
@@ -242,7 +244,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "2.5"  # v2.5: Per-strategy expiry (48-120h), momentum Tier1 trailing at 50%
+    version = "3.0"  # v3.0: Pure intraday — EOD_CLOSE at 19:45, holdings 3-5h, ema_trend replaces ma_trend
 
     def __init__(self):
         super().__init__()
@@ -368,11 +370,15 @@ class AgentTrader3(BaseAgent):
             self._set_status(AgentStatus.ERROR, str(exc))
             raise
 
-    def run_position_monitor(self) -> dict:
+    def run_position_monitor(self, force_close_all: bool = False) -> dict:
         """V1: Standalone position monitor — check TP/SL/trailing/expiry between scans.
 
         Called by scheduler every 15 min. Only monitors existing positions,
         does NOT evaluate new setups (no Scoring 3 data needed).
+
+        Args:
+            force_close_all: v3.0 — if True, force-close ALL active positions
+                with EOD_CLOSE result (used at 19:50 CET deadline).
 
         CRITICAL fix: Always save after monitoring — trailing stop updates
         modify effective_stop in memory and must be persisted even when no
@@ -384,7 +390,8 @@ class AgentTrader3(BaseAgent):
         if not active:
             return {"active": 0, "closed": 0}
 
-        still_active, newly_closed = self._monitor_positions(active)
+        still_active, newly_closed = self._monitor_positions(
+            active, force_close_all=force_close_all)
 
         if newly_closed:
             self._trades_closed_total += len(newly_closed)
@@ -404,14 +411,31 @@ class AgentTrader3(BaseAgent):
 
         return {"active": len(still_active), "closed": len(newly_closed)}
 
-    def _monitor_positions(self, active: list[dict]) -> tuple[list[dict], list[dict]]:
+    def _monitor_positions(self, active: list[dict],
+                            force_close_all: bool = False) -> tuple[list[dict], list[dict]]:
         """Monitor active positions: check TP, SL, expiry, trailing stop.
+
+        Args:
+            force_close_all: v3.0 — if True, close ALL positions (EOD deadline).
 
         Returns (still_active, newly_closed).
         """
         still_active = []
         newly_closed = []
         now = datetime.now(timezone.utc)
+
+        # v3.0: Check if past EOD deadline (19:45 CET)
+        try:
+            from zoneinfo import ZoneInfo
+            now_cet = now.astimezone(ZoneInfo("Europe/Paris"))
+            past_deadline = (now_cet.hour > EOD_DEADLINE_HOUR or
+                            (now_cet.hour == EOD_DEADLINE_HOUR and
+                             now_cet.minute >= EOD_DEADLINE_MINUTE))
+        except Exception:
+            past_deadline = False
+
+        if force_close_all:
+            past_deadline = True
 
         # Fetch prices in parallel
         tickers = list({p["ticker"] for p in active})
@@ -464,7 +488,25 @@ class AgentTrader3(BaseAgent):
                 pnl_pct = (entry_price - price) / entry_price * 100
             pos["unrealized_pnl_pct"] = round(pnl_pct, 2)
 
-            # Check expiry (max holding days)
+            # v3.0: EOD deadline force-close (19:45 CET)
+            if past_deadline:
+                entry_time = pos.get("entry_time", "")
+                try:
+                    entry_dt = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
+                    holding_hours = (now - entry_dt).total_seconds() / 3600
+                except (ValueError, AttributeError, TypeError):
+                    holding_hours = 0
+                pos["result"] = "EOD_CLOSE"
+                pos["pnl_pct"] = round(pnl_pct, 2)
+                pos["close_time"] = now.isoformat()
+                pos["close_price"] = price
+                pos["holding_hours"] = round(holding_hours, 1)
+                pos["effective_stop_at_close"] = pos.get("effective_stop",
+                                                          -pos.get("stop_pct", 0))
+                newly_closed.append(pos)
+                continue
+
+            # Check expiry (max holding hours)
             entry_time = pos.get("entry_time", "")
             try:
                 entry_dt = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
@@ -534,9 +576,19 @@ class AgentTrader3(BaseAgent):
                 newly_closed.append(pos)
                 continue
 
-            # Check max holding period (v2.5: per-strategy instead of global)
-            max_hours = STRATEGY_MAX_HOLDING_HOURS.get(
+            # v3.0: Check max holding period (strategy max OR time-to-deadline, whichever is smaller)
+            strategy_max = STRATEGY_MAX_HOLDING_HOURS.get(
                 strategy, MAX_HOLDING_DAYS * 24)
+            # Also compute time remaining until EOD deadline
+            try:
+                from zoneinfo import ZoneInfo
+                deadline_today = now.astimezone(ZoneInfo("Europe/Paris")).replace(
+                    hour=EOD_DEADLINE_HOUR, minute=EOD_DEADLINE_MINUTE, second=0)
+                time_to_deadline = (deadline_today - now.astimezone(
+                    ZoneInfo("Europe/Paris"))).total_seconds() / 3600
+                max_hours = min(strategy_max, max(0, time_to_deadline))
+            except Exception:
+                max_hours = strategy_max
             if holding_hours > max_hours:
                 pos["result"] = "EXPIRED"
                 pos["pnl_pct"] = round(pnl_pct, 2)
@@ -564,23 +616,23 @@ class AgentTrader3(BaseAgent):
                 return overrides[strategy]
 
         defaults = {
+            # v3.0: Intraday trailing — tighter activation across the board
+            # because positions are held hours, not days
             # Mean-reversion family — early activation to protect short-target gains
-            "rsi_reversal": 0.35,
-            "stochastic_reversal": 0.35,
-            "bollinger_squeeze": 0.40,
-            # v2.5: Momentum/trend family — LATER activation (0.50) to let profits run.
-            # Previously 0.35-0.45 caused premature breakeven-stop on retracements.
-            # With target 2.0×ATR, activating at 50% means ~1.0×ATR profit before trailing.
-            "macd_crossover": 0.50,
-            "ma_trend": 0.50,
-            "momentum_divergence": 0.50,
-            # Combo mean-reversion — early trailing (short targets)
-            "rsi_bollinger_combo": 0.35,
-            "bollinger_stoch_combo": 0.35,
-            # v2.5: Combo momentum — later activation
-            "rsi_macd_combo": 0.45,
-            "macd_ma_combo": 0.50,
-            "ma_rsi_macd_combo": 0.45,  # Triple confluence: moderate
+            "rsi_reversal": 0.40,
+            "stochastic_reversal": 0.40,
+            "bollinger_squeeze": 0.35,     # v3.0: was 0.40, breakout profits fast
+            # Momentum/trend family — v3.0: lowered from 0.50 (short window)
+            "macd_crossover": 0.35,
+            "ema_trend": 0.35,             # v3.0: was ma_trend 0.50
+            "momentum_divergence": 0.35,
+            # Combo mean-reversion — early trailing
+            "rsi_bollinger_combo": 0.40,
+            "bollinger_stoch_combo": 0.40,
+            # Combo momentum — v3.0: lowered from 0.45-0.50
+            "rsi_macd_combo": 0.35,
+            "macd_ma_combo": 0.35,
+            "ma_rsi_macd_combo": 0.35,
         }
         return defaults.get(strategy, 0.50)
 

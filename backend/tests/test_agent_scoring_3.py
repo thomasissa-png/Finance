@@ -22,7 +22,7 @@ from backend.app.agents.agent_scoring_3 import (
     _detect_rsi_reversal,
     _detect_macd_crossover,
     _detect_bollinger_squeeze,
-    _detect_ma_trend,
+    _detect_ema_trend,
     _detect_momentum_divergence,
     _detect_stochastic_reversal,
     score_technical_setups,
@@ -32,12 +32,12 @@ from backend.app.agents.agent_scoring_3 import (
 # ── Helpers ───────────────────────────────────────────────────────
 
 def _make_indicators(**overrides):
-    """Build a base indicators dict with sensible defaults."""
+    """Build a base indicators dict with sensible defaults (v3.0: EMA 9/21)."""
     base = {
         "last_close": 100.0,
         "prev_close": 99.0,
         "rsi_14": 50.0,
-        "rsi_21": 50.0,
+        "rsi_9": 50.0,
         "rsi_prev": 48.0,
         "adx": 20.0,
         "macd": {
@@ -49,13 +49,17 @@ def _make_indicators(**overrides):
             "bandwidth": 5.0, "pct_b": 0.50,
         },
         "stochastic": {"k": 50.0, "d": 50.0},
-        "sma_20": 99.0,
-        "sma_50": 97.0,
-        "sma_200": 95.0,
+        # v3.0: EMA 9/21 replace SMA 20/50/200
+        "ema_9": 99.5,
+        "ema_21": 98.0,
+        "sma_20": None,
+        "sma_50": None,
+        "sma_200": None,
         "ema_20": 99.5,
         "atr": 2.0,
         "volume_ratio": 1.0,
         "_params": {},
+        "_daily_direction": None,
     }
     base.update(overrides)
     return base
@@ -65,7 +69,7 @@ def _make_indicators(**overrides):
 
 SINGLE_STRATEGIES = [
     "rsi_reversal", "macd_crossover", "bollinger_squeeze",
-    "ma_trend", "momentum_divergence", "stochastic_reversal",
+    "ema_trend", "momentum_divergence", "stochastic_reversal",
 ]
 
 COMBO_STRATEGIES = [
@@ -206,9 +210,8 @@ class TestMaRsiMacdCombo:
         """All three agree LONG → strong signal."""
         indicators = _make_indicators(
             last_close=102.0,
-            sma_20=101.0,
-            sma_50=99.0,
-            ema_20=101.5,
+            ema_9=101.0,
+            ema_21=99.0,
             rsi_14=58.0,
             macd={
                 "macd": 0.5, "signal": 0.3, "histogram": 0.2,
@@ -226,9 +229,8 @@ class TestMaRsiMacdCombo:
         """All three agree SHORT → strong signal."""
         indicators = _make_indicators(
             last_close=96.0,
-            sma_20=98.0,
-            sma_50=100.0,
-            ema_20=97.0,
+            ema_9=98.0,
+            ema_21=100.0,
             rsi_14=42.0,
             macd={
                 "macd": -0.5, "signal": -0.3, "histogram": -0.2,
@@ -242,11 +244,11 @@ class TestMaRsiMacdCombo:
         assert result["score"] >= 65
 
     def test_no_signal_partial_alignment(self):
-        """MA bullish but RSI < 50 → no signal (partial confluence)."""
+        """EMA bullish but RSI < 50 → no signal (partial confluence)."""
         indicators = _make_indicators(
             last_close=102.0,
-            sma_20=101.0,
-            sma_50=99.0,
+            ema_9=101.0,
+            ema_21=99.0,
             rsi_14=45.0,  # RSI disagrees
             macd={"macd": 0.5, "signal": 0.3, "histogram": 0.2,
                   "prev_macd": 0.2, "prev_signal": 0.3, "prev_histogram": 0.1},
@@ -257,9 +259,8 @@ class TestMaRsiMacdCombo:
         """Triple combo should score higher than individual single strategies."""
         indicators = _make_indicators(
             last_close=102.0,
-            sma_20=101.0,
-            sma_50=99.0,
-            ema_20=101.5,
+            ema_9=101.0,
+            ema_21=99.0,
             rsi_14=58.0,
             macd={
                 "macd": 0.5, "signal": 0.3, "histogram": 0.2,
@@ -268,12 +269,12 @@ class TestMaRsiMacdCombo:
             adx=30.0,
         )
         combo = _detect_ma_rsi_macd_combo(indicators)
-        ma_single = _detect_ma_trend(indicators)
+        ema_single = _detect_ema_trend(indicators)
 
         assert combo is not None
-        if ma_single is not None:
-            assert combo["score"] >= ma_single["score"], \
-                "Triple combo should score >= single MA trend"
+        if ema_single is not None:
+            assert combo["score"] >= ema_single["score"], \
+                "Triple combo should score >= single EMA trend"
 
 
 # ── RSI + Bollinger Combo ─────────────────────────────────────────
@@ -302,11 +303,11 @@ class TestRsiBollingerCombo:
 # ── MACD + MA Combo ───────────────────────────────────────────────
 
 class TestMacdMaCombo:
-    def test_bullish_macd_cross_ma_aligned(self):
+    def test_bullish_macd_cross_ema_aligned(self):
         indicators = _make_indicators(
             last_close=102.0,
-            sma_20=101.0,
-            sma_50=99.0,
+            ema_9=101.0,
+            ema_21=99.0,
             macd={
                 "macd": 0.5, "signal": 0.3, "histogram": 0.2,
                 "prev_macd": 0.2, "prev_signal": 0.3, "prev_histogram": 0.1,
@@ -318,12 +319,12 @@ class TestMacdMaCombo:
         assert result["direction"] == "LONG"
         assert result["strategy"] == "macd_ma_combo"
 
-    def test_no_signal_macd_cross_ma_reversed(self):
-        """MACD bullish but MA bearish → no signal."""
+    def test_no_signal_macd_cross_ema_reversed(self):
+        """MACD bullish but EMA bearish → no signal."""
         indicators = _make_indicators(
             last_close=96.0,
-            sma_20=98.0,
-            sma_50=100.0,
+            ema_9=98.0,
+            ema_21=100.0,
             macd={
                 "macd": 0.5, "signal": 0.3, "histogram": 0.2,
                 "prev_macd": 0.2, "prev_signal": 0.3, "prev_histogram": 0.1,
@@ -336,7 +337,7 @@ class TestMacdMaCombo:
 
 class TestVersion:
     def test_version_bumped(self):
-        assert AgentScoring3.version == "2.6"
+        assert AgentScoring3.version == "3.0"
 
 
 # ── Detector Map in score_technical_setups ────────────────────────

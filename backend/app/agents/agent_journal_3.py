@@ -190,7 +190,7 @@ class AgentJournal3(BaseAgent):
 
     name = "journal_3"
     description = "Journal & A/B analysis — technical trading strategies"
-    version = "2.2"  # v2.2: trailing_level + effective_stop_at_close in journal entries
+    version = "3.0"  # v3.0: Intraday — force-close after 24h (safety), supports EOD_CLOSE result type
 
     def __init__(self):
         super().__init__()
@@ -253,7 +253,7 @@ class AgentJournal3(BaseAgent):
                 try:
                     entry_dt = datetime.fromisoformat(entry_time.replace("Z", "+00:00"))
                     holding_hours = (now - entry_dt).total_seconds() / 3600
-                    if holding_hours > 3 * 24:  # MAX_HOLDING_DAYS
+                    if holding_hours > 24:  # v3.0: intraday, force-close after 24h (safety)
                         tickers_to_fetch.add(pos["ticker"])
                 except (ValueError, AttributeError, TypeError):
                     pass
@@ -288,7 +288,7 @@ class AgentJournal3(BaseAgent):
                     still_active.append(pos)
                     continue
 
-                if holding_hours > 3 * 24:
+                if holding_hours > 24:  # v3.0: intraday safety net
                     # Force close expired position — validate fetched price
                     raw_price = prices.get(pos["ticker"])
                     if raw_price is not None:
