@@ -559,6 +559,177 @@ def _is_critical_period(zone: dict[str, Any]) -> bool:
     return current_month in zone.get("critical_months", [])
 
 
+def _fetch_one_weather_zone(zone: dict) -> list[NewsItem]:
+    """Fetch weather data for a single agricultural zone and generate alerts.
+
+    Extracted from fetch_weather_alerts() to enable parallel execution.
+    Returns a list of NewsItem alerts (0-4 per zone: frost, heat, drought, wind).
+    """
+    items: list[NewsItem] = []
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": zone["lat"],
+        "longitude": zone["lon"],
+        "daily": "temperature_2m_min,temperature_2m_max,precipitation_sum,wind_speed_10m_max",
+        "past_days": 7,
+        "forecast_days": 7,
+        "timezone": "UTC",
+    }
+    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    if resp.status_code != 200:
+        return items
+
+    data = resp.json()
+    daily = data.get("daily", {})
+    if not daily:
+        return items
+
+    dates = daily.get("time", [])
+    temp_mins = daily.get("temperature_2m_min", [])
+    temp_maxs = daily.get("temperature_2m_max", [])
+    precip_sums = daily.get("precipitation_sum", [])
+    wind_maxs = daily.get("wind_speed_10m_max", [])
+
+    # Split into past (first 7) and forecast (last 7)
+    past_precip = [p for p in precip_sums[:7] if p is not None]
+    raw_forecast_temp_mins = temp_mins[7:]
+    raw_forecast_temp_maxs = temp_maxs[7:]
+    raw_forecast_wind = wind_maxs[7:]
+    forecast_temp_mins = [t for t in raw_forecast_temp_mins if t is not None]
+    forecast_temp_maxs = [t for t in raw_forecast_temp_maxs if t is not None]
+    forecast_wind = [w for w in raw_forecast_wind if w is not None]
+
+    in_season = _is_growing_season(zone)
+
+    # ── Check 1: Frost alert (only during growing season) ──
+    if in_season and forecast_temp_mins and zone["frost_threshold"] > -100:
+        min_forecast = min(forecast_temp_mins)
+        if min_forecast <= zone["frost_threshold"]:
+            frost_date = "prochains jours"
+            if len(dates) > 7:
+                for i, val in enumerate(raw_forecast_temp_mins):
+                    if val is not None and val == min_forecast:
+                        frost_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
+                        break
+            title = (
+                f"[METEO ALERTE] Gel prevu a {zone['name']}: {min_forecast:.1f}°C "
+                f"le {frost_date} (seuil critique: {zone['frost_threshold']}°C) — "
+                f"cultures: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+    # ── Check 2: Heat stress alert (only during growing season) ──
+    if in_season and forecast_temp_maxs and zone["heat_threshold"] < 100:
+        max_forecast = max(forecast_temp_maxs)
+        is_critical = _is_critical_period(zone)
+        heat_stress_thresh = zone.get("heat_stress_threshold", zone["heat_threshold"])
+
+        consecutive_stress_days = 0
+        for temp in raw_forecast_temp_maxs[:5]:
+            if temp is not None and temp >= heat_stress_thresh:
+                consecutive_stress_days += 1
+            elif temp is not None:
+                break
+
+        if max_forecast >= zone["heat_threshold"]:
+            heat_date = "prochains jours"
+            if len(dates) > 7:
+                for i, val in enumerate(raw_forecast_temp_maxs):
+                    if val is not None and val == max_forecast:
+                        heat_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
+                        break
+            critical_tag = " [PERIODE CRITIQUE — silking/grain fill]" if is_critical else ""
+            title = (
+                f"[METEO ALERTE] Canicule prevue a {zone['name']}: {max_forecast:.1f}°C "
+                f"le {heat_date} (seuil: {zone['heat_threshold']}°C){critical_tag} — "
+                f"stress thermique: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+        elif is_critical and consecutive_stress_days >= 3:
+            stress_temps = [t for t in raw_forecast_temp_maxs[:5] if t is not None and t >= heat_stress_thresh]
+            avg_stress = sum(stress_temps) / len(stress_temps) if stress_temps else 0
+            title = (
+                f"[METEO ALERTE] Stress thermique cumule a {zone['name']}: "
+                f"{consecutive_stress_days} jours consecutifs > {heat_stress_thresh}°C "
+                f"(moy: {avg_stress:.1f}°C) — PERIODE CRITIQUE (silking/grain fill) — "
+                f"risque sterilite pollen / perte rendement: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+    # ── Check 3: Drought alert (zone-specific, critical-period-aware) ──
+    drought_threshold = zone.get("drought_threshold_mm", 10.0)
+    if in_season and past_precip and drought_threshold > 0:
+        if len(past_precip) >= 5:
+            total_precip_7d = sum(past_precip)
+            is_critical = _is_critical_period(zone)
+            effective_threshold = zone.get("critical_drought_mm", drought_threshold) if is_critical else drought_threshold
+            if total_precip_7d < effective_threshold:
+                critical_tag = " [PERIODE CRITIQUE]" if is_critical else ""
+                severity = "SEVERE" if total_precip_7d < effective_threshold * 0.5 else ""
+                title = (
+                    f"[METEO ALERTE] Secheresse{' ' + severity if severity else ''} a {zone['name']}: "
+                    f"seulement {total_precip_7d:.1f}mm sur 7 jours "
+                    f"(seuil: {effective_threshold}mm){critical_tag} — "
+                    f"{zone['drought_note']} — cultures: {zone['crops']}"
+                )
+                items.append(NewsItem(
+                    title=title,
+                    source="Open-Meteo",
+                    url="https://open-meteo.com",
+                    published=datetime.now(timezone.utc),
+                    related_tickers=zone["tickers"],
+                    source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                    news_zone=_zone_slug(zone["name"]),
+                ))
+
+    # ── Check 4: Hurricane-force winds (always active for relevant zones) ──
+    if forecast_wind:
+        max_wind = max(forecast_wind)
+        if max_wind >= 100:
+            title = (
+                f"[METEO ALERTE] Vents violents a {zone['name']}: "
+                f"{max_wind:.0f} km/h prevus — "
+                f"risque perturbation: {zone['crops']}"
+            )
+            items.append(NewsItem(
+                title=title,
+                source="Open-Meteo",
+                url="https://open-meteo.com",
+                published=datetime.now(timezone.utc),
+                related_tickers=zone["tickers"],
+                source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
+                news_zone=_zone_slug(zone["name"]),
+            ))
+
+    return items
+
+
 def fetch_weather_alerts() -> list[NewsItem]:
     """Fetch weather data for critical agricultural zones and generate alerts.
 
@@ -567,198 +738,48 @@ def fetch_weather_alerts() -> list[NewsItem]:
     Frost/heat alerts are only generated during the growing season.
     Drought thresholds are zone-specific.
 
-    Makes 16 sequential HTTP calls (one per zone). Time-capped at 60s
-    to avoid blocking the pool for other structured data sources.
+    v8.5: Parallel execution (6 workers) for 24 zones. Sequential approach
+    took 60-120s on Replit (DNS cold-starts), causing budget exhaustion and
+    Open-Meteo appearing as "not_started" in 4/5 scans. Parallel reduces
+    total time to ~15-20s (24 zones / 6 workers = 4 waves × 3-5s each).
     """
-    WEATHER_MAX_SECONDS = 45
-    weather_start = time.monotonic()
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     items: list[NewsItem] = []
-    zones_checked = 0
+    zones_ok = 0
+    zones_failed = 0
 
-    for zone in AGRICULTURAL_ZONES:
-        # Time budget check
-        elapsed = time.monotonic() - weather_start
-        if elapsed >= WEATHER_MAX_SECONDS:
-            logger.warning("Weather time budget exhausted (%.0fs) after %d/%d zones",
-                           elapsed, zones_checked, len(AGRICULTURAL_ZONES))
-            break
+    executor = ThreadPoolExecutor(max_workers=6)
+    try:
+        future_to_zone = {
+            executor.submit(_fetch_one_weather_zone, zone): zone
+            for zone in AGRICULTURAL_ZONES
+        }
 
-        try:
-            # Fetch 7-day forecast + last 7 days history
-            url = "https://api.open-meteo.com/v1/forecast"
-            params = {
-                "latitude": zone["lat"],
-                "longitude": zone["lon"],
-                "daily": "temperature_2m_min,temperature_2m_max,precipitation_sum,wind_speed_10m_max",
-                "past_days": 7,
-                "forecast_days": 7,
-                "timezone": "UTC",
-            }
-            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            if resp.status_code != 200:
-                continue
+        for future in as_completed(future_to_zone, timeout=45):
+            zone = future_to_zone[future]
+            try:
+                zone_items = future.result(timeout=5)
+                items.extend(zone_items)
+                zones_ok += 1
+            except TimeoutError:
+                logger.warning("Weather zone TIMEOUT: %s", zone["name"])
+                zones_failed += 1
+            except Exception as exc:
+                logger.warning("Weather fetch error for %s: %s", zone["name"], exc)
+                zones_failed += 1
+    except TimeoutError:
+        completed = sum(1 for f in future_to_zone if f.done())
+        logger.warning("Weather global timeout (45s): %d/%d zones completed",
+                       completed, len(AGRICULTURAL_ZONES))
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
-            data = resp.json()
-            daily = data.get("daily", {})
-            if not daily:
-                continue
+    if zones_ok > 0 or zones_failed > 0:
+        logger.info("Weather: %d zones OK, %d failed, %d items from %d total zones",
+                    zones_ok, zones_failed, len(items), len(AGRICULTURAL_ZONES))
 
-            dates = daily.get("time", [])
-            temp_mins = daily.get("temperature_2m_min", [])
-            temp_maxs = daily.get("temperature_2m_max", [])
-            precip_sums = daily.get("precipitation_sum", [])
-            wind_maxs = daily.get("wind_speed_10m_max", [])
-
-            # Split into past (first 7) and forecast (last 7)
-            # Keep raw slices for correct date indexing, filtered for min/max
-            past_precip = [p for p in precip_sums[:7] if p is not None]
-            raw_forecast_temp_mins = temp_mins[7:]
-            raw_forecast_temp_maxs = temp_maxs[7:]
-            raw_forecast_wind = wind_maxs[7:]
-            forecast_temp_mins = [t for t in raw_forecast_temp_mins if t is not None]
-            forecast_temp_maxs = [t for t in raw_forecast_temp_maxs if t is not None]
-            forecast_wind = [w for w in raw_forecast_wind if w is not None]
-
-            in_season = _is_growing_season(zone)
-
-            # ── Check 1: Frost alert (only during growing season) ──
-            if in_season and forecast_temp_mins and zone["frost_threshold"] > -100:
-                min_forecast = min(forecast_temp_mins)
-                if min_forecast <= zone["frost_threshold"]:
-                    # Find date using raw (unfiltered) list to preserve index alignment
-                    frost_date = "prochains jours"
-                    if len(dates) > 7:
-                        for i, val in enumerate(raw_forecast_temp_mins):
-                            if val is not None and val == min_forecast:
-                                frost_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
-                                break
-                    title = (
-                        f"[METEO ALERTE] Gel prevu a {zone['name']}: {min_forecast:.1f}°C "
-                        f"le {frost_date} (seuil critique: {zone['frost_threshold']}°C) — "
-                        f"cultures: {zone['crops']}"
-                    )
-                    items.append(NewsItem(
-                        title=title,
-                        source="Open-Meteo",
-                        url="https://open-meteo.com",
-                        published=datetime.now(timezone.utc),
-                        related_tickers=zone["tickers"],
-                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
-                        news_zone=_zone_slug(zone["name"]),
-                    ))
-
-            # ── Check 2: Heat stress alert (only during growing season) ──
-            # Two tiers: extreme heat (heat_threshold) and cumulative stress
-            # (heat_stress_threshold for 3+ consecutive days during critical months)
-            if in_season and forecast_temp_maxs and zone["heat_threshold"] < 100:
-                max_forecast = max(forecast_temp_maxs)
-                is_critical = _is_critical_period(zone)
-                heat_stress_thresh = zone.get("heat_stress_threshold", zone["heat_threshold"])
-
-                # Count consecutive days above stress threshold (first 3 days of forecast = highest confidence)
-                consecutive_stress_days = 0
-                for temp in raw_forecast_temp_maxs[:5]:  # Only days 1-5 (reliable forecast window)
-                    if temp is not None and temp >= heat_stress_thresh:
-                        consecutive_stress_days += 1
-                    elif temp is not None:
-                        break  # Streak broken
-
-                # Alert 2a: Extreme heat spike
-                if max_forecast >= zone["heat_threshold"]:
-                    heat_date = "prochains jours"
-                    if len(dates) > 7:
-                        for i, val in enumerate(raw_forecast_temp_maxs):
-                            if val is not None and val == max_forecast:
-                                heat_date = dates[7 + i] if 7 + i < len(dates) else "prochains jours"
-                                break
-                    critical_tag = " [PERIODE CRITIQUE — silking/grain fill]" if is_critical else ""
-                    title = (
-                        f"[METEO ALERTE] Canicule prevue a {zone['name']}: {max_forecast:.1f}°C "
-                        f"le {heat_date} (seuil: {zone['heat_threshold']}°C){critical_tag} — "
-                        f"stress thermique: {zone['crops']}"
-                    )
-                    items.append(NewsItem(
-                        title=title,
-                        source="Open-Meteo",
-                        url="https://open-meteo.com",
-                        published=datetime.now(timezone.utc),
-                        related_tickers=zone["tickers"],
-                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
-                        news_zone=_zone_slug(zone["name"]),
-                    ))
-
-                # Alert 2b: Cumulative heat stress (3+ days above stress threshold during critical period)
-                # This catches the "32°C for 5 days during silking = pollen sterility" scenario
-                elif is_critical and consecutive_stress_days >= 3:
-                    stress_temps = [t for t in raw_forecast_temp_maxs[:5] if t is not None and t >= heat_stress_thresh]
-                    avg_stress = sum(stress_temps) / len(stress_temps) if stress_temps else 0
-                    title = (
-                        f"[METEO ALERTE] Stress thermique cumule a {zone['name']}: "
-                        f"{consecutive_stress_days} jours consecutifs > {heat_stress_thresh}°C "
-                        f"(moy: {avg_stress:.1f}°C) — PERIODE CRITIQUE (silking/grain fill) — "
-                        f"risque sterilite pollen / perte rendement: {zone['crops']}"
-                    )
-                    items.append(NewsItem(
-                        title=title,
-                        source="Open-Meteo",
-                        url="https://open-meteo.com",
-                        published=datetime.now(timezone.utc),
-                        related_tickers=zone["tickers"],
-                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),  # Cumulative stress during critical period
-                        news_zone=_zone_slug(zone["name"]),
-                    ))
-
-            # ── Check 3: Drought alert (zone-specific, critical-period-aware) ──
-            drought_threshold = zone.get("drought_threshold_mm", 10.0)
-            if in_season and past_precip and drought_threshold > 0:
-                # Require sufficient data (>= 5 of 7 days) to avoid false alerts
-                if len(past_precip) >= 5:
-                    total_precip_7d = sum(past_precip)
-                    is_critical = _is_critical_period(zone)
-                    # Use tighter threshold during critical months
-                    effective_threshold = zone.get("critical_drought_mm", drought_threshold) if is_critical else drought_threshold
-                    if total_precip_7d < effective_threshold:
-                        critical_tag = " [PERIODE CRITIQUE]" if is_critical else ""
-                        severity = "SEVERE" if total_precip_7d < effective_threshold * 0.5 else ""
-                        title = (
-                            f"[METEO ALERTE] Secheresse{' ' + severity if severity else ''} a {zone['name']}: "
-                            f"seulement {total_precip_7d:.1f}mm sur 7 jours "
-                            f"(seuil: {effective_threshold}mm){critical_tag} — "
-                            f"{zone['drought_note']} — cultures: {zone['crops']}"
-                        )
-                        items.append(NewsItem(
-                            title=title,
-                            source="Open-Meteo",
-                            url="https://open-meteo.com",
-                            published=datetime.now(timezone.utc),
-                            related_tickers=zone["tickers"],
-                            source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
-                            news_zone=_zone_slug(zone["name"]),
-                        ))
-
-            # ── Check 4: Hurricane-force winds (always active for relevant zones) ──
-            if forecast_wind:
-                max_wind = max(forecast_wind)
-                if max_wind >= 100:  # 100 km/h = tropical storm force
-                    title = (
-                        f"[METEO ALERTE] Vents violents a {zone['name']}: "
-                        f"{max_wind:.0f} km/h prevus — "
-                        f"risque perturbation: {zone['crops']}"
-                    )
-                    items.append(NewsItem(
-                        title=title,
-                        source="Open-Meteo",
-                        url="https://open-meteo.com",
-                        published=datetime.now(timezone.utc),
-                        related_tickers=zone["tickers"],
-                        source_weight=SOURCE_WEIGHTS.get("Open-Meteo", 1.2),
-                        news_zone=_zone_slug(zone["name"]),
-                    ))
-
-        except Exception as exc:
-            logger.warning("Weather fetch error for %s: %s", zone["name"], exc)
-        finally:
-            zones_checked += 1
+    return items
 
     if items:
         logger.info("Generated %d weather alerts from %d zones", len(items), len(AGRICULTURAL_ZONES))
