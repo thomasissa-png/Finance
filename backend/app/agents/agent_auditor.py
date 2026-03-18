@@ -927,6 +927,24 @@ class AgentAuditor(BaseAgent):
             from ..learning import load_trades, compute_performance
             from ..models import TradeResult
 
+            # 9. slippage_aware_rr — v8.5: R/R check accounts for estimated spread
+            # Structural check (source inspection) — runs regardless of trade data
+            try:
+                import inspect as _insp
+                from ..trade_selector import select_trades
+                sel_src = _insp.getsource(select_trades)
+                has_effective_rr = "effective_rr" in sel_src and "effective_target" in sel_src
+                findings.append({
+                    "area": "slippage_aware_rr",
+                    "status": "OK" if has_effective_rr else "WARN",
+                    "detail": "R/R check uses effective_rr (target - spread) / (stop + spread)"
+                              if has_effective_rr
+                              else "R/R check ignores slippage — nominal R/R may overstate profitability",
+                })
+                scores["slippage_aware_rr"] = 9 if has_effective_rr else 4
+            except Exception:
+                scores["slippage_aware_rr"] = 5
+
             trades = load_trades()
             closed = [t for t in trades if t.result != TradeResult.PENDING]
 
@@ -1103,6 +1121,7 @@ class AgentAuditor(BaseAgent):
         tests.append("test_trader_agent_respects_daily_cap_per_vix_regime")
         tests.append("test_trader_agent_spread_filter_rejects_illiquid_trades")
         tests.append("test_trader_agent_fallback_ticker_works")
+        tests.append("test_trader_agent_slippage_aware_rr")
 
     def _audit_trader_2(self, report: dict, focus: str | None):
         """Audit Agent Trader 2 — trend following sur commodities.
@@ -2023,6 +2042,33 @@ class AgentAuditor(BaseAgent):
             except Exception:
                 scores["persistence"] = 6
 
+            # 8. trailing_tier1_buffer — v3.1: category-aware near-breakeven buffer
+            from .agent_trader_3 import _get_tier1_trailing_buffer, _TIER1_TRAILING_BUFFERS
+            commod_buffer = _get_tier1_trailing_buffer("HG=F")  # commodities
+            forex_buffer = _get_tier1_trailing_buffer("EURUSD=X")  # forex
+            buffer_ok = commod_buffer <= -0.10 and forex_buffer > commod_buffer
+            findings.append({
+                "area": "trailing_tier1_buffer",
+                "status": "OK" if buffer_ok else "WARN",
+                "detail": f"Tier 1 buffers: commodities={commod_buffer}%, "
+                          f"forex={forex_buffer}% — "
+                          + ("wider buffer for volatile assets prevents false exits"
+                             if buffer_ok else "commodity buffer too tight!"),
+            })
+            scores["trailing_tier1_buffer"] = 9 if buffer_ok else 4
+
+            # 9. regime_match_filtering — v3.1: regime mismatch penalized in _evaluate_setups
+            eval_src2 = inspect.getsource(AgentTrader3._evaluate_setups)
+            has_regime_filter = "regime_match" in eval_src2 and "0.80" in eval_src2
+            findings.append({
+                "area": "regime_match_filtering",
+                "status": "OK" if has_regime_filter else "WARN",
+                "detail": "Regime mismatch penalty (0.80×) applied in _evaluate_setups"
+                          if has_regime_filter
+                          else "Regime mismatch NOT filtered in Trader 3 — only Scoring 3 penalizes",
+            })
+            scores["regime_match_filtering"] = 9 if has_regime_filter else 4
+
         except Exception as exc:
             findings.append({"area": "trader_3", "status": "ERROR", "detail": str(exc)})
             scores["overall"] = 3
@@ -2033,6 +2079,8 @@ class AgentAuditor(BaseAgent):
             "test_trader_3_force_close_all_eod_close",
             "test_trader_3_11_strategies_holding_hours",
             "test_trader_3_trailing_stop_per_strategy",
+            "test_trader_3_tier1_commodity_buffer_wider",
+            "test_trader_3_regime_mismatch_penalty",
         ])
 
     def _audit_journal_3(self, report: dict, focus: str | None):

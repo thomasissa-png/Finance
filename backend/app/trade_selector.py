@@ -1114,8 +1114,18 @@ def select_trades(
             _min_rr = 1.3  # Moderate edge
         # commodity, weather, supply_chain, geopolitical stay at 1.2
 
-        if rr < _min_rr:
-            reason = f"R/R {rr:.2f} < seuil adaptatif {_min_rr} ({best_news.news_category})"
+        # v8.5: Slippage-aware R/R — estimated spread erodes target and widens effective stop.
+        # On illiquid tickers the nominal R/R can look fine but the effective R/R after
+        # slippage drops below 1.0, making the trade unprofitable.
+        spread = ESTIMATED_SPREADS.get(ticker, DEFAULT_SPREAD)
+        effective_target = max(0.01, target_pct - spread)
+        effective_stop = stop_pct + spread
+        effective_rr = round(effective_target / effective_stop, 2) if effective_stop > 0 else 0
+
+        if effective_rr < _min_rr:
+            reason = (f"Effective R/R {effective_rr:.2f} < seuil {_min_rr} "
+                      f"({best_news.news_category}) — after spread {spread:.3f}% "
+                      f"[nominal R/R={rr:.2f}]")
             logger.info("Skipping %s: %s", ticker, reason)
             rejection_log.append({
                 "title": best_news.news.title, "ticker": [ticker],

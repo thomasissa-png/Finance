@@ -102,6 +102,25 @@ TECH_CORRELATION_GROUPS = {
 POSITIONS_FILE = Path(os.getenv("DATA_DIR", "data")) / "tech_positions.json"
 
 
+# v3.1: Category-aware trailing tier 1 buffer
+# Commodities have wider intraday noise (ATR 2-3%) — a -0.05% buffer
+# triggers false exits. Use -0.15% for commodities, -0.05% for others.
+_TIER1_TRAILING_BUFFERS = {
+    "commodities": -0.15,
+    "forex": -0.05,
+    "indices": -0.05,
+    "equities": -0.08,
+}
+
+
+def _get_tier1_trailing_buffer(ticker: str) -> float:
+    """Get the trailing tier 1 near-breakeven buffer for a ticker's category."""
+    from .agent_scoring_3 import TECH_TICKERS
+    info = TECH_TICKERS.get(ticker, {})
+    category = info.get("category", "equities")
+    return _TIER1_TRAILING_BUFFERS.get(category, -0.05)
+
+
 def _ensure_positions_file():
     """Create the positions file if it doesn't exist."""
     POSITIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -246,7 +265,7 @@ class AgentTrader3(BaseAgent):
 
     name = "trader_3"
     description = "Technical trading — multi-strategy, A/B testing"
-    version = "3.0"  # v3.0: Pure intraday — EOD_CLOSE at 19:45, holdings 3-5h, ema_trend replaces ma_trend
+    version = "3.1"  # v3.1: Category-aware trailing tier 1 buffer, regime_match filtering
 
     def __init__(self):
         super().__init__()
@@ -534,7 +553,8 @@ class AgentTrader3(BaseAgent):
             # J2/v2.3: Progressive trailing stop per-strategy — BEFORE SL check
             # so trailing-adjusted stop is used in SL evaluation.
             # v2.3: 3 paliers instead of single breakeven jump:
-            #   Palier 1: PnL > activation_pct of target → stop = breakeven (-0.05%)
+            #   Palier 1: PnL > activation_pct of target → stop = near-breakeven
+            #     v3.1: category-aware buffer (commodities -0.15%, others -0.05%)
             #   Palier 2: PnL > 50% of target → stop = +25% of target
             #   Palier 3: PnL > 75% of target → stop = +50% of target
             strategy = pos.get("strategy", "")
@@ -554,8 +574,11 @@ class AgentTrader3(BaseAgent):
                     pos["trailing_active"] = True
                     pos["trailing_level"] = 2
                 elif progress >= trailing_pct and current_level < 1:
-                    # Palier 1: breakeven (original activation threshold)
-                    new_stop = -0.05  # Near-breakeven with tiny buffer
+                    # Palier 1: near-breakeven with category-aware buffer
+                    # v3.1: commodities have wider intraday noise → -0.15% buffer
+                    # instead of -0.05% which triggers false exits on ATR 2-3% tickers
+                    tier1_buffer = _get_tier1_trailing_buffer(ticker)
+                    new_stop = tier1_buffer
                     pos["trailing_active"] = True
                     pos["trailing_level"] = 1
 
@@ -760,11 +783,18 @@ class AgentTrader3(BaseAgent):
             if self._check_correlation_conflict(ticker, direction, all_active):
                 continue
 
+            # v3.1: Regime mismatch penalty — if Scoring 3 flagged regime_match=False,
+            # the strategy is being used outside its preferred regime (e.g., mean-reversion
+            # in trending market). Apply 20% penalty aligned with Scoring 3's REGIME_MISMATCH_PENALTY.
+            regime_match = setup.get("regime_match", True)
+
             # Apply learning multipliers
             adj_score = score
             adj_score *= strategy_adj.get(strategy, 1.0)
             adj_score *= ticker_adj.get(ticker, 1.0)
             adj_score *= timeframe_adj.get(timeframe, 1.0)
+            if not regime_match:
+                adj_score *= 0.80  # v3.1: aligned with REGIME_MISMATCH_PENALTY
 
             if adj_score < MIN_TRADE_SCORE:
                 continue
