@@ -48,25 +48,27 @@ MAX_HOLDING_DAYS = 1  # Safety fallback (should never be reached)
 EOD_DEADLINE_HOUR = 19
 EOD_DEADLINE_MINUTE = 45
 
-# v3.0: Per-strategy max holding hours — intraday calibrated
-# Mean-reversion: RSI/Stoch signals resolve in 1-3 hours on 1H bars
-# Momentum: MACD/EMA trend signals develop over 3-5 hours on 1H bars
+# v3.0: Per-strategy max holding hours — full-session intraday
+# Positions can live the entire trading day (07:50 → 19:45 CET = ~12h max).
+# The hard deadline at 19:45 (EOD_CLOSE) is the real safety net.
+# These ceilings give each strategy enough room to develop while still
+# expiring stale signals before end-of-day.
 STRATEGY_MAX_HOLDING_HOURS = {
-    # Mean-reversion: fast signal, quick resolution
-    "rsi_reversal": 3,
-    "stochastic_reversal": 3,
-    "bollinger_squeeze": 4,      # Breakout needs slightly more time
-    # Momentum/trend: needs a few hours to develop
-    "macd_crossover": 5,
-    "ema_trend": 5,              # v3.0: was ma_trend (120h), now EMA 9/21 intraday
-    "momentum_divergence": 4,
-    # Combo mean-reversion: fast
-    "rsi_bollinger_combo": 3,
-    "bollinger_stoch_combo": 3,
-    # Combo momentum: slightly longer
-    "rsi_macd_combo": 4,
-    "macd_ma_combo": 5,
-    "ma_rsi_macd_combo": 5,
+    # Mean-reversion: signals resolve faster, but allow full session for late entries
+    "rsi_reversal": 10,
+    "stochastic_reversal": 10,
+    "bollinger_squeeze": 11,     # Breakout can take most of the session
+    # Momentum/trend: let trends develop across the full session
+    "macd_crossover": 12,
+    "ema_trend": 12,             # EMA 9/21 trends can run all day
+    "momentum_divergence": 11,
+    # Combo mean-reversion: same as singles
+    "rsi_bollinger_combo": 10,
+    "bollinger_stoch_combo": 10,
+    # Combo momentum: full session
+    "rsi_macd_combo": 11,
+    "macd_ma_combo": 12,
+    "ma_rsi_macd_combo": 12,
 }
 
 # Minimum score to take a trade

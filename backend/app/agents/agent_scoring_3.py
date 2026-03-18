@@ -1673,7 +1673,16 @@ def score_technical_setups(tickers: dict | None = None,
                     strategy_name, (1.5, 1.0)
                 )
                 target_pct = round(max(0.5, atr_pct * target_mult * atr_mult), 2)
-                stop_pct = round(atr_pct * stop_mult * atr_mult, 2)
+                # v3.0: Stop floor per category — prevents stops below typical spread
+                category = info.get("category", "")
+                _STOP_FLOOR = {
+                    "forex": 0.10,       # Forex spread ~0.08%, stop must be above
+                    "indices": 0.05,     # Index spreads tighter
+                    "commodities": 0.08, # Futures spreads
+                    "equities": 0.05,    # Equity spreads
+                }
+                stop_floor = _STOP_FLOOR.get(category, 0.05)
+                stop_pct = round(max(stop_floor, atr_pct * stop_mult * atr_mult), 2)
 
             # P4/F10: Confidence = signal quality, not just score * 0.9
             # F10: Normalize signal count by strategy type to avoid combo bias
