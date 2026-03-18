@@ -66,8 +66,17 @@ def fetch_eia_data() -> list[NewsItem]:
         return []
 
     items: list[NewsItem] = []
+    # Total time budget: 5 series × 15s timeout = 75s sequential worst case.
+    # On Replit, this exceeds the 75s global timeout in collect_structured_data().
+    # Cap at 30s total — partial results are better than zero.
+    eia_start = time.monotonic()
+    EIA_BUDGET_SECONDS = 30
 
     for series_id, description in EIA_SERIES.items():
+        if time.monotonic() - eia_start > EIA_BUDGET_SECONDS:
+            logger.warning("EIA time budget exhausted (%.0fs) — %d/%d series fetched",
+                          time.monotonic() - eia_start, len(items), len(EIA_SERIES))
+            break
         try:
             # EIA API v2
             url = "https://api.eia.gov/v2/seriesid/" + series_id
@@ -75,7 +84,10 @@ def fetch_eia_data() -> list[NewsItem]:
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
 
             if resp.status_code != 200:
-                # Try v1 fallback
+                # Try v1 fallback — but only if we have time budget left
+                if time.monotonic() - eia_start > EIA_BUDGET_SECONDS:
+                    logger.warning("EIA v2 failed for %s (HTTP %d), no time for v1 fallback", series_id, resp.status_code)
+                    continue
                 url_v1 = f"https://api.eia.gov/series/?api_key={api_key}&series_id={series_id}&num=2"
                 resp = requests.get(url_v1, timeout=REQUEST_TIMEOUT)
 
@@ -127,23 +139,16 @@ def fetch_eia_data() -> list[NewsItem]:
             elif "Refinery" in description:
                 tickers = ["CL=F", "BZ=F"]
 
-            # Extract period date from response for accurate published timestamp
+            # Extract period date string for the headline (informational only).
+            # IMPORTANT: published_dt = now(), NOT the data period date.
+            # EIA weekly data periods (e.g., "20260313") are 5-7 days old by the
+            # time they're published. Using the period date as published_dt caused
+            # _filter_old_news() to silently drop ALL EIA items (age > 18h max).
             period_str = ""
             if isinstance(series_data[0], list):
                 period_str = str(series_data[0][0]) if series_data[0][0] else ""
             else:
                 period_str = series_data[0].get("period", "")
-            try:
-                # EIA periods can be "YYYYMMDD", "YYYY-MM-DD", or "YYYYMM"
-                clean = period_str.replace("-", "").strip()
-                if len(clean) == 8:
-                    published_dt = datetime.strptime(clean, "%Y%m%d").replace(tzinfo=timezone.utc)
-                elif len(clean) == 6:
-                    published_dt = datetime.strptime(clean, "%Y%m").replace(tzinfo=timezone.utc)
-                else:
-                    published_dt = datetime.now(timezone.utc)
-            except (ValueError, TypeError):
-                published_dt = datetime.now(timezone.utc)
 
             # Build a precise headline with numbers
             direction = "hausse" if change > 0 else "baisse"
@@ -156,7 +161,7 @@ def fetch_eia_data() -> list[NewsItem]:
                 title=title,
                 source="EIA",
                 url=f"https://www.eia.gov/petroleum/supply/weekly/",
-                published=published_dt,
+                published=datetime.now(timezone.utc),
                 related_tickers=tickers,
                 source_weight=SOURCE_WEIGHTS.get("EIA", 1.15),
                 news_zone="us",
@@ -773,16 +778,19 @@ def fetch_weather_alerts() -> list[NewsItem]:
         logger.warning("Weather global timeout (45s): %d/%d zones completed",
                        completed, len(AGRICULTURAL_ZONES))
     finally:
-        executor.shutdown(wait=True, cancel_futures=True)
+        # wait=False: Don't block on slow zones. On Replit, DNS cold-starts
+        # can push individual zone requests to 20-30s. With 24 zones / 6 workers
+        # = 4 waves, shutdown(wait=True) could block 60-100s total, exceeding
+        # the 75s budget of collect_structured_data() and causing "not_started".
+        # With wait=False, we return immediately with partial results (zones that
+        # completed within the 45s as_completed window). Trailing zone threads
+        # self-terminate when their HTTP timeout fires.
+        executor.shutdown(wait=False, cancel_futures=True)
 
     if zones_ok > 0 or zones_failed > 0:
         logger.info("Weather: %d zones OK, %d failed, %d items from %d total zones",
                     zones_ok, zones_failed, len(items), len(AGRICULTURAL_ZONES))
 
-    return items
-
-    if items:
-        logger.info("Generated %d weather alerts from %d zones", len(items), len(AGRICULTURAL_ZONES))
     return items
 
 
@@ -1364,11 +1372,9 @@ def fetch_usda_crop_data() -> list[NewsItem]:
                     except (ValueError, TypeError):
                         pass
 
-            # Parse week_ending for accurate published timestamp
-            try:
-                usda_published_dt = datetime.strptime(week.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            except (ValueError, TypeError):
-                usda_published_dt = datetime.now(timezone.utc)
+            # NOTE: use now() as published, NOT the data period date.
+            # USDA weekly data periods are 5-7 days old → _filter_old_news()
+            # would drop them (>18h max age). The period date is in the title.
 
             title = (
                 f"[USDA DATA] {q['label']} — {stat}: {value}%{wow_str} "
@@ -1378,7 +1384,7 @@ def fetch_usda_crop_data() -> list[NewsItem]:
                 title=title,
                 source="USDA",
                 url="https://quickstats.nass.usda.gov/",
-                published=usda_published_dt,
+                published=datetime.now(timezone.utc),
                 related_tickers=q["tickers"],
                 source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
                 news_zone="us",
@@ -1538,11 +1544,11 @@ def fetch_cot_data() -> list[NewsItem]:
         latest_date = sorted_dates[0]
         previous_date = sorted_dates[1] if len(sorted_dates) > 1 else None
 
-        # Parse report date for accurate published timestamp
-        try:
-            cot_published_dt = datetime.strptime(latest_date.strip(), "%y%m%d").replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            cot_published_dt = datetime.now(timezone.utc)
+        # NOTE: use now() as published, NOT the COT report date.
+        # COT data is from Tuesday, published Friday → 3-5 days old by the
+        # time we read it. Using the report date caused _filter_old_news()
+        # to silently drop ALL COT items (age > 18h max).
+        cot_published_dt = datetime.now(timezone.utc)
 
         # Parse both weeks
         latest_data = _parse_cot_by_date(lines, col_map, latest_date)
@@ -2025,17 +2031,9 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
             # Use region-specific tickers if available, otherwise fall back to category default
             final_tickers = region_tickers if region_tickers else matched_tickers
 
-            # Parse event date from geometry for accurate published timestamp
-            eonet_published_dt = datetime.now(timezone.utc)
-            if geometry:
-                event_date_str = geometry[-1].get("date", "")
-                if event_date_str:
-                    try:
-                        # EONET dates are ISO 8601: "2025-08-12T00:00:00Z"
-                        clean = event_date_str.replace("Z", "+00:00")
-                        eonet_published_dt = datetime.fromisoformat(clean)
-                    except (ValueError, TypeError):
-                        pass
+            # NOTE: use now() as published. EONET event dates can be days/weeks
+            # old for ongoing events (wildfires, storms). Using the event date
+            # caused _filter_old_news() to drop still-active events (age > 18h).
 
             title = f"[NASA EONET] {label}: {title_raw}{location_str}"
 
@@ -2043,7 +2041,7 @@ def fetch_nasa_eonet_events() -> list[NewsItem]:
                 title=title,
                 source="NASA EONET",
                 url=event.get("link", "https://eonet.gsfc.nasa.gov/"),
-                published=eonet_published_dt,
+                published=datetime.now(timezone.utc),
                 related_tickers=list(set(final_tickers)),
                 source_weight=SOURCE_WEIGHTS.get("NASA EONET", 1.1),
                 news_zone=_zone_slug(region_name) if region_name else "",
@@ -2138,11 +2136,8 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                     if injection is not None:
                         injection_str = f", {'injection' if injection >= 0 else 'soutirage'}: {abs(injection):.2f} TWh/j"
 
-                    # Parse gasDayStart for accurate published timestamp
-                    try:
-                        agsi_published_dt = datetime.strptime(gas_date.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                    except (ValueError, TypeError):
-                        agsi_published_dt = datetime.now(timezone.utc)
+                    # NOTE: use now() as published, NOT gasDayStart.
+                    # Gas data dates are 1-2 days old → dropped by _filter_old_news().
 
                     title = (
                         f"[GIE AGSI] Stockage gaz EU: {full_pct:.1f}% plein"
@@ -2153,7 +2148,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                         title=title,
                         source="GIE AGSI",
                         url="https://agsi.gie.eu/",
-                        published=agsi_published_dt,
+                        published=datetime.now(timezone.utc),
                         related_tickers=["NG=F"],
                         source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),
                         news_zone="europe",
@@ -2180,12 +2175,6 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
 
             # Only alert on country level if it's significantly diverging from normal
             if full_pct < thresholds["critical_low"]:
-                # Parse gasDayStart for accurate published timestamp
-                try:
-                    country_published_dt = datetime.strptime(gas_date.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                except (ValueError, TypeError):
-                    country_published_dt = datetime.now(timezone.utc)
-
                 title = (
                     f"[GIE AGSI] ALERTE {country_name}: stockage gaz {full_pct:.1f}% — "
                     f"CRITIQUE BAS (seuil saison {season}: {thresholds['critical_low']}%) — "
@@ -2195,7 +2184,7 @@ def fetch_gie_agsi_data() -> list[NewsItem]:
                     title=title,
                     source="GIE AGSI",
                     url="https://agsi.gie.eu/",
-                    published=country_published_dt,
+                    published=datetime.now(timezone.utc),
                     related_tickers=["NG=F"],
                     source_weight=SOURCE_WEIGHTS.get("GIE AGSI", 1.15),  # Country-level stress
                     news_zone=_zone_slug(country_name),
@@ -2334,17 +2323,9 @@ def fetch_usda_wasde() -> list[NewsItem]:
                     except (ValueError, TypeError):
                         pass
 
-            # Parse load_time or week_ending for accurate published timestamp
-            wasde_date_str = latest.get("load_time", latest.get("week_ending", ""))
-            try:
-                if wasde_date_str:
-                    # load_time format: "2025-08-12 00:00:00" or "YYYY-MM-DD"
-                    clean_date = wasde_date_str.strip().split(" ")[0]
-                    wasde_published_dt = datetime.strptime(clean_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                else:
-                    wasde_published_dt = datetime.now(timezone.utc)
-            except (ValueError, TypeError):
-                wasde_published_dt = datetime.now(timezone.utc)
+            # NOTE: use now() as published, NOT the WASDE report date.
+            # WASDE is published monthly (~10th). Using the report date caused
+            # _filter_old_news() to drop all WASDE items after day 1.
 
             title = (
                 f"[WASDE] {q['label']} — {q['statisticcat_desc'].title()}: "
@@ -2354,7 +2335,7 @@ def fetch_usda_wasde() -> list[NewsItem]:
                 title=title,
                 source="USDA",
                 url="https://www.usda.gov/oce/commodity/wasde",
-                published=wasde_published_dt,
+                published=datetime.now(timezone.utc),
                 related_tickers=q["tickers"],
                 source_weight=SOURCE_WEIGHTS.get("USDA", 1.1),
                 news_zone="us",
@@ -2684,18 +2665,9 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
 
             for disease_key, info in disease_keywords.items():
                 if disease_key in disease_name:
-                    # Parse eventDate for accurate published timestamp
-                    woah_published_dt = datetime.now(timezone.utc)
-                    if event_date:
-                        try:
-                            # WOAH dates: "2025-08-12", "2025-08-12T00:00:00Z", or "2025-08-12T00:00:00"
-                            clean = event_date.strip().replace("Z", "+00:00")
-                            if "T" in clean:
-                                woah_published_dt = datetime.fromisoformat(clean)
-                            else:
-                                woah_published_dt = datetime.strptime(clean.split(" ")[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                        except (ValueError, TypeError):
-                            pass
+                    # NOTE: use now() as published, NOT the event date.
+                    # WOAH outbreaks can be reported days after detection.
+                    # Event date is included in the title for context.
                     title = (
                         f"[WOAH ALERTE] {info['severity']} — {disease_name.title()} "
                         f"detecte en {country} ({event_date}) — "
@@ -2705,7 +2677,7 @@ def fetch_woah_disease_alerts() -> list[NewsItem]:
                         title=title,
                         source="WOAH",
                         url="https://wahis.woah.org/",
-                        published=woah_published_dt,
+                        published=datetime.now(timezone.utc),
                         related_tickers=info["tickers"],
                         source_weight=SOURCE_WEIGHTS.get("WOAH", 1.15),
                         news_zone=_zone_slug(country) if country else "",
