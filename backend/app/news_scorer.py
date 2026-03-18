@@ -185,6 +185,15 @@ def _set_cached_score(key: str, score_entry: dict) -> None:
 _scan_token_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "scans": 0}
 _token_usage_lock = threading.Lock()  # C2: Thread-safe token tracking
 
+# v7.7: API status tracking — allows callers to distinguish timeout from normal empty
+_last_api_status: str = "success"  # "success" | "timeout" | "api_error" | "parse_error" | "no_tool_use"
+_last_api_error_msg: str = ""
+
+
+def get_last_api_status() -> tuple[str, str]:
+    """Return (status, error_message) from last Claude API call."""
+    return _last_api_status, _last_api_error_msg
+
 
 def get_token_usage() -> dict:
     """Return cumulative token usage stats."""
@@ -591,7 +600,17 @@ def _call_claude_with_retry(client, headlines, session_context, max_retries=3,
     Returns parsed scores list, or empty list on failure.
     Never raises — API errors are logged and return [] so the scan
     completes gracefully (no trade) instead of crashing.
+
+    Sets module-level _last_api_status to track the outcome:
+    - "success": Claude returned valid scores
+    - "timeout": All retries exhausted due to timeout
+    - "api_error": All retries exhausted due to API error
+    - "parse_error": All retries exhausted due to parse error
+    - "no_tool_use": Claude response had no usable output
     """
+    global _last_api_status, _last_api_error_msg
+    _last_api_status = "success"
+    _last_api_error_msg = ""
     # v4.3 B5: Ticker list in user message (saves system prompt tokens)
     user_message = f"""Contexte : {session_context}
 
@@ -683,6 +702,8 @@ Headlines :
             if attempt < max_retries:
                 time.sleep(2 ** attempt)
                 continue
+            _last_api_status = "no_tool_use"
+            _last_api_error_msg = "Claude response had no tool_use or parseable JSON after all retries"
             return []
 
         except (json.JSONDecodeError, ValueError) as exc:
@@ -690,6 +711,8 @@ Headlines :
             if attempt < max_retries:
                 time.sleep(2 ** attempt)
                 continue
+            _last_api_status = "parse_error"
+            _last_api_error_msg = f"Parse error after all retries: {exc}"
             return []
         except anthropic.APITimeoutError as exc:
             # Specific handling for timeouts — use longer backoff since API is likely congested
@@ -700,6 +723,8 @@ Headlines :
                 time.sleep(wait)
                 continue
             logger.error("Claude API timeout after %d attempts — scan will proceed without scores", max_retries + 1)
+            _last_api_status = "timeout"
+            _last_api_error_msg = f"APITimeoutError after {max_retries + 1} attempts: {exc}"
             return []
         except anthropic.APIError as exc:
             wait = 2 ** attempt  # 1s, 2s, 4s, 8s
@@ -709,8 +734,12 @@ Headlines :
                 time.sleep(wait)
                 continue
             logger.error("Claude API error after %d attempts — scan will proceed without scores", max_retries + 1)
+            _last_api_status = "api_error"
+            _last_api_error_msg = f"{type(exc).__name__} after {max_retries + 1} attempts: {exc}"
             return []
 
+    _last_api_status = "no_tool_use"
+    _last_api_error_msg = "Exhausted all retry attempts without valid response"
     return []
 
 
@@ -868,10 +897,22 @@ def score_news_batch(
     all_scored = pre_filtered_scored + cached_scored + claude_scored
     all_scored.sort(key=lambda s: s.total_score, reverse=True)
 
-    logger.info("Scored %d/%d news items (claude=%d, cached=%d, prefiltered=%d, VIX=%s, regime=%s)",
+    # v7.7: Propagate API status so callers can distinguish timeout from normal empty
+    api_status, api_error_msg = get_last_api_status()
+    if items_to_score and not claude_scored and api_status != "success":
+        # Claude was called but returned nothing — this is an API failure, not "no news"
+        market_ctx["api_status"] = api_status
+        market_ctx["api_error"] = api_error_msg
+        logger.error("Claude API failure during scoring: status=%s, error=%s",
+                     api_status, api_error_msg)
+    else:
+        market_ctx["api_status"] = "success"
+
+    logger.info("Scored %d/%d news items (claude=%d, cached=%d, prefiltered=%d, VIX=%s, regime=%s, api=%s)",
                 len(all_scored), len(news_items),
                 len(claude_scored), len(cached_scored), len(pre_filtered_scored),
-                market_ctx.get("vix", "N/A"), market_ctx.get("regime", "N/A"))
+                market_ctx.get("vix", "N/A"), market_ctx.get("regime", "N/A"),
+                api_status)
 
     # F4: Log cumulative token usage
     usage = get_token_usage()

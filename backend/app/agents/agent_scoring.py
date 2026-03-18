@@ -88,6 +88,27 @@ class AgentScoring(BaseAgent):
             self._last_scored_count = len(scored)
             self._total_scored += len(scored)
 
+            # v7.7: Detect API failure from market_ctx (propagated by score_news_batch)
+            api_status = market_ctx.get("api_status", "success") if market_ctx else "success"
+            if api_status != "success":
+                api_error = market_ctx.get("api_error", "") if market_ctx else ""
+                result["api_status"] = api_status
+                result["api_error"] = api_error
+                # Map to error_type/error_message for registry compatibility
+                status_to_error_type = {
+                    "timeout": "APITimeoutError",
+                    "api_error": "APIError",
+                    "parse_error": "ParseError",
+                    "no_tool_use": "NoToolUseError",
+                }
+                result["error_type"] = status_to_error_type.get(api_status, "ScoringError")
+                result["error_message"] = api_error
+                self.log("Claude API failure detected", {
+                    "api_status": api_status,
+                    "error": api_error[:200],
+                    "news_count": len(news_items),
+                }, level="ERROR")
+
             # Step 2: Get token usage stats
             # A1: Fixed keys — get_token_usage() returns input_tokens/output_tokens
             # A2: Read cache hit count from scorer

@@ -216,6 +216,9 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
     scored = scoring_result.get("scored", [])
     market_ctx = scoring_result.get("market_context")
 
+    # v7.7: Detect API failure — don't return early, let Teams 2-4 run
+    # (Team 3 is fully independent of news scoring, Team 2 has its own Scoring 2)
+    scoring_api_failed = False
     if not scored:
         # Differentiate between API failure types
         error_type = scoring_result.get("error_type", "")
@@ -232,6 +235,11 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
             reason = f"Erreur API Claude ({error_type}): {error_msg[:200]}"
         else:
             reason = "Aucune news scorée — toutes filtrées ou cache vide"
+
+        if error_type:
+            scoring_api_failed = True
+            logger.error("Scoring API failure: %s — Teams 2-4 will still execute", reason)
+
         result_dict = {
             "scan_type": scan_type.value,
             "has_trade": False,
@@ -241,39 +249,35 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
         }
         if error_type:
             result_dict["api_error"] = error_type
-        _append_scan_result(result_dict, news_result)
-        return result_dict
+    else:
+        # Log scored results
+        logger.info("--- Scored news (%d) ---", len(scored))
+        for s in scored:
+            logger.info("  score=%-6.1f dir=%-7s cat=%-15s delay=%-3d aware=%-3d | %s",
+                         s.total_score, s.direction.value,
+                         s.news_category, s.transmission_delay,
+                         s.market_awareness, s.news.title[:100])
 
-    # Log scored results
-    logger.info("--- Scored news (%d) ---", len(scored))
-    for s in scored:
-        logger.info("  score=%-6.1f dir=%-7s cat=%-15s delay=%-3d aware=%-3d | %s",
-                     s.total_score, s.direction.value,
-                     s.news_category, s.transmission_delay,
-                     s.market_awareness, s.news.title[:100])
+        # Step 3: Agent Learning — Get adjustments
+        learning_data = agent_learning.get_adjustments()
 
-    # Step 3: Agent Learning — Get adjustments
-    learning_data = agent_learning.get_adjustments()
-
-    # Step 4: Agent Trader 1 — Decide (Équipe 1)
-    # v6.5 P9: Wrap Trader 1 in try/except so Teams 2-4 always execute.
-    # Production incident 2026-03-09 11:33 CET: Trader 1 hung on market data
-    # fetch, blocking the entire pipeline — Teams 2-4 never ran.
-    try:
-        result_dict = agent_trader.run(
-            scored, scan_type, learning_data,
-            existing_trade_ticker=existing_trade_ticker,
-            market_context=market_ctx,
-        )
-    except Exception as exc:
-        logger.error("Équipe 1 Trader failed: %s — pipeline continues to Teams 2-4", exc)
-        result_dict = {
-            "scan_type": scan_type.value,
-            "has_trade": False,
-            "reason_no_trade": f"Trader 1 error: {str(exc)[:200]}",
-            "news_analyzed": len(news_items),
-            "all_scored_news": [],
-        }
+        # Step 4: Agent Trader 1 — Decide (Équipe 1)
+        # v6.5 P9: Wrap Trader 1 in try/except so Teams 2-4 always execute.
+        try:
+            result_dict = agent_trader.run(
+                scored, scan_type, learning_data,
+                existing_trade_ticker=existing_trade_ticker,
+                market_context=market_ctx,
+            )
+        except Exception as exc:
+            logger.error("Équipe 1 Trader failed: %s — pipeline continues to Teams 2-4", exc)
+            result_dict = {
+                "scan_type": scan_type.value,
+                "has_trade": False,
+                "reason_no_trade": f"Trader 1 error: {str(exc)[:200]}",
+                "news_analyzed": len(news_items),
+                "all_scored_news": [],
+            }
 
     # v8.5: Capture team results for dashboard multi-team display
     team_results = {}
@@ -434,6 +438,10 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
             team_results["team_4"]["has_activity"] = True
     except Exception:
         pass
+
+    # v7.7: Flag scoring API failure in result for frontend/dashboard visibility
+    if scoring_api_failed:
+        result_dict["scoring_api_failed"] = True
 
     # Attach team results to scan output
     result_dict["team_results"] = team_results
