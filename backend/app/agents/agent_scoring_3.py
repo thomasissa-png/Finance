@@ -1672,7 +1672,7 @@ def score_technical_setups(tickers: dict | None = None,
                 target_mult, stop_mult = STRATEGY_RR_PROFILES.get(
                     strategy_name, (1.5, 1.0)
                 )
-                target_pct = round(atr_pct * target_mult * atr_mult, 2)
+                target_pct = round(max(0.5, atr_pct * target_mult * atr_mult), 2)
                 stop_pct = round(atr_pct * stop_mult * atr_mult, 2)
 
             # P4/F10: Confidence = signal quality, not just score * 0.9
