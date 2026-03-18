@@ -206,9 +206,10 @@ def compute_tech_learning(entries: list[dict]) -> dict:
         return result
 
     # Filter valid entries (with result)
+    # v3.0: Include EOD_CLOSE — positions force-closed at 19:45 CET are valid trades
     valid = [
         e for e in entries
-        if e.get("result") in ("TP_HIT", "SL_HIT", "EXPIRED")
+        if e.get("result") in ("TP_HIT", "SL_HIT", "EXPIRED", "EOD_CLOSE")
     ]
 
     # Sort chronologically
@@ -232,6 +233,8 @@ def compute_tech_learning(entries: list[dict]) -> dict:
     tp_hits = sum(1 for e in valid if e.get("result") == "TP_HIT")
     sl_hits = sum(1 for e in valid if e.get("result") == "SL_HIT")
     expired = sum(1 for e in valid if e.get("result") == "EXPIRED")
+    # v3.0: Track EOD_CLOSE (intraday deadline force-close at 19:45 CET)
+    eod_closed = sum(1 for e in valid if e.get("result") == "EOD_CLOSE")
 
     mae_values = [e.get("mae_pct") for e in valid if e.get("mae_pct") is not None]
     mfe_values = [e.get("mfe_pct") for e in valid if e.get("mfe_pct") is not None]
@@ -276,6 +279,7 @@ def compute_tech_learning(entries: list[dict]) -> dict:
         "tp_hits": tp_hits,
         "sl_hits": sl_hits,
         "expired": expired,
+        "eod_closed": eod_closed,  # v3.0: intraday deadline force-close count
         "avg_mae_pct": round(avg_mae, 2),
         "avg_mfe_pct": round(avg_mfe, 2),
         "wins": len(wins),
@@ -536,10 +540,19 @@ def compute_tech_learning(entries: list[dict]) -> dict:
                 f"— holding period or targets may need calibration"
             )
 
-    # MAE alert
-    if avg_mae < -3:
+    # v3.0: High EOD_CLOSE rate — targets too ambitious for intraday window
+    if len(valid) >= MIN_TRADES_GLOBAL:
+        eod_rate = eod_closed / len(valid) * 100
+        if eod_rate > 30:
+            anomalies.append(
+                f"HIGH_EOD_CLOSE: {eod_rate:.0f}% of trades force-closed at deadline "
+                f"— targets or holding too ambitious for intraday window"
+            )
+
+    # MAE alert (v3.0: tightened from -3% to -1.5% for intraday targets)
+    if avg_mae < -1.5:
         anomalies.append(
-            f"HIGH_MAE: avg {avg_mae:.1f}% — stops may be too wide"
+            f"HIGH_MAE: avg {avg_mae:.1f}% — stops may be too wide for intraday"
         )
 
     # Win rate alert
@@ -881,7 +894,7 @@ class AgentLearning3(BaseAgent):
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         recent: list[dict] = []
         for e in all_entries:
-            if e.get("result") not in ("TP_HIT", "SL_HIT", "EXPIRED"):
+            if e.get("result") not in ("TP_HIT", "SL_HIT", "EXPIRED", "EOD_CLOSE"):
                 continue
             ts_str = e.get("close_time") or e.get("entry_time", "")
             if not ts_str:
