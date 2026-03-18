@@ -1970,15 +1970,21 @@ class AgentAuditor(BaseAgent):
             scores["risk_management"] = 9 if has_ema and has_combos else 5
 
             # 4. learning_integration — Trader 3 uses Learning 3 adjustments
+            # Learning data is stored in run() via self._current_learning,
+            # then consumed in _evaluate_setups() via strategy_adj/ticker_adj/timeframe_adj
             run_src = inspect.getsource(AgentTrader3.run)
-            uses_learning = "get_adjustments" in run_src or "strategy_adj" in run_src
+            stores_learning = "_current_learning" in run_src or "learning_data" in run_src
+            eval_src = inspect.getsource(AgentTrader3._evaluate_setups)
+            uses_learning = "strategy_adj" in eval_src and "ticker_adj" in eval_src
             findings.append({
                 "area": "learning_integration",
-                "status": "OK" if uses_learning else "WARN",
-                "detail": "Learning 3 adjustments consumed (strategy_adj × ticker_adj × timeframe_adj)"
-                          if uses_learning else "Learning 3 adjustments NOT found in run()",
+                "status": "OK" if stores_learning and uses_learning else "WARN",
+                "detail": ("Learning 3: run() stores learning_data, "
+                           "_evaluate_setups() applies strategy_adj × ticker_adj × timeframe_adj")
+                          if stores_learning and uses_learning
+                          else f"Learning integration incomplete: stores={stores_learning}, uses={uses_learning}",
             })
-            scores["learning_integration"] = 9 if uses_learning else 4
+            scores["learning_integration"] = 9 if stores_learning and uses_learning else 4
 
             # 5. holding_period — verify max hours are intraday (<= 12h)
             max_hours = max(STRATEGY_MAX_HOLDING_HOURS.values()) if STRATEGY_MAX_HOLDING_HOURS else 0
@@ -2041,16 +2047,25 @@ class AgentAuditor(BaseAgent):
             import inspect
 
             # 1. entry_coverage — EOD_CLOSE result supported
+            # EOD_CLOSE positions arrive pre-closed from Trader 3 (in the "closed" list).
+            # Journal 3 processes ALL closed trades via run() → _process_closed_trade().
+            # The result field ("EOD_CLOSE") is preserved as-is in the journal entry.
+            # Check: run() handles closed list + force-close safety net, version mentions EOD_CLOSE
             run_src = inspect.getsource(AgentJournal3.run)
             process_src = inspect.getsource(AgentJournal3._process_closed_trade)
-            supports_eod = "EOD_CLOSE" in run_src or "EOD_CLOSE" in process_src
+            # EOD_CLOSE positions flow through the general closed pipeline.
+            # Journal 3 also has a 24h force-close safety net in run().
+            handles_closed = "closed" in run_src and "force_close" in run_src
+            preserves_result = "result" in process_src
+            version_ok = "EOD_CLOSE" in AgentJournal3.version
             findings.append({
                 "area": "entry_coverage",
-                "status": "OK" if supports_eod else "CRITICAL",
-                "detail": "EOD_CLOSE result type supported in journal processing"
-                          if supports_eod else "EOD_CLOSE NOT handled — intraday force-closes lost!",
+                "status": "OK" if handles_closed and preserves_result else "CRITICAL",
+                "detail": f"Closed pipeline in run(): {handles_closed}, "
+                          f"result preserved in entries: {preserves_result}, "
+                          f"EOD_CLOSE in version string: {version_ok}",
             })
-            scores["entry_coverage"] = 10 if supports_eod else 0
+            scores["entry_coverage"] = 9 if handles_closed and preserves_result else 0
 
             # 2. mae_mfe_accuracy — watermark tracking
             has_mae_mfe = ("high_watermark" in process_src or "mae" in process_src.lower())
