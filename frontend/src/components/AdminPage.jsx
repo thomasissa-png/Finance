@@ -467,6 +467,16 @@ function AdminPage({ isActive }) {
           {resetResult && (
             <div style={{ marginTop: 12, padding: 12, borderRadius: 6, background: "rgba(16,185,129,0.1)", border: "1px solid var(--green)" }}>
               <strong style={{ color: "var(--green)" }}>Réinitialisation réussie</strong>
+              <p style={{ margin: "8px 0 4px", fontSize: 13, color: "var(--text-secondary)" }}>
+                Les scans sont suspendus pendant 5 minutes pour éviter de recréer des trades immédiatement.
+              </p>
+              <button
+                className="trigger-btn"
+                style={{ marginTop: 8, fontSize: 12 }}
+                onClick={() => { window.location.hash = "dashboard"; }}
+              >
+                Aller au Dashboard →
+              </button>
               <details style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>
                 <summary style={{ cursor: "pointer" }}>Détails du reset</summary>
                 <pre style={{ whiteSpace: "pre-wrap", marginTop: 8, background: "var(--bg-secondary)", padding: 8, borderRadius: 6, maxHeight: 200, overflow: "auto" }}>

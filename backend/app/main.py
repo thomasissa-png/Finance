@@ -9,7 +9,7 @@ import os
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -78,6 +78,10 @@ _running_scans_lock = threading.Lock()
 
 # O2: Mutex between recovery thread and journal scheduler
 _journal_lock = threading.Lock()
+
+# Post-reset scan suppression: scans are blocked until this time
+_reset_cooldown_until: datetime | None = None
+RESET_SCAN_COOLDOWN_MINUTES = 5
 
 
 def _load_scans_cache() -> dict[str, dict]:
@@ -314,6 +318,15 @@ def _run_scheduled_scan(scan_key: str) -> None:
     Solution: spawn a daemon thread and return immediately. The scheduler
     thread stays free, health checks keep responding, Replit stays happy.
     """
+    # Post-reset cooldown: suppress scans for a few minutes after a full reset
+    # to avoid immediately re-creating trades the user just cleared
+    global _reset_cooldown_until
+    if _reset_cooldown_until and datetime.now(timezone.utc) < _reset_cooldown_until:
+        remaining = (_reset_cooldown_until - datetime.now(timezone.utc)).seconds
+        logger.info("Scheduled scan '%s' suppressed — reset cooldown active (%ds remaining)",
+                     scan_key, remaining)
+        return
+
     # Night guard: never run scans outside trading hours (7h-20h CET)
     # Protects against APScheduler misfire edge cases on Replit restarts
     now_paris = datetime.now(PARIS_TZ)
@@ -368,6 +381,10 @@ def _run_us_session_scan() -> None:
 
 def _run_event_check() -> None:
     """Run event-driven scan check in background thread."""
+    # Suppress event checks during post-reset cooldown
+    if _reset_cooldown_until and datetime.now(timezone.utc) < _reset_cooldown_until:
+        return
+
     def _event_worker():
         event_key = "__event_check__"
         with _running_scans_lock:
@@ -1914,7 +1931,14 @@ def reset_all_data(password: str = ""):
         _CLEANUP_SENTINEL.unlink()
         results["sentinel"] = "removed"
 
-    logger.info("MANUAL RESET via API — results: %s", results)
+    # 7. Activate scan cooldown — suppress scans for N minutes to avoid
+    # immediately re-creating trades the user just cleared
+    global _reset_cooldown_until
+    _reset_cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=RESET_SCAN_COOLDOWN_MINUTES)
+    results["scan_cooldown_until"] = _reset_cooldown_until.isoformat()
+
+    logger.info("MANUAL RESET via API — scan cooldown %d min — results: %s",
+                RESET_SCAN_COOLDOWN_MINUTES, results)
     return {"status": "ok", "results": results}
 
 
@@ -2112,7 +2136,13 @@ def reset_team_data(team_id: int, password: str = ""):
             _last_scans = {}
         results["scan_cache"] = "cleared"
 
-    logger.info("TEAM %d RESET via API — results: %s", team_id, results)
+    # 6. Activate scan cooldown
+    global _reset_cooldown_until
+    _reset_cooldown_until = datetime.now(timezone.utc) + timedelta(minutes=RESET_SCAN_COOLDOWN_MINUTES)
+    results["scan_cooldown_until"] = _reset_cooldown_until.isoformat()
+
+    logger.info("TEAM %d RESET via API — scan cooldown %d min — results: %s",
+                team_id, RESET_SCAN_COOLDOWN_MINUTES, results)
     return {"status": "ok", "results": results}
 
 
