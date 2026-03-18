@@ -251,6 +251,22 @@ def _fetch_intraday_prices(
         return None, None, None, None
 
 
+def _ensure_utc(ts) -> datetime:
+    """Normalize any timestamp (naive, aware, Pandas) to UTC-aware datetime.
+
+    Fixes 'can't compare offset-naive and offset-aware datetimes' when
+    mixing Pandas Timestamps (from yfinance, often naive) with Python
+    datetimes (from PG trades, always UTC-aware).
+    """
+    if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
+        return ts.astimezone(timezone.utc)
+    # Naive timestamp — assume UTC
+    if hasattr(ts, 'tz_localize'):
+        # Pandas Timestamp
+        return ts.tz_localize(timezone.utc)
+    return ts.replace(tzinfo=timezone.utc)
+
+
 def _filter_post_entry(
     bars: list | None, entry_time: datetime,
 ) -> list | None:
@@ -261,20 +277,11 @@ def _filter_post_entry(
     """
     if not bars:
         return None
-    # Normalize entry_time to UTC for consistent comparison
-    if entry_time.tzinfo is None:
-        entry_utc = entry_time.replace(tzinfo=timezone.utc)
-    else:
-        entry_utc = entry_time.astimezone(timezone.utc)
+    entry_utc = _ensure_utc(entry_time)
 
     filtered = []
     for bar in bars:
-        ts = bar[0]
-        # Normalize bar timestamp to UTC
-        if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
-            ts_utc = ts.astimezone(timezone.utc)
-        else:
-            ts_utc = ts  # Assume UTC if naive
+        ts_utc = _ensure_utc(bar[0])
         if ts_utc >= entry_utc:
             filtered.append(bar)
     return filtered if filtered else None
@@ -351,7 +358,7 @@ def _compute_mae_mfe(
         mfe = max(mfe, favorable)
 
         # M6: Stop after the exit bar — post-exit price action is irrelevant
-        if exit_bar_ts is not None and bar_ts >= exit_bar_ts:
+        if exit_bar_ts is not None and _ensure_utc(bar_ts) >= _ensure_utc(exit_bar_ts):
             break
 
     return round(mae, 4), round(mfe, 4)
@@ -654,8 +661,8 @@ def _compute_bar_interval(post_bars: list | None) -> str | None:
     """Detect bar interval from timestamps of consecutive bars."""
     if not post_bars or len(post_bars) < 2:
         return None
-    ts0 = post_bars[0][0]
-    ts1 = post_bars[1][0]
+    ts0 = _ensure_utc(post_bars[0][0])
+    ts1 = _ensure_utc(post_bars[1][0])
     try:
         if hasattr(ts0, 'timestamp') and hasattr(ts1, 'timestamp'):
             delta_min = abs((ts1.timestamp() - ts0.timestamp())) / 60
@@ -945,7 +952,7 @@ def _run_daily_journal_impl() -> list[dict]:
         # M6: Reuse exit_bar_ts from earlier (already computed for MAE/MFE)
         hit_time = exit_bar_ts
         if result in (TradeResult.TP_HIT, TradeResult.SL_HIT) and hit_time is not None:
-            raw_hours = (hit_time - trade.timestamp).total_seconds() / 3600
+            raw_hours = (_ensure_utc(hit_time) - _ensure_utc(trade.timestamp)).total_seconds() / 3600
             # B2: Add midpoint correction — bar timestamp is start of bar
             if bar_interval == "15min":
                 raw_hours += 0.125  # +7.5min midpoint
@@ -987,7 +994,7 @@ def _run_daily_journal_impl() -> list[dict]:
 
         # A4: exit_time = actual hit time for TP/SL, journal run time for EXPIRED
         if hit_time is not None and result in (TradeResult.TP_HIT, TradeResult.SL_HIT):
-            exit_time_value = hit_time if hasattr(hit_time, 'tzinfo') and hit_time.tzinfo else hit_time
+            exit_time_value = _ensure_utc(hit_time)
         else:
             exit_time_value = datetime.now(timezone.utc)
 
