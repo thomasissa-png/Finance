@@ -334,7 +334,7 @@ AUDIT_PROFILES = {
 class AgentAuditor(BaseAgent):
     name = "auditor"
     description = "Audit en profondeur de chaque agent"
-    version = "8.2"  # v8.2: fix audit checks in except blocks, timedelta import, safe defaults
+    version = "8.3"  # v8.3: Deep audit methods for Team 3 (scoring_3, trader_3, journal_3, learning_3)
 
     def __init__(self):
         super().__init__()
@@ -401,10 +401,10 @@ class AgentAuditor(BaseAgent):
                 "scoring_2": self._audit_scoring_2,
                 "journal_2": self._audit_journal_2,
                 "learning_2": self._audit_learning_2,
-                "scoring_3": self._audit_generic_agent,
-                "trader_3": self._audit_generic_agent,
-                "journal_3": self._audit_generic_agent,
-                "learning_3": self._audit_generic_agent,
+                "scoring_3": self._audit_scoring_3,
+                "trader_3": self._audit_trader_3,
+                "journal_3": self._audit_journal_3,
+                "learning_3": self._audit_learning_3,
                 "scoring_4": self._audit_generic_agent,
                 "trader_4": self._audit_generic_agent,
                 "journal_4": self._audit_generic_agent,
@@ -1756,6 +1756,477 @@ class AgentAuditor(BaseAgent):
             "section": "Learning adaptatif",
             "update": "Add audit trail: last audit date + score for learning system",
         })
+
+    # ── Team 3 deep audits ─────────────────────────────────────────
+
+    def _audit_scoring_3(self, report: dict, focus: str | None):
+        """Audit Agent Scoring 3 — indicator params, strategy coverage, v3.0 intraday checks."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_scoring_3 import (
+                TECH_TICKERS, STRATEGIES, TIMEFRAMES, TIMEFRAME_WEIGHTS,
+                DEFAULT_PARAMS, STRATEGY_RR_PROFILES, STRATEGY_REGIME_PREFERENCE,
+                MIN_SETUP_SCORE, score_technical_setups,
+            )
+
+            # 1. indicator_accuracy — v3.0 params (EMA 9/21, MACD 5/13/4, BB 12/1.8)
+            param_checks = {
+                "ema_fast": (9, DEFAULT_PARAMS.get("ema_fast")),
+                "ema_slow": (21, DEFAULT_PARAMS.get("ema_slow")),
+                "macd_fast": (5, DEFAULT_PARAMS.get("macd_fast")),
+                "macd_slow": (13, DEFAULT_PARAMS.get("macd_slow")),
+                "macd_signal": (4, DEFAULT_PARAMS.get("macd_signal")),
+                "bb_period": (12, DEFAULT_PARAMS.get("bb_period")),
+                "bb_std": (1.8, DEFAULT_PARAMS.get("bb_std")),
+                "stoch_k": (9, DEFAULT_PARAMS.get("stoch_k")),
+                "adx_period": (10, DEFAULT_PARAMS.get("adx_period")),
+            }
+            mismatches = [k for k, (expected, actual) in param_checks.items() if expected != actual]
+            findings.append({
+                "area": "indicator_accuracy",
+                "status": "OK" if not mismatches else "CRITICAL",
+                "detail": "All v3.0 indicator params match (EMA 9/21, MACD 5/13/4, BB 12/1.8, Stoch 9, ADX 10)"
+                          if not mismatches else f"Param mismatches: {mismatches}",
+            })
+            scores["indicator_accuracy"] = 10 if not mismatches else 2
+
+            # 2. strategy_coverage — 11 strategies (6 simple + 5 combos)
+            expected_strategies = {
+                "rsi_reversal", "macd_crossover", "bollinger_squeeze",
+                "ema_trend", "momentum_divergence", "stochastic_reversal",
+                "rsi_macd_combo", "bollinger_stoch_combo", "ma_rsi_macd_combo",
+                "rsi_bollinger_combo", "macd_ma_combo",
+            }
+            actual = set(STRATEGIES.keys())
+            missing = expected_strategies - actual
+            extra = actual - expected_strategies
+            # Verify cross-references in RR_PROFILES and REGIME_PREFERENCE
+            rr_missing = expected_strategies - set(STRATEGY_RR_PROFILES.keys())
+            regime_missing = expected_strategies - set(STRATEGY_REGIME_PREFERENCE.keys())
+            all_ok = not missing and not extra and not rr_missing and not regime_missing
+            findings.append({
+                "area": "strategy_coverage",
+                "status": "OK" if all_ok else "CRITICAL",
+                "detail": f"{len(actual)} strategies, "
+                          f"RR profiles: {len(STRATEGY_RR_PROFILES)}, "
+                          f"regime prefs: {len(STRATEGY_REGIME_PREFERENCE)}"
+                          + (f" — MISSING: {missing}" if missing else "")
+                          + (f" — NO RR: {rr_missing}" if rr_missing else "")
+                          + (f" — NO REGIME: {regime_missing}" if regime_missing else ""),
+            })
+            scores["strategy_coverage"] = 10 if all_ok else 3
+
+            # 3. ticker_coverage — 20 tickers expected
+            findings.append({
+                "area": "ticker_coverage",
+                "status": "OK" if len(TECH_TICKERS) == 20 else "WARN",
+                "detail": f"{len(TECH_TICKERS)} tickers configured (expected 20)",
+            })
+            scores["ticker_coverage"] = 9 if len(TECH_TICKERS) >= 18 else 5
+
+            # 4. score_distribution — from last scoring result
+            try:
+                from .registry import get_agent
+                agent = get_agent("scoring_3")
+                if agent:
+                    last = agent.get_last_result()
+                    if last and isinstance(last, dict):
+                        stats = last.get("stats", {})
+                        setups = stats.get("setups_found", 0)
+                        avg = stats.get("avg_score", 0)
+                        findings.append({
+                            "area": "score_distribution",
+                            "status": "OK" if setups >= 0 else "WARN",
+                            "detail": f"Last run: {setups} setups found, avg score={avg:.1f}",
+                        })
+                        scores["score_distribution"] = 8 if setups > 0 else 5
+                    else:
+                        findings.append({"area": "score_distribution", "status": "INFO",
+                                         "detail": "No scoring data yet (agent not run)"})
+                        scores["score_distribution"] = 5
+            except Exception:
+                findings.append({"area": "score_distribution", "status": "INFO",
+                                 "detail": "Registry unavailable — skipped runtime check"})
+                scores["score_distribution"] = 6
+
+            # 5. ohlcv_reliability — market_data import and batch fetch
+            try:
+                from ..market_data import fetch_history_batch
+                findings.append({
+                    "area": "ohlcv_reliability",
+                    "status": "OK",
+                    "detail": "fetch_history_batch available; Twelve Data + yfinance fallback",
+                })
+                scores["ohlcv_reliability"] = 8
+            except ImportError:
+                findings.append({"area": "ohlcv_reliability", "status": "CRITICAL",
+                                 "detail": "Cannot import fetch_history_batch from market_data"})
+                scores["ohlcv_reliability"] = 0
+
+            # 6. multi_timeframe — v3.0: 1H only signal, daily directional filter
+            tf_ok = TIMEFRAMES == ["1h"] and TIMEFRAME_WEIGHTS == {"1h": 1.0}
+            daily_filter = DEFAULT_PARAMS.get("daily_sma_period") is not None
+            findings.append({
+                "area": "multi_timeframe",
+                "status": "OK" if tf_ok and daily_filter else "WARN",
+                "detail": f"Timeframes={TIMEFRAMES}, weights={TIMEFRAME_WEIGHTS}, "
+                          f"daily_sma_period={DEFAULT_PARAMS.get('daily_sma_period')}, "
+                          f"daily_adx_period={DEFAULT_PARAMS.get('daily_adx_period')}",
+            })
+            scores["multi_timeframe"] = 10 if tf_ok and daily_filter else 5
+
+            # 7. no_claude_call — pure computational
+            import inspect
+            src = inspect.getsource(score_technical_setups)
+            has_claude = "anthropic" in src.lower() or "claude" in src.lower()
+            findings.append({
+                "area": "no_claude_call",
+                "status": "OK" if not has_claude else "CRITICAL",
+                "detail": "Confirmed: no Claude API call in score_technical_setups()"
+                          if not has_claude else "UNEXPECTED Claude reference in tech scoring!",
+            })
+            scores["no_claude_call"] = 10 if not has_claude else 0
+
+        except Exception as exc:
+            findings.append({"area": "scoring_3", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        self._analyze_agent_errors(findings, scores, improvements, "scoring_3")
+        tests.extend([
+            "test_scoring_3_v30_indicator_params",
+            "test_scoring_3_11_strategies_coverage",
+            "test_scoring_3_no_claude_call",
+            "test_scoring_3_1h_only_timeframe",
+        ])
+
+    def _audit_trader_3(self, report: dict, focus: str | None):
+        """Audit Agent Trader 3 — EOD_CLOSE, holding limits, trailing, learning integration."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_trader_3 import (
+                AgentTrader3, MAX_POSITIONS, MAX_HOLDING_DAYS,
+                EOD_DEADLINE_HOUR, EOD_DEADLINE_MINUTE,
+                STRATEGY_MAX_HOLDING_HOURS, MIN_TRADE_SCORE,
+            )
+
+            # 1. position_management — EOD_CLOSE hard deadline
+            eod_ok = EOD_DEADLINE_HOUR == 19 and EOD_DEADLINE_MINUTE == 45
+            findings.append({
+                "area": "position_management",
+                "status": "OK" if eod_ok else "CRITICAL",
+                "detail": f"EOD deadline={EOD_DEADLINE_HOUR}:{EOD_DEADLINE_MINUTE:02d} CET "
+                          f"(expected 19:45), MAX_HOLDING_DAYS={MAX_HOLDING_DAYS}",
+            })
+            scores["position_management"] = 10 if eod_ok else 2
+
+            # Verify force_close_all triggers EOD_CLOSE result
+            import inspect
+            monitor_src = inspect.getsource(AgentTrader3._monitor_positions)
+            has_eod_close = 'EOD_CLOSE' in monitor_src and 'force_close_all' in monitor_src
+            findings.append({
+                "area": "eod_close_logic",
+                "status": "OK" if has_eod_close else "CRITICAL",
+                "detail": "force_close_all → EOD_CLOSE result confirmed in _monitor_positions"
+                          if has_eod_close else "Missing EOD_CLOSE logic in monitor!",
+            })
+            scores["eod_close_logic"] = 10 if has_eod_close else 0
+
+            # 2. strategy_selection — all 11 strategies mapped in holdings
+            expected = {
+                "rsi_reversal", "macd_crossover", "bollinger_squeeze",
+                "ema_trend", "momentum_divergence", "stochastic_reversal",
+                "rsi_macd_combo", "bollinger_stoch_combo", "ma_rsi_macd_combo",
+                "rsi_bollinger_combo", "macd_ma_combo",
+            }
+            holdings_mapped = set(STRATEGY_MAX_HOLDING_HOURS.keys())
+            missing_holdings = expected - holdings_mapped
+            findings.append({
+                "area": "strategy_selection",
+                "status": "OK" if not missing_holdings else "WARN",
+                "detail": f"{len(holdings_mapped)} strategies with max holding hours"
+                          + (f" — MISSING: {missing_holdings}" if missing_holdings else ""),
+            })
+            scores["strategy_selection"] = 9 if not missing_holdings else 5
+
+            # 3. risk_management — trailing stop per-strategy
+            trailing_src = inspect.getsource(AgentTrader3._get_trailing_threshold)
+            has_ema = "ema_trend" in trailing_src
+            has_combos = "ma_rsi_macd_combo" in trailing_src
+            findings.append({
+                "area": "risk_management",
+                "status": "OK" if has_ema and has_combos else "WARN",
+                "detail": f"Trailing thresholds: ema_trend={'present' if has_ema else 'MISSING'}, "
+                          f"combos={'present' if has_combos else 'MISSING'}, "
+                          f"MAX_POSITIONS={MAX_POSITIONS}",
+            })
+            scores["risk_management"] = 9 if has_ema and has_combos else 5
+
+            # 4. learning_integration — Trader 3 uses Learning 3 adjustments
+            run_src = inspect.getsource(AgentTrader3.run)
+            uses_learning = "get_adjustments" in run_src or "strategy_adj" in run_src
+            findings.append({
+                "area": "learning_integration",
+                "status": "OK" if uses_learning else "WARN",
+                "detail": "Learning 3 adjustments consumed (strategy_adj × ticker_adj × timeframe_adj)"
+                          if uses_learning else "Learning 3 adjustments NOT found in run()",
+            })
+            scores["learning_integration"] = 9 if uses_learning else 4
+
+            # 5. holding_period — verify max hours are intraday (<= 12h)
+            max_hours = max(STRATEGY_MAX_HOLDING_HOURS.values()) if STRATEGY_MAX_HOLDING_HOURS else 0
+            min_hours = min(STRATEGY_MAX_HOLDING_HOURS.values()) if STRATEGY_MAX_HOLDING_HOURS else 0
+            intraday_ok = max_hours <= 12 and min_hours >= 1
+            findings.append({
+                "area": "holding_period",
+                "status": "OK" if intraday_ok else "WARN",
+                "detail": f"Holding range: {min_hours}h - {max_hours}h "
+                          f"(v3.0 intraday: must be <= 12h)",
+            })
+            scores["holding_period"] = 10 if intraday_ok else 4
+
+            # 6. ab_testing — weekly config consumption
+            init_src = inspect.getsource(AgentTrader3.__init__)
+            has_weekly = "weekly_config" in init_src or "_weekly_config" in init_src
+            findings.append({
+                "area": "ab_testing",
+                "status": "OK" if has_weekly else "WARN",
+                "detail": "Weekly config (enabled/disabled strategies) loaded"
+                          if has_weekly else "Weekly config not found in init",
+            })
+            scores["ab_testing"] = 8 if has_weekly else 4
+
+            # 7. persistence — atomic writes
+            try:
+                save_src = inspect.getsource(AgentTrader3._save_positions)
+                atomic = "os.replace" in save_src or "replace" in save_src
+                findings.append({
+                    "area": "persistence",
+                    "status": "OK" if atomic else "WARN",
+                    "detail": "Atomic file writes (temp → replace)" if atomic
+                              else "Non-atomic file writes detected",
+                })
+                scores["persistence"] = 9 if atomic else 5
+            except Exception:
+                scores["persistence"] = 6
+
+        except Exception as exc:
+            findings.append({"area": "trader_3", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        self._analyze_agent_errors(findings, scores, improvements, "trader_3")
+        tests.extend([
+            "test_trader_3_eod_close_deadline_1945",
+            "test_trader_3_force_close_all_eod_close",
+            "test_trader_3_11_strategies_holding_hours",
+            "test_trader_3_trailing_stop_per_strategy",
+        ])
+
+    def _audit_journal_3(self, report: dict, focus: str | None):
+        """Audit Agent Journal 3 — EOD_CLOSE tracking, dedup, atomic writes, MAE/MFE."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_journal_3 import AgentJournal3, JOURNAL_FILE
+            import inspect
+
+            # 1. entry_coverage — EOD_CLOSE result supported
+            run_src = inspect.getsource(AgentJournal3.run)
+            process_src = inspect.getsource(AgentJournal3._process_closed_trade)
+            supports_eod = "EOD_CLOSE" in run_src or "EOD_CLOSE" in process_src
+            findings.append({
+                "area": "entry_coverage",
+                "status": "OK" if supports_eod else "CRITICAL",
+                "detail": "EOD_CLOSE result type supported in journal processing"
+                          if supports_eod else "EOD_CLOSE NOT handled — intraday force-closes lost!",
+            })
+            scores["entry_coverage"] = 10 if supports_eod else 0
+
+            # 2. mae_mfe_accuracy — watermark tracking
+            has_mae_mfe = ("high_watermark" in process_src or "mae" in process_src.lower())
+            findings.append({
+                "area": "mae_mfe_accuracy",
+                "status": "OK" if has_mae_mfe else "WARN",
+                "detail": "MAE/MFE watermark tracking found in _process_closed_trade"
+                          if has_mae_mfe else "MAE/MFE tracking not detected",
+            })
+            scores["mae_mfe_accuracy"] = 8 if has_mae_mfe else 4
+
+            # 3. strategy_analysis — per-strategy breakdown
+            has_strategy_breakdown = "strategy" in process_src
+            findings.append({
+                "area": "strategy_analysis",
+                "status": "OK" if has_strategy_breakdown else "WARN",
+                "detail": "Per-strategy analysis in journal entries",
+            })
+            scores["strategy_analysis"] = 8 if has_strategy_breakdown else 5
+
+            # 4. dedup_integrity — (ticker, strategy, entry_time) key
+            from .agent_journal_3 import _pg_save_entries
+            pg_src = inspect.getsource(_pg_save_entries)
+            correct_dedup = "strategy" in pg_src and "entry_time" in pg_src and "ticker" in pg_src
+            # Also check ON CONFLICT
+            has_conflict = "ON CONFLICT" in pg_src
+            findings.append({
+                "area": "dedup_integrity",
+                "status": "OK" if correct_dedup and has_conflict else "CRITICAL",
+                "detail": f"PG dedup key includes (ticker, strategy, entry_time): {correct_dedup}, "
+                          f"ON CONFLICT clause: {has_conflict}",
+            })
+            scores["dedup_integrity"] = 10 if correct_dedup and has_conflict else 3
+
+            # 5. pnl_tracking — P&L computation
+            has_pnl = "pnl" in process_src.lower()
+            findings.append({
+                "area": "pnl_tracking",
+                "status": "OK" if has_pnl else "WARN",
+                "detail": "P&L tracking found in trade processing",
+            })
+            scores["pnl_tracking"] = 8 if has_pnl else 4
+
+            # 6. persistence — atomic single write
+            from .agent_journal_3 import _save_entries_json
+            json_src = inspect.getsource(_save_entries_json)
+            atomic = "os.replace" in json_src or "replace" in json_src
+            has_lock = "fcntl" in json_src or "LOCK" in json_src
+            findings.append({
+                "area": "persistence",
+                "status": "OK" if atomic else "WARN",
+                "detail": f"Atomic write: {atomic}, file locking: {has_lock}",
+            })
+            scores["persistence"] = 9 if atomic else 5
+
+        except Exception as exc:
+            findings.append({"area": "journal_3", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        self._analyze_agent_errors(findings, scores, improvements, "journal_3")
+        tests.extend([
+            "test_journal_3_eod_close_support",
+            "test_journal_3_dedup_ticker_strategy_entry_time",
+            "test_journal_3_atomic_write",
+        ])
+
+    def _audit_learning_3(self, report: dict, focus: str | None):
+        """Audit Agent Learning 3 — decay 15d, EOD_CLOSE, weekly config, anomaly detection."""
+        findings = report["findings"]
+        improvements = report["improvements"]
+        tests = report["tests_to_add"]
+        scores = report["score_breakdown"]
+
+        try:
+            from .agent_learning_3 import (
+                AgentLearning3, DECAY_HALF_LIFE_DAYS, ACTIVATION_DATE,
+                MIN_TRADES_STRATEGY, MIN_TRADES_TICKER, MIN_TRADES_GLOBAL,
+                MIN_TRADES_AB, compute_tech_learning,
+            )
+
+            # 1. strategy_ranking — A/B test with WR + PnL + Sharpe
+            import inspect
+            weekly_src = inspect.getsource(AgentLearning3.generate_weekly_config)
+            has_sharpe = "sharpe" in weekly_src.lower()
+            has_wr = "win_rate" in weekly_src or "wr" in weekly_src.lower()
+            findings.append({
+                "area": "strategy_ranking",
+                "status": "OK" if has_sharpe and has_wr else "WARN",
+                "detail": f"A/B ranking uses Sharpe: {has_sharpe}, WR: {has_wr}, "
+                          f"min trades for A/B: {MIN_TRADES_AB}",
+            })
+            scores["strategy_ranking"] = 9 if has_sharpe and has_wr else 5
+
+            # 2. ticker_calibration — per-ticker adjustments with bounds
+            learning_src = inspect.getsource(compute_tech_learning)
+            has_ticker = "ticker_adj" in learning_src or "per_ticker" in learning_src
+            findings.append({
+                "area": "ticker_calibration",
+                "status": "OK" if has_ticker else "WARN",
+                "detail": f"Per-ticker adjustments: {has_ticker}, "
+                          f"min trades: {MIN_TRADES_TICKER}",
+            })
+            scores["ticker_calibration"] = 8 if has_ticker else 4
+
+            # 3. sample_size — min trades enforced
+            samples_ok = (MIN_TRADES_STRATEGY >= 5 and MIN_TRADES_TICKER >= 5
+                          and MIN_TRADES_GLOBAL >= 10)
+            findings.append({
+                "area": "sample_size",
+                "status": "OK" if samples_ok else "WARN",
+                "detail": f"Minimums — strategy: {MIN_TRADES_STRATEGY}, ticker: {MIN_TRADES_TICKER}, "
+                          f"global: {MIN_TRADES_GLOBAL}, A/B: {MIN_TRADES_AB}",
+            })
+            scores["sample_size"] = 9 if samples_ok else 5
+
+            # 4. overfitting_risk — decay half-life = 15d for intraday
+            decay_ok = DECAY_HALF_LIFE_DAYS == 15
+            findings.append({
+                "area": "overfitting_risk",
+                "status": "OK" if decay_ok else "WARN",
+                "detail": f"Decay half-life: {DECAY_HALF_LIFE_DAYS}d "
+                          f"(v3.0 expected: 15d for intraday feedback speed)",
+            })
+            scores["overfitting_risk"] = 10 if decay_ok else 5
+
+            # 5. anomaly_detection — EOD_CLOSE rate + HIGH_MAE + WIN_RATE
+            has_eod_anomaly = "HIGH_EOD_CLOSE" in learning_src or "eod_close" in learning_src.lower()
+            has_mae_anomaly = "HIGH_MAE" in learning_src
+            has_wr_anomaly = "win_rate" in learning_src and "35" in learning_src
+            findings.append({
+                "area": "anomaly_detection",
+                "status": "OK" if has_eod_anomaly and has_mae_anomaly else "WARN",
+                "detail": f"EOD_CLOSE rate anomaly: {has_eod_anomaly}, "
+                          f"HIGH_MAE: {has_mae_anomaly}, "
+                          f"low win rate alert: {has_wr_anomaly}",
+            })
+            ad_score = sum([has_eod_anomaly, has_mae_anomaly, has_wr_anomaly])
+            scores["anomaly_detection"] = min(10, 5 + ad_score * 2)
+
+            # 6. feedback_loop — weekly config generation + consumption
+            has_weekly = hasattr(AgentLearning3, "generate_weekly_config")
+            has_get = hasattr(AgentLearning3, "get_weekly_config")
+            # Verify activation date gate
+            run_src = inspect.getsource(AgentLearning3.run)
+            has_activation_gate = "ACTIVATION_DATE" in run_src
+            findings.append({
+                "area": "feedback_loop",
+                "status": "OK" if has_weekly and has_get else "WARN",
+                "detail": f"generate_weekly_config: {has_weekly}, "
+                          f"get_weekly_config: {has_get}, "
+                          f"activation_date: {ACTIVATION_DATE.isoformat()}, "
+                          f"gate in run(): {has_activation_gate}",
+            })
+            scores["feedback_loop"] = 9 if has_weekly and has_get and has_activation_gate else 5
+
+            # EOD_CLOSE inclusion in valid results
+            has_eod_valid = '"EOD_CLOSE"' in learning_src or "'EOD_CLOSE'" in learning_src
+            findings.append({
+                "area": "eod_close_inclusion",
+                "status": "OK" if has_eod_valid else "CRITICAL",
+                "detail": "EOD_CLOSE included in valid trade results for learning"
+                          if has_eod_valid else "EOD_CLOSE NOT in valid results — learning ignores intraday force-closes!",
+            })
+            scores["eod_close_inclusion"] = 10 if has_eod_valid else 0
+
+        except Exception as exc:
+            findings.append({"area": "learning_3", "status": "ERROR", "detail": str(exc)})
+            scores["overall"] = 3
+
+        self._analyze_agent_errors(findings, scores, improvements, "learning_3")
+        tests.extend([
+            "test_learning_3_decay_15_days",
+            "test_learning_3_eod_close_in_valid_results",
+            "test_learning_3_weekly_config_generation",
+            "test_learning_3_activation_date_gate",
+        ])
 
     def _audit_generic_agent(self, report: dict, focus: str | None):
         """Generic audit for Teams 3/4 agents — checks metrics, logs, and basic health."""

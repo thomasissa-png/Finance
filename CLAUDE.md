@@ -61,7 +61,7 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 | Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
 | Infrastructure | 7.7 | Suppress transient SSL errors (INFO instead of WARN) |
 | Performance | 8.4 | Fix .values() on list crash in _compute_trader_3_kpis |
-| Auditor | 8.2 | Fix audit checks in except blocks, timedelta import, safe defaults |
+| Auditor | 8.3 | Deep audit methods for Team 3 (scoring_3, trader_3, journal_3, learning_3) |
 
 ## Architecture v7.0 — Multi-Agent par Équipes
 

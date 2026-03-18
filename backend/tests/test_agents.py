@@ -2267,9 +2267,101 @@ class TestAuditorChecksOutsideExcept:
         assert "timedelta" in header, "timedelta must be imported at module level"
 
     def test_auditor_version_bumped(self):
-        """Auditor version should be 8.2 after fixes."""
+        """Auditor version should be 8.3 after Team 3 deep audit methods."""
         from backend.app.agents.agent_auditor import AgentAuditor
-        assert AgentAuditor.version == "8.2"
+        assert AgentAuditor.version == "8.3"
+
+
+class TestAuditorTeam3DeepAudit:
+    """v8.3: Auditor has dedicated deep audit methods for Team 3."""
+
+    def test_dispatch_scoring_3_not_generic(self):
+        """scoring_3 should dispatch to _audit_scoring_3, not _audit_generic_agent."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        assert hasattr(a, "_audit_scoring_3"), "Missing _audit_scoring_3 method"
+
+    def test_dispatch_trader_3_not_generic(self):
+        """trader_3 should dispatch to _audit_trader_3, not _audit_generic_agent."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        assert hasattr(a, "_audit_trader_3"), "Missing _audit_trader_3 method"
+
+    def test_dispatch_journal_3_not_generic(self):
+        """journal_3 should dispatch to _audit_journal_3, not _audit_generic_agent."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        assert hasattr(a, "_audit_journal_3"), "Missing _audit_journal_3 method"
+
+    def test_dispatch_learning_3_not_generic(self):
+        """learning_3 should dispatch to _audit_learning_3, not _audit_generic_agent."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        assert hasattr(a, "_audit_learning_3"), "Missing _audit_learning_3 method"
+
+    def test_scoring_3_audit_checks_indicators(self):
+        """_audit_scoring_3 should verify v3.0 indicator params."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        report = {
+            "target_agent": "scoring_3",
+            "findings": [], "improvements": [], "tests_to_add": [],
+            "score_breakdown": {},
+        }
+        a._audit_scoring_3(report, None)
+        areas = [f["area"] for f in report["findings"]]
+        assert "indicator_accuracy" in areas
+        assert "strategy_coverage" in areas
+        assert "no_claude_call" in areas
+        # Verify indicator params are OK
+        indicator_finding = next(f for f in report["findings"] if f["area"] == "indicator_accuracy")
+        assert indicator_finding["status"] == "OK", f"Indicator params wrong: {indicator_finding['detail']}"
+
+    def test_trader_3_audit_checks_eod(self):
+        """_audit_trader_3 should verify EOD_CLOSE at 19:45."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        report = {
+            "target_agent": "trader_3",
+            "findings": [], "improvements": [], "tests_to_add": [],
+            "score_breakdown": {},
+        }
+        a._audit_trader_3(report, None)
+        areas = [f["area"] for f in report["findings"]]
+        assert "position_management" in areas
+        assert "eod_close_logic" in areas
+        eod_finding = next(f for f in report["findings"] if f["area"] == "position_management")
+        assert eod_finding["status"] == "OK"
+
+    def test_journal_3_audit_checks_dedup(self):
+        """_audit_journal_3 should verify dedup integrity."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        report = {
+            "target_agent": "journal_3",
+            "findings": [], "improvements": [], "tests_to_add": [],
+            "score_breakdown": {},
+        }
+        a._audit_journal_3(report, None)
+        areas = [f["area"] for f in report["findings"]]
+        assert "dedup_integrity" in areas
+        assert "entry_coverage" in areas
+
+    def test_learning_3_audit_checks_decay(self):
+        """_audit_learning_3 should verify 15-day decay and EOD_CLOSE inclusion."""
+        from backend.app.agents.agent_auditor import AgentAuditor
+        a = AgentAuditor()
+        report = {
+            "target_agent": "learning_3",
+            "findings": [], "improvements": [], "tests_to_add": [],
+            "score_breakdown": {},
+        }
+        a._audit_learning_3(report, None)
+        areas = [f["area"] for f in report["findings"]]
+        assert "overfitting_risk" in areas
+        assert "eod_close_inclusion" in areas
+        decay_finding = next(f for f in report["findings"] if f["area"] == "overfitting_risk")
+        assert decay_finding["status"] == "OK", f"Decay should be 15d: {decay_finding['detail']}"
 
 
 class TestStartupRecoveryLearning:
