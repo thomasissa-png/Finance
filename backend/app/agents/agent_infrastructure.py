@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class AgentInfrastructure(BaseAgent):
     name = "infrastructure"
     description = "Surveillance & maintenance infrastructure système"
-    version = "7.7"  # v7.7: Suppress transient SSL errors (INFO instead of WARN for non-critical issues)
+    version = "7.8"  # v7.8: Trading pipeline structural checks (entry/exit Teams 1, 2, 3)
 
     def __init__(self):
         super().__init__()
@@ -238,6 +238,9 @@ class AgentInfrastructure(BaseAgent):
 
                 # Pool stats
                 result["pool"] = self._get_pool_info()
+
+            # v7.8: Trading pipeline structural checks (Teams 1, 2, 3)
+            self._check_trading_pipelines(result)
 
             # Build recommendations
             self._build_recommendations(result)
@@ -579,6 +582,161 @@ class AgentInfrastructure(BaseAgent):
                     "area": "agent_health",
                     "action": f"Agent '{agent}' has {counts['errors']} errors in last 24h — investigate",
                 })
+
+    # ── Trading pipeline structural checks ──────────────────────────
+
+    def _check_trading_pipelines(self, result: dict) -> None:
+        """v7.8: Verify entry/exit structural integrity for Teams 1, 2 & 3.
+
+        Checks that critical exit mechanisms are wired correctly (source inspection),
+        without executing any trades. Runs during full_report (weekly).
+        """
+        checks = []
+        import inspect
+
+        # ── TEAM 1: Day Trading ──────────────────────────────────────
+        try:
+            from ..position_monitor import monitor_positions
+            pm_src = inspect.getsource(monitor_positions)
+            # P1: Trailing before SL (order matters)
+            trailing_idx = pm_src.find("trailing")
+            sl_idx = pm_src.find("SL_HIT")
+            t1_order = trailing_idx > 0 and sl_idx > 0 and trailing_idx < sl_idx
+            checks.append({
+                "team": 1, "area": "exit_order",
+                "ok": t1_order,
+                "detail": "TP → Trailing → SL → Time stop" if t1_order
+                          else "CRITICAL: SL checked before trailing stop adjustment",
+            })
+            # P2: Trailing persistence
+            t1_persist = "update_trade_stop" in pm_src
+            checks.append({
+                "team": 1, "area": "trailing_persistence",
+                "ok": t1_persist,
+                "detail": "Trailing stop persisted via update_trade_stop()" if t1_persist
+                          else "CRITICAL: trailing stop changes lost between cycles",
+            })
+            # P3: Slippage-aware R/R
+            from ..trade_selector import select_trades
+            sel_src = inspect.getsource(select_trades)
+            t1_rr = "effective_rr" in sel_src and "effective_target" in sel_src
+            checks.append({
+                "team": 1, "area": "slippage_rr",
+                "ok": t1_rr,
+                "detail": "R/R uses effective_rr after spread deduction" if t1_rr
+                          else "WARN: R/R ignores estimated spread",
+            })
+        except Exception as exc:
+            checks.append({"team": 1, "area": "import", "ok": False,
+                           "detail": f"Team 1 check failed: {exc}"})
+
+        # ── TEAM 2: Trend Following ──────────────────────────────────
+        try:
+            from .agent_trader_2 import AgentTrader2
+            # Hysteresis is in _evaluate_ticker (flip decision logic)
+            eval_src = inspect.getsource(AgentTrader2._evaluate_ticker)
+            # P1: Flip threshold with hysteresis
+            t2_hysteresis = "hysteresis" in eval_src or "hours_held" in eval_src
+            checks.append({
+                "team": 2, "area": "flip_hysteresis",
+                "ok": t2_hysteresis,
+                "detail": "Flip threshold includes hysteresis (anti-churn)" if t2_hysteresis
+                          else "WARN: no hysteresis on flip threshold",
+            })
+            # P2: Confidence decay (time-based exit) — called from run()
+            t2_run_src = inspect.getsource(AgentTrader2.run)
+            t2_decay = "_apply_confidence_decay" in t2_run_src
+            checks.append({
+                "team": 2, "area": "confidence_decay",
+                "ok": t2_decay,
+                "detail": "Confidence decay closes stale positions" if t2_decay
+                          else "WARN: no time-decay exit mechanism",
+            })
+            # P3: Price validation guard — validate_price called in run()
+            t2_price_guard = "validate_price" in t2_run_src
+            checks.append({
+                "team": 2, "area": "price_guard",
+                "ok": t2_price_guard,
+                "detail": "Price validation before position entry" if t2_price_guard
+                          else "WARN: no price guard on entry",
+            })
+        except Exception as exc:
+            checks.append({"team": 2, "area": "import", "ok": False,
+                           "detail": f"Team 2 check failed: {exc}"})
+
+        # ── TEAM 3: Technical Trading ────────────────────────────────
+        try:
+            from .agent_trader_3 import (
+                AgentTrader3, _get_tier1_trailing_buffer,
+                EOD_DEADLINE_HOUR, EOD_DEADLINE_MINUTE,
+            )
+            # P1: EOD deadline correct
+            t3_eod = EOD_DEADLINE_HOUR == 19 and EOD_DEADLINE_MINUTE == 45
+            checks.append({
+                "team": 3, "area": "eod_deadline",
+                "ok": t3_eod,
+                "detail": f"EOD deadline {EOD_DEADLINE_HOUR}:{EOD_DEADLINE_MINUTE:02d} CET"
+                          + (" (correct)" if t3_eod else " — EXPECTED 19:45!"),
+            })
+            # P2: Category-aware trailing tier 1
+            commod_buf = _get_tier1_trailing_buffer("HG=F")
+            forex_buf = _get_tier1_trailing_buffer("EURUSD=X")
+            t3_buffer = commod_buf <= -0.10 and forex_buf > commod_buf
+            checks.append({
+                "team": 3, "area": "trailing_buffer",
+                "ok": t3_buffer,
+                "detail": f"Tier 1 buffers: commodities={commod_buf}%, forex={forex_buf}%"
+                          + (" — category-aware" if t3_buffer else " — WARN: commodity buffer too tight"),
+            })
+            # P3: Regime mismatch filtering
+            eval_src = inspect.getsource(AgentTrader3._evaluate_setups)
+            t3_regime = "regime_match" in eval_src and "0.80" in eval_src
+            checks.append({
+                "team": 3, "area": "regime_filter",
+                "ok": t3_regime,
+                "detail": "Regime mismatch penalty (0.80×) applied in _evaluate_setups" if t3_regime
+                          else "WARN: regime_match not filtered in Trader 3",
+            })
+            # P4: Trailing stop persistence (always save after monitor)
+            # _save_positions is a module-level function called in run_position_monitor
+            # (the wrapper that calls _monitor_positions then saves state)
+            run_monitor_src = inspect.getsource(AgentTrader3.run_position_monitor)
+            t3_save = "_save_positions" in run_monitor_src
+            checks.append({
+                "team": 3, "area": "trailing_persistence",
+                "ok": t3_save,
+                "detail": "Positions saved after monitoring (trailing changes persist)" if t3_save
+                          else "CRITICAL: trailing stop changes lost between cycles",
+            })
+        except Exception as exc:
+            checks.append({"team": 3, "area": "import", "ok": False,
+                           "detail": f"Team 3 check failed: {exc}"})
+
+        # Aggregate
+        ok_count = sum(1 for c in checks if c["ok"])
+        total = len(checks)
+        failures = [c for c in checks if not c["ok"]]
+
+        result["trading_pipelines"] = {
+            "checks": checks,
+            "ok": ok_count,
+            "total": total,
+            "all_ok": ok_count == total,
+        }
+
+        if failures:
+            for f in failures:
+                result.setdefault("issues", []).append({
+                    "area": f"team{f['team']}_{f['area']}",
+                    "severity": "CRITICAL" if "CRITICAL" in f["detail"] else "WARN",
+                    "detail": f["detail"],
+                })
+            self.log(f"Trading pipeline checks: {ok_count}/{total} OK", {
+                "failures": [{"team": f["team"], "area": f["area"], "detail": f["detail"]}
+                             for f in failures],
+            }, level="WARN")
+        else:
+            self.log(f"Trading pipeline checks: {ok_count}/{total} OK — all teams healthy")
 
     # ── Metrics ──────────────────────────────────────────────────────
 
