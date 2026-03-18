@@ -743,10 +743,11 @@ def fetch_weather_alerts() -> list[NewsItem]:
     Frost/heat alerts are only generated during the growing season.
     Drought thresholds are zone-specific.
 
-    v8.5: Parallel execution (6 workers) for 24 zones. Sequential approach
+    v8.5: Parallel execution for 24 zones. Sequential approach
     took 60-120s on Replit (DNS cold-starts), causing budget exhaustion and
-    Open-Meteo appearing as "not_started" in 4/5 scans. Parallel reduces
-    total time to ~15-20s (24 zones / 6 workers = 4 waves × 3-5s each).
+    Open-Meteo appearing as "not_started" in 4/5 scans.
+    v8.7: Increased workers 6→12 (24 zones / 12 = 2 waves) and timeout
+    45s→90s to prevent systematic timeouts on Replit with DNS cold-starts.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -754,17 +755,17 @@ def fetch_weather_alerts() -> list[NewsItem]:
     zones_ok = 0
     zones_failed = 0
 
-    executor = ThreadPoolExecutor(max_workers=6)
+    executor = ThreadPoolExecutor(max_workers=12)
     try:
         future_to_zone = {
             executor.submit(_fetch_one_weather_zone, zone): zone
             for zone in AGRICULTURAL_ZONES
         }
 
-        for future in as_completed(future_to_zone, timeout=45):
+        for future in as_completed(future_to_zone, timeout=90):
             zone = future_to_zone[future]
             try:
-                zone_items = future.result(timeout=5)
+                zone_items = future.result(timeout=10)
                 items.extend(zone_items)
                 zones_ok += 1
             except TimeoutError:
@@ -775,15 +776,14 @@ def fetch_weather_alerts() -> list[NewsItem]:
                 zones_failed += 1
     except TimeoutError:
         completed = sum(1 for f in future_to_zone if f.done())
-        logger.warning("Weather global timeout (45s): %d/%d zones completed",
+        logger.warning("Weather global timeout (90s): %d/%d zones completed",
                        completed, len(AGRICULTURAL_ZONES))
     finally:
         # wait=False: Don't block on slow zones. On Replit, DNS cold-starts
-        # can push individual zone requests to 20-30s. With 24 zones / 6 workers
-        # = 4 waves, shutdown(wait=True) could block 60-100s total, exceeding
-        # the 75s budget of collect_structured_data() and causing "not_started".
+        # can push individual zone requests to 20-30s. With 24 zones / 12 workers
+        # = 2 waves, shutdown(wait=True) could block 40-60s total.
         # With wait=False, we return immediately with partial results (zones that
-        # completed within the 45s as_completed window). Trailing zone threads
+        # completed within the 90s as_completed window). Trailing zone threads
         # self-terminate when their HTTP timeout fires.
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -3469,7 +3469,7 @@ def collect_structured_data() -> list[NewsItem]:
     futures = _start_times
     source_item_counts: dict[str, int] = {}
     try:
-        for future in as_completed(futures, timeout=75):
+        for future in as_completed(futures, timeout=120):
             source_name, start_t = futures[future]
             latency_ms = (time.monotonic() - start_t) * 1000
             try:
@@ -3504,7 +3504,7 @@ def collect_structured_data() -> list[NewsItem]:
                     source_item_counts[name] = -2
         completed_sources = {futures[f][0] for f in futures if f.done()}
         skipped = [n for n, _ in sources if n not in completed_sources]
-        logger.warning("Structured data collection timed out (75s). "
+        logger.warning("Structured data collection timed out (120s). "
                        "Completed: %s. Skipped: %s",
                        sorted(completed_sources), skipped)
         if tracker:

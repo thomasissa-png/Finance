@@ -743,10 +743,10 @@ Headlines :
     return []
 
 
-# Max items per Claude API call — keeps processing under 30s per batch.
-# Pre-filter in news_collector caps at 50, but this is a safety net
-# in case items are injected from other sources (event triggers, etc.)
-SCORING_BATCH_SIZE = 50
+# Max items per Claude API call — keeps processing under timeout per batch.
+# Pre-filter in news_collector caps at 50, but scoring splits into batches
+# of 15 for reliable API calls (50 items caused systematic timeouts on Replit).
+SCORING_BATCH_SIZE = 15
 
 
 def score_news_batch(

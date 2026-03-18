@@ -238,7 +238,7 @@ class AgentTrader2(BaseAgent):
 
     name = "trader_2"
     description = "Trend trading — spéculateur commodities long terme"
-    version = "8.0"  # v8.0: Time-decay confidence (7j sans news → close), momentum reversal on losing streak
+    version = "8.1"  # v8.1: Fix fresh start detection — only reinit on truly empty DB, not on NEUTRAL positions from DB
 
     def __init__(self):
         super().__init__()
@@ -288,13 +288,18 @@ class AgentTrader2(BaseAgent):
                 if ticker not in positions:
                     positions[ticker] = self._init_position(ticker, info)
 
-            # Force initial LONG positions on fresh start (all NEUTRAL = no data)
-            # Trend following needs a starting position to track from
-            all_neutral = all(
+            # Force initial LONG positions on TRUE fresh start only:
+            # A fresh start is when _load_positions() returned {} (empty DB)
+            # and all positions were just created by _init_position() above.
+            # Do NOT reinitialize when positions loaded from DB happen to be NEUTRAL
+            # (that erases accumulated history/confidence).
+            freshly_created = all(
                 positions[t].get("direction") == "NEUTRAL"
+                and not positions[t].get("changes")  # No flip history = truly new
+                and not positions[t].get("entry_time")  # No entry time = never traded
                 for t in TREND_TICKERS
             )
-            if all_neutral:
+            if freshly_created:
                 self.log("Fresh start detected — initializing all positions to LONG", {
                     "tickers": list(TREND_TICKERS.keys()),
                 }, level="DECISION")

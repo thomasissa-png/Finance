@@ -370,8 +370,11 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
         # If positions exist but has_activity is False, flag it
         if len(t3_active) > 0 and not team_results["team_3"].get("has_activity"):
             team_results["team_3"]["has_activity"] = True
-    except Exception:
-        pass  # Best effort — don't break pipeline for dashboard data
+    except Exception as exc:
+        # Log the error instead of silently swallowing — stale count bug
+        logger.warning("Team 3 live position read failed: %s", exc)
+        if "team_3" not in team_results:
+            team_results["team_3"] = {"has_activity": False, "active_count": 0}
 
     # Step 7: Équipe 4 — Scoring 4 + Trader 4 (non-blocking, needs data from teams 1-3)
     try:
