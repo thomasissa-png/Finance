@@ -383,7 +383,7 @@ function ClosedPositionsToday({ closedToday }) {
     <div className="section-card">
       <div className="section-header">
         <h3>
-          Positions clôturées aujourd'hui ({closedToday.length})
+          Positions clôturées du jour ({closedToday.length})
           <span style={{ marginLeft: 10, fontSize: 13, fontWeight: 600, color: pnlColor(totalPnl) }}>
             {totalPnl > 0 ? "+" : ""}{totalPnl.toFixed(2)}%
           </span>
@@ -529,12 +529,12 @@ export default function DashboardPage({ isActive, agents }) {
       const parisNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Paris" }));
       const todayStr = `${parisNow.getFullYear()}-${String(parisNow.getMonth() + 1).padStart(2, "0")}-${String(parisNow.getDate()).padStart(2, "0")}`;
 
-      const [scanRes, perfRes, reportRes, histRes, t1Res, t2Res, t3Res, t4Res, j1TodayRes, j2Res, j3Res, j4Res] = await Promise.all([
+      const [scanRes, perfRes, reportRes, histRes, allT1Res, t2Res, t3Res, t4Res, j1TodayRes, j2Res, j3Res, j4Res] = await Promise.all([
         fetch("/api/scan/latest").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/performance").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch("/api/performance/report").then((r) => r.ok ? r.json() : null).catch(() => null),
         fetch("/api/performance/history?limit=30").then((r) => r.ok ? r.json() : []).catch(() => []),
-        fetch("/api/trades/pending").then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
@@ -543,6 +543,16 @@ export default function DashboardPage({ isActive, agents }) {
         fetch("/api/journal3/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/journal4/entries").then((r) => r.ok ? r.json() : []).catch(() => []),
       ]);
+      // Helper: check if a date string falls on today (Paris timezone)
+      const isToday = (dateStr) => {
+        if (!dateStr) return false;
+        return dateStr.startsWith(todayStr);
+      };
+
+      // Derive Team 1 pending and completed-today from all trades
+      const allT1 = Array.isArray(allT1Res) ? allT1Res : [];
+      const t1Res = allT1.filter((t) => t.result === "PENDING");
+      const t1ClosedToday = allT1.filter((t) => t.result !== "PENDING" && isToday(t.timestamp));
 
       // Only apply if this is still the most recent fetch
       if (fetchId !== fetchCountRef.current) return;
@@ -567,18 +577,33 @@ export default function DashboardPage({ isActive, agents }) {
       };
       setJournalStats({ "3": computeJournalStats(j3Res), "4": computeJournalStats(j4Res) });
 
-      // Build today's closed positions from all 4 journals
-      const isToday = (dateStr) => {
-        if (!dateStr) return false;
-        return dateStr.startsWith(todayStr);
-      };
+      // Build today's closed positions from all teams
+      // Sources: trades API (T1), journal entries (T2), positions closed array (T3/T4),
+      // plus journal entries as fallback for enriched data (MAE/MFE etc.)
       const closed = [];
-      // Team 1: journal entries for today (already date-filtered by API)
-      (Array.isArray(j1TodayRes) ? j1TodayRes : []).forEach((e) => {
+      const closedKeys = new Set();
+      // Team 1: completed trades today (from /api/trades, not just journal)
+      // This catches trades closed by position monitor BEFORE journal runs at 22h
+      t1ClosedToday.forEach((e) => {
+        const key = `c1-${e.ticker}-${e.timestamp || e.entry_time}`;
+        closedKeys.add(key);
         closed.push({
           ...e,
           _team: "1",
-          _key: `c1-${e.ticker}-${e.timestamp || e.entry_time}`,
+          _key: key,
+          _pnl: e.pnl_pct ?? null,
+          _closeTime: e.exit_time || e.timestamp,
+        });
+      });
+      // Team 1: also add journal entries for today (may have enriched data like MAE/MFE)
+      (Array.isArray(j1TodayRes) ? j1TodayRes : []).forEach((e) => {
+        const key = `c1-${e.ticker}-${e.timestamp || e.entry_time}`;
+        if (closedKeys.has(key)) return; // already added from trades
+        closedKeys.add(key);
+        closed.push({
+          ...e,
+          _team: "1",
+          _key: key,
           _pnl: e.pnl_pct ?? null,
           _closeTime: e.exit_time || e.timestamp,
         });
@@ -588,37 +613,84 @@ export default function DashboardPage({ isActive, agents }) {
         if (e.entry_type === "snapshot") return;
         const closeTime = e.exit_time || e.close_time || e.created_at;
         if (isToday(closeTime)) {
+          const key = `c2-${e.ticker}-${e.entry_time || closeTime}`;
+          if (closedKeys.has(key)) return;
+          closedKeys.add(key);
           closed.push({
             ...e,
             _team: "2",
-            _key: `c2-${e.ticker}-${e.entry_time || closeTime}`,
+            _key: key,
             _pnl: e.pnl_pct ?? null,
             _closeTime: closeTime,
             result: e.result || (e.pnl_pct > 0 ? "TP_HIT" : "SL_HIT"),
           });
         }
       });
-      // Team 3: filter entries closed today
-      (Array.isArray(j3Res) ? j3Res : []).forEach((e) => {
-        const closeTime = e.close_time || e.exit_time || e.created_at;
-        if (isToday(closeTime)) {
+      // Team 3: closed positions from trader API (available immediately, before journal runs)
+      const t3Closed = Array.isArray(t3Res?.closed) ? t3Res.closed : [];
+      t3Closed.forEach((e) => {
+        const closeTime = e.close_time || e.exit_time || e.closed_at || e.created_at;
+        if (isToday(closeTime) || isToday(e.entry_time)) {
+          const key = `c3-${e.ticker}-${e.strategy || ""}-${e.entry_time || closeTime}`;
+          if (closedKeys.has(key)) return;
+          closedKeys.add(key);
           closed.push({
             ...e,
             _team: "3",
-            _key: `c3-${e.ticker}-${e.strategy || ""}-${e.entry_time || closeTime}`,
+            _key: key,
             _pnl: e.pnl_pct ?? null,
             _closeTime: closeTime,
           });
         }
       });
-      // Team 4: filter entries closed today
-      (Array.isArray(j4Res) ? j4Res : []).forEach((e) => {
+      // Team 3: also add journal entries for today (enriched data)
+      (Array.isArray(j3Res) ? j3Res : []).forEach((e) => {
         const closeTime = e.close_time || e.exit_time || e.created_at;
         if (isToday(closeTime)) {
+          const key = `c3-${e.ticker}-${e.strategy || ""}-${e.entry_time || closeTime}`;
+          if (closedKeys.has(key)) return;
+          closedKeys.add(key);
+          closed.push({
+            ...e,
+            _team: "3",
+            _key: key,
+            _pnl: e.pnl_pct ?? null,
+            _closeTime: closeTime,
+          });
+        }
+      });
+      // Team 4: closed positions from trader API (history entries with close info)
+      const t4History = Array.isArray(t4Res?.history)
+        ? t4Res.history
+        : (t4Res && typeof t4Res === "object" && !Array.isArray(t4Res))
+          ? Object.values(t4Res).flatMap((p) => (p && Array.isArray(p.history)) ? p.history.map((h) => ({ ...h, ticker: p.ticker || h.ticker })) : [])
+          : [];
+      t4History.forEach((e) => {
+        const closeTime = e.close_time || e.exit_time || e.closed_at || e.created_at;
+        if (isToday(closeTime) || isToday(e.entry_time)) {
+          const key = `c4-${e.ticker}-${e.entry_time || closeTime}`;
+          if (closedKeys.has(key)) return;
+          closedKeys.add(key);
           closed.push({
             ...e,
             _team: "4",
-            _key: `c4-${e.ticker}-${e.entry_time || closeTime}`,
+            _key: key,
+            _pnl: e.pnl_pct ?? null,
+            _closeTime: closeTime,
+          });
+        }
+      });
+      // Team 4: also add journal entries for today (enriched data)
+      (Array.isArray(j4Res) ? j4Res : []).forEach((e) => {
+        const closeTime = e.close_time || e.exit_time || e.created_at;
+        if (isToday(closeTime)) {
+          const key = `c4-${e.ticker}-${e.entry_time || closeTime}`;
+          if (closedKeys.has(key)) return;
+          closedKeys.add(key);
+          closed.push({
+            ...e,
+            _team: "4",
+            _key: key,
             _pnl: e.pnl_pct ?? null,
             _closeTime: closeTime,
           });
@@ -627,7 +699,7 @@ export default function DashboardPage({ isActive, agents }) {
       setClosedToday(closed);
 
       // Normalize positions for all teams
-      // Team 1: /api/trades/pending returns only PENDING trades (server-side filter)
+      // Team 1: pending trades derived from /api/trades above
       const pending1 = Array.isArray(t1Res) ? t1Res : [];
       // Team 2: dict {ticker: posData} — convert to array, filter non-FLAT
       const t2Values = t2Res && typeof t2Res === "object" && !Array.isArray(t2Res) ? Object.values(t2Res) : [];
@@ -646,13 +718,14 @@ export default function DashboardPage({ isActive, agents }) {
   const refreshPositions = useCallback(async () => {
     setPosLoading(true);
     try {
-      const [t1Res, t2Res, t3Res, t4Res] = await Promise.all([
-        fetch("/api/trades/pending").then((r) => r.ok ? r.json() : []).catch(() => []),
+      const [allT1Res, t2Res, t3Res, t4Res] = await Promise.all([
+        fetch("/api/trades").then((r) => r.ok ? r.json() : []).catch(() => []),
         fetch("/api/trader2/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader3/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
         fetch("/api/trader4/positions").then((r) => r.ok ? r.json() : {}).catch(() => ({})),
       ]);
-      const pending1 = Array.isArray(t1Res) ? t1Res : [];
+      const allT1 = Array.isArray(allT1Res) ? allT1Res : [];
+      const pending1 = allT1.filter((t) => t.result === "PENDING");
       const t2Values = t2Res && typeof t2Res === "object" && !Array.isArray(t2Res) ? Object.values(t2Res) : [];
       const active2 = t2Values.filter((t) => t.direction && t.direction !== "FLAT");
       const active3 = Array.isArray(t3Res?.active) ? t3Res.active : [];
