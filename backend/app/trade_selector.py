@@ -38,7 +38,7 @@ PRE_MOVE_THRESHOLDS: dict[str, float] = {
     "actions_europe": 0.8,  # 80% — stocks gap on earnings etc
     "indices": 0.75,     # 75% — indices reflect broad sentiment, pre-move is more informative
 }
-from .economic_calendar import check_event_conflict, get_events_context
+from .economic_calendar import check_event_conflict, get_events_context, is_ticker_sensitive_to_event
 from .models import (
     Direction,
     ScanResult,
@@ -639,22 +639,14 @@ def select_trades(
             learning_state=learning_state_for_log,
         )
 
-    # ── Calendar check: block trades near major macro events ──────
-    event_conflict = check_event_conflict()
-    if event_conflict:
-        logger.warning(
-            "TRADE BLOCKED: %s imminent — no edge on macro events",
-            event_conflict.name,
-        )
-        return ScanResult(
-            scan_type=scan_type,
-            timestamp=now,
-            has_trade=False,
-            reason_no_trade=f"Événement macro imminent : {event_conflict.name} — zéro edge, trade bloqué",
-            news_analyzed=len(scored_news),
-            market_context=market_context,
-            all_scored_news=all_scored_log,
-            learning_state=learning_state_for_log,
+    # ── Calendar check: detect active macro events (per-ticker filtering below) ──
+    # Instead of blocking ALL trades globally, we check per-ticker sensitivity.
+    # E.g., BOE rate decision blocks GBP/FTSE but NOT KC=F (coffee) or ZW=F (wheat).
+    _active_macro_event = check_event_conflict()  # None if no event in window
+    if _active_macro_event:
+        logger.info(
+            "Macro event active: %s — will filter sensitive tickers only (exempt: agri/softs/livestock)",
+            _active_macro_event.name,
         )
 
     # ── Daily cap check — v4.0 D4: adaptive to VIX regime ──────
@@ -704,10 +696,31 @@ def select_trades(
         # v4.0 D1: Find ALL eligible tickers (not just first) — allows fallback if primary blocked
         eligible_for_news = [t for t in sn.impacted_tickers if t in ASSET_BY_TICKER and t in eligible_tickers]
 
+        # v8.5: Per-ticker macro event filter — only block tickers sensitive to the active event.
+        # E.g., BOE rate decision blocks GBPUSD but NOT KC=F (coffee driven by weather).
+        if _active_macro_event and eligible_for_news:
+            pre_filter_count = len(eligible_for_news)
+            eligible_for_news = [
+                t for t in eligible_for_news
+                if not is_ticker_sensitive_to_event(t, _active_macro_event)
+            ]
+            blocked_count = pre_filter_count - len(eligible_for_news)
+            if blocked_count > 0:
+                logger.info(
+                    "Macro filter: %d/%d tickers blocked for '%s' due to %s",
+                    blocked_count, pre_filter_count,
+                    sn.news.title[:50], _active_macro_event.name,
+                )
+
         if not eligible_for_news:
+            reason = (
+                f"Aucun ticker eligible pour session {scan_type.value}"
+                if not _active_macro_event
+                else f"Tickers bloqués par {_active_macro_event.name} (macro event)"
+            )
             rejection_log.append({
                 "title": sn.news.title, "ticker": sn.impacted_tickers[:3],
-                "reason": f"Aucun ticker eligible pour session {scan_type.value}",
+                "reason": reason,
                 "score": sn.total_score,
             })
             continue

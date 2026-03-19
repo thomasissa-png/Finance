@@ -162,3 +162,81 @@ def test_economic_event_frozen():
     )
     assert e.name == "Test"
     assert e.blocks_trade is True
+
+
+# ── Per-ticker sensitivity tests ─────────────────────────────────────
+
+
+def test_agri_tickers_exempt_from_rate_decisions():
+    """Agricultural commodities should NOT be blocked by central bank rate decisions."""
+    from backend.app.economic_calendar import is_ticker_sensitive_to_event, MACRO_EXEMPT_TICKERS
+
+    boe_event = EconomicEvent(
+        name="BOE Rate Decision", date=date(2026, 3, 19),
+        time_cet=time(13, 0), impact="high", currency="GBP",
+    )
+    ecb_event = EconomicEvent(
+        name="ECB Rate Decision", date=date(2026, 3, 5),
+        time_cet=time(14, 15), impact="high", currency="EUR",
+    )
+    fomc_event = EconomicEvent(
+        name="FOMC Rate Decision", date=date(2026, 3, 18),
+        time_cet=time(20, 0), impact="high", currency="USD",
+    )
+
+    # Agri/soft commodities should be exempt from ALL rate decisions
+    for ticker in ["KC=F", "ZW=F", "CC=F", "ZC=F", "ZS=F", "SB=F", "OJ=F", "LE=F", "HE=F"]:
+        assert not is_ticker_sensitive_to_event(ticker, boe_event), f"{ticker} should be exempt from BOE"
+        assert not is_ticker_sensitive_to_event(ticker, ecb_event), f"{ticker} should be exempt from ECB"
+        assert not is_ticker_sensitive_to_event(ticker, fomc_event), f"{ticker} should be exempt from FOMC"
+
+
+def test_forex_blocked_by_relevant_rate_decision():
+    """Forex tickers should be blocked by their currency's central bank."""
+    from backend.app.economic_calendar import is_ticker_sensitive_to_event
+
+    boe_event = EconomicEvent(
+        name="BOE Rate Decision", date=date(2026, 3, 19),
+        time_cet=time(13, 0), impact="high", currency="GBP",
+    )
+    assert is_ticker_sensitive_to_event("GBPUSD=X", boe_event)
+    assert is_ticker_sensitive_to_event("^FTSE", boe_event)
+    # But not EUR tickers
+    assert not is_ticker_sensitive_to_event("EURUSD=X", boe_event)
+    assert not is_ticker_sensitive_to_event("^FCHI", boe_event)
+
+
+def test_usda_blocks_agri_tickers():
+    """USDA WASDE should block agricultural commodity tickers (directly affected)."""
+    from backend.app.economic_calendar import is_ticker_sensitive_to_event
+
+    wasde_event = EconomicEvent(
+        name="USDA WASDE Report", date=date(2026, 3, 10),
+        time_cet=time(18, 0), impact="high", currency="USD",
+    )
+    # USDA WASDE directly impacts agri — should block
+    assert is_ticker_sensitive_to_event("ZW=F", wasde_event)
+    assert is_ticker_sensitive_to_event("ZC=F", wasde_event)
+    assert is_ticker_sensitive_to_event("KC=F", wasde_event)
+
+
+def test_check_event_conflict_with_exempt_ticker():
+    """check_event_conflict with ticker= should skip events the ticker is exempt from."""
+    from backend.app.economic_calendar import check_event_conflict
+
+    # Use a BOE date — 2026-03-19 at 13:00 CET
+    boe_date = date(2026, 3, 19)
+    scan_time = datetime(2026, 3, 19, 13, 30, tzinfo=PARIS_TZ)  # Within BOE window
+
+    # Without ticker → returns BOE conflict
+    conflict = check_event_conflict(scan_time)
+    assert conflict is not None
+    assert "BOE" in conflict.name
+
+    # With exempt ticker (coffee) → no conflict
+    conflict = check_event_conflict(scan_time, ticker="KC=F")
+    assert conflict is None
+
+    # With sensitive ticker (GBPUSD) → still returns conflict
+    conflict = check_event_conflict(scan_time, ticker="GBPUSD=X")
+    assert conflict is not None

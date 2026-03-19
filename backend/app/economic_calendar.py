@@ -446,12 +446,130 @@ def get_upcoming_events(target_date: date | None = None, window_days: int = 2) -
     return events
 
 
+# ── Tickers sensitive to each currency's central bank / macro events ──
+# Only these tickers are blocked during the corresponding event.
+# Commodities driven by physical supply/demand (agri, softs, livestock)
+# are NOT sensitive to rate decisions — a BOE rate change doesn't move coffee.
+# "ALL" key = events that affect everything (unused currently, reserved).
+CURRENCY_SENSITIVE_TICKERS: dict[str, set[str]] = {
+    "USD": {
+        # US indices
+        "^GSPC", "^DJI", "^IXIC", "^RUT",
+        # US stocks
+        "AAPL", "MSFT", "TSLA", "AMZN",
+        # USD forex
+        "EURUSD=X", "USDJPY=X", "GBPUSD=X", "USDCHF=X", "EURJPY=X",
+        "AUDUSD=X", "USDCNH=X",
+        # Safe havens (rate-sensitive via USD strength)
+        "GC=F", "SI=F",
+        # Energy (USD-denominated, rate-sensitive)
+        "CL=F", "BZ=F", "NG=F",
+        # Copper (macro/China proxy)
+        "HG=F",
+        # EU indices/stocks (spillover from US macro)
+        "^FCHI", "^GDAXI", "^FTSE", "^N225",
+        "TTE.PA", "MC.PA", "BNP.PA", "SAN.PA", "AI.PA", "RMS.PA", "OR.PA",
+    },
+    "EUR": {
+        # EU indices
+        "^FCHI", "^GDAXI", "^FTSE",
+        # EUR forex
+        "EURUSD=X", "EURJPY=X",
+        # Euronext stocks
+        "TTE.PA", "MC.PA", "BNP.PA", "SAN.PA", "AI.PA", "RMS.PA", "OR.PA",
+        # Safe havens (rate-sensitive)
+        "GC=F", "SI=F",
+    },
+    "GBP": {
+        # GBP forex
+        "GBPUSD=X",
+        # UK index
+        "^FTSE",
+        # Safe havens (minor spillover)
+        "GC=F", "SI=F",
+    },
+    "JPY": {
+        # JPY forex
+        "USDJPY=X", "EURJPY=X",
+        # Japan index
+        "^N225",
+        # Gold (yen carry trade unwind → gold bid)
+        "GC=F",
+    },
+    "AUD": {
+        # AUD forex
+        "AUDUSD=X",
+        # Copper (Australia = major exporter)
+        "HG=F",
+    },
+    "CNY": {
+        # CNY forex
+        "USDCNH=X",
+        # China demand proxies
+        "HG=F", "AUDUSD=X",
+        # Luxury (China consumer)
+        "MC.PA", "RMS.PA", "OR.PA",
+    },
+}
+
+# Tickers NEVER blocked by rate decisions / macro data releases.
+# These are driven by physical supply/demand, not monetary policy.
+# Weather, disease, crop reports → NOT affected by BOE/FOMC/ECB.
+MACRO_EXEMPT_TICKERS: set[str] = {
+    # Agriculture
+    "ZC=F", "ZW=F", "ZS=F",
+    # Tropical softs
+    "KC=F", "CC=F", "SB=F", "OJ=F",
+    # Livestock
+    "LE=F", "HE=F",
+    # PGMs (supply-driven, South African mines)
+    "PL=F", "PA=F",
+    # Cotton
+    "CT=F",
+    # Uranium ETF
+    "URA",
+}
+
+
+def is_ticker_sensitive_to_event(ticker: str, event: "EconomicEvent") -> bool:
+    """Check if a ticker is sensitive to a specific economic event.
+
+    Agricultural commodities (coffee, wheat, cocoa, etc.) are NOT sensitive
+    to central bank rate decisions — a BOE rate change doesn't move KC=F.
+
+    USDA reports (WASDE, Quarterly) DO block agri tickers (they directly impact them).
+    """
+    # USDA reports affect agricultural commodities — block them
+    if event.name in ("USDA WASDE Report", "USDA Quarterly Grain Stocks"):
+        agri_tickers = {"ZC=F", "ZW=F", "ZS=F", "KC=F", "CC=F", "SB=F", "OJ=F",
+                        "LE=F", "HE=F", "CT=F"}
+        # USDA blocks agri tickers + general USD-sensitive tickers
+        return ticker in agri_tickers or ticker in CURRENCY_SENSITIVE_TICKERS.get("USD", set())
+
+    # Macro-exempt tickers are never blocked by rate decisions or data releases
+    if ticker in MACRO_EXEMPT_TICKERS:
+        return False
+
+    # Check currency-specific sensitivity
+    sensitive = CURRENCY_SENSITIVE_TICKERS.get(event.currency, set())
+    if sensitive:
+        return ticker in sensitive
+
+    # Unknown currency → block conservatively
+    return True
+
+
 def check_event_conflict(
     scan_datetime: datetime | None = None,
+    ticker: str | None = None,
 ) -> EconomicEvent | None:
     """Check if a major economic event is within the danger window.
 
     Returns the conflicting event if found, None otherwise.
+
+    If ticker is provided, only returns a conflict if the ticker is
+    sensitive to the event (e.g., KC=F is NOT blocked by BOE rate decision).
+    If ticker is None, returns any active conflict (legacy global behavior).
 
     Each event type has its own window (hours_before/hours_after)
     set when the event is created. FOMC gets the widest window,
@@ -477,11 +595,20 @@ def check_event_conflict(
         window_end = event_dt + timedelta(hours=event.hours_after)
 
         if window_start <= scan_dt_paris <= window_end:
+            # If ticker provided, check if this ticker is actually sensitive
+            if ticker is not None and not is_ticker_sensitive_to_event(ticker, event):
+                logger.info(
+                    "Economic event %s active but ticker %s is exempt (not sensitive)",
+                    event.name, ticker,
+                )
+                continue
+
             logger.warning(
-                "Economic event conflict: %s at %s (scan at %s, window %s-%s)",
+                "Economic event conflict: %s at %s (scan at %s, window %s-%s%s)",
                 event.name, event_dt.strftime("%Y-%m-%d %H:%M"),
                 scan_dt_paris.strftime("%H:%M"),
                 window_start.strftime("%H:%M"), window_end.strftime("%H:%M"),
+                f", ticker={ticker}" if ticker else "",
             )
             return event
 

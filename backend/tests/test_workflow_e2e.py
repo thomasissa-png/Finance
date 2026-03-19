@@ -976,7 +976,8 @@ class TestMultiTradeSelection:
              patch("backend.app.trade_selector._count_today_trades", return_value=1), \
              patch("backend.app.trade_selector._get_recently_traded_tickers", return_value=set()), \
              patch("backend.app.trade_selector.is_market_open", return_value=True), \
-             patch("backend.app.trade_selector.validate_price", return_value=(True, "")):
+             patch("backend.app.trade_selector.validate_price", return_value=(True, "")), \
+             patch("backend.app.trade_selector.check_event_conflict", return_value=None):
             result = select_trades(scored, ScanType.EUROPE, existing_trade_ticker=["CL=F"])
         assert result.has_trade is True
         # BZ=F blocked (correlated with CL=F), only GC=F should pass
