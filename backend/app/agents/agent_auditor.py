@@ -1097,19 +1097,63 @@ class AgentAuditor(BaseAgent):
             except Exception:
                 scores["correlation_check"] = 5
 
-            # 8. Calendar blocking
+            # 8. Calendar blocking (per-ticker sensitivity v8.5)
             try:
-                from ..economic_calendar import get_upcoming_events
+                from ..economic_calendar import (
+                    get_upcoming_events, is_ticker_sensitive_to_event,
+                    MACRO_EXEMPT_TICKERS, CURRENCY_SENSITIVE_TICKERS,
+                )
                 events = get_upcoming_events()
+                # Verify per-ticker filtering works correctly
+                cal_details = [f"{len(events)} upcoming events loaded"]
+                cal_score = 8
+
+                # Check that exempt tickers set is populated
+                if not MACRO_EXEMPT_TICKERS:
+                    cal_score = 5
+                    cal_details.append("WARN: MACRO_EXEMPT_TICKERS is empty")
+                else:
+                    cal_details.append(f"{len(MACRO_EXEMPT_TICKERS)} macro-exempt tickers (agri/softs/livestock)")
+
+                # Check that currency sensitivity map covers major currencies
+                expected_currencies = {"USD", "EUR", "GBP", "JPY", "AUD", "CNY"}
+                missing = expected_currencies - set(CURRENCY_SENSITIVE_TICKERS.keys())
+                if missing:
+                    cal_score = min(cal_score, 6)
+                    cal_details.append(f"WARN: Missing currency mappings: {missing}")
+                else:
+                    cal_details.append(f"{len(CURRENCY_SENSITIVE_TICKERS)} currency sensitivity maps")
+
+                # Spot-check: agri tickers should be exempt from rate decisions
+                if events:
+                    rate_events = [e for e in events if "Rate Decision" in e.name or "LPR" in e.name]
+                    if rate_events:
+                        test_event = rate_events[0]
+                        exempt_ok = not is_ticker_sensitive_to_event("KC=F", test_event)
+                        sensitive_ok = True
+                        # Check a forex ticker is sensitive to its currency
+                        if test_event.currency == "GBP":
+                            sensitive_ok = is_ticker_sensitive_to_event("GBPUSD=X", test_event)
+                        elif test_event.currency == "EUR":
+                            sensitive_ok = is_ticker_sensitive_to_event("EURUSD=X", test_event)
+                        elif test_event.currency == "USD":
+                            sensitive_ok = is_ticker_sensitive_to_event("EURUSD=X", test_event)
+                        if exempt_ok and sensitive_ok:
+                            cal_details.append(f"Per-ticker filter OK: KC=F exempt from {test_event.name}, forex sensitive")
+                            cal_score = max(cal_score, 9)
+                        else:
+                            cal_score = min(cal_score, 5)
+                            cal_details.append(f"CRITICAL: Per-ticker filter broken (exempt={exempt_ok}, sensitive={sensitive_ok})")
+
                 findings.append({
                     "area": "calendar_blocking",
-                    "status": "OK",
-                    "detail": f"Economic calendar active, {len(events)} upcoming events loaded",
+                    "status": "OK" if cal_score >= 7 else "WARN",
+                    "detail": " | ".join(cal_details),
                 })
-                scores["calendar_blocking"] = 8
-            except Exception:
+                scores["calendar_blocking"] = cal_score
+            except Exception as exc:
                 scores["calendar_blocking"] = 5
-                findings.append({"area": "calendar_blocking", "status": "WARN", "detail": "Cannot verify calendar"})
+                findings.append({"area": "calendar_blocking", "status": "WARN", "detail": f"Cannot verify calendar: {exc}"})
 
         except Exception as exc:
             findings.append({"area": "trader", "status": "ERROR", "detail": str(exc)})
