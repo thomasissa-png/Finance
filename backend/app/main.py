@@ -83,6 +83,19 @@ _journal_lock = threading.Lock()
 _reset_cooldown_until: datetime | None = None
 RESET_SCAN_COOLDOWN_MINUTES = 5
 
+# v8.6: Scan dispatch tracking — records when each scan was dispatched today
+# Used by the watchdog to detect missed scans
+_scan_dispatch_times: dict[str, datetime] = {}
+_scan_dispatch_lock = threading.Lock()
+
+# Expected scan schedule (hour, minute) for watchdog detection
+_EXPECTED_SCANS = {
+    "europe": (7, 50),
+    "mid_session": (11, 15),
+    "us": (14, 50),
+    "us_session": (17, 0),
+}
+
 
 def _load_scans_cache() -> dict[str, dict]:
     """Load last scan results (#34). Uses PostgreSQL when available.
@@ -338,6 +351,10 @@ def _run_scheduled_scan(scan_key: str) -> None:
         logger.warning("Scheduled scan '%s' blocked — weekend", scan_key)
         return
 
+    # v8.6: Track dispatch time for watchdog
+    with _scan_dispatch_lock:
+        _scan_dispatch_times[scan_key] = now_paris
+
     def _scan_worker():
         with _running_scans_lock:
             if scan_key in _running_scans:
@@ -352,6 +369,7 @@ def _run_scheduled_scan(scan_key: str) -> None:
             with _scans_lock:
                 _last_scans[scan_key] = result
                 _save_scans_cache(_last_scans)
+            logger.info("Scheduled scan '%s' completed successfully", scan_key)
         except Exception as exc:
             logger.error("Scheduled scan '%s' failed: %s", scan_key, exc)
         finally:
@@ -550,6 +568,60 @@ def _run_daily_journal() -> None:
 
     thread = threading.Thread(target=_journal_worker, daemon=True, name="daily-journal")
     thread.start()
+
+
+def _run_scan_watchdog() -> None:
+    """v8.6: Detect and retrigger missed scans.
+
+    Runs every 30 minutes. Checks if expected scans for today have actually
+    dispatched. If a scan should have run by now but hasn't (no dispatch record
+    AND no result in _last_scans for today), retrigger it.
+
+    This catches: Replit container sleep beyond misfire_grace_time, APScheduler
+    internal errors, and any other silent scan drops.
+    """
+    now_paris = datetime.now(PARIS_TZ)
+    # Only run on weekdays during trading hours
+    if now_paris.weekday() >= 5 or now_paris.hour < 8 or now_paris.hour >= 20:
+        return
+
+    today_str = now_paris.strftime("%Y-%m-%d")
+
+    for scan_key, (expected_hour, expected_minute) in _EXPECTED_SCANS.items():
+        # Skip scans that haven't reached their scheduled time yet
+        # Give 20 minutes margin (scan at 17:00, watchdog checks from 17:20)
+        expected_time = now_paris.replace(hour=expected_hour, minute=expected_minute, second=0)
+        if now_paris < expected_time + timedelta(minutes=20):
+            continue
+
+        # Check 1: Was the scan dispatched today?
+        dispatched_today = False
+        with _scan_dispatch_lock:
+            dispatch_time = _scan_dispatch_times.get(scan_key)
+            if dispatch_time and dispatch_time.strftime("%Y-%m-%d") == today_str:
+                dispatched_today = True
+
+        if dispatched_today:
+            continue
+
+        # Check 2: Does _last_scans have a result from today for this key?
+        has_result_today = False
+        with _scans_lock:
+            scan_data = _last_scans.get(scan_key)
+            if scan_data and isinstance(scan_data, dict):
+                ts = scan_data.get("timestamp", "")
+                if today_str in str(ts):
+                    has_result_today = True
+
+        if has_result_today:
+            continue
+
+        # Scan was missed — retrigger it
+        logger.warning(
+            "WATCHDOG: scan '%s' (expected %02d:%02d CET) was NOT dispatched today — retriggering now",
+            scan_key, expected_hour, expected_minute,
+        )
+        _run_scheduled_scan(scan_key)
 
 
 def _run_weekly_source_review() -> None:
@@ -951,13 +1023,18 @@ async def lifespan(app: FastAPI):
     # if the app crashes mid-scan, a 10 min window would re-trigger the scan
     # immediately on restart, causing another crash. 60s is enough for normal
     # cold-start delays without re-triggering after a crash.
-    # misfire_grace_time=300 (5 min) — Replit may sleep the container and wake it
-    # after the scheduled time. A 5-minute window ensures the scan still runs after
-    # a brief sleep, without risk of crash loops (night guard blocks >20h CET anyway).
-    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=300)
-    bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=300)
-    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=300)
-    bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=300)
+    # misfire_grace_time=900 (15 min) — Replit may sleep the container for several
+    # minutes around scheduled scan times. 5 min was too short — a sleep from 16:55
+    # to 17:06 CET caused us_session_scan to be silently dropped by APScheduler.
+    # 15 min covers typical Replit sleep cycles without crash loop risk (night guard
+    # blocks >20h CET anyway, and scans are idempotent).
+    bg_scheduler.add_job(_run_europe_scan, CronTrigger(hour=7, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="europe_scan", misfire_grace_time=900)
+    bg_scheduler.add_job(_run_mid_session_scan, CronTrigger(hour=11, minute=15, day_of_week="mon-fri", timezone="Europe/Paris"), id="mid_session_scan", misfire_grace_time=900)
+    bg_scheduler.add_job(_run_us_scan, CronTrigger(hour=14, minute=50, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_scan", misfire_grace_time=900)
+    bg_scheduler.add_job(_run_us_session_scan, CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone="Europe/Paris"), id="us_session_scan", misfire_grace_time=900)
+    # v8.6: Scan watchdog — detects and retriggers missed scans every 30 minutes
+    # Runs at :25 and :55 to avoid collision with scans themselves (:50, :00, :15)
+    bg_scheduler.add_job(_run_scan_watchdog, CronTrigger(minute="25,55", hour="8-19", day_of_week="mon-fri", timezone="Europe/Paris"), id="scan_watchdog", misfire_grace_time=60)
     # Daily journal at 22:00 CET — auto-close trades + generate journal, weekdays only
     # misfire_grace_time=3600 (1h) — journal is pure data processing (no external API calls),
     # so crash loops are not a concern. A long grace period ensures the journal runs even
