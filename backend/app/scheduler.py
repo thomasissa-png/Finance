@@ -39,12 +39,14 @@ def _get_pending_trade_tickers() -> list[str]:
         return []
 
 
-def run_scan(scan_type: ScanType, max_retries: int = 1,
+def run_scan(scan_type: ScanType, max_retries: int = 2,
              existing_trade_ticker: list[str] | str | None = None) -> dict:
     """Execute a full scan pipeline via agents: News → Scoring → Trader.
 
     v6.0: Delegates to run_scan_pipeline() which chains the agents.
-    Retries on non-API errors.
+    v8.5: Increased max_retries from 1→2 (3 attempts total). On PG transient
+    errors, resets the connection pool between retries so the next attempt gets
+    fresh connections. 2s delay between retries for PG to stabilize.
     """
     for attempt in range(max_retries + 1):
         try:
@@ -58,7 +60,17 @@ def run_scan(scan_type: ScanType, max_retries: int = 1,
             logger.error("Scan %s failed (attempt %d/%d): %s",
                          scan_type.value, attempt + 1, max_retries + 1, exc)
             if attempt < max_retries:
-                logger.info("Retrying immediately (attempt %d)...", attempt + 2)
+                # v8.5: Reset PG pool on transient errors before retrying
+                exc_str = str(exc).lower()
+                if any(kw in exc_str for kw in ("ssl", "connection", "operational")):
+                    try:
+                        from .database import reset_pool
+                        reset_pool()
+                    except Exception:
+                        pass
+                import time
+                time.sleep(2)
+                logger.info("Retrying scan (attempt %d)...", attempt + 2)
             else:
                 logger.error("All %d attempts failed for %s scan",
                              max_retries + 1, scan_type.value)

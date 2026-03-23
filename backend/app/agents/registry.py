@@ -164,6 +164,30 @@ def get_all_status() -> list[dict]:
 
 # ── Orchestration ──────────────────────────────────────────────────────
 
+def _is_pg_transient_error(exc: Exception) -> bool:
+    """Check if an exception is a transient PostgreSQL error (SSL drop, connection reset).
+
+    These errors occur when Replit restarts the network or PG proxy, killing all
+    SSL connections simultaneously. The fix is to reset the pool and retry.
+    """
+    try:
+        import psycopg2
+        if isinstance(exc, psycopg2.OperationalError):
+            return True
+    except ImportError:
+        pass
+    exc_str = str(exc).lower()
+    return any(keyword in exc_str for keyword in (
+        "ssl connection has been closed",
+        "connection already closed",
+        "server closed the connection unexpectedly",
+        "could not connect to server",
+        "connection refused",
+        "connection reset",
+        "broken pipe",
+    ))
+
+
 def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
     """Execute the full scan pipeline: News → Scoring → Teams.
 
@@ -174,12 +198,63 @@ def run_scan_pipeline(scan_type, existing_trade_ticker=None) -> dict:
     4. Équipe 3: Scoring 3 → Learning 3 cache → Trader 3
     5. Équipe 4: Scoring 4 → Learning 4 cache → Trader 4
 
+    v8.5: Top-level try/except with PG pool recovery. If a transient PG error
+    (SSL drop, connection reset) crashes the pipeline, reset the pool and retry
+    once. This prevents a 5-minute DB outage from silently killing the scan.
+
     Args:
         scan_type: ScanType enum (EUROPE / US)
         existing_trade_ticker: Tickers already traded today
 
     Returns: Full scan result dict
     """
+    try:
+        return _run_scan_pipeline_inner(scan_type, existing_trade_ticker)
+    except Exception as exc:
+        if _is_pg_transient_error(exc):
+            logger.error(
+                "CRITICAL: Scan pipeline crashed on PG transient error: %s — "
+                "resetting pool and retrying once", exc,
+            )
+            try:
+                from ..database import reset_pool
+                reset_pool()
+                time.sleep(2)  # Brief pause for PG to stabilize
+                return _run_scan_pipeline_inner(scan_type, existing_trade_ticker)
+            except Exception as retry_exc:
+                logger.error(
+                    "CRITICAL: Scan pipeline retry also failed: %s", retry_exc,
+                )
+                from datetime import datetime, timezone
+                error_result = {
+                    "scan_type": scan_type.value,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "has_trade": False,
+                    "reason_no_trade": f"PG connection failure (retry failed): {str(retry_exc)[:200]}",
+                    "news_analyzed": 0,
+                    "pipeline_error": True,
+                    "error_type": type(retry_exc).__name__,
+                }
+                _append_scan_result(error_result, {})
+                return error_result
+        # Non-PG error — still catch to prevent silent failure
+        logger.error("CRITICAL: Scan pipeline crashed: %s", exc, exc_info=True)
+        from datetime import datetime, timezone
+        error_result = {
+            "scan_type": scan_type.value,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "has_trade": False,
+            "reason_no_trade": f"Pipeline error: {str(exc)[:200]}",
+            "news_analyzed": 0,
+            "pipeline_error": True,
+            "error_type": type(exc).__name__,
+        }
+        _append_scan_result(error_result, {})
+        return error_result
+
+
+def _run_scan_pipeline_inner(scan_type, existing_trade_ticker=None) -> dict:
+    """Inner scan pipeline logic (called by run_scan_pipeline with error recovery)."""
     _ensure_agents()
 
     agent_news = _agents["news"]

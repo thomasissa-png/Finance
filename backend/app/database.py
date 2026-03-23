@@ -163,6 +163,27 @@ def close_pool():
             _last_conn_use = 0.0
 
 
+def reset_pool():
+    """Force-reset the connection pool after a transient failure (e.g. SSL drop).
+
+    v8.5: When all PG connections die simultaneously (Replit SSL reset, network
+    hiccup), the pool holds dead connections. This destroys the entire pool so
+    the next get_conn() call creates a fresh one with live connections.
+
+    Safe to call from any thread — uses the same lock as pool creation.
+    """
+    global _pool, _last_conn_use
+    with _pool_lock:
+        if _pool is not None:
+            logger.warning("Force-resetting PG connection pool (all connections presumed dead)")
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+            _pool = None
+            _last_conn_use = 0.0
+
+
 @contextmanager
 def get_conn():
     """Get a connection from the pool as a context manager.
