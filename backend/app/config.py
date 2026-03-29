@@ -1,0 +1,573 @@
+"""Configuration: 39 assets and application settings."""
+
+from dataclasses import dataclass
+
+SCAN_TIMES = {
+    "europe": "07:50",       # CET — 10 min avant ouverture Euronext
+    "mid_session": "11:15",  # CET — mid-session EU, capte PMIs + meteo matin
+    "us": "14:50",           # CET — 20 min apres release macro US (ex 14:30 = conflit NFP/CPI)
+    "us_session": "17:00",   # CET — US mid-session, capte EIA/ISM/WASDE + reaction open
+}
+
+# Mapping scan cache keys to scan type (asset eligibility)
+# mid_session uses europe assets, us_session uses US assets
+SCAN_KEY_TO_TYPE: dict[str, str] = {
+    "europe": "europe",
+    "mid_session": "europe",
+    "us": "us",
+    "us_session": "us",
+    "post_eia": "us",  # Wednesday 16:45 post-EIA — separate key to avoid conflict with 17:00
+}
+
+TARGET_PERCENT = 0.5  # Objectif minimum de mouvement en % (baisse de 1.0 — adapte levier 5-10x, 0.5% x 10x = 5%)
+MIN_RISK_REWARD = 1.2  # Ratio risque/rendement minimum (ex 1.3 — 1.2 plus realiste en intraday)
+NEWS_MAX_AGE_HOURS = 8  # Ignorer les news de plus de 8h (ex 6h — elargi pour capter overnight US au scan Europe 07:50)
+# v7.7: Extended window for structured data sources (EIA, USDA, NOAA, etc.)
+# These publish at fixed schedules — a USDA report at 22:00 UTC is still relevant at 07:50 CET
+STRUCTURED_SOURCE_MAX_AGE_HOURS = 18
+# Sources that use the extended window
+STRUCTURED_SOURCES = {"EIA", "USDA", "USDA FAS", "NOAA", "Open-Meteo", "CFTC", "GIE_AGSI",
+                      "NASA_EONET", "NASA_POWER", "WOAH", "SHFE", "FedWatch", "GNEWS"}
+NEWS_FRESHNESS_PEAK_HOURS = 2  # Score max si < 2h
+MIN_SCORE_THRESHOLD = 20  # Score minimum pour recommander un trade (ex 25 — capte les signaux mid-range)
+
+# ── Multi-trade per scan (v3.5) ──────────────────────────────────
+# No per-scan cap — all valid candidates pass. Only a daily cap limits exposure.
+MAX_TRADES_PER_DAY = 6  # Cap journalier global pour limiter l'exposition
+
+# ── Position sizing (v3.6) ──────────────────────────────────────
+BASE_POSITION_SIZE_PCT = 2.0    # Base position size: 2% of capital
+KELLY_FRACTION = 0.25           # Quarter-Kelly for safety
+MAX_POSITION_SIZE_PCT = 5.0     # Never risk more than 5% on a single trade
+MIN_POSITION_SIZE_PCT = 0.5     # Minimum position size
+
+DEFAULT_SOURCE_WEIGHT = 0.75
+
+# ── Edge-priority: score multipliers par categorie ──────────────
+# Reflete l'edge REEL du systeme sur chaque type de news.
+# Les earnings/macro sont deja pricees par les algos → on penalise fortement.
+# Les signaux physiques (commodity, meteo) ont un delai de transmission → on booste.
+CATEGORY_SCORE_MULTIPLIERS: dict[str, float] = {
+    "earnings":      0.2,   # Quasi zero-edge — deja price en pre-market
+    "macro":         0.3,   # Algos HFT dominent — on n'a aucun avantage
+    "geopolitical":  1.3,   # Fort edge si signal early — delai de pricing 1-6h
+    "regulatory":    0.7,   # v5.2: Baisse de 0.9 — reglementation rarement en avance (export bans = supply_chain)
+    "m_a":           0.5,   # v5.2: Baisse de 0.7 — desk M&A ont l'info avant les medias
+    "sector":        1.2,   # Liens indirects = edge reel — le marche connecte lentement
+    "commodity":     1.5,   # Edge max — signaux physiques (meteo, shipping, stocks)
+    "weather":       1.6,   # Fort edge mais faux-positifs possibles sur previsions
+    "supply_chain":  1.6,   # Disruptions logistiques — delai de pricing long
+    "central_bank_subtle": 0.8,  # Speeches/minutes secondaires — edge faible mais non nul
+    "other":         0.5,   # v5.2: Baisse de 0.8 — force Claude a mieux categoriser
+}
+
+# ── News category multipliers for calibration (#7) ────────────
+NEWS_CATEGORY_MULTIPLIERS: dict[str, dict[str, float]] = {
+    "earnings":             {"target_mult": 0.8,  "stop_mult": 1.2},  # Petit target, large stop — peu de conviction
+    "macro":                {"target_mult": 0.8,  "stop_mult": 1.3},  # Idem — terrain hostile
+    "geopolitical":         {"target_mult": 1.15, "stop_mult": 1.2},  # Target ambitieux, stop large (vol)
+    "regulatory":           {"target_mult": 0.95, "stop_mult": 1.1},
+    "m_a":                  {"target_mult": 1.2,  "stop_mult": 1.0},
+    "sector":               {"target_mult": 1.1,  "stop_mult": 1.0},
+    "commodity":            {"target_mult": 1.2,  "stop_mult": 1.05},  # Commodities physiques — gros moves possibles
+    "weather":              {"target_mult": 1.3,  "stop_mult": 1.0},   # Meteo = moves directionnels forts
+    "supply_chain":         {"target_mult": 1.2,  "stop_mult": 1.1},
+    "central_bank_subtle":  {"target_mult": 0.9,  "stop_mult": 1.1},
+    "other":                {"target_mult": 1.0,  "stop_mult": 1.0},
+}
+
+# ── Correlation groups (#22) ──────────────────────────────────
+CORRELATION_GROUPS: dict[str, list[str]] = {
+    "energy": ["TTE.PA", "CL=F", "BZ=F", "NG=F"],
+    "gold_safe": ["GC=F", "SI=F", "USDCHF=X"],
+    "risk_on_eu": ["^FCHI", "^GDAXI", "^FTSE"],
+    "risk_on_us": ["^GSPC", "^DJI", "^IXIC", "^RUT"],
+    "jpy_carry": ["USDJPY=X", "EURJPY=X", "^N225"],
+    "luxury": ["MC.PA", "RMS.PA", "OR.PA"],
+    "agri": ["ZC=F", "ZW=F", "ZS=F"],
+    "tropical_soft": ["KC=F", "SB=F", "CC=F", "OJ=F"],  # Same tropical zones (Brazil, West Africa)
+    "livestock": ["LE=F", "HE=F"],  # Same disease/feed cost drivers
+    "pgm": ["PL=F", "PA=F"],  # Platinum Group Metals — same South African mines
+    "china_proxy": ["USDCNH=X", "HG=F", "AUDUSD=X"],  # P3-2: China demand complex
+}
+
+# ── Chain reactions: effets de second ordre ─────────────────────
+# Quand une news impacte un actif, ces liens indirects sont souvent en retard.
+CHAIN_REACTIONS: dict[str, list[dict[str, str]]] = {
+    # Energie
+    "CL=F":  [
+        {"ticker": "TTE.PA", "direction": "same", "reason": "Stocks existants valent plus / producteur oil major"},
+        {"ticker": "BZ=F", "direction": "same", "reason": "Brent correle au WTI"},
+        {"ticker": "NG=F", "direction": "same", "reason": "Energie correle"},
+    ],
+    "BZ=F":  [{"ticker": "CL=F", "direction": "same", "reason": "WTI correle au Brent"}],
+    "NG=F":  [
+        {"ticker": "CL=F", "direction": "same", "reason": "Energie correle — substitution gaz/petrole"},
+        {"ticker": "TTE.PA", "direction": "same", "reason": "Producteur gaz majeur"},
+    ],
+    # Metaux / safe haven
+    "GC=F":  [
+        {"ticker": "SI=F", "direction": "same", "reason": "Argent suit l'or"},
+        {"ticker": "USDCHF=X", "direction": "inverse", "reason": "CHF safe haven correle a l'or"},
+        {"ticker": "EURUSD=X", "direction": "same", "reason": "Or monte = dollar faiblit = EUR/USD monte"},
+        {"ticker": "USDJPY=X", "direction": "inverse", "reason": "Or monte = risk-off = yen se renforce"},
+    ],
+    # Agriculture — memes zones de production
+    "ZC=F":  [
+        {"ticker": "ZS=F", "direction": "same", "reason": "Soja meme zone de production (Midwest)"},
+        {"ticker": "ZW=F", "direction": "same", "reason": "Rotation des cultures — memes terres"},
+        {"ticker": "LE=F", "direction": "inverse", "reason": "Mais monte = feed cost hausse = pression sur betail"},
+        {"ticker": "HE=F", "direction": "inverse", "reason": "Mais monte = feed cost hausse = pression sur porc"},
+    ],
+    "ZW=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Rotation cultures — prix ble tire mais"},
+        {"ticker": "ZS=F", "direction": "same", "reason": "Rotation cultures — memes terres Midwest/Argentine"},
+        {"ticker": "LE=F", "direction": "inverse", "reason": "Ble monte = feed cost hausse = pression sur betail"},
+        {"ticker": "HE=F", "direction": "inverse", "reason": "Ble monte = feed cost hausse = pression sur porc"},
+    ],
+    "KC=F":  [
+        {"ticker": "SB=F", "direction": "same", "reason": "Memes planteurs bresil — sucre et cafe"},
+        {"ticker": "CC=F", "direction": "same", "reason": "Cafe et cacao = soft tropicaux, memes pressions climatiques"},
+    ],
+    "SB=F":  [
+        {"ticker": "KC=F", "direction": "same", "reason": "Memes zones bresiliennes — cafe et sucre"},
+    ],
+    "CC=F":  [
+        {"ticker": "KC=F", "direction": "same", "reason": "Cacao et cafe = soft tropicaux, memes zones Afrique/Bresil"},
+        {"ticker": "SB=F", "direction": "same", "reason": "Soft commodities tropicales correles"},
+    ],
+    "OJ=F":  [
+        {"ticker": "SB=F", "direction": "same", "reason": "Jus d'orange et sucre — Bresil/Floride, meteo tropicale"},
+    ],
+    "CT=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Coton et mais — competition terres US South"},
+    ],
+    # Betail — feed demand + disease contagion
+    "LE=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Betail = demande de mais (feed) — hausse betail tire le mais"},
+        {"ticker": "HE=F", "direction": "same", "reason": "Meme filiere elevage, memes risques sanitaires"},
+    ],
+    "HE=F":  [
+        {"ticker": "ZC=F", "direction": "same", "reason": "Porc = demande de mais/soja (feed)"},
+        {"ticker": "LE=F", "direction": "same", "reason": "Meme filiere elevage, risques sanitaires communs"},
+    ],
+    # Geopolitique Moyen-Orient
+    "USDJPY=X": [
+        {"ticker": "GC=F", "direction": "inverse", "reason": "Risk-off: yen monte = or monte"},
+    ],
+    # Luxe / consommation Chine
+    "MC.PA": [
+        {"ticker": "RMS.PA", "direction": "same", "reason": "Meme exposition consommateur chinois"},
+        {"ticker": "OR.PA", "direction": "same", "reason": "Luxe/beaute — meme clientele"},
+    ],
+    # PGM (Platinum Group Metals) — same mines in South Africa
+    "PL=F":  [
+        {"ticker": "PA=F", "direction": "same", "reason": "Memes mines sud-africaines — disruption PGM impacte les deux"},
+    ],
+    "PA=F":  [
+        {"ticker": "PL=F", "direction": "same", "reason": "Memes mines sud-africaines — disruption PGM impacte les deux"},
+    ],
+    # Cuivre = indicateur industriel
+    "HG=F":  [
+        {"ticker": "^GSPC", "direction": "same", "reason": "Cuivre = proxy activite industrielle"},
+        {"ticker": "^FCHI", "direction": "same", "reason": "Cuivre = proxy activite industrielle EU"},
+        {"ticker": "AUDUSD=X", "direction": "same", "reason": "Australie 4e producteur cuivre — AUD correle"},
+        {"ticker": "USDCNH=X", "direction": "inverse", "reason": "Chine 1er importateur cuivre — CNH monte quand demande forte"},
+    ],
+    # P3-2: China yuan — demand indicator
+    "USDCNH=X": [
+        {"ticker": "HG=F", "direction": "inverse", "reason": "Yuan fort = Chine achete plus de commodities"},
+        {"ticker": "AUDUSD=X", "direction": "inverse", "reason": "Yuan deprecie = AUD sous pression (Chine 1er client)"},
+    ],
+}
+
+# ── Estimated bid-ask spread by ticker (in %) ─────────────────
+# Used to filter out trades where the spread eats the target.
+# Also sets the minimum stop-loss floor (can't stop tighter than spread).
+ESTIMATED_SPREADS: dict[str, float] = {
+    # Forex: tight spreads (major pairs)
+    "EURUSD=X": 0.01, "GBPUSD=X": 0.02, "USDJPY=X": 0.01, "AUDUSD=X": 0.02,
+    "USDCHF=X": 0.02, "EURJPY=X": 0.03, "USDCNH=X": 0.05,
+    # Major indices: tight
+    "^GSPC": 0.02, "^DJI": 0.02, "^IXIC": 0.02, "^RUT": 0.05,
+    "^FCHI": 0.03, "^GDAXI": 0.03, "^FTSE": 0.03, "^N225": 0.05,
+    # Euronext stocks: moderate
+    "MC.PA": 0.05, "OR.PA": 0.05, "AI.PA": 0.05, "SAN.PA": 0.05,
+    "TTE.PA": 0.04, "BNP.PA": 0.05, "RMS.PA": 0.06,
+    # Energy: tight-moderate
+    "CL=F": 0.03, "BZ=F": 0.04, "NG=F": 0.10,
+    # Metals: moderate
+    "GC=F": 0.03, "SI=F": 0.05, "HG=F": 0.05,
+    "PL=F": 0.10, "PA=F": 0.15,  # PGM: illiquid
+    # Agri: moderate-wide
+    "ZC=F": 0.05, "ZW=F": 0.05, "ZS=F": 0.05,
+    "KC=F": 0.10, "SB=F": 0.08, "CC=F": 0.12, "CT=F": 0.08,
+    "OJ=F": 0.20, "LE=F": 0.10, "HE=F": 0.10,
+    # ETFs
+    "URA": 0.08,
+}
+DEFAULT_SPREAD = 0.10  # Default for unknown tickers
+
+# ── Scan trigger cooldown in seconds (#35) ────────────────────
+TRIGGER_COOLDOWN_SECONDS = 300  # 5 minutes entre deux triggers manuels
+
+# ── Schema version (#42) ──────────────────────────────────────
+SCHEMA_VERSION = 3  # v3: ML learning improvements
+
+
+@dataclass(frozen=True)
+class Asset:
+    ticker: str
+    name: str
+    category: str
+    currency: str
+
+
+ASSETS: list[Asset] = [
+    # ── ACTIONS EURONEXT PARIS (7) ───────────────────────────────
+    Asset("MC.PA", "LVMH", "actions_europe", "EUR"),
+    Asset("OR.PA", "L'Oréal", "actions_europe", "EUR"),
+    Asset("AI.PA", "Air Liquide", "actions_europe", "EUR"),
+    Asset("SAN.PA", "Sanofi", "actions_europe", "EUR"),
+    Asset("TTE.PA", "TotalEnergies", "actions_europe", "EUR"),
+    Asset("BNP.PA", "BNP Paribas", "actions_europe", "EUR"),
+    Asset("RMS.PA", "Hermès", "actions_europe", "EUR"),
+    # Removed: CS.PA (AXA), CAP.PA (Capgemini), VIE.PA (Veolia), DG.PA (Vinci),
+    # EN.PA (Bouygues), SU.PA (Schneider), SAF.PA (Safran), RI.PA (Pernod)
+    # — zero edge: no dedicated source, no chain reaction,
+    # no commodity/weather link. Only reachable via generic RSS/yfinance.
+    # ── MÉTAUX PRÉCIEUX (4) ──────────────────────────────────────
+    Asset("GC=F", "Or", "metaux", "USD"),
+    Asset("SI=F", "Argent", "metaux", "USD"),
+    Asset("PL=F", "Platine", "metaux", "USD"),   # Covered by GNews "mine strike South Africa" query
+    Asset("PA=F", "Palladium", "metaux", "USD"),  # Covered by GNews "mine strike South Africa" + Russia sanctions
+    # ── FOREX (6) ────────────────────────────────────────────────
+    Asset("EURUSD=X", "EUR/USD", "forex", "USD"),
+    Asset("GBPUSD=X", "GBP/USD", "forex", "USD"),
+    Asset("USDJPY=X", "USD/JPY", "forex", "JPY"),
+    Asset("AUDUSD=X", "AUD/USD", "forex", "USD"),
+    Asset("USDCHF=X", "USD/CHF", "forex", "CHF"),
+    # Removed: USDCAD=X, NZDUSD=X, EURGBP=X — no dedicated source, no chain reaction
+    Asset("EURJPY=X", "EUR/JPY", "forex", "JPY"),
+    # P3-2: China offshore yuan — key for China demand/policy signals
+    Asset("USDCNH=X", "USD/CNH", "forex", "CNH"),
+    # ── COMMODITIES — v5.2: split into sub-categories for learning granularity ──
+    # Energy (3)
+    Asset("CL=F", "Pétrole WTI", "commodities_energy", "USD"),
+    Asset("BZ=F", "Pétrole Brent", "commodities_energy", "USD"),
+    Asset("NG=F", "Gaz Naturel", "commodities_energy", "USD"),
+    # Agriculture (4)
+    Asset("ZC=F", "Maïs", "commodities_agri", "USD"),
+    Asset("ZW=F", "Blé", "commodities_agri", "USD"),
+    Asset("ZS=F", "Soja", "commodities_agri", "USD"),
+    Asset("CT=F", "Coton", "commodities_agri", "USD"),
+    # Tropical softs (4)
+    Asset("KC=F", "Café", "commodities_soft", "USD"),
+    Asset("SB=F", "Sucre", "commodities_soft", "USD"),
+    Asset("CC=F", "Cacao", "commodities_soft", "USD"),
+    Asset("OJ=F", "Jus d'Orange", "commodities_soft", "USD"),
+    # Industrial metals (1)
+    Asset("HG=F", "Cuivre", "commodities_industrial", "USD"),
+    # Livestock (2)
+    Asset("LE=F", "Bétail Vivant", "commodities_livestock", "USD"),
+    Asset("HE=F", "Porc Maigre", "commodities_livestock", "USD"),
+    # P3-2: Uranium — energy transition + geopolitical hedge
+    Asset("URA", "Uranium ETF", "commodities_energy", "USD"),
+    # ── INDICES (8) ──────────────────────────────────────────────
+    Asset("^FCHI", "CAC 40", "indices", "EUR"),
+    Asset("^GSPC", "S&P 500", "indices", "USD"),
+    Asset("^DJI", "Dow Jones", "indices", "USD"),
+    Asset("^IXIC", "Nasdaq", "indices", "USD"),
+    Asset("^RUT", "Russell 2000", "indices", "USD"),
+    Asset("^GDAXI", "DAX", "indices", "EUR"),
+    Asset("^FTSE", "FTSE 100", "indices", "GBP"),
+    Asset("^N225", "Nikkei 225", "indices", "JPY"),  # Kept: jpy_carry correlation group
+    # Removed: ^IBEX, ^FTSEMIB — in risk_on_eu but no dedicated source (^FCHI + ^GDAXI suffisent)
+    # Removed: ^HSI (Hang Seng), ^AXJO (ASX 200) — no dedicated source, no chain reaction
+]
+
+ASSET_BY_TICKER = {a.ticker: a for a in ASSETS}
+
+# ── Market hours (CET) — used by Trader 3 to validate entry timing ──
+# Only assets with restricted trading hours are listed.
+# Forex, commodities (CME Globex), and US indices (futures) trade nearly 24h — not restricted.
+# Format: (open_hour, open_minute, close_hour, close_minute) in Europe/Paris timezone.
+MARKET_HOURS: dict[str, tuple[int, int, int, int]] = {
+    # Euronext Paris: 09:00 - 17:30 CET
+    "MC.PA": (9, 0, 17, 30),
+    "OR.PA": (9, 0, 17, 30),
+    "AI.PA": (9, 0, 17, 30),
+    "SAN.PA": (9, 0, 17, 30),
+    "TTE.PA": (9, 0, 17, 30),
+    "BNP.PA": (9, 0, 17, 30),
+    "RMS.PA": (9, 0, 17, 30),
+    # CAC 40 / DAX / FTSE indices: use futures open times (8:00 CET)
+    # Cash indices open at 9:00 but futures trade from 8:00 — prices are valid from 8:00
+    "^FCHI": (8, 0, 17, 30),
+    "^GDAXI": (8, 0, 17, 30),
+    "^FTSE": (8, 0, 17, 30),
+    # Nikkei: 01:00 - 07:00 CET (TSE hours in CET: 00:00-06:00 + some buffer)
+    "^N225": (1, 0, 7, 0),
+    # US equities: 15:30 - 22:00 CET (NYSE/NASDAQ regular hours)
+    "AAPL": (15, 30, 22, 0),
+    "MSFT": (15, 30, 22, 0),
+    "TSLA": (15, 30, 22, 0),
+    "AMZN": (15, 30, 22, 0),
+    # US indices: futures trade nearly 24h on CME Globex, no restriction needed
+    # Commodities: CME Globex, ICE — near 24h, no restriction needed
+    # Forex: 24h Sun-Fri, no restriction needed
+}
+
+
+def is_market_open(ticker: str) -> bool:
+    """Check if the market for this ticker is currently open (Europe/Paris timezone)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    hours = MARKET_HOURS.get(ticker)
+    if hours is None:
+        return True  # No restriction = always tradeable (forex, commodities, US futures)
+    open_h, open_m, close_h, close_m = hours
+    now = datetime.now(ZoneInfo("Europe/Paris"))
+    # Weekend check
+    if now.weekday() >= 5:
+        return False
+    current = now.hour * 60 + now.minute
+    market_open = open_h * 60 + open_m
+    market_close = close_h * 60 + close_m
+    return market_open <= current <= market_close
+
+
+CATEGORIES = {
+    "actions_europe": "Actions Euronext Paris",
+    "metaux": "Métaux Précieux",
+    "forex": "Forex",
+    "commodities_energy": "Énergie",
+    "commodities_agri": "Agriculture",
+    "commodities_soft": "Soft Commodities",
+    "commodities_industrial": "Métaux Industriels",
+    "commodities_livestock": "Bétail",
+    "indices": "Indices Boursiers",
+}
+
+# ── Session filtering: which assets are eligible per scan ────────
+# Europe scan: Euronext + EUR/GBP indices + global (metals, forex, commodities)
+# US scan: USD/JPY/HKD/AUD indices + global (metals, forex, commodities)
+EUROPE_INDEX_CURRENCIES = {"EUR", "GBP"}
+US_INDEX_CURRENCIES = {"USD", "JPY", "HKD", "AUD", "CNH"}
+
+
+def assets_for_session(scan_type_value: str) -> set[str]:
+    """Return the set of tickers eligible for a given scan session."""
+    tickers: set[str] = set()
+    for a in ASSETS:
+        if a.category == "actions_europe":
+            # European stocks: only in Europe scan
+            if scan_type_value == "europe":
+                tickers.add(a.ticker)
+        elif a.category == "indices":
+            # Indices: filter by currency
+            if scan_type_value == "europe" and a.currency in EUROPE_INDEX_CURRENCIES:
+                tickers.add(a.ticker)
+            elif scan_type_value == "us" and a.currency in US_INDEX_CURRENCIES:
+                tickers.add(a.ticker)
+        else:
+            # Metals, forex, commodities: available in both sessions
+            tickers.add(a.ticker)
+    return tickers
+
+
+# ── G2: Market holidays — journal skips these dates ────────────
+# Major market closures where no trading occurs.
+# US holidays (NYSE/CME closed) + Euronext closures.
+MARKET_HOLIDAYS_2025 = {
+    "2025-01-01",  # New Year's Day
+    "2025-01-20",  # MLK Jr Day (US)
+    "2025-02-17",  # Presidents' Day (US)
+    "2025-04-18",  # Good Friday (US+EU)
+    "2025-04-21",  # Easter Monday (EU)
+    "2025-05-01",  # Labour Day (EU)
+    "2025-05-26",  # Memorial Day (US)
+    "2025-06-19",  # Juneteenth (US)
+    "2025-07-04",  # Independence Day (US)
+    "2025-09-01",  # Labor Day (US)
+    "2025-11-27",  # Thanksgiving (US)
+    "2025-12-25",  # Christmas (US+EU)
+    "2025-12-26",  # Boxing Day (EU)
+}
+
+MARKET_HOLIDAYS_2026 = {
+    "2026-01-01",  # New Year's Day
+    "2026-01-19",  # MLK Jr Day (US)
+    "2026-02-16",  # Presidents' Day (US)
+    "2026-04-03",  # Good Friday (US+EU)
+    "2026-04-06",  # Easter Monday (EU)
+    "2026-05-01",  # Labour Day (EU)
+    "2026-05-25",  # Memorial Day (US)
+    "2026-06-19",  # Juneteenth (US)
+    "2026-07-03",  # Independence Day observed (US)
+    "2026-09-07",  # Labor Day (US)
+    "2026-11-26",  # Thanksgiving (US)
+    "2026-12-25",  # Christmas (US+EU)
+    "2026-12-26",  # Boxing Day (EU)
+}
+
+MARKET_HOLIDAYS = MARKET_HOLIDAYS_2025 | MARKET_HOLIDAYS_2026
+
+
+def is_market_holiday(date_str: str) -> bool:
+    """Check if a date string (YYYY-MM-DD) is a known market holiday."""
+    return date_str in MARKET_HOLIDAYS
+
+
+NEWS_CATEGORIES = [
+    "earnings", "macro", "geopolitical", "regulatory",
+    "m_a", "sector", "commodity", "weather",
+    "supply_chain", "central_bank_subtle", "other",
+]
+
+RSS_FEEDS = [
+    # ── Phase 3: medias mainstream (information deja traitee par les algos) ──
+    # Reuters: feeds.reuters.com deprecated (DNS dead). BBC Business as replacement.
+    "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "https://feeds.bbci.co.uk/news/rss.xml",
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+    "https://www.investing.com/rss/news.rss",
+]
+
+# ── Phase 1 feeds: early-signal sources (data brute, avant interpretation) ──
+# Verified 2026-03-09 — 20 feeds (replaced 4 dead: drought.gov 404, climate.gov 404, NASS SSL, splash247 SSL)
+EARLY_SIGNAL_FEEDS = [
+    # Meteo / Agri — signaux physiques pour commodities
+    # drought.gov/rss 404 since 2026-03. Covered by Open-Meteo drought API + NWS alerts.
+    "https://www.spc.noaa.gov/products/spcrss.xml",                # SPC: severe weather outlooks, tornado/storm watches
+    "https://www.weather.gov/rss_page.php?site_name=nws",          # NWS national weather summary
+    "https://api.weather.gov/alerts/active.atom",                   # NWS active alerts (CAP v1.2 ATOM)
+    "https://www.nhc.noaa.gov/index-at.xml",                       # NHC: Atlantic hurricane advisories (Jun-Nov critical for oil/sugar)
+    # climate.gov archived June 2025, feeds dead. ENSO/outlooks covered by Open-Meteo + NWS.
+    # USDA / FAO — rapports sur les recoltes et stocks
+    # nass.usda.gov/rss SSL errors since 2026-03. USDA data covered by USDA NASS/WASDE APIs in data_apis.py.
+    "https://www.fao.org/feeds/fao-newsroom-rss",                   # FAO: food security, agriculture, crop reports
+    # Geopolitique — OSINT, conflits, sanctions, defense
+    # defense.gov redirects to war.gov since 2025. Single entry (was 2 — redundant fallback wasted a thread).
+    "https://www.war.gov/DesktopModules/ArticleCS/RSS.ashx?max=10&ContentType=1&Site=945",  # war.gov (ex Defense.gov): military ops, geopolitics
+    "https://www.iaea.org/feeds/pressalerts",                       # IAEA: nuclear, sanctions, inspections
+    # Energie
+    "https://www.eia.gov/rss/todayinenergy.xml",                   # EIA: energy analysis, stocks commentary
+    "https://oilprice.com/rss/main",                               # OilPrice: crude, gas, OPEC
+    # Maritime / Shipping — perturbations supply chain
+    "https://gcaptain.com/feed/",                                   # gCaptain: maritime (intermittent 403)
+    "https://www.marinelink.com/news/rss",                          # MarineLink: shipping, maritime, offshore
+    "https://www.maritime-executive.com/articles.rss",              # Maritime Executive: shipping disruptions
+    "https://www.hellenicshippingnews.com/feed/",                    # Hellenic Shipping News: global shipping, freight, BDI (replaces dead splash247)
+    # Canal chokepoints — Panama transit disruptions = supply chain + oil
+    # Removed: suezcanal.gov.eg — HTML page, NOT an RSS feed (always fails to parse)
+    "https://pancanal.com/en/feed/",                               # ACP: Panama Canal Authority (draft restrictions, transit delays)
+    # Central banks — speeches et minutes (signaux dovish/hawkish subtils)
+    "https://www.ecb.europa.eu/rss/press.xml",                     # ECB: press releases RSS (was .html — returned HTML not XML)
+    "https://www.federalreserve.gov/feeds/press_all.xml",
+    "https://www.bankofengland.co.uk/rss/speeches",                 # BoE: verified working (200)
+    # ── P2-1: China data sources — key demand driver for commodities ──
+    # Removed 2026-03-10: caixin.com/api/dataapi — persistent timeouts, unreliable API endpoint
+    # Removed 2026-03-10: xinhuanet.com/english/rss — 404 (domain/path changed)
+    "http://english.www.gov.cn/policies/latestreleases/rss.xml",   # China State Council: policy announcements, trade decisions
+    # ── P3-3: Government gazettes — export bans, tariffs, regulations ──
+    "https://www.federalregister.gov/documents/search.atom?conditions%5Bagencies%5D%5B%5D=international-trade-commission&conditions%5Btype%5D%5B%5D=RULE",  # US Federal Register: trade rules, tariffs
+    # Removed 2026-03-10: eur-lex.europa.eu — persistent timeouts
+]
+
+# ── Source weights: early-signal sources get premium weight ──────
+SOURCE_WEIGHTS: dict[str, float] = {
+    # Phase 0: structured data APIs (premium — donnees chiffrees, pas du texte)
+    "Open-Meteo": 1.2,
+    "open-meteo": 1.2,
+    "CFTC": 1.1,      # Raised from 1.05: positioning extremes (>8pp weekly swing) are genuinely market-moving
+    "cftc": 1.1,
+    "Options Flow": 1.0,  # Raised from 0.95: put/call extremes + IV skew = smart money hedging
+    # Phase 1: early-signal (premium — info pas encore pricee)
+    "USDA": 1.1,
+    "usda": 1.1,
+    "NASS": 1.1,
+    "nass": 1.1,
+    "FAO": 1.05,
+    "fao.org": 1.05,
+    "NOAA": 1.1,
+    "NCEI": 1.1,
+    "ncei": 1.1,
+    "drought.gov": 1.1,
+    "climate.gov": 1.1,
+    "Storm Prediction Center": 1.1,
+    "spc.noaa.gov": 1.1,
+    "National Weather Service": 1.1,
+    "weather.gov": 1.1,
+    "api.weather.gov": 1.1,
+    "EIA": 1.15,
+    "eia.gov": 1.15,
+    "IAEA": 1.05,
+    "iaea.org": 1.05,
+    "Defense.gov": 1.05,
+    "defense.gov": 1.05,
+    "war.gov": 1.05,  # Defense.gov redirects to war.gov
+    "ECB": 1.0,
+    "ecb.europa.eu": 1.0,
+    "Federal Reserve": 1.0,
+    "federalreserve.gov": 1.0,
+    "Bank of England": 1.0,
+    "bankofengland": 1.0,
+    "gCaptain": 1.05,
+    "gcaptain": 1.05,
+    "MarineLink": 1.05,
+    "marinelink": 1.05,
+    "Maritime Executive": 1.05,
+    "maritime-executive": 1.05,
+    "OilPrice": 0.9,   # Lowered from 1.0: news aggregator, not primary source (often lags EIA/OPEC)
+    "oilprice": 0.9,
+    "Hellenic Shipping News": 1.05,
+    "hellenicshippingnews": 1.05,
+    # Removed: Suez Canal source weight — HTML page, not RSS (dead source)
+    "Panama Canal": 1.1,
+    "pancanal": 1.1,
+    "SHFE": 1.1,               # Shanghai Futures Exchange inventories
+    "shfe": 1.1,
+    "FedWatch": 1.0,           # CME FedWatch implied rates
+    "NHC": 1.15,                # Hurricane advisories — critical for oil/sugar
+    "nhc.noaa.gov": 1.15,
+    "National Hurricane Center": 1.15,
+    "NASA EONET": 1.1,         # Natural events tracker — wildfires, storms, volcanoes
+    "GIE AGSI": 1.15,          # Raised from 1.1: European gas storage — critical for NG/energy, especially winter
+    # Phase 3: mainstream (info deja traitee — poids reduits)
+    "BBC": 0.85,
+    "bbc": 0.85,
+    "reuters": 0.85,
+    "Reuters": 0.85,
+    "CNBC": 0.9,
+    "cnbc": 0.9,
+    "Investing.com": 0.7,
+    "investing": 0.7,
+    "Yahoo Finance": 0.8,
+    # P1-5: WOAH animal disease alerts
+    "WOAH": 1.15,
+    "woah": 1.15,
+    # P2-2: Satellite vegetation monitoring
+    "NASA POWER": 1.15,
+    # P2-3: Freight/shipping
+    "Freight Index": 1.1,
+    # P2-4: LME proxy
+    "LME Proxy": 1.05,
+    # P3-1: Chokepoint/shipping
+    "Shipping Proxy": 1.1,
+    # P3-5: Dark pool
+    "Dark Pool Proxy": 1.0,
+    # P2-1: China sources
+    "Caixin": 1.0,
+    "caixin": 1.0,
+    "NBS China": 1.05,
+    "PBOC": 1.0,
+    "Xinhua Finance": 0.95,
+    # Team 2 audit: new sources
+    "USDA FAS": 1.1,        # Export sales — weekly, directly market-moving
+    "Plant Disease": 1.1,    # Crop disease alerts — structural supply signal
+    "plant_disease": 1.1,
+    "Google News": 0.85,     # Aggregator — used for coverage gap queries
+    "google_news": 0.85,
+}

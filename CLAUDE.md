@@ -1,0 +1,1325 @@
+# OneShot News Trading System — v6.1 Multi-Agent Architecture
+
+## Philosophie fondamentale (CRUCIAL)
+**Notre edge est sur les signaux EN AVANCE DE PHASE — pas les news que tout le monde commente.**
+
+Le systeme est concu pour detecter les **dislocations non encore pricees** par le marche :
+- Un rapport meteo NOAA sur une secheresse au Midwest → impact ble/mais 6-12h avant que le marche reagisse
+- Un gel au Bresil capte par bulletin local → cafe/sucre avant que Bloomberg reprenne l'info
+- Un rapport USDA sur les stocks → commodities physiques avant que les traders de futures reagissent
+- Un mouvement militaire capte par OSINT → petrole/or avant les medias mainstream
+
+**Ce qu'on NE cherche PAS :**
+- Earnings / resultats d'entreprise → deja prices en pre-market/after-hours par les algos HFT
+- Decisions de taux / NFP / CPI → les algos reagissent en microsecondes, zero edge
+- Headlines CNN/BBC/trending Twitter → 100% des participants ont deja vu
+
+**REGLE ABSOLUE — Commodities :**
+On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity ne marchent pas, le probleme est dans le scoring ou l'analyse — PAS dans la categorie elle-meme. Le learning ne doit JAMAIS penaliser les commodities en tant que classe. Les ajustements se font au niveau ticker+newscat (granulaire), jamais au niveau categorie d'actif pour les commodities.
+
+## Philosophie de versioning des agents (CRUCIAL — v8.2)
+
+**Chaque agent a une version** (`version` class attribute) qui DOIT être incrémentée à chaque changement de logique métier.
+
+### Principe fondamental
+**Ce qui compte, c'est la performance de chaque VERSION de l'agent, pas la performance historique globale.**
+- Un trade produit par Scorer v7.3 + Trader v6.5 n'a rien à voir avec un trade produit par des versions antérieures
+- Mélanger les données de versions différentes contamine le learning et empêche de mesurer le progrès réel
+- Chaque version DOIT être évaluée indépendamment pour savoir si les changements ont amélioré ou dégradé la performance
+
+### Règles de versioning
+1. **Versioner** : À chaque changement de logique (scoring, sélection, calibration, learning, etc.), incrémenter la `version` de l'agent concerné
+2. **Stamper** : Chaque trade est stamped avec `agent_versions` — un dict des versions de tous les agents actifs au moment de la création
+3. **Filtrer** : Le Learning ne considère QUE les trades produits par les versions ACTUELLES du scorer et du trader. Les trades pré-v8.2 (sans `agent_versions`) sont gardés par compatibilité mais naturellement down-weightés par le decay temporel
+4. **Mesurer** : L'Agent Performance segmente ses KPIs par version courante
+5. **Nouveaux agents** : tout nouvel agent DOIT déclarer une `version` et suivre ces règles
+
+### Impact sur le learning
+- `_filter_by_current_versions()` dans `learning.py` filtre les trades par version scorer+trader
+- `build_performance_summary()` (feedback Claude) ne montre que la performance de la version courante
+- L'Agent Performance (`_compute_trader_1_kpis`) filtre aussi par version
+
+### Versions actuelles
+| Agent | Version | Dernier changement |
+|-------|---------|-------------------|
+| News | 7.7 | news_zone on EIA/USDA/SHFE sources |
+| Scoring | 7.6 | S1-P2 signal accumulator race fix, S1-P4 fallback validation |
+| Scoring 2 | 8.2 | Thread-safe tokens, LRU cache cap, dead code cleanup, fallback validation |
+| Scoring 3 | 2.3 | Configurable params, parallel intraday, pivot_type fix, log exceptions |
+| Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
+| Trader 1 | 6.7 | Enhanced logging (max_score, top_headline), save_trade error handling |
+| Trader 2 | 7.7 | Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once |
+| Trader 3 | 2.2 | Market hours validation, live entry price fetch, price cross-validation |
+| Trader 4 | 2.1 | Always-save after monitor, stale stop_price fix |
+| Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
+| Journal 2 | 7.2 | Atomic single-write (PG vs JSON branch), no triple write |
+| Journal 3 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
+| Journal 4 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
+| Learning 1 | 5.5 | Per-source performance tracking in Claude feedback |
+| Learning 2 | 7.4 | Zone+intensity-aware newscat cross-dimension |
+| Learning 3 | 2.1 | Weekly config disk persistence (survives restart) |
+| Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
+| Infrastructure | 7.7 | Suppress transient SSL errors (INFO instead of WARN) |
+| Performance | 8.3 | Cascade-safe daily report (individual try/except per KPI section) |
+| Auditor | 8.2 | Fix audit checks in except blocks, timedelta import, safe defaults |
+
+## Architecture v7.0 — Multi-Agent par Équipes
+
+### Philosophie "Équipes de Trading"
+Le système est organisé en **équipes autonomes**. Chaque équipe a son propre trader, journal et learning, formant une boucle fermée d'exécution et d'apprentissage. Les agents partagés (News, Scoring, Auditeur) alimentent toutes les équipes.
+
+Le framework est conçu pour ajouter facilement de nouvelles équipes : créer un trio trader/journal/learning, les enregistrer dans le registry, wirer le scheduler, et l'auditeur les couvrira automatiquement via ses profils.
+
+### 21 Agents Autonomes (`backend/app/agents/`)
+
+| Agent | Fichier | Équipe | Rôle |
+|-------|---------|--------|------|
+| **News** | `agent_news.py` | Partagé | Collecte, dédup, santé sources, event detection |
+| **Scoring** | `agent_scoring.py` | Partagé | Score Claude, formule edge, chain reactions |
+| **Scoring 2** | `agent_scoring_2.py` | Équipe 2 | Re-pondération trend, multiplicateurs structurels, accumulation |
+| **Scoring 3** | `agent_scoring_3.py` | Équipe 3 | Indicateurs techniques (RSI, MACD, Bollinger, etc.) sur 20 tickers |
+| **Scoring 4** | `agent_scoring_4.py` | Équipe 4 | Meta-scoring confluence Teams 1+2+3 |
+| **Trader 1** | `agent_trader.py` | Équipe 1 | Day trading intraday, TP/SL, risk mgmt |
+| **Trader 2** | `agent_trader_2.py` | Équipe 2 | Trend following commodities, positions longue durée |
+| **Trader 3** | `agent_trader_3.py` | Équipe 3 | Trading technique multi-stratégie, positions heures à 3 jours |
+| **Trader 4** | `agent_trader_4.py` | Équipe 4 | Ensemble confluence-driven, sizing par niveau de confluence |
+| **Journal 1** | `agent_journal.py` | Équipe 1 | Clôture trades 22h, P&L, MAE/MFE |
+| **Journal 2** | `agent_journal_2.py` | Équipe 2 | Journal des flips, MAE/MFE daily bars |
+| **Journal 3** | `agent_journal_3.py` | Équipe 3 | Journal positions techniques, analyse A/B par stratégie |
+| **Journal 4** | `agent_journal_4.py` | Équipe 4 | Journal positions meta, analyse par combinaison de sources |
+| **Learning 1** | `agent_learning.py` | Équipe 1 | 6 dimensions learning, anomalie detection |
+| **Learning 2** | `agent_learning_2.py` | Équipe 2 | 4 dimensions learning trend, calibration seuil |
+| **Learning 3** | `agent_learning_3.py` | Équipe 3 | 3 dimensions (stratégie, ticker, timeframe), ranking stratégies |
+| **Learning 4** | `agent_learning_4.py` | Équipe 4 | Optimisation poids, combinaison d'équipes, confluence |
+| **Infrastructure** | `agent_infrastructure.py` | Partagé | Santé PG, maintenance VACUUM, fallbacks, timeouts |
+| **Performance** | `agent_performance.py` | Partagé | KPIs tous agents (incl. Teams 3/4), tendances, ranking, alertes |
+| **Auditeur** | `agent_auditor.py` | Partagé | Audit profondeur, note /10, 22 profils |
+| **UX** | (virtuel) | Partagé | Frontend React |
+
+### Équipe 1 — Day Trading Intraday
+- **Trader 1** : news trading, 0-1 trade par scan, TP/SL intraday, 41 actifs
+- **Journal 1** : ferme les PENDING à 22h, prix réels 15min/1h bars, MAE/MFE/slippage
+- **Learning 1** : 6 dimensions (ticker×cat, session, newscat+ticker, régime VIX, direction, delay_bias)
+- **Boucle** : Journal 1 → Learning 1 → cache invalidé → Trader 1 utilise au prochain scan
+
+### Équipe 2 — Trend Following Commodities
+- **Scoring 2** : re-pondération des news scorées par Scoring 1 avec multiplicateurs trend-spécifiques (catégories weather/supply_chain boostées, persistence structurelle, magnitude privilegiée). NE rappelle PAS Claude — pur re-weighting. Publie accumulation directionnelle par ticker.
+- **Trader 2** : positions LONG/SHORT sur 4 commodities (HG=F, CC=F, KC=F, ZW=F), consomme l'accumulation de Scoring 2 (évite double-counting), flips sur signal fort
+- **Journal 2** : enrichit chaque flip avec MAE/MFE via daily bars, snapshots quotidiens
+- **Learning 2** : 4 dimensions (per-ticker, per-newscat, per-direction, signal calibration)
+- **Boucle** : Journal 2 → Learning 2 → cache invalidé → Trader 2 utilise au prochain scan
+- **Feedback loop** : Learning 2 ajuste les poids de signal par ticker/newscat/direction + seuil de flip adaptatif (base 20, ×threshold_adj)
+
+### Équipe 3 — Technical Indicators Trading (v2.1)
+- **Scoring 3** (v2.1) : indicateurs techniques (RSI 14/21, MACD 12/26/9, Bollinger 20/2, SMA/EMA 20/50/200, Stochastic 14/3, ADX 14) sur 20 tickers liquides. NE rappelle PAS Claude — pur calcul. Utilise market_data.py (Twelve Data + yfinance fallback). **11 stratégies** : 6 simples (rsi_reversal, macd_crossover, bollinger_squeeze, ma_trend, momentum_divergence, stochastic_reversal) + **5 combos** (rsi_macd_combo, bollinger_stoch_combo, ma_rsi_macd_combo, rsi_bollinger_combo, macd_ma_combo). Multi-timeframe (daily primary + 1h confirmation). Paramètres configurables via weekly_config de Learning 3. Filtre de régime trending/ranging par stratégie. Confidence basée sur signal count + régime + volume (pas score * 0.9). Pivot-based momentum divergence (pas closes[-5] fixe). **Combos** : scores de base plus élevés (60-65 vs 35-50) car confluence = conviction plus forte. Combos A/B testés comme les singles via Learning 3.
+- **Trader 3** (v2.0) : positions multiples (max 10), holding 1-3 jours, TP/SL/trailing stop **per-strategy** (J2), A/B testing des stratégies. Consomme Learning 3 (strategy_adj, ticker_adj, timeframe_adj) + **weekly_config** (enabled strategies, budgets). **Correlation check** (P8) entre positions dans le même groupe. **agent_versions** (P6) stamped sur chaque position. **Dynamic MAX_PER_STRATEGY** (J4) : strategies validées obtiennent plus de budget (6 vs 4). **strategy_version** (J1) pour tracking des paramètres.
+- **Journal 3** (v2.0) : journalise les positions fermées, MAE/MFE, **R/R réalisé** (L4), **Sharpe ratio** par stratégie (L5), **weekly summary** (L1/C5), regime match tracking. Dedup par (ticker, strategy, entry_time) — **corrigé PG ON CONFLICT** (était ticker+entry_time, ne matchait pas UNIQUE constraint). Persistence PG (tech_journal_entries) + JSON.
+- **Learning 3** (v2.0) : 5 dimensions (per-strategy, per-ticker, per-timeframe, per-regime, **AB-test → ajustements réels**). **Weekly config generation** (C3) : validation dimanche soir, enable/disable stratégies, poids par stratégie, budgets dynamiques. AB-test ranking basé sur WR 30% + avg_pnl 40% + **Sharpe 30%** (L5). **Parameter change tracking** (L2). Anomaly detection (overtrading, consecutive losses, MAE). Bounds [0.6, 1.4], decay 30j.
+- **Boucle quotidienne** : Journal 3 → Learning 3 → cache invalidé → Trader 3 utilise au prochain scan
+- **Boucle hebdomadaire** (dimanche 20h30) : Learning 3 → generate_weekly_config → Scoring 3 + Trader 3 consomment au scan suivant
+- **20 tickers** : EURUSD=X, GBPUSD=X, USDJPY=X, AUDUSD=X, ^GSPC, ^FCHI, ^GDAXI, GC=F, CL=F, BZ=F, HG=F, SI=F, ZC=F, ZW=F, AAPL, MSFT, TSLA, AMZN, BNP.PA, TTE.PA
+- **Persistence** : Tables PG `tech_positions` + `tech_journal_entries` + fallback JSON
+- **API** : `POST /api/learning3/weekly-config` (génère), `GET /api/learning3/weekly-config` (consulte), `GET /api/journal3/weekly-summary`
+
+### Équipe 4 — Meta/Ensemble Trading
+- **Mission** : combiner les learnings des 3 équipes pour trouver les meilleures combinaisons de signaux. Objectif 80% WR. Trades 0-3 jours. AB testing hebdomadaire. Activation lundi 2026-03-16.
+- **Scoring 4** : combine les signaux des Teams 1 (news), 2 (trend), 3 (technique) en meta-scores unifiés par ticker. Poids par défaut (news=0.35, trend=0.25, tech=0.40), optimisés par Learning 4 weekly_config. Confluence detection : 2/3 teams agree → 1.2x boost, 3/3 → 1.5x boost. Tie LONG/SHORT → NEUTRAL (v2.0). NE rappelle PAS Claude — pure agrégation.
+- **Trader 4** : positions confluence-driven (min confluence level 2), sizing adapté (3/3=100%, 2/3=50%), max 6 positions, holding max 72h (0-3 jours). TP/SL par confluence (3/3=3%, 2/3=2%, SL=1.5%), trailing stop (activation 1%, distance 0.7%). Correlation groups (11 groupes). Agent versions sur chaque position. Consomme Learning 4 (combo_adj, ticker_adj, confluence_adj, duration_adj, weight optimization, weekly_config).
+- **Journal 4** : journalise les positions fermées, tracking par combinaison de sources (ex: "news+trend+tech"), analyse par niveau de confluence. Sharpe ratio par combo (v2.0). Duration category (intraday/overnight/multi_day). Close type tracking (TP_HIT/SL_HIT/EXPIRED/REVERSAL/SIGNAL). Weekly summary pour validation Learning 4. Dedup par (ticker, entry_time). Persistence PG (meta_journal_entries) + JSON.
+- **Learning 4** : 5 dimensions (combo, ticker, confluence, duration, weight optimization). Weekly config generation dimanche 20h45 CET. AB testing vs config précédente. Target WR 80%. Config history (10 dernières). Anomaly detection (BELOW_TARGET, WEAK_COMBO, STREAK, HIGH_MAE, CONFLUENCE_PARADOX). Bounds [0.6, 1.4], decay 45j.
+- **Boucle** : Journal 4 → Learning 4 → poids optimisés → Scoring 4/Trader 4 utilisent au prochain scan
+- **Boucle hebdomadaire** : Dimanche 20h45 → Learning 4 generate_weekly_config() → freeze weights + validated combos → Scoring 4 + Trader 4 utilisent la semaine suivante
+- **Dépendance upstream** : démarre uniquement le 2026-03-16. Nécessite ≥2 sources actives (sur 3: news, trend, tech). Graceful degradation.
+- **Persistence** : Tables PG `meta_positions` + `meta_journal_entries` + fallback JSON
+
+### Infrastructure agents
+- **`base.py`** : `BaseAgent` — logging structuré, message bus, status tracking, `execute()` wrapper
+- **`registry.py`** : 21 singletons (4 équipes + infra + perf + audit), orchestration News → Scoring → per-team branches, helpers pour les 4 équipes
+- **Agent Infrastructure** (`agent_infrastructure.py`) : surveillance continue de l'infrastructure système
+  - Health check toutes les 15 min : connexion PG, pool, pending trades, fallback JSON
+  - Maintenance quotidienne 23h : VACUUM ANALYZE, pruning agent tables, stats
+  - Rapport hebdomadaire dimanche 21h : tendances taille tables, erreurs récurrentes, recommandations
+  - Détection divergence JSON/PG, trades stuck PENDING, table bloat
+  - API : `GET /api/infrastructure/health`, `POST /api/infrastructure/maintenance`, `GET /api/infrastructure/report`
+  - Audit : profil `infrastructure` — 8 checks
+- **Message Bus** : `agent_messages` (PG) — communication inter-agents async
+- **Logs structurés** : `agent_logs` (PG) — niveaux INFO/WARN/ERROR/DECISION, visibles frontend
+- **Audit Reports** : `audit_reports` (PG) + `data/audit_reports.json` (fallback) — persistés entre sessions
+
+### Pipeline quotidien complet (22h CET)
+```
+Journal 1 (ferme trades PENDING)
+  → Learning 1 (recalcule 6 dimensions)
+  → Journal 2 (enrichit flips Trader 2 avec MAE/MFE)
+  → Learning 2 (recalcule 4 dimensions trend)
+  → Journal 3 (journalise positions techniques fermées)
+  → Learning 3 (recalcule 3 dimensions technique)
+  → Journal 4 (journalise positions meta fermées)
+  → Learning 4 (optimise poids, recalcule 5 dimensions)
+  → Cache scan vidé
+  → Infrastructure maintenance 23h (VACUUM, pruning, stats)
+```
+
+### Pipeline hebdomadaire (dimanche CET)
+```
+20:00 — Weekly source review (Agent News)
+20:30 — Team 3 weekly config (Learning 3 → Scoring 3/Trader 3)
+20:45 — Team 4 weekly config (Learning 4 → Scoring 4/Trader 4)
+21:00 — Infrastructure report
+21:30 — Performance weekly trends
+```
+
+### Pipeline scan (4x/jour)
+```
+News → Scoring → [Learning 1 cache] → Trader 1
+              → Scoring 2 → [Learning 2 cache] → Trader 2
+     Scoring 3 (technique, indépendant des news) → [Learning 3 cache] → Trader 3
+     Scoring 4 (combine Scoring 1+2+3) → [Learning 4 weekly_config] → Trader 4
+```
+
+### Ajouter une nouvelle équipe (Équipe N)
+1. Créer `agent_trader_N.py` (stratégie spécifique)
+2. Créer `agent_journal_N.py` (adapté à la stratégie)
+3. Créer `agent_learning_N.py` (dimensions pertinentes)
+4. Enregistrer dans `registry.py` (_agents + helpers)
+5. Wirer dans `main.py` (scheduler + API endpoints)
+6. Ajouter profils dans `agent_auditor.py` (AUDIT_PROFILES)
+7. Créer pages frontend (TraderNPage, JournalNPage, LearningNPage)
+8. Mettre à jour sidebar, App.jsx, notifications
+
+#### Agent Trader 2 — Trend Following Commodities
+- **Fichier** : `agent_trader_2.py`
+- **Stratégie** : Trend following sur 4 commodities sélectionnées. Positions longue durée (jours/semaines), contrairement au Trader 1 (intraday).
+- **4 tickers suivis** (`TREND_TICKERS`) : HG=F (cuivre), CC=F (cacao), KC=F (café), ZW=F (blé)
+- **Logique** : Chaque scan accumule un signal net (LONG/SHORT) basé sur les news scorées, pondéré par Learning 2 (ticker_adj × newscat_adj × direction_adj). Si le signal net dépasse un seuil calibré (20 × threshold_adj) et contredit la position actuelle, la position est flippée.
+- **Catégories filtrées** (`RELEVANT_CATEGORIES`) : commodity, weather, supply_chain, geopolitical, regulatory, sector, other (exclut earnings, macro, m_a, central_bank_subtle)
+- **Score minimum** (`MIN_NEWS_SCORE`) : 15 (plus bas que Trader 1, car les signaux de tendance s'accumulent)
+- **P&L tracking** : Réalisé (cumulé à chaque flip) + Latent (position courante) + Historique des changements
+- **Persistence** : Table PG `trend_positions` (ticker VARCHAR PK, data JSONB, updated_at) + fallback JSON `data/trend_positions.json`
+- **Pipeline** : Exécuté dans `run_scan_pipeline()` après Trader 1, non-bloquant (erreur Trader 2 n'affecte pas Trader 1)
+- **API** : `GET /api/trader2/positions`, `GET /api/trader2/positions/{ticker}/history`
+- **Frontend** : `Trader2Page.jsx` — KPIs, cards positions, historique flips, logs DECISION, Learning 2 context, **newscat performance** (zone+intensity+source drill-down v5.5)
+- **Audit** : Profil `trader_2` dans l'auditeur — 8 checks
+- **v7.5** : Zone+intensity-aware learning lookup (newscat+zone+intensity+ticker priority), news_zone and intensity tier stored in flip records for geographic and magnitude traceability
+- **Tests** : 27 tests dans `test_agent_trader_2.py`
+
+#### Agent Journal 2 — Trend Journal
+- **Fichier** : `agent_journal_2.py`
+- **Run quotidien** à 22h après Journal 1 + Learning 1
+- **Fonctionnement** : enrichit chaque flip de Trader 2 avec MAE/MFE via daily bars, prend des snapshots quotidiens de chaque position
+- **Dedup** : par (ticker, entry_time) — évite les doublons lors de triggers manuels
+- **Pruning** : entries > 1 an supprimées automatiquement
+- **Persistence** : Table PG `trend_journal_entries` (id, ticker, entry_time, data JSONB, created_at, UNIQUE ticker+entry_time) + fallback JSON `data/trend_journal.json`
+- **Bus** : publie `journal_2_complete` → Learning 2 consomme
+- **API** : `GET /api/journal2/entries`, `POST /api/journal2/trigger`
+- **Frontend** : `Journal2Page.jsx` — KPIs (flips, WR, P&L, MAE), historique par ticker, logs
+- **Audit** : Profil `journal_2` — 8 checks (flip_coverage, mae_mfe_accuracy, pnl_tracking, dedup_integrity, bar_fetch_reliability, pruning, snapshot_quality, persistence)
+
+#### Agent Learning 2 — Trend Learning
+- **Fichier** : `agent_learning_2.py`
+- **4 dimensions** adaptées au trend following :
+  1. **Per-ticker** (min 4 periods) : quels actifs trend bien vs choppy
+  2. **Per-newscat** (min 3 periods) : quelles catégories produisent de bons flips
+  3. **Per-direction** (min 4 periods) : LONG vs SHORT accuracy
+  4. **Signal calibration** : seuil de flip adaptatif (threshold_adj 0.95-1.05)
+- **Bounds** : ticker/newscat [0.6, 1.4], direction [0.8, 1.2]
+- **Anomaly detection** : churning (trop de flips, WR < 30%), streaks (>= 3 pertes), MAE élevé (< -5%), win rate faible (< 35%)
+- **Cache** : invalidé après Journal 2, recalculé à la demande par Trader 2
+- **Bus** : publie `learning_2_updated`
+- **API** : `GET /api/learning2/adjustments`, `POST /api/learning2/trigger`
+- **Frontend** : `Learning2Page.jsx` — 4 dimensions avec barres, anomalies, calibration seuil, logs
+- **Audit** : Profil `learning_2` — 8 checks (sample_size, ticker_calibration, newscat_calibration, direction_balance, threshold_stability, churning_detection, anomaly_detection, feedback_loop)
+- **v7.4** : Zone+intensity-aware newscat cross-dimension — uses news_zone and expected_magnitude from flip records to compute geographic+intensity adjustments (ex: weather+india+high+ZW=F), preventing cross-zone and cross-intensity contamination in learning
+- **Tests** : 35 tests dans `test_journal2_learning2.py`
+
+#### Agent Performance — KPIs & Suivi
+- **Fichier** : `agent_performance.py`
+- **Mission** : Mesurer et suivre les KPIs de TOUS les agents, identifier les performants/sous-performants, tracker l'évolution temporelle
+- **KPIs par agent** :
+  - **Trader 1** : win_rate, pnl_total, avg_pnl, expired_rate, best/worst ticker, R/R réalisé
+  - **Trader 2** : realized_pnl, unrealized_pnl, flip_win_rate, avg_position_duration_days, by_ticker
+  - **Scoring** : avg_score, zero_edge_filter_rate, cache_hit_rate, tokens_per_scan
+  - **News** : items_per_scan, source_error_rate, dedup_rate, collection_speed
+  - **Journal 1** : closure_rate, price_fetch_success, mae_avg, bar_coverage
+  - **Journal 2** : flip_coverage, snapshot_quality, mae_mfe_enrichment
+  - **Learning 1** : adjustment_count, anomaly_rate, cache_freshness
+  - **Learning 2** : calibration_stability, churning_detection
+  - **Infra** : pg_uptime, maintenance_regularity
+- **3 actions** :
+  - `snapshot` (toutes les heures 7h-22h, léger) : collecte get_metrics() de tous les agents
+  - `daily_report` (22h30, après journal) : KPIs complets avec données trades/journal, ranking, alertes
+  - `weekly_trends` (dimanche 21h30) : évolution des KPIs, tendances improving/declining/stable
+- **Ranking** : identifie top_performers et underperformers par score normalisé
+- **Alertes** : win_rate < 35% = CRITICAL, expired_rate > 50% = WARN, price_fetch < 70% = WARN, pg_failures >= 3 = CRITICAL
+- **Tendances** : comparaison first-half/second-half des snapshots, classification improving/declining/stable
+- **Rétention** : 168 snapshots (1 semaine horaire), 30 rapports quotidiens
+- **API** : `GET /api/performance/snapshot`, `GET /api/performance/report`, `GET /api/performance/history`, `POST /api/performance/trigger/{action}`
+- **Audit** : Profil `performance` — 8 checks (kpi_coverage, data_freshness, trader_win_rate, trend_computation, alert_thresholds, ranking_logic, history_retention, cross_agent_consistency)
+
+### Agent Auditeur — utilisation
+L'auditeur s'appelle manuellement via l'API ou Claude Code :
+- `POST /api/agents/auditor/audit/{target_agent}` — lance un audit
+- `GET /api/agents/auditor/reports` — tous les rapports
+- `GET /api/agents/auditor/reports/latest/{target_agent}` — dernier rapport
+- Chaque audit produit : note /10, findings, améliorations priorisées, tests à ajouter, updates mémoire
+- Les rapports sont persistés et consultables quelle que soit la session
+
+### Stack technique
+- **Backend**: FastAPI + APScheduler (Python)
+- **Frontend**: React + Vite
+- **Persistence**: PostgreSQL (primary, via `DATABASE_URL`) avec fallback JSON flat files
+  - `database.py`: connection pool (psycopg2, min=2 max=10), tables trades/journal_entries/scan_history/last_scans/price_archive/agent_messages/agent_logs/audit_reports/trend_positions/trend_journal_entries/tech_positions/tech_journal_entries/meta_positions/meta_journal_entries
+  - Fallback: `data/trades.json` + `data/journal.json` + `data/scan_history.json` + `data/last_scans.json` + `data/audit_reports.json` (file locking via `fcntl`)
+  - Auto-migration JSON→PG au demarrage si PG est vide mais JSON a des donnees
+  - `price_archive`: daily OHLCV par ticker pour backtesting historique (v5.1)
+- **Market Data**: Twelve Data (primary) + yfinance (fallback) — module `market_data.py`
+
+## Branche active : `claude/json-to-postgres-migration-ToNVq`
+
+### Travail effectue sur cette branche (20 commits)
+
+#### 1. Migration JSON → PostgreSQL (`database.py`, `migrate_json_to_postgres.py`)
+- 4 tables PG : `trades`, `journal_entries`, `scan_history`, `last_scans`
+- CRUD complet avec `psycopg2.extras.RealDictCursor` et JSONB pour champs complexes
+- `ON CONFLICT DO NOTHING` pour dedup (trades: ticker+timestamp, journal: ticker+entry_time)
+- `is_pg_enabled()` → True si psycopg2 importe ET DATABASE_URL set
+- Script de migration : `python -m backend.migrate_json_to_postgres`
+- Tous les modules (journal, learning, scan_history, scheduler, main) utilisent PG quand disponible
+- Auto-migration : si PG est vide mais JSON a des donnees, migration automatique au load
+
+#### 2. Migration Market Data vers Twelve Data (`market_data.py`)
+- Module unifie : Twelve Data (primary) + yfinance (fallback)
+- Rate limiter thread-safe : 7 req/min (free tier = 8)
+- TTL cache 3 niveaux : 2min (quotes), 10min (daily), 30min (intraday)
+- Mapping complet des 41 tickers yfinance → Twelve Data, verifie via API :
+  - **Indices** : TOUS blacklistés → yfinance only (^FCHI, ^GDAXI, ^FTSE, ^N225 = 404 sur TD; ^GSPC, ^DJI, ^IXIC, ^RUT, ^VIX = non dispo free tier)
+  - **Forex** : EURUSD=X→EUR/USD, USDJPY=X→USD/JPY, GBPUSD=X→GBP/USD, USDCHF=X→USD/CHF, EURJPY=X→EUR/JPY, AUDUSD=X→AUD/USD, USDCNH=X→USD/CNH (pas de collision, pas de `type` nécessaire)
+  - **Paris stocks** : TTE.PA→TTE, MC.PA→MC, BNP.PA→BNP, etc. (mic_code=XPAR)
+  - **Energie** : CL=F→CL1, BZ=F→CO1, NG=F→NG/USD (pas de collision)
+  - **Metaux précieux** : GC=F→XAU/USD, SI=F→XAG/USD, PL=F→XPT/USD, PA=F→XPD/USD (forex-style, pas de collision)
+  - **Base metals** : HG=F→HG1 (**avec `type=commodities`** — sans ça, TD retourne Homag Group AG ~25€ au lieu du cuivre ~5.90$)
+  - **Agriculture sans collision** : ZC=F→C_1, ZW=F→W_1, ZS=F→S_1, CT=F→CT1
+  - **Agriculture AVEC collision** (nécessitent **`type=commodities`**) :
+    - CC=F→CC1 (sans type: Amundi MSCI China Tech ETF ~287€, avec type: Cocoa ~3425$)
+    - KC=F→KC1 (sans type: stock inconnu ~0.01$, avec type: Coffee ~296$)
+    - SB=F→SB1 (sans type: Smartbroker Holding AG ~12€, avec type: Sugar ~14$)
+    - OJ=F→JO1 (sans type: John B. Sanfilippo & Son ~64$, avec type: OJ ~189$)
+  - **Livestock** (nécessitent **`type=commodities`**) :
+    - LE=F→LC1 (sans type: The Marzetti Company ~140$, avec type: Live Cattle ~233$)
+    - HE=F→LH1 (sans type: Lifetime Brands Inc. ~3.38$, avec type: Lean Hogs ~96$)
+- **REGLE CRITIQUE `type=commodities`** : Les symboles TD de futures (CC1, KC1, SB1, HG1, JO1, LC1, LH1) collisionnent avec des actions/ETFs. Sans le paramètre `type=commodities` dans la requête, TD retourne le prix de l'action au lieu du future. Le mapping utilise `{"type": "commodities"}` dans les extra params pour ces 7 tickers. Les symboles sans collision (CL1, CO1, C_1, W_1, S_1, CT1, XAU/USD, etc.) n'ont pas besoin de ce paramètre.
+- Fonctions : `fetch_price()`, `fetch_history()`, `fetch_history_range()`, `fetch_intraday()`
+- Secret : `TWELVE_DATA_API_KEY` = `57627ad733b24fa78ac40652078c18fc` (free tier 800 credits/jour, 8 req/min)
+
+#### 3. Fixes Journal (4 root causes corrigees — commit 389b649)
+- **misfire_grace_time** : 60s → 3600s pour le job journal 22h (pas de risque crash loop — pur data processing)
+- **Startup recovery** : `_recover_pending_trades_on_startup()` detecte et ferme les vieux trades PENDING au boot
+- **Trades stuck PENDING** : `update_trade_result()` toujours appele meme si exit_price=None (fallback entry_price)
+- **Trigger format** : reponse toujours `{entries: [...], diagnostic: {...}}` (plus de format inconsistant)
+- **Debug endpoint** : `GET /api/journal/debug` — inspecte PG vs JSON, parse errors, pending trades
+
+#### 4. Audit complet — 17 fixes (commit 1c15010)
+- Scoring: freshness retiree de la formule, edge_factor floor 0.05, category multipliers recalibres
+- Journal: post-entry price tracking (1h bars, filtre bars avant l'entree du trade)
+- Threading: shutdown(wait=False, cancel_futures=True) partout
+- Calendar: dates 2025-2026 hardcodees FOMC/ECB/BOE
+
+#### 5. Learning v3.4 — audit ML (commit 42709d2)
+- 10 fixes : structured return format, session/newscat/regime adj separees, per-ticker stricter significance
+- Signal PnL-signe, t-stat configurable, decay temporel adaptatif, anti-double-counting
+
+#### 6. Cross-day dedup + Journal diagnostics (commit ffc965b)
+- Dedup Jaccard ticker cross-day, diagnostic wrapper pour trigger
+
+#### 7. Resilient data loading (commit 688271d)
+- Resilient per-entry parsing (skip invalids instead of crash)
+- Auto-migration JSON→PG on load
+
+#### 8. Audit speculateur v3.5 — 17 ameliorations
+- **6 nouvelles sources data** : WOAH (maladies animales), NASA POWER (satellite NDVI), Freight proxy (BDRY ETF), LME inventory proxy (metal ETFs), Chokepoint monitoring (tanker ETFs), Dark pool signals (volume/price divergence)
+- **GNews** : +6 queries (export bans Inde/Indonesie/Russie, Chine PMI/PBOC, Argentine), consolidation 8→5 commodity queries, rotation intelligente 28 queries / 4 scans (100 req/jour)
+- **5 RSS feeds** : Caixin, Xinhua, Chinese govt, US Federal Register (ITC), EUR-Lex
+- **2 nouveaux actifs** : USDCNH=X (yuan offshore), URA (uranium ETF) → 41 total
+- **Cooldown adaptatif** : weather/supply_chain=1j, commodity=2j, default=3j (au lieu de 3j fixe)
+- **Re-entry apres faux stop** : si SL_HIT aujourd'hui sur weather/supply_chain/commodity, re-entry autorise
+- **Position sizing VIX** : stress (VIX≥30)=0.5x, elevated (VIX≥20)=0.75x, calm (VIX≤13)=1.2x
+- **Gestion vendredi** : apres-midi=0.6x, matin=0.8x (liquidite + gap weekend)
+- **Correlation** : +groupe china_proxy (USDCNH, HG=F, AUDUSD), chain reactions USDCNH↔HG/AUD
+- **Event scanner** : frequence 15→10 min
+- **Dynamic correlation** : skip computation si static group couvre deja la paire
+- **collect_structured_data()** : 11→17 sources, timeout 90→120s
+
+#### 9. Audit decision v4.0 — 19 ameliorations (audit complet du pipeline de decisions)
+- **A1** : Bug fix `impacted` variable utilisee avant definition dans news_scorer.py
+- **A2** : Convergence direction — validation que les news convergent dans la meme direction
+- **A3** : Dynamic asset count dans le prompt (`len(ASSETS)` au lieu de 39 hardcode)
+- **B1+B2** : `expected_magnitude` et `signal_reliability` — 2 nouvelles dimensions scoring + `reliability_factor` dans la formule
+- **B3** : Confidence decorrellee du score (`reliability * clarity / 100`)
+- **B4** : Filtre spread — rejette si spread > 40% du target estime, `ESTIMATED_SPREADS` dans config.py
+- **B5** : Pre-move depuis `today_open` au lieu de `previous_close`
+- **C1** : ATR 5 jours (au lieu de 20) — plus reactif aux conditions recentes
+- **C2** : Stop SHORT asymetrique +20% (les squeezes haussiers sont plus violents)
+- **C3** : Stop floor adaptatif = max(ancien plancher, 2x estimated_spread)
+- **C4** : Score factor convexe `(score/100)^1.5` — recompense disproportionnellement les hauts scores
+- **D1** : Fallback ticker — essaie les tickers secondaires si le principal est bloque
+- **D3** : Cache correlation dynamique TTL 1h
+- **D4** : Daily cap adaptatif VIX (stress=2, elevated=4, normal=6)
+- **E1** : PnL par categorie d'actif dans le feedback Claude
+- **E2** : Direction accuracy tracking dans le feedback Claude
+- **E3** : Separation DONNEES DE PERFORMANCE vs INSTRUCTIONS SCORING dans le prompt
+
+#### 10. Audit journal v4.1 — 27 ameliorations (audit complet du systeme de journal)
+- **A1** : File locking `fcntl.LOCK_EX` sur `_save_journal()` — evite corruption donnees
+- **A2** : Guard division par zero dans `_compute_pnl()` (entry_price=0)
+- **A3** : Sort explicite chronologique des bars + bars 5-tuple (ts, high, low, open, close)
+- **A4** : `exit_time` = timestamp reel du bar TP/SL (pas l'heure du journal run)
+- **B1** : Bars 15min en priorite (fallback 1h puis daily) — resolution TP/SL plus fine
+- **B2** : Correction midpoint sur `actual_pricing_hours` (+7.5min pour 15min, +30min pour 1h)
+- **B3** : Smart fallback `actual_pricing_hours` — utilise remaining trading window au lieu de 8h fixe
+- **B4** : EXPIRED utilise last post-entry bar close au lieu de session_close
+- **B5** : Slippage tracking — difference entry_price vs first post-entry bar open
+- **C1** : Streak tracking — alerte quand >= 3 pertes consecutives par ticker
+- **C2** : Performance par heure d'entree dans le feedback Claude
+- **C3** : Performance par jour de semaine (Lun-Ven) dans le feedback Claude
+- **C4** : Drawdown tracking — max pertes consecutives + max drawdown cumulatif
+- **C5** : PnL skewness — positive=profil favorable, negative=alerte
+- **C6** : Direction accuracy segmentee par categorie de news
+- **D1** : Suppression appel redundant `compute_learning_adjustments()` en fin de journal
+- **D2** : Date-range limiting — learning ne considere que les 6 derniers mois
+- **D3** : Journal pruning automatique des entries > 1 an
+- **D4** : `compute_learning_adjustments()` accepte parametre `trades` optionnel (evite reload)
+- **E1** : Metrics structurees — timing, taux succes fetch prix
+- **E2** : Alerte si > 50% des fetch prix echouent (possible API outage)
+- **E3** : Cross-check PnL entre journal entry et trade update (validation duale)
+- **E4** : Bar coverage tracking — nombre de bars post-entry disponibles
+- **F1** : Max Adverse Excursion (MAE) et Max Favorable Excursion (MFE)
+- **F2** : EXPIRED rate monitoring — alerte calibration si > 60%
+- **F3** : Realized R/R vs predicted R/R — alerte si stops trop serres
+- **F4** : Price anomaly detection — flag si mouvement > 20% (split/data error)
+- **G1** : DST-safe date filtering — conversion Paris timezone pour filtrage bars
+- **G2** : Market holidays 2025-2026 dans config.py (US + EU)
+- **G3** : Global timeout 300s pour le journal run
+
+#### 11. Audit learning v4.2 — 21 ameliorations (audit complet du systeme de learning)
+- **A2** : Fix stderr=0 bug — check min_effect_size au lieu de retourner True aveuglément
+- **A3** : Minimum effect size threshold (0.1) dans `_is_significant()` — ignore signaux négligeables
+- **A4** : PnL divisor 2.0 → 1.0 dans `_compute_adjustment()` — doublait la sensibilité
+- **A5** : Average multipliers across ALL eligible tickers (pas juste le premier) dans `trade_selector.py`
+- **B1** : `delay_bias_adj` — adjustment global basé sur la précision des prédictions transmission_delay
+- **B2** : `magnitude_accuracy` tracking dans performance summary
+- **B3** : Slippage vs estimated spread feedback dans performance summary
+- **B4** : `hour_adj` — per-hour-of-day learning adjustment (0.85-1.15, min 8 trades)
+- **B5** : `direction_adj` — LONG vs SHORT accuracy adjustment (0.8-1.2, min 8 trades)
+- **C1** : Regime min trades raised to 15, merged 4→2 buckets (low_vol, high_vol)
+- **C2** : Confidence-scaled bounds (via different min_significant per dimension)
+- **C3** : Decay handled by cache invalidation (no separate multiplier needed)
+- **C4** : Convergence source dedup (documented, handled in news_scorer)
+- **D1** : Lookback reduced to 2x half_life (60-90j instead of 180j fixed)
+- **D3** : Detect partial PG migration — warning if PG/JSON divergent
+- **D4** : `build_performance_summary(trades=...)` accepts optional trades param
+- **E1** : Restructured prompt to alerts-only — compact N=/WR=/PnL= header, outliers only
+- **E2** : MAE feedback — alerte si SL_HIT > 40% et MAE élevé
+- **E3** : signal_reliability precision tracking — alerte si low-rel > high-rel WR
+- **7 dimensions** de learning au lieu de 4 : ticker*cat + session + newscat + regime + hour + direction + delay_bias
+- **Blending** : `final_mult = base * session * newscat * regime * hour * dir * delay_bias` (clamp [0.5, 1.5])
+
+#### 12. Audit Claude API v4.3 — 20 ameliorations (audit complet utilisation Claude)
+- **A1/F1** : Modele configurable — `claude-haiku-4-5-20251001` par defaut (3x moins cher que Sonnet), `CLAUDE_MODEL` env var pour override
+- **A2** : `temperature=0` pour scoring reproductible (deterministe)
+- **A3** : Singleton Anthropic client (`_get_client()`) — reutilise connexion HTTP, evite recreer a chaque scan
+- **A4** : Dynamic `max_tokens` base sur taille du batch (300 tokens/item, min 4096, max 16384)
+- **B1** : System prompt restructure en XML (`<role>`, `<scoring_dimensions>`, `<hard_rules>`, `<examples>`) — meilleur suivi des instructions
+- **B2** : 3 few-shot examples dans le prompt (weather/NOAA, earnings zero-edge, geopolitique OSINT) — calibration implicite
+- **B3/E1** : System prompt en blocks structures avec `cache_control` pour prompt caching Anthropic
+- **B5** : Ticker list deplace du system prompt vers le user message — economie tokens systeme caches
+- **B6** : `PROMPT_VERSION` hash MD5 du system prompt — log pour tracer les changements de prompt
+- **C1** : `perceived_age_hours` optionnel dans tool schema — diagnostic coherence age percu vs reel
+- **C2** : `maxLength: 300` sur reasoning — force la concision, evite gaspillage tokens
+- **D1** : Pre-filtrage zero-edge (`_is_zero_edge_headline()`) — skip Claude pour earnings/macro evidents, economise API calls
+- **D2** : Validation coherence cross-dimensions (`_validate_coherence()`) — detecte contradictions surprise vs delay vs awareness
+- **D3** : `confirmed_event` boolean dans tool schema — remplace keyword matching fragile pour M&A confirme vs rumeur
+- **F2** : Score caching par hash headline (`_score_cache`, TTL 4h) — evite re-scorer les memes news
+- **F3** : Prompt caching via `cache_control: {"type": "ephemeral"}` sur system blocks — reduit tokens input
+- **F4** : Token usage tracking (`get_token_usage()`) — monitoring couts cumules input/output/scans
+- **Note** : B4 (extended thinking) intentionnellement skippe — incompatible avec `tool_choice` force
+
+#### 13. Backtest & Learning Integrity v5.1 — 8 ameliorations
+- **B1** : Scan history retention etendue de 30 → 365 jours pour backtesting historique
+- **B2** : `all_scored_news` stocke maintenant description, url, published, source_weight (replay fidele)
+- **B3** : Table `price_archive` (PG) — daily OHLCV par ticker, archivage automatique apres journal
+- **B4** : `run_news_replay_backtest()` — re-score les headlines historiques avec la formule actuelle (sans appeler Claude)
+- **B5** : `_rescore_headline()` — recalcule le score avec edge_factor/reliability_factor actuels
+- **L1** : Data integrity — filtre trades anomalous (PnL > 50%) dans learning, filtre PENDING dans insights
+- **L2** : Coherence validation corrigee : `_validate_coherence()` retourne (delay, awareness) corriges au lieu de juste logger
+- **L3** : Instructions scoring enrichies — guidance specifique pour Claude basee sur les metriques (EXPIRED rate, streaks, direction)
+- **Endpoints** : `/api/backtest/replay`, `/api/price-archive/stats`, `/api/price-archive/fill`
+
+#### 14. Learning Integrity & Granular Commodities v5.2 — 5 ameliorations
+- **L4** : Split "commodities" en 5 sous-categories: commodities_energy, commodities_agri, commodities_soft, commodities_industrial, commodities_livestock
+- **L5** : `cat_adj` desactive pour toutes les commodities — le learning ne penalise jamais les commodities en tant que classe (regle absolue)
+- **L6** : `newscat_adj` cross-dimension newscat+ticker (ex: weather+ZW=F) — evite que weather+ZW=F perde penalise weather+CC=F
+- **L7** : Fallback broad newscat toujours calcule — les tickers sans assez de donnees cross-dimension utilisent le signal pooled
+- **L8** : PRE_MOVE_THRESHOLDS et CATEGORIES mis a jour pour les nouvelles sous-categories commodity
+
+#### 15. Multi-Agent Architecture v6.0 — refactoring majeur
+- **7 agents autonomes** : News, Scoring, Trader, Journal, Learning, Auditeur, UX
+- **BaseAgent** : classe mère avec logging structuré (PG), message bus, status tracking, execute() wrapper
+- **MessageBus** : communication inter-agents via `agent_messages` (PG, fallback in-memory)
+- **AgentLogger** : logs structurés dans `agent_logs` (PG), niveaux INFO/WARN/ERROR/DECISION
+- **Registry** : singletons, orchestration `run_scan_pipeline()` (News → Scoring → Trader)
+- **Agent Auditeur** : audit profondeur de chaque agent, 9 profils d'expertise (news, scoring, trader_1, trader_2, journal, learning, ux, auditor), note /10, persistance rapports, trend tracking, log analysis
+  - Checks par agent : source coverage, score distribution, win rate, bar coverage, commodity protection, component coverage...
+  - **Profil UX** (v6.1) : component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility
+  - Rapports persistés dans `audit_reports` (PG) ou `data/audit_reports.json`
+  - API : `POST /api/agents/auditor/audit/{agent}`, `GET /api/agents/auditor/reports`
+- **Scheduler** délègue aux agents (plus d'appels directs aux modules)
+- **main.py** : nouveaux endpoints `/api/agents/*`, `/api/agents/auditor/*`
+- **Frontend** : sidebar 8 agents, overview cards, agent detail avec métriques + logs timeline
+- **Weekly source review** déplacée au dimanche 20h (avant le trading lundi)
+- **3 tables PG ajoutées** : `agent_messages`, `agent_logs`, `audit_reports`
+- Les agents wrappent les modules existants — zéro réécriture logique métier
+- Architecture multi-trader prête (agent_trader_2.py, agent_trader_3.py...)
+
+#### 16. Database Audit & Agent Infrastructure v6.1
+- **MessageBus SQL fix** : `consume()` utilisait `RETURNING ... ORDER BY ... LIMIT` (invalide en PG) — réécrit en CTE
+- **Pruning agent tables** : `pg_prune_agent_messages(30j)`, `pg_prune_agent_logs(90j)`, `pg_prune_audit_reports(100)` — appelées automatiquement dans `pg_run_maintenance()`
+- **VACUUM ANALYZE** : étendu aux 7 tables (ajout `agent_messages`, `agent_logs`, `audit_reports`)
+- **pg_table_stats()** : monitoring étendu aux 7 tables
+- **Profil UX auditeur** : 7 checks (component_coverage, api_integration, error_handling, polling_efficiency, responsive_design, data_display, agent_visibility)
+- **42 tests agents** (`test_agents.py`) : MessageBus (10), AgentLogger (5), BaseAgent (6), Registry (6), Auditor (6), per-agent init (5), pruning (3), status (1)
+
+#### 17. Auditor Self-Audit & Deep Checks v6.2
+- **15 checks manquants ajoutés** across 5 audit methods :
+  - `_audit_news()` : `freshness_distribution` (age analysis), `data_quality` (empty title detection)
+  - `_audit_scoring()` : `edge_factor_calibration` (floor analysis), `coherence_validation` (import check), `chain_reaction_coverage` (config check)
+  - `_audit_trader()` : `position_sizing` (VIX tracking), `correlation_check` (same-day correlation violations), `calendar_blocking` (economic calendar check)
+  - `_audit_journal()` : `price_fetch_reliability` (missing exit_price rate), `pruning` (oldest entry check), `recovery` (recovery events in logs)
+  - `_audit_learning()` : `decay_calibration` (half-life/lookback check), `anomaly_detection` (performance summary alerts), `feedback_quality` (WR/PnL in feedback)
+- **Self-audit profile** : 8ème profil `"auditor"` dans AUDIT_PROFILES — 6 checks (profile_coverage, check_implementation, persistence, scoring_calibration, trend_tracking, log_analysis)
+- **`_audit_self()` method** : meta-audit vérifie coverage des profils, implémentation des checks, persistance PG, calibration scoring, trends, analyse logs
+- **`_analyze_agent_errors()` helper** : analyse logs ERROR/WARN du target agent, trouve les erreurs les plus fréquentes, suggère améliorations — appelé dans les 5 audits
+- **`_compute_trends()` helper** : compare score actuel vs précédent par agent depuis `_audit_history`, calcule delta et direction (improving/declining/stable)
+- **Trend info dans rapports** : `report["trend"]` avec previous_score, delta, direction
+- **File lock fix** : `_load_reports()` utilise `fcntl.LOCK_SH` pour lectures concurrentes sûres
+- **47 tests agents** (`test_agents.py`) : +5 tests (self_audit_runs, auditor_profile_has_checks, trend_tracking_empty, trend_tracking_with_history, analyze_agent_errors)
+
+#### 18. Agent Audit Round 1-3 — Journal↔Learning data integrity v6.3
+- **Round 1 — Audit Learning** (7 fixes) :
+  - `AgentLearning.run()` was dead code — wired into pipeline via `run_learning_update()` in registry
+  - MAE/slippage feedback loaded from JournalEntry (not broken `getattr(t, "mae")` on TradeRecommendation)
+  - `invalidate_cache()` also invalidates perf summary cache
+  - `extract_structured_anomalies()` — typed dicts replace fragile text parsing
+  - Removed unnecessary `hasattr(t, "news_category")` guards
+- **Round 2 — Audit Journal** (5 fixes) :
+  - `run_daily_journal()` returns `list[dict]`, not `dict` — agent_journal.py `isinstance` check
+  - SHORT slippage formula was identical to LONG (copy-paste bug) — inverted
+  - Dead import `run_journal_recovery` removed from main.py
+  - File locking added to `_load_scan_decision_data()`
+  - Learning update called after journal in main.py scheduler
+- **Round 3 — Audit Journal→Learning data flow** (3 fixes) :
+  - **P1** : 9 missing columns added to PG trades DDL + `_TRADE_COLUMNS` (surprise, directional_clarity, signal_reliability, expected_magnitude, position_size_pct, convergence_count, convergence_boost, news_url, news_description) — fields existed on Pydantic model but silently dropped on PG write, breaking Learning's signal_reliability and magnitude feedback loops
+  - **P2** : EXPIRED trades now compute `actual_pricing_hours` (remaining trading window entry→20h) — Learning couldn't learn delay_bias from EXPIRED outcomes
+  - **P3** : Defensive `getattr(t, "news_category", "other")` replaced with direct `t.news_category` in learning.py (4 occurrences) — field has default on model, getattr masked real errors
+- **Data contract verified** : all 6 learning dimensions have correct data flow Journal→TradeRecommendation→Learning
+
+#### 19. Audit Agent Trader v6.3 — 5 fixes
+- **P1 (CRITIQUE)** : `rec.score` → `AttributeError` : `TradeRecommendation` n'a pas de champ `score`, corrigé en `rec.raw_claude_score` (agent_trader.py:97,112)
+- **P2 (CRITIQUE)** : `monitor_positions()` retourne `list[dict]`, agent traitait comme `dict` — `.get("active_positions")` crashait. Réécrit pour compter les trades PENDING réels
+- **P3** : `rec.direction` (enum `Direction`) stocké sans `.value` → metrics/logs affichaient `Direction.LONG` au lieu de `LONG`
+- **P4** : Dead code dans `_check_correlation()` — `in_static_group` toujours False car la branche `and` est inatteignable après le `return True`. Réécrit avec tracking `ticker_in_any_group`/`existing_in_any_group` séparés, skip dynamic si les deux sont dans des groupes statiques
+- **P5** : `reset_daily_counters()` jamais appelé — wirée dans `_run_daily_journal()` post-journal 22h pour préparer le lendemain
+
+#### 20. Audit Trader (Journal+Learning perspective) v6.4 — 3 fixes
+- **J1/L1 (CRITIQUE)** : Trailing stop NON persisté — `position_monitor.py:223` modifiait `trade.stop_price` en mémoire sans sauver en PG/JSON. Au cycle suivant (15min), `load_trades()` restaurait le stop original. Le Journal à 22h et le Learning utilisaient des données de stop incorrectes. Fix : ajout `update_trade_stop()` (learning.py) + `pg_update_trade_stop()` (database.py), appelé après chaque trailing adjustment
+- **J1b** : Ordre incorrect dans `monitor_positions()` — SL check (step 2) AVANT trailing stop (step 3). Réordonné : TP → Trailing → SL → Time stop. Maintenant le SL check utilise le stop potentiellement resserré
+- **J2/L2/L3** : `getattr(trade, "field", default)` inutiles sur 12 champs déclarés avec defaults Pydantic dans `journal.py` (4) et `learning.py` (8). Remplacés par accès directs (`trade.field`, `t.field`, `je.field`). Cohérent avec le fix v6.3 P3 pour `news_category`
+- **7 tests** : trailing stop order, persistence call, update_trade_stop exists + JSON fallback, pg_update_trade_stop exists, no getattr in journal, no getattr in learning
+
+#### 21. Audit Scoring (from Trader perspective) v6.5 — 3 fixes
+- **P1 (BUG)** : Formule high-vol incohérente — `_calibrate_trade()` utilisait `0.12 + 0.33 * (ns^1.5)` mais le filtre spread (line 808) et le calcul pre-move (line 833) utilisaient `0.10 + 0.35 * (ns^1.5)`. L'estimation du target par le filtre spread était différente du target réellement calibré. Fix : synchronisé les deux formulas sur `0.12 + 0.33` (les tiers low-vol et normal étaient déjà synchronisés)
+- **P2** : `hasattr(sn, 'convergence_count')` aux lignes 671 et 743 de `trade_selector.py` — `convergence_count` est un champ déclaré sur `ScoredNews` avec default=0, `hasattr` est inutile et masque des erreurs. Remplacé par accès direct
+- **P3** : `getattr(best_news, 'expected_magnitude', 50)` aux lignes 804 et 827 + `getattr(best_news, 'convergence_count', 0)` à la ligne 1040 — mêmes champs déclarés avec defaults sur `ScoredNews`. Remplacés par accès directs (cohérent avec le pattern v6.4)
+- **6 tests** : highvol_formula_synced, spread_filter_matches_calibrate, no_hasattr_on_scored_news, no_getattr_on_scored_news, scored_news_has_all_trader_fields, scoring_agent_returns_all_needed_keys
+
+#### 22. Timeout Audit v6.5 — 8 fixes Replit compatibility
+- **P1** : `position_monitor.py` — `shutdown(wait=True)` bloquait le scheduler → `shutdown(wait=False, cancel_futures=True)` + global timeout 45s + `TimeoutError` séparé de `Exception`
+- **P2** : `event_scanner.py` — timeout per-feed 5s→15s (DNS cold-start Replit), logging debug→warning
+- **P3** : `journal.py` — `as_completed()` sans timeout global (bloquait indéfiniment) → timeout dynamique + force-close trades PENDING restants
+- **P4** : `news_scorer.py` — Claude API timeout 120s→45s (120s×3 retries causait health check failures)
+- **P5** : `trade_selector.py` — shutdown explicite + fallback gracieux
+- **P6** : `data_apis.py` — `TimeoutError` séparé de `Exception` pour tracking précis
+- **P7** : `data_apis.py` — `max_workers` 5→3 (Replit OOM kills)
+- **P8** : `news_collector.py` — `TimeoutError` séparé dans `collect_rss_news()` et `collect_early_signal_news()`
+
+#### 23. Frontend UX Redesign v7.0 — Navigation centrée agents
+- **Navigation** : suppression des 4 onglets, remplacement par sidebar-driven routing
+  - Hash routing : `#dashboard`, `#news`, `#scoring`, `#scoring2`, `#trader`, `#journal`, `#learning`, `#auditor`
+  - Sidebar : Dashboard + 7 agents + bouton Alertes avec badge notifications
+  - 8 pages lazy-loadées via `React.lazy` + `Suspense`
+- **DashboardPage** : KPIs globaux (trades, win rate, P&L, pending) + agent overview cards + scan triggers + progress + toasts
+- **TraderPage** : KPIs, positions PENDING, historique trades (filtres résultat/direction/catégorie, pagination, expandable), ajustements learning per-ticker avec décomposition, dimensions session/direction/delay_bias, logs DECISION
+- **ScoringPage** : historique scans avec news scorées (expandable, 6 barres dimensions scoring), rejets, ajustements newscat learning, logs agent
+- **JournalPage** : wrapper Journal existant + contexte learning injecté (session, régime, delay bias) + logs agent journal
+- **NewsPage** : santé sources (tableau succès/échecs/latence/erreurs avec health bars), revue hebdomadaire, logs agent
+- **LearningPage** : 6 dimensions learning avec descriptions (per-ticker, session, newscat, régime VIX, direction, delay bias), KPIs boosts/pénalités, logs agent
+- **AuditorPage** : trigger audit par agent, rapports (score /10 circle, tendances improving/declining, constats, améliorations, détail checks), logs agent
+- **NotificationCenter** : panneau slide-in (overlay + animation), alertes WARN/ERROR de tous les agents, filtres agent/niveau, clic → navigation vers page agent
+- **CSS** : ~500 lignes ajoutées (KPI cards, section cards, compact tables, learning grid, scoring dimension bars, health bars, notification panel, audit report cards, score circles, mobile responsive)
+
+#### 24. Infrastructure Audit v8.3 — 15 fixes across 12 agents
+- **CRITICAL P1** : `agent_trader_4.py` — `run_position_monitor()` always saves positions (trailing stop updates on open positions were lost between cycles)
+- **CRITICAL P2** : `agent_trader_4.py` — `_check_tp_sl_trailing()` used stale `stop_price` capture before trailing update; now reads `pos.get("stop_price")` AFTER trailing adjusts it
+- **CRITICAL P3** : `agent_journal_2.py` — triple write (new → all → snapshots) replaced with single atomic write branching on `is_pg_enabled()`
+- **CRITICAL P4** : `agent_journal_3.py` — double write replaced with single atomic write (PG vs JSON branch)
+- **CRITICAL P5** : `agent_journal_4.py` — same pattern as Journal 3, single atomic write with try/except fallback
+- **HIGH P6** : `agent_trader_2.py` — news double-counting (direct + chain_reactions) fixed with set-based dedup
+- **HIGH P7** : `agent_trader_2.py` — `_make_change()` null price guard, returns `None` instead of crash
+- **HIGH P8** : `agent_learning_2.py` — snapshot entries (`entry_type == "snapshot"`) filtered out of learning data in both `run()` and `get_adjustments()`
+- **HIGH P9** : `agent_learning_2.py` — `get_adjustments()` now updates `_total_recalculations` and `_last_run_time` on cache miss
+- **HIGH P10** : `agent_learning_3.py` — weekly config now persisted to disk (`data/learning3_weekly_config.json`), survives restart
+- **HIGH P11** : `agent_learning_4.py` — same disk persistence pattern for weekly config
+- **HIGH P12** : `agent_performance.py` — daily report uses individual try/except per KPI section (one failure no longer aborts all)
+- **MEDIUM P13** : `agent_scoring_2.py` — word-boundary regex for structural keywords (was substring match: "ban" matched "banana")
+- **MEDIUM P14** : `main.py` — dead import `invalidate_learning_2_cache` removed
+- **25+ tests** added in `test_agents.py` covering all fixes
+
+#### 25. Team 2 Scoring Pipeline Decouple v7.6 — 4 fixes
+- **CRITICAL Fix A** : `agent_trader_2.py` — removed `total_score < MIN_NEWS_SCORE` pre-filter in `_filter_relevant_news()`. Scoring 1's total_score includes edge_factor (transmission_delay × market_awareness) designed for intraday, which killed trend-relevant signals (e.g., USDA report with delay=80 but awareness=70 → low edge score → dropped before Scoring 2 could re-weight). Scoring 2's MIN_TREND_SCORE is the proper quality gate.
+- **HIGH Fix C** : `config.py` + `news_collector.py` — added `STRUCTURED_SOURCE_MAX_AGE_HOURS=18` and `STRUCTURED_SOURCES` set (EIA, USDA, NOAA, Open-Meteo, CFTC, GIE_AGSI, NASA, WOAH, SHFE, FedWatch, GNEWS). `_filter_old_news()` now uses per-source max age instead of global 8h. Trend following needs 12-18h lookback for overnight structured data.
+- **MEDIUM Fix E** : `agent_scoring_2.py` — structural categories (weather, supply_chain, commodity, commodities_energy/agri/soft/industrial) exempt from freshness_weight decay. A 12h-old USDA report is as valid for trend as a 1h-old one.
+- **LOW Fix G** : `agent_scoring_2.py` — added 5 structural keywords: `ferrugem` (1.4, Brazilian coffee rust), `black frost` (1.6), `geada negra` (1.6), `conab` (1.3, Brazilian crop agency), `tc/rc` (1.3, copper smelting terms)
+- **Tests** : 61/61 pass. Updated `test_t3_fresh_news_weighted_more` (geopolitical instead of weather), added `test_t3_structural_category_no_freshness_penalty`
+
+#### 26. Twelve Data Price Validation & Commodity Fix — 4 commits
+- **Fix 1** : `market_data.py` — Blacklisted 21 tickers with unit mismatches between Twelve Data and yfinance (indices, some futures) to prevent garbage price data. Added `_TD_BLACKLIST` set + `TD_PRICE_RANGES` sanity check dict
+- **Fix 2** : `market_data.py` — Refined blacklist: un-blacklisted 4 verified futures (CL1, CO1, NG/USD, XAU/USD) after confirming correct prices, documented all symbol resolution decisions
+- **Fix 3 (CRITICAL)** : `market_data.py` — Added `type=commodities` to 7 TD symbol mappings (CC1, KC1, SB1, HG1, JO1, LC1, LH1) that collided with stocks/ETFs. Without this param, TD returns wrong prices (e.g., CC1 = Amundi ETF ~287€ instead of Cocoa ~3435$)
+- **CLAUDE.md** : Documented TD `type=commodities` requirement, local dev setup, price validation helpers
+
+#### 27. Audit Scoring 3 — Technical Indicators Review (session courante)
+- **Revue complète** du pipeline de calcul des indicateurs techniques de l'Équipe 3
+- **Indicateurs validés** (tous corrects mathématiquement) :
+  - RSI (Wilder smoothing) — vérifié vs calcul manuel, match exact
+  - EMA (seed SMA + exponential) — vérifié avec données connues
+  - Bollinger Bands (écart-type population, convention Bollinger) — pct_b correct
+  - Stochastic %K/%D — vérifié avec cas simple (K=70, D=56.67)
+  - ATR (Wilder smoothing) — constant range → ATR exact
+  - ADX — 0 pour marché plat, 100 pour trend pur
+  - SMA — trivial, correct
+  - MACD — EMA fast - EMA slow, signal line correct
+- **Source des données** : `fetch_history_batch()` dans `market_data.py` (365j daily), passe correctement `type=commodities` via `**extra` params. Batch groupé par param_key (tickers avec même extra params ensemble)
+- **Validation NaN/Inf** (F1) : droppés avant calcul d'indicateurs
+- **11 stratégies** (6 simples + 5 combos) : logique de détection correcte, scoring cohérent
+- **Multi-timeframe** : intraday 1h en parallèle (5 threads, timeout 30s) pour les top 10 setups
+- **Mise à jour CLAUDE.md** : versions agents synchronisées avec le code (6 agents avaient évolué)
+
+### Etat actuel des fichiers cles
+- `backend/app/agents/base.py` : BaseAgent, MessageBus (PG+memory), AgentLogger, AgentStatus, execute() wrapper
+- `backend/app/agents/registry.py` : 21 singletons (4 équipes + infra + perf + audit), run_scan_pipeline (News→Scoring→per-team branches), helpers pour toutes les équipes
+- `backend/app/agents/agent_news.py` : collecte, dédup Jaccard, source health, event detection, weekly review
+- `backend/app/agents/agent_scoring.py` : v7.6, score Claude API, zero-edge filter, chain reactions, token tracking, signal accumulator race fix, fallback validation
+- `backend/app/agents/agent_scoring_2.py` : v8.2, Équipe 2, re-pondération trend (category mults, structural keywords, persistence, accumulation), NE rappelle PAS Claude, publie trend_scored. Thread-safe tokens, LRU cache cap, dead code cleanup, fallback validation. Structural categories exempt from freshness_weight decay, +5 keywords (ferrugem, black frost, geada negra, conab, tc/rc)
+- `backend/app/agents/agent_trader.py` : v6.7, décision trade, position monitor, multi-trader ready, daily counters. Enhanced logging (max_score, top_headline), save_trade error handling
+- `backend/app/agents/agent_trader_2.py` : v7.7, trend following 4 commodities, consomme Learning 2 (ticker_adj, newscat_adj, direction_adj, threshold_adj), flip history, persistence PG/JSON. Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once
+- `backend/app/agents/agent_journal.py` : Équipe 1, clôture trades, P&L, MAE/MFE, startup recovery
+- `backend/app/agents/agent_journal_2.py` : Équipe 2, journal des flips Trader 2, MAE/MFE daily bars, snapshots quotidiens, dedup, pruning, persistence PG (trend_journal_entries) + JSON
+- `backend/app/agents/agent_learning.py` : Équipe 1, 6 dims ML, anomaly detection, cache learning, performance summary
+- `backend/app/agents/agent_learning_2.py` : Équipe 2, 4 dims trend (ticker, newscat, direction, signal calibration), anomaly detection (churning, streaks, MAE), cache
+- `backend/app/agents/agent_scoring_3.py` : v2.3, Équipe 3, indicateurs techniques (RSI, MACD, Bollinger, SMA/EMA, Stochastic, ADX) sur 20 tickers, 11 stratégies (6 simples + 5 combos), market_data.py pour OHLCV. Configurable params via weekly_config, parallel intraday confirmation, pivot_type fix, per-category squeeze thresholds, NaN/Inf validation, batch OHLCV fetch
+- `backend/app/agents/agent_trader_3.py` : v2.2, Équipe 3, multi-position (max 10), holding 1-3j, A/B testing stratégies, persistence PG (tech_positions) + JSON. Market hours validation, live entry price fetch, price cross-validation
+- `backend/app/agents/agent_journal_3.py` : Équipe 3, journal positions techniques, analyse par stratégie, MAE/MFE, persistence PG (tech_journal_entries) + JSON
+- `backend/app/agents/agent_learning_3.py` : Équipe 3, 3 dims (strategy, ticker, timeframe), ranking stratégies, anomaly detection
+- `backend/app/agents/agent_scoring_4.py` : Équipe 4, meta-scorer combinant Teams 1+2+3, poids configurables, confluence detection (boost 1.2x-1.5x)
+- `backend/app/agents/agent_trader_4.py` : Équipe 4, confluence-driven (min level 2), sizing par confluence, max 6 positions, expiry 48h, persistence PG (meta_positions) + JSON
+- `backend/app/agents/agent_journal_4.py` : Équipe 4, journal meta positions, tracking par combinaison de sources, persistence PG (meta_journal_entries) + JSON
+- `backend/app/agents/agent_learning_4.py` : Équipe 4, optimisation poids (news/trend/tech), ajustements par combinaison/ticker/confluence, bounds [0.6, 1.4]
+- `backend/app/agents/agent_infrastructure.py` : v7.7, health check 15min (PG, pool, pending, fallbacks), maintenance 23h (VACUUM, pruning, stats), rapport hebdomadaire dim 21h, détection divergence JSON/PG, suppress transient SSL errors
+- `backend/app/agents/agent_performance.py` : KPIs tous agents (incl. Teams 3/4), 3 actions (snapshot horaire, daily report 22h30, weekly trends dim 21h30), ranking, alertes, tendances
+- `backend/app/agents/agent_auditor.py` : audit profondeur, 22 profils d'expertise (incl. Teams 3/4), note /10, persistance rapports, trend tracking, log analysis
+- `backend/app/main.py` : v6.0, scheduler via agents, API /api/agents/*, audit endpoints, 4 scans + journal 22h + weekly review dim 20h
+- `backend/app/scheduler.py` : v6.0, délègue à run_scan_pipeline() (agents), conserve run_scan() pour compat
+- `backend/app/database.py` : v7.0, 14 tables PG (+ trend_positions, trend_journal_entries, tech_positions, tech_journal_entries, meta_positions, meta_journal_entries), pool, CRUD, pruning agent tables (messages 30j, logs 90j, reports 100), VACUUM 9+ tables, pg_update_trade_stop (v6.4)
+- `backend/app/market_data.py` : Twelve Data + yfinance, 41 mappings verifies
+- `backend/app/journal.py` : v6.4, 15min bars, MAE/MFE, slippage, pruning, PnL cross-check, global timeout, EXPIRED pricing_hours, direct field access (no getattr)
+- `backend/app/learning.py` : v6.4, 6 learning dimensions, newscat+ticker cross-dimension, cat_adj disabled for commodities, structured anomalies, journal-based MAE/slippage feedback, update_trade_stop for trailing persistence, direct field access (no getattr)
+- `backend/app/trade_selector.py` : v6.5, convex calibration, fallback ticker, spread filter (synced high-vol formula), VIX daily cap, fixed static group correlation check, direct field access on ScoredNews (no hasattr/getattr)
+- `backend/app/news_scorer.py` : v4.3+, singleton client, Haiku default, temperature=0, XML prompt, few-shot, score cache
+- `backend/app/source_monitor.py` : v5.2, source health tracking, daily/weekly reports, discovery suggestions
+- `backend/app/config.py` : ESTIMATED_SPREADS, DEFAULT_SPREAD, MARKET_HOLIDAYS 2025-2026, CATEGORIES, STRUCTURED_SOURCE_MAX_AGE_HOURS (18h), STRUCTURED_SOURCES (EIA, USDA, NOAA, etc.)
+- `backend/app/models.py` : v4.1, +6 JournalEntry fields (slippage, MAE, MFE, bar_coverage, bar_interval, realized_rr). v7.6: `news_zone: str = ""` field added to NewsItem, ScoredNews, TradeRecommendation, and JournalEntry for geographic tagging
+- `backend/app/scan_history.py` : PG support, pruning 365j
+- `frontend/src/App.jsx` : v7.0, navigation centrée agents (sidebar-driven), hash routing (#dashboard, #news, #scoring, #scoring2, #trader, #journal, #learning, #auditor), lazy-load pages, notification polling, health check
+- `frontend/src/components/AgentSidebar.jsx` : v7.0, navigation principale (Dashboard + 6 agents + Alertes), status dots, notification badge
+- `frontend/src/components/AgentOverview.jsx` : 7 cards métriques live sur dashboard
+- `frontend/src/components/DashboardPage.jsx` : v7.0, KPIs globaux (trades, win rate, P&L, pending), agent overview cards, scan triggers, progress, toasts
+- `frontend/src/components/TraderPage.jsx` : v7.0, KPIs trader, positions en cours, historique trades (filtres résultat/direction/catégorie, pagination), ajustements learning (per-ticker, session, direction, delay bias), **newscat performance** (zone+intensity+source drill-down v5.5), logs DECISION
+- `frontend/src/components/NewscatPerformance.jsx` : v5.5, composant partagé Trader 1/2 — performance par combo newscat (zone+intensity+ticker), filtres (catégorie, zone, intensité, ticker, source, tri), drill-down trades, breakdown sources
+- `frontend/src/components/ScoringPage.jsx` : v7.0, historique scans (news scorées, dimensions barres, rejets), ajustements newscat learning, logs agent
+- `frontend/src/components/Scoring2Page.jsx` : v7.0, KPIs trend scoring, accumulation directionnelle par ticker (barres LONG/SHORT), news re-pondérées, logs agent scoring_2
+- `frontend/src/components/JournalPage.jsx` : v7.0, wrapper Journal existant + contexte learning injecté + logs agent journal
+- `frontend/src/components/Journal.jsx` : composant journal inchangé (763 lignes, filtres, pagination, expandable entries, export CSV)
+- `frontend/src/components/NewsPage.jsx` : v7.0, santé sources (tableau taux succès/échecs/latence/erreurs, health bars), revue hebdomadaire, logs agent
+- `frontend/src/components/LearningPage.jsx` : v7.0, 6 dimensions learning (per-ticker, session, newscat, régime VIX, direction, delay bias), KPIs (boosts/pénalités), descriptions, logs agent
+- `frontend/src/components/AuditorPage.jsx` : v7.0, trigger audit par agent (22 targets incl. Teams 3/4), rapports, logs agent
+- `frontend/src/components/Scoring3Page.jsx` : Équipe 3, KPIs technique, setups par stratégie, distribution par ticker, logs
+- `frontend/src/components/Trader3Page.jsx` : Équipe 3, KPIs trader, positions actives, **StrategyPerformance** (remplace A/B basique), historique, logs
+- `frontend/src/components/StrategyPerformance.jsx` : v2.1, composant partagé performance par stratégie (single + combo) — filtres type/statut/tri, drill-down trades, WR/P&L/Sharpe/learning adj, résultat breakdown bar
+- `frontend/src/components/Journal3Page.jsx` : Équipe 3, KPIs journal, analyse par stratégie, historique entries, logs
+- `frontend/src/components/Learning3Page.jsx` : Équipe 3, 3 dimensions (strategy, ticker, timeframe), anomalies, logs
+- `frontend/src/components/Scoring4Page.jsx` : Équipe 4, KPIs meta-scoring, confluence summary, signaux top, logs
+- `frontend/src/components/Trader4Page.jsx` : Équipe 4, KPIs trader, positions ouvertes, upstream status, historique, logs
+- `frontend/src/components/Journal4Page.jsx` : Équipe 4, KPIs journal, performance par combinaison, historique, logs
+- `frontend/src/components/Learning4Page.jsx` : Équipe 4, optimisation poids, ajustements combinaison/ticker/confluence, matrice performance, logs
+- `frontend/src/components/NotificationCenter.jsx` : v7.0, panneau latéral slide-in, alertes WARN/ERROR de tous les agents, filtres agent/niveau, navigation vers page agent
+
+## REGLE ABSOLUE — Protection des donnees de production
+
+**JAMAIS committer les fichiers `data/*.json` dans git.**
+
+Ces fichiers contiennent les trades reels, le journal, l'historique de scans.
+Ils sont dans `.gitignore` et crees automatiquement au demarrage par les guards `_ensure_file()`.
+Un commit accidentel de ces fichiers = **perte de toutes les donnees a chaque deploiement**.
+
+Fichiers proteges :
+- `data/trades.json` — tous les trades passes et pending
+- `data/journal.json` — journal quotidien avec analyse post-trade
+- `data/scan_history.json` — historique de tous les scans (audit trail)
+- `data/last_scans.json` — cache des derniers scans (volatile)
+- `data/audit_reports.json` — rapports d'audit de l'Agent Auditeur (persistés entre sessions)
+- `data/source_health.json` — données santé sources (Agent News)
+- `data/trend_positions.json` — positions tendance Agent Trader 2 (persistées entre sessions)
+- `data/trend_journal.json` — journal des flips Agent Journal 2 (completed periods pour Learning 2)
+
+Regles :
+1. **Ne JAMAIS `git add data/`** ou `git add -A` sans verifier
+2. **Ne JAMAIS ecraser** ces fichiers (write_text, truncate) sans lire d'abord
+3. **Toujours utiliser file locking** (`fcntl.LOCK_EX` / `LOCK_SH`) pour les acces concurrents
+4. **Toujours avoir un guard `_ensure_file()`** qui cree le fichier vide `[]` si absent
+5. **Les tests `test_data_persistence.py`** verifient ces regles — ne pas les supprimer
+
+## Data Sources — 4 phases par priorite d'edge
+
+### Phase 0 : Structured Data APIs (PRIORITE MAX — donnees chiffrees)
+Module `data_apis.py` — 17 sources de donnees numeriques que Claude peut interpreter precisement :
+- **Open-Meteo** (GRATUIT, no key) : surveillance meteo 16 zones agricoles critiques
+  - US Midwest Corn Belt, Brazil Minas Gerais (cafe/sucre), Brazil Sao Paulo, Brazil Rio Grande do Sul (soja/mais)
+  - Ukraine/Mer Noire (ble), Inde Punjab/Haryana (ble/riz), Argentine Pampas (soja/mais/ble)
+  - Golfe du Mexique (petrole offshore), Asie du Sud-Est (huile palme), Australie (ble)
+  - **NOUVEAU** : Cote d'Ivoire (cacao), Ghana (cacao), US South Texas (coton), Inde Gujarat (coton), Floride (OJ), Bresil SP (OJ)
+  - Alertes : gel (seuils calibres par culture), canicule, stress thermique cumule (3j+ au-dessus du seuil)
+  - Secheresse avec seuils adaptatifs (periode critique vs normale)
+  - Periodes critiques : silking mais (Jun-Aug), grain fill ble, floraison soja (Dec-Feb hemisph. sud)
+- **EIA API** (cle gratuite `EIA_API_KEY`) : stocks petrole/gaz/distillats + utilisation raffineries hebdo
+  - Seuil de significance : |change_pct| >= 0.5% (ignore le bruit de rounding)
+  - Poids: lit `SOURCE_WEIGHTS["EIA"]` (1.15) au lieu d'un hardcode
+- **USDA NASS** (cle gratuite `USDA_API_KEY`) : crop progress, conditions, recoltes
+  - Queries saisonnieres : planting (Apr-Jun), condition (May-Sep), emergence (May-Jul), harvest (Sep-Dec)
+  - Ble condition : toute l'annee (winter wheat)
+  - Delta WoW : calcul automatique semaine vs semaine, flag [SWING MAJEUR] si >= 5pp
+- **GNews** (cle gratuite `GNEWS_API_KEY`, 100 req/jour) : recherche ciblee par mots-cles — 28 queries avec rotation
+  - **Core queries** (22, toujours executees) : frost/freeze, oil/sanctions, port/shipping, copper/mine, BDI/freight, OPEC, cereals USDA, gold reserves, nat gas/TTF, palm oil/China, hurricane/Gulf, cocoa, cotton, OJ/citrus, PGM, portugais x2, disease/blight, fertilizer, avian flu, cattle disease, ASF
+  - **Extra queries** (6, rotation par scan) : India rice/wheat/sugar export ban, Indonesia palm oil export, Russia/Ukraine wheat/Black Sea, China PMI Caixin, PBOC rate/RRR/yuan, Argentina peso/capital controls
+  - **Rotation** : 22 core + ~2 extras/scan × 4 scans = ~96 req/jour (dans le plafond 100)
+  - v3.5: consolidation 8→5 commodity queries pour liberer 3 slots
+  - v3.5: +6 queries emerging markets / export bans (India, Indonesie, Russie, Chine, Argentine)
+  - **Portugais** : "geada cafe Minas Gerais frio", "seca milho soja safra quebra" (12-24h avant medias EN)
+  - **Maladies/engrais** : "wheat rust crop disease blight", "fertilizer potash phosphate shortage"
+- **CFTC COT** (GRATUIT, no key) : positionnement commerciaux vs speculateurs
+  - Alertes sur CHANGEMENTS hebdo (>8pp swing en 1 semaine = signal fort)
+  - Alertes positionnement extreme commerciaux (>20% OI net)
+  - Alertes speculateurs surexposes (>25% long ou < -20% short = risque reversal)
+  - Detection divergence commerciaux vs speculateurs (signal contrarian)
+- **Options Flow** (GRATUIT via yfinance) : put/call ratio extreme, volume spikes, IV skew
+  - EU equities : TTE.PA, MC.PA, BNP.PA, SAN.PA, AI.PA (seuil P/C > 3.0)
+  - US ETFs : SPY, QQQ, USO, GLD, SLV, CORN, WEAT (seuil P/C > 1.5)
+  - Seuil volume calls US ETFs : 50000 (was 500 — SPY trade millions/jour)
+  - Check 3 expirations les plus proches (was 1 — smart money utilise souvent la 2e/3e)
+  - Mappage ETF→tickers : SPY→^GSPC, USO→CL=F/BZ=F, GLD→GC=F, CORN→ZC=F, WEAT→ZW=F
+  - IV skew analysis : put IV >> call IV (+25%) = smart money hedging baissier
+- **NASA EONET** (GRATUIT, no key) : Earth Observatory Natural Events Tracker
+  - Evenements : tempetes, feux de foret, volcans, inondations, seismes
+  - Filtrage geographique : 9 regions commodity (US Midwest, Bresil, Golfe, Ukraine, SE Asia, etc.)
+  - Evenements hors zones commodity = ignores (reduit faux positifs)
+  - Retry automatique sur 503 (serveur sous charge)
+- **GIE AGSI** (cle gratuite `GIE_AGSI_API_KEY`) : stockage gaz europeen
+  - Donnees EU aggregate + pays individuels (DE, FR, NL, IT)
+  - Seuils saisonniers : hiver (draw) vs ete (injection) — niveaux normaux differents
+  - Detection stress regional masque par l'agregat EU (ex: Allemagne a 20% = crise)
+  - Impact : NG=F (gaz naturel)
+- **USDA WASDE** (cle gratuite `USDA_API_KEY`) : World Agri Supply and Demand Estimates
+  - Production et rendement mais/soja/ble — rapport mensuel le plus market-moving en agri
+  - Detection revision vs estimation precedente (seuil 0.5%)
+  - Impact : ZC=F, ZS=F, ZW=F
+- **CME FedWatch** (GRATUIT via yfinance ZQ=F) : taux implicites Fed Funds futures
+  - Taux implicite = 100 - prix du future, variation 5j en bps
+  - Seuil alerte : |shift| >= 5bps (repricing significatif)
+  - Forward guidance : spread M+1/M+2/M+3 vs spot (>15bps = anticipation forte) — tickers dynamiques (calcules a partir de la date courante)
+  - Impact : GC=F (inverse), EURUSD=X, ^GSPC, USDJPY=X
+- **SHFE/LME Inventaires** (GRATUIT via yfinance) : proxy inventaires metaux via volume/prix
+  - Volume anormal (>2x moy 20j) = mouvement inventaires physiques
+  - Mouvement mensuel >5% = tightness ou surplus
+  - Impact : HG=F (cuivre)
+- **WOAH/OIE** (GRATUIT, no key) : surveillance maladies animales mondiales
+  - ASF (peste porcine africaine), HPAI (grippe aviaire), FMD (fievre aphteuse), BSE (vache folle)
+  - Parsing JSON API WOAH pour outbreaks recents (7 derniers jours)
+  - Impact : LE=F, HE=F (betail)
+- **NASA POWER** (GRATUIT, no key) : donnees satellite pour stress vegetatif
+  - Precipitation + temperature sur 14 jours par zone agricole
+  - Detection secheresse satellite (<5mm/14j) et stress thermique
+  - Complement aux previsions Open-Meteo avec observation reelle
+  - Impact : ZW=F, ZC=F, ZS=F, KC=F selon la zone
+- **Freight Index proxy** (GRATUIT via yfinance BDRY) : Baltic Dry Index via ETF
+  - Spike >20% mensuel ou collapse >20% = signal shipping
+  - Surge 5j >10% = signal court terme
+  - Impact : HG=F, ZC=F, ZW=F, ZS=F (commodities physiques)
+- **LME Inventory proxy** (GRATUIT via yfinance) : volume anomaly sur ETFs metaux
+  - CPER (cuivre), JJN (nickel), PALL (palladium), PPLT (platine)
+  - Volume >2x moy 20j = signal inventaires/demande physique
+  - Impact : HG=F, PL=F, PA=F
+- **Chokepoint Monitoring** (GRATUIT via yfinance) : proxy tankers pour disruptions maritimes
+  - STNG, FRO (tanker companies) — spike prix >5% sur 5j avec volume anormal = disruption
+  - Impact : CL=F, BZ=F, NG=F (energie)
+- **Dark Pool Signals** (GRATUIT via yfinance) : divergence volume/prix sur ETFs majeurs
+  - GLD, USO, SPY, QQQ, XLE, XLF — volume >2x sans mouvement prix (<0.5%) = accumulation institutionnelle
+  - Impact : tickers selon ETF (GLD→GC=F, USO→CL=F, etc.)
+
+Poids premium (v3.5) : Open-Meteo=1.2, EIA=1.15, NHC=1.15, NOAA=1.1, USDA=1.1, NASA EONET=1.1, GIE AGSI=1.15, CFTC=1.1, WOAH=1.15, NASA POWER=1.15, Freight Index=1.1, Shipping Proxy=1.1, LME Proxy=1.05, Dark Pool Proxy=1.0, Options=1.0, FedWatch=1.0, SHFE=1.1, OilPrice=0.9
+- Tous les poids lus via `SOURCE_WEIGHTS.get()` — plus de hardcodes dans data_apis.py
+- GNews: poids variable par categorie query (weather=1.0, commodity/supply_chain=0.95, geopolitical=0.85)
+
+### Phase 1 : Early-Signal RSS (info brute, pas encore interpretee)
+Sources configurees dans `EARLY_SIGNAL_FEEDS` (25 feeds — v3.5 elargi) :
+- **Meteo/Agri** : Drought.gov (US drought monitor), SPC (orages), NWS (alertes), api.weather.gov (ATOM), NHC (ouragans Atlantique), Climate.gov (ENSO/outlooks)
+- **USDA/FAO** : NASS reports (recoltes, stocks), FAO newsroom
+- **Geopolitique/Defense** : war.gov (operations militaires, geopolitique), IAEA (nucleaire/sanctions)
+- **Energie** : EIA Today in Energy, OilPrice
+- **Maritime/Shipping** : gCaptain, MarineLink, Maritime Executive, Splash247 (ports, containers, BDI)
+- **Canal chokepoints** : Panama Canal Authority (ACP) — transit disruptions
+- **Banques centrales** : ECB (corrige .html→.xml), Federal Reserve, Bank of England (speeches)
+- **Chine** (v3.5) : Caixin RSS, Xinhua English finances, Chinese govt latest releases
+- **Reglementation** (v3.5) : US Federal Register (ITC trade rules), EUR-Lex (recent EU legislation)
+
+**v3.5** : +5 feeds Chine/reglementation (edge sur export bans, tarifs, decisions commerciales)
+
+### Phase 2 : Yahoo Finance (yfinance)
+Prix temps reel, news par ticker, historique de volatilite. Gratuit, pas de cle API.
+
+### Phase 3 : Medias mainstream (info deja traitee par les algos)
+RSS feeds (5 sources) : BBC Business + World, CNBC World + Business, Investing.com. Poids reduits : BBC=0.85, CNBC=0.9, Investing.com=0.7
+**Note** : Reuters feeds.reuters.com DNS dead → remplace par BBC
+
+- **Claude API (Anthropic)** (v4.3): scoring des news via Haiku (configurable via `CLAUDE_MODEL` env var) avec tool_use pour structured output + retry exponentiel (max 3 retries). Singleton client HTTP. `temperature=0` pour reproductibilite. Headlines incluent la description RSS quand disponible. WARNING logs si GNEWS_API_KEY ou EIA_API_KEY manquantes. Seul secret requis: `ANTHROPIC_API_KEY`.
+  - **Pre-filtrage zero-edge** (v4.3 D1) : skip Claude pour earnings/macro evidents (`_is_zero_edge_headline()`)
+  - **Pre-filtrage** : cap a 50 items max avant Claude (heuristique source_weight + freshness + description)
+  - **Batching** : si > 50 items, decoupe en batchs de 50 pour eviter timeout API
+  - **Timeout** : 90s par batch (50 items ~30s processing, marge pour queueing API)
+  - **Prompt caching** (v4.3 F3) : system prompt avec `cache_control: {"type": "ephemeral"}` — reduit tokens input
+  - **Score caching** (v4.3 F2) : cache par hash headline (TTL 4h) — evite re-scorer les memes news
+  - **Token tracking** (v4.3 F4) : `get_token_usage()` — monitoring couts cumules
+  - **Coherence** (v4.3 D2) : validation cross-dimensions surprise/delay/awareness
+  - **XML prompt** (v4.3 B1) : sections `<role>`, `<scoring_dimensions>`, `<hard_rules>`, `<examples>` avec 3 few-shot examples
+
+## Calendrier Economique
+Module `economic_calendar.py` — bloque les trades avant les evenements macro majeurs :
+- **FOMC** : dates 2025-2026 hardcodees (publies par la Fed)
+- **ECB** : dates 2025-2026 hardcodees
+- **BOE** : dates 2025-2026 hardcodees
+- **NFP** : premier vendredi de chaque mois (genere dynamiquement)
+- **CPI** : ~2eme semaine de chaque mois (approxime)
+- **Fenetre de danger** : 2h avant + 1h apres l'evenement
+- **Action** : si evenement dans la fenetre, le trade est BLOQUE (zero edge sur macro)
+- **Contexte Claude** : les evenements a venir sont injectes dans le prompt
+
+## Scans Evenementiels (reactifs) — ACTIFS
+Module `event_scanner.py` — schedule dans `main.py` toutes les 10 minutes.
+- **Cron** : toutes les 10 minutes pendant les heures de trading (07:00-19:30 CET), lundi-vendredi
+- **Weekend** : desactive (weekday check dans `should_trigger_scan()` + `day_of_week` dans CronTrigger)
+- **Detection** : mots-cles a fort potentiel dans les titres RSS (v3.1 — elargi)
+  - weather : drought, frost, hurricane, typhoon, tropical storm, el nino, la nina, wildfire, volcanic eruption, earthquake, monsoon failure, record heat/cold...
+  - supply_chain : pipeline explosion, port closed, canal blocked, embargo, container shortage, baltic dry, freight rate surge, vessel grounding, lng terminal, strategic reserve...
+  - geopolitical : military strike, sanctions, nuclear, invasion, carrier strike group, no-fly zone, military buildup, arms deal...
+  - commodity : opec cut, crop failure, stockpile draw, shortage, gas storage, ttf price, palm oil export, coffee frost, china import, wheat export ban...
+  - **v3.2 livestock** : african swine fever, avian flu, bird flu, foot-and-mouth, bse, mad cow, screwworm, herd liquidation, cattle disease, swine fever...
+- **Keywords prioritaires** : hurricane warning, pipeline explosion, military strike, export ban... → bypass cooldown categorie
+- **Cooldowns par categorie** : geopolitique=60s, supply_chain=120s, commodity/weather=300s (minimum global 30s)
+- **Trigger** : si signal detecte → scan complet immediat (respecte cooldown par categorie)
+- **Scan type** : avant 14:00 = europe, apres 14:00 = us
+
+## Scoring — Formule Edge-Weighted (v4.0)
+
+### Criteres d'evaluation (par Claude) — 11 dimensions
+1. **surprise** (0-100) : A quel point l'info est inattendue
+2. **freshness** (0-100) : Calculee automatiquement (age de la news). **NON incluse dans la formule** — stockee pour le journal/tracing uniquement. Claude voit deja l'age "[il y a X.Xh]" et ajuste transmission_delay en consequence. L'inclure causerait une double penalisation.
+3. **directional_clarity** (0-100) : Clarte de la direction d'impact
+4. **transmission_delay** (0-100) : CRITIQUE — Temps avant que le marche price pleinement
+   - 0 = deja price (earnings, NFP conforme)
+   - 20 = algos HFT ont deja reagi (CPI, FOMC)
+   - 50 = quelques acteurs ont vu, pas le gros du marche
+   - 80 = info specialisee, seuls les experts comprennent (rapport USDA, alerte NOAA)
+   - 100 = personne n'a fait le lien avec les actifs
+5. **market_awareness** (0-100) : % des participants qui ont DEJA VU l'info
+   - 0 = personne (bulletin meteo local)
+   - 50 = desk institutionnels
+   - 100 = tout le monde (headline CNN, trending Twitter)
+6. **direction** : LONG / SHORT / NEUTRAL
+7. **impacted_tickers** : tickers directement impactes
+8. **news_category** : earnings, macro, geopolitical, regulatory, m_a, sector, commodity, weather, supply_chain, central_bank_subtle, other
+9. **reasoning** : explication incluant l'estimation du delai de pricing
+10. **expected_magnitude** (0-100, v4.0) : Amplitude attendue du mouvement prix
+    - 0 = bruit, mouvement negligeable
+    - 50 = mouvement notable 1-3%
+    - 100 = choc majeur > 3%
+11. **signal_reliability** (0-100, v4.0) : Fiabilite du signal
+    - 0 = rumeur/speculation non confirmee
+    - 50 = rapport de presse
+    - 100 = fait confirme / mesure officielle (USDA, EIA, NOAA)
+
+### Formule de score (v4.0 — reliability_factor ajoute)
+```
+edge_factor = max(transmission_delay/100 * (1 - market_awareness/100), 0.05)
+reliability_factor = 0.4 + 0.6 * (signal_reliability / 100)
+score = surprise * (clarity/100) * edge_factor * reliability_factor * source_weight * category_score_mult
+```
+**Changements v4.0 vs v3.1 :**
+- **signal_reliability** ajoute : les faits confirmes (EIA, USDA) scorent 2.5x plus que les rumeurs
+- reliability_factor plancher a 0.4 (meme une rumeur garde 40% de valeur — utile si elle est vraie)
+- **expected_magnitude** ajoute : utilise dans la calibration R/R (pas dans le score)
+- **convergence direction** (A2) : validation que les news convergent dans la meme direction
+- **dynamic asset count** (A3) : prompt utilise `len(ASSETS)` au lieu de 39 hardcode
+- **bug fix A1** : `impacted` variable utilise avant definition — corrige
+
+**Changements v3.1 vs v2.0 :**
+- freshness retiree de la formule (evite double penalisation avec transmission_delay)
+- edge_factor floor releve de 0.01 → 0.05 (empeche l'ecrasement total des scores mid-range)
+- MIN_SCORE_THRESHOLD abaisse de 55 → 25 (formule multiplicative trop punitive a 55)
+
+**Exemples concrets :**
+- Earnings Apple (delay=5, awareness=95) → edge_factor = 0.05*0.05 = 0.0025 (floor 0.05) → score ecrase
+- Rapport NOAA secheresse (delay=80, awareness=10) → edge_factor = 0.8*0.9 = 0.72 → score booste
+- Gel Bresil cafe (delay=90, awareness=5) → edge_factor = 0.9*0.95 = 0.855 → score maximal
+
+### Hard-caps sur categories zero-edge (v3.2 — stratifie)
+- **earnings** : transmission_delay force a 5 si > 15, market_awareness force a >= 90
+- **macro** : transmission_delay force a 10 si > 20, market_awareness force a >= 85
+- **m_a** (v3.2) : 2 niveaux :
+  - **M&A confirme** ("confirms", "agrees to buy") → delay=5, awareness>=90 (comme earnings)
+  - **M&A rumeur** ("talks", "in discussions") → delay cap a 40, awareness>=50 (edge reel)
+- **central_bank_subtle** (v3.2) : 3 niveaux :
+  - **Decision de taux** ("rate decision", "holds rates") → delay=5, awareness>=95 (HFT domine)
+  - **Discours president** ("Powell", "Lagarde") → delay cap a 25, awareness>=70
+  - **Discours secondaire** (regional Fed, membre ECB) → delay cap a 45, awareness>=50 (edge max)
+
+### Category Score Multipliers (edge-priority)
+```
+earnings:           0.2   # Quasi zero-edge — deja price en pre-market
+macro:              0.3   # Algos HFT dominent — aucun avantage
+m_a:                0.7   # Fort si rumeur, rarement en avance de phase (releve de 0.5)
+central_bank_subtle: 0.8  # Speeches secondaires — edge faible mais non nul (releve de 0.6)
+other:              0.8   # Defaut moins punitif (releve de 0.6)
+regulatory:         0.9   # Peut avoir de l'edge si signal early (releve de 0.6)
+sector:             1.2   # Liens indirects = edge reel
+geopolitical:       1.3   # Fort edge si signal early
+commodity:          1.5   # Edge max — signaux physiques
+supply_chain:       1.6   # Disruptions logistiques — delai long
+weather:            1.6   # Fort edge mais faux-positifs possibles sur previsions
+```
+
+### News Category Multipliers (calibration R/R)
+Ajustent target et stop selon la categorie :
+- **earnings** : target_mult=0.8, stop_mult=1.2 (petit target, large stop — peu de conviction)
+- **weather** : target_mult=1.3, stop_mult=1.0 (gros moves directionnels)
+- **commodity** : target_mult=1.2, stop_mult=1.05
+- **geopolitical** : target_mult=1.15, stop_mult=1.2 (ambitieux mais volatile)
+
+## Chain Reaction Detector
+Detection automatique des effets de second ordre. Le marche est LENT a connecter les impacts indirects.
+
+### Liens configures (`CHAIN_REACTIONS`)
+- **Energie** : CL=F (WTI) → TTE.PA, BZ=F, NG=F | BZ=F → CL=F
+- **Metaux/safe haven** : GC=F (Or) → SI=F (same), USDCHF=X (inverse), EURUSD=X (same), USDJPY=X (inverse, risk-off)
+- **Agriculture** : ZC=F (Mais) → ZS=F, ZW=F (same), LE=F, HE=F (inverse — feed cost) | KC=F (Cafe) → SB=F (sucre)
+- **Luxe/Chine** : MC.PA → RMS.PA, OR.PA (meme exposition consommateur chinois)
+- **Cuivre** : HG=F → ^GSPC, ^FCHI (proxy industriel), AUDUSD=X (same — Australie producteur)
+- **PGM** : PL=F ↔ PA=F (memes mines sud-africaines — disruption impacte les deux)
+- **Yen carry** : USDJPY=X → GC=F (risk-off inverse)
+- **Yuan/Chine** (v3.5) : USDCNH=X → HG=F (inverse — demand proxy), AUDUSD=X (inverse — China trade partner)
+
+### Fonctionnement
+Apres le scoring Claude, `_detect_chain_reactions()` enrichit automatiquement `impacted_tickers` avec les cibles de second ordre. La direction est propagee (same/inverse).
+
+## Strategie
+- **Type**: Day trading event-driven (news-based), focus edge detection
+- **Scans**: 4/jour — **lundi-vendredi uniquement**
+  - **07:50 CET** (Europe) : capte overnight US/Asie, rapports meteo nuit — edge max (12h+ de delay)
+  - **11:15 CET** (Mid-Session) : capte PMIs matin, donnees EU, meteo actualisee — 9h de trading restant
+  - **14:50 CET** (Pre-US) : decale de 14:30 pour eviter conflit NFP/CPI — les algos ont reagi, on capte le second ordre
+  - **17:00 CET** (US Session) : capte EIA petrole (mer 16:30), ISM (16:00), WASDE mensuel, reaction US open
+- **Scan keys**: `europe`, `mid_session`, `us`, `us_session` (cache + trigger API)
+- **Mapping scan → actifs**: europe/mid_session → ScanType.EUROPE, us/us_session → ScanType.US
+- **Weekend**: tous les scans, event checks et journal sont desactives samedi-dimanche (marches fermes). Les triggers manuels retournent HTTP 400 le week-end.
+- **Execution**: 0 ou 1 trade par scan
+- **Fenetres de sortie**: Europe 09:00-20:00 CET, US 15:30-20:00 CET
+- **Cloture**: toutes les positions fermees avant 20:00 CET. Pas d'overnight.
+- **Univers**: 41 actifs (7 actions Euronext Paris, 4 metaux, 7 forex, 15 commodities, 8 indices)
+  - v3.5: +USDCNH=X (yuan offshore — proxy Chine), +URA (uranium ETF — geopolitique nucleaire)
+- **Filtrage par session**: Europe = Euronext + indices EUR/GBP + metaux/forex/commodities. US = indices USD/JPY/HKD/AUD + metaux/forex/commodities.
+- **Correlation portfolio**: chaque scan verifie les trades de TOUS les autres scans (pas seulement l'autre session)
+- **DST**: toutes les heures utilisent `ZoneInfo("Europe/Paris")` (pas de CET hardcode)
+
+## Calibration R/R (v4.0 — decorrellee, convexe)
+3 tiers de volatilite avec **facteur convexe** et **magnitude scaling** :
+- **Low-vol** (ATR < 1%, forex/large indices) : factor=0.30+(score/100)^1.5*0.60, stop=0.5
+- **Normal** (ATR 1-5%) : factor=0.20+(score/100)^1.5*0.50, stop=0.4
+- **High-vol** (ATR > 5%, NG, small-cap) : factor=0.10+(score/100)^1.5*0.35, stop=0.3
+- **Convexe** (v4.0 C4) : `(score/100)^1.5` au lieu de lineaire — les scores eleves sont disproportionnellement recompenses
+- **Magnitude factor** (v4.0 B1) : `0.7 + 0.6 * (expected_magnitude/100)` multiplie le score_factor
+- **ATR 5 jours** (v4.0 C1) : utilise les 5 derniers jours au lieu de 20 (plus reactif aux conditions recentes)
+- **Asymmetrie SHORT** (v4.0 C2) : stop SHORT +20% plus large (les squeezes sont plus violents a la hausse)
+- **Stop floor adaptatif** (v4.0 C3) : `max(TARGET_PERCENT * 0.7, spread_estime * 2)` — evite les stops en dessous du spread
+- **Target**: ATR x score_factor x magnitude_factor x news_category_target_mult
+- **Stop**: ATR x stop_fraction x news_category_stop_mult (x1.2 si SHORT)
+- **R/R variable**: le ratio varie selon le score (convexe, plus le score est eleve, plus le target est ambitieux)
+- **Planchers**: target min = TARGET_PERCENT, stop min = max(TARGET_PERCENT x 0.7, 2x estimated_spread)
+- **Spread filter** (v4.0 B4) : rejette les trades ou le spread represente >40% du target estime
+
+## Trade Selection — Risk Management (v4.0)
+
+### Cooldown adaptatif par categorie
+- **weather/supply_chain** : cooldown 1 jour (signaux persistants, re-scan rapide)
+- **commodity** : cooldown 2 jours
+- **Autres** : cooldown 3 jours (default)
+
+### Re-entry apres faux stop
+- Si un trade est SL_HIT aujourd'hui sur weather/supply_chain/commodity → re-entry autorise
+- Justification : les signaux physiques persistent — un stop intraday ne signifie pas que le signal est invalide
+- Ne s'applique PAS aux TP_HIT (le signal a deja ete price)
+
+### Position sizing dynamique
+- **Quarter-Kelly** de base, ajuste par :
+  - **VIX regime** : stress (VIX≥30) → 0.5x | elevated (VIX≥20) → 0.75x | calm (VIX≤13) → 1.2x
+  - **Vendredi** : apres-midi → 0.6x | matin → 0.8x (liquidite reduite + risque gap weekend)
+
+### Fallback ticker (v4.0 D1)
+- Si le ticker principal est bloque (correlation, cooldown, prix indisponible), essaie le ticker suivant dans `impacted_tickers`
+- Ordre : parcourt tous les tickers eligibles d'une news avant de rejeter le candidat
+- Evite de perdre des signaux valides quand seul le ticker primaire est bloque
+
+### Daily cap adaptatif VIX (v4.0 D4)
+- **stress** (VIX≥30) : max 2 trades/jour (MAX_TRADES_PER_DAY // 3)
+- **elevated** (VIX≥20) : max 4 trades/jour (MAX_TRADES_PER_DAY * 2/3)
+- **normal/calm** : max 6 trades/jour (MAX_TRADES_PER_DAY)
+
+### Confidence decorrellee (v4.0 B3)
+- `confidence = min(100, signal_reliability * directional_clarity / 100)`
+- Plus liee au score — reflete la fiabilite x clarte, pas le score total
+
+### Spread filter (v4.0 B4)
+- Avant calibration, estime le target potentiel
+- Rejette si spread > 40% du target estime (trade non profitable apres spread)
+- `ESTIMATED_SPREADS` dans config.py pour les 41 tickers
+
+### Pre-move depuis open (v4.0 B5)
+- Utilise `today_open` au lieu de `previous_close` pour detecter les pre-moves intraday
+- Plus precis pour le day trading (capte le mouvement depuis l'ouverture)
+
+### Dynamic correlation optimization
+- Si deux tickers sont dans le meme groupe statique, skip le calcul de correlation dynamique (rolling 20j)
+- **Cache TTL 1h** (v4.0 D3) : resultats de correlation dynamique caches pendant 1h
+- Gain de performance : evite des appels yfinance inutiles quand la correlation est deja connue
+
+## Correlation Groups
+Groupes d'actifs correles pour eviter les doubles expositions :
+- energy: TTE.PA, CL=F, BZ=F, NG=F
+- gold_safe: GC=F, SI=F, USDCHF=X
+- risk_on_eu: ^FCHI, ^GDAXI, ^FTSE
+- risk_on_us: ^GSPC, ^DJI, ^IXIC, ^RUT
+- jpy_carry: USDJPY=X, EURJPY=X, ^N225
+- luxury: MC.PA, RMS.PA, OR.PA
+- agri: ZC=F, ZW=F, ZS=F
+- tropical_soft: KC=F, SB=F, CC=F, OJ=F
+- livestock: LE=F, HE=F
+- pgm: PL=F, PA=F
+- china_proxy: USDCNH=X, HG=F, AUDUSD=X
+
+## Journal quotidien (22h CET)
+- **Scheduler**: job automatique a 22:00 CET chaque jour ouvrable (lundi-vendredi)
+  - `misfire_grace_time=3600` (1h) — le journal est du pur data processing, pas de risque crash loop
+  - Si le job est rate (app down), la startup recovery ferme les vieux trades au redemarrage
+- **Startup recovery** : `_recover_pending_trades_on_startup()` dans `main.py`
+  - Au demarrage, detecte les trades PENDING de jours precedents
+  - Lance automatiquement `run_daily_journal()` pour les fermer
+  - Evite les trades bloques PENDING quand l'app est tuee avant 22h
+- **Actions**: ferme tous les trades PENDING, recupere les prix reels du jour (15min bars preferred, 1h fallback via Twelve Data/yfinance)
+- **Resultat auto**: TP verifie en priorite via bars chronologiques (15min/1h), puis SL, puis EXPIRED
+  - Bars 5-tuple (timestamp, high, low, open, close) triees chronologiquement
+  - Bars filtrees pour ne garder que post-entry (ignore les extremes d'avant le trade)
+  - Si TP et SL touches dans la meme barre → conservatif SL
+  - EXPIRED utilise le close de la derniere barre post-entry (pas le session close global)
+- **v4.1 Enrichissement journal** :
+  - Slippage tracking : entry_price vs first post-entry bar open
+  - MAE/MFE : Max Adverse/Favorable Excursion pendant le trade
+  - Bar coverage : nombre de bars post-entry disponibles + intervalle detecte
+  - Realized R/R : ratio risque/rendement realise vs predit
+  - Price anomaly detection : flag si mouvement > 20% (possible split/data error)
+  - PnL cross-check : validation duale entre journal et trade update
+  - DST-safe date filtering : conversion Paris timezone pour filtrage bars
+  - Global timeout 300s pour eviter les journal runs infinis
+  - Exit time = timestamp reel du bar TP/SL (pas l'heure du journal run)
+  - Midpoint correction sur actual_pricing_hours (+7.5min pour 15min, +30min pour 1h)
+- **Pruning** : entries > 1 an prunees automatiquement apres chaque journal run
+- **Dedup**: verifie `(ticker, entry_time)` pour eviter les doublons lors de triggers manuels
+- **Trades anciens**: recupere les prix historiques pour la date reelle du trade (pas seulement aujourd'hui)
+- **Persistence**: PostgreSQL (primary) ou `data/journal.json` (fallback)
+  - Resilient: si une entree echoue au parsing, elle est skippee (pas de crash)
+  - Auto-migration JSON→PG si PG est vide mais JSON a des donnees
+- **Prix indisponibles** : si le fetch de prix echoue, le trade est marque EXPIRED avec entry_price comme fallback
+  - `update_trade_result()` est TOUJOURS appele (plus de trades stuck PENDING)
+- **Categories de news**: earnings, macro, geopolitical, regulatory, m_a, sector, commodity, weather, supply_chain, central_bank_subtle, other
+- **Categories d'actifs**: actions_europe, metaux, forex, commodities_energy, commodities_agri, commodities_soft, commodities_industrial, commodities_livestock, indices
+- **Learning**: apres chaque cloture, les resultats alimentent `compute_learning_adjustments()`
+- **Frontend**: onglet "Journal" avec tableau groupe par date, badges categorie news et actif
+- **API**: `GET /api/journal`, `GET /api/journal/{date}`, `POST /api/journal/trigger`, `GET /api/journal/debug`
+  - `/api/journal/trigger` retourne toujours `{entries: [...], diagnostic: {...}}`
+  - `/api/journal/debug` : diagnostic PG vs JSON, parse errors, pending trades details
+- **Decision trace** (v3): chaque entree journal stocke le raisonnement complet :
+  - `all_scored_news` : toutes les news scorees par Claude avec scores et reasoning
+  - `rejection_log` : pourquoi chaque candidat a ete rejete (NEUTRAL, score bas, correle, deja price, R/R)
+  - `decision_summary` : pourquoi ce trade a ete selectionne plutot que les alternatives
+  - `learning_state` : etat des ajustements learning au moment du scan
+  - `raw_claude_score` / `learning_multiplier` : decomposition du score
+  - `vix_at_trade` / `market_regime` : contexte marche au moment du trade
+  - `predicted_transmission_delay` / `actual_pricing_time_hours` / `delay_accuracy` : tracking precision
+
+## Learning adaptatif (v7.7 — granular commodities, zone+intensity-aware newscat cross-dimension)
+- **Par ticker**: ajustement 0.5-1.5 (min **8** trades, t-stat > **2.0**)
+- **Par categorie d'actif**: ajustement 0.7-1.3 (min 5 trades, t-stat > 1.5) — **DESACTIVE pour commodities** (v5.2: le learning ne penalise jamais les commodities en tant que classe)
+- **Par newscat+ticker** (v5.2): ajustement 0.7-1.3 (min 4 trades) — cross-dimension granulaire (ex: weather+ZW=F au lieu de weather global)
+  - Fallback broad category si le combo n'a pas assez de donnees
+  - Applique contextuellement par la news_category + ticker du trade courant
+- **Par newscat+zone+ticker** (v7.6): ajustement 0.7-1.3 (min 3 trades) — geographic isolation (ex: weather+france_beauce+ZW=F). Lookup priority: zone+ticker > ticker > broad category > 1.0. Prevents bad trades from one geographic zone from penalizing another zone.
+- **Par newscat+intensity+ticker** (v7.7): ajustement 0.7-1.3 (min 3 trades) — intensity isolation based on expected_magnitude. Tiers: low (0-33), high (67-100), medium uses fallback. Key format: `weather+high+ZW=F`. Prevents low-intensity signals (minor drought) from contaminating high-intensity signals (severe drought). Combined with zone: `weather+india+high+ZW=F` (most granular).
+- **Par session** (europe/us): ajustement 0.8-1.2 (min 5 trades, t-stat > 1.5) — applique par le scan courant
+- **Par regime VIX** (v4.2 C1): ajustement 0.7-1.3, **2 buckets** (low_vol=calm+normal, high_vol=elevated+stress), **min 15 trades**
+  - Merged from 4 regimes to 2 for larger sample sizes — reduces overfitting
+- **Par direction** (v4.2 B5): ajustement 0.8-1.2 (LONG vs SHORT accuracy, min 8 trades)
+- **Delay bias** (v4.2 B1): ajustement global basé sur la précision des prédictions transmission_delay
+  - Si surestimation systématique → pénalise (on entre trop agressivement)
+  - Si sous-estimation → booste (on rate de l'edge)
+- **Blending multiplicatif** (v5.2): `final_mult = base(ticker*cat) * session * newscat_ticker * regime * direction * delay_bias`
+  - 6 dimensions (was 7, hour_adj removed M8: worst data-to-noise ratio)
+  - Clamp final [0.5, 1.5]
+- **A5: Average ticker mults** (v4.2): utilise la moyenne des multipliers de TOUS les tickers éligibles (pas juste le premier)
+- **Significance test**: pseudo t-test avec **effet size minimum** (v4.2 A3)
+  - A2: stderr=0 vérifie min_effect_size au lieu de retourner True aveuglément
+  - A3: |mean| doit être >= 0.1 (ignore les signaux négligeables)
+  - Per-ticker: t > 2.0, min 8 trades (v5.2: raised from 1.5)
+  - Per-category/session/newscat: t > 1.5, min 5 trades (v5.2: raised from 1.0)
+  - Per-regime: t > 1.5, min 15 trades (v5.2: raised from 1.0)
+- **Signal PnL-signe**: `_compute_adjustment()` normalise par 1.0 (v4.2 A4, was 2.0 — doublait la sensibilité)
+  - Formule: `1.0 + clamp(avg_pnl / 1.0, -cap, cap) * sensitivity`
+- **Decay temporel adaptatif**: demi-vie 45j (peu de trades) → 30j (beaucoup de trades)
+- **D1: Lookback = 2x half_life** (v4.2): was 180 jours fixe — maintenant 60-90j selon half_life
+- **D4: Trades parameter**: `compute_learning_adjustments(trades=...)` et `build_performance_summary(trades=...)` acceptent un paramètre optionnel
+- **D3: Partial PG migration detection** (v4.2): warning si PG et JSON ont des données divergentes
+- **Feedback loop Claude** (v4.2 E1): format **alerts-only** — compact, n'inclut que les anomalies :
+  - Header compact: `N=X | WR=X% | PnL=X% | moy=X%`
+  - Outliers newscat seulement (WR < 35% ou > 70%)
+  - Direction accuracy si anomalous (< 45% ou > 65%)
+  - Delay bias si significatif (> 10pts)
+  - EXPIRED rate si > 40%
+  - Drawdown si >= 3 pertes consécutives
+  - Skewness si négative < -0.5
+  - **E2: MAE feedback** — alerte si SL_HIT > 40% et MAE élevé (stops trop serrés)
+  - **E3: signal_reliability precision** — alerte si low-rel WR > high-rel WR
+  - **B2: magnitude_accuracy** — alerte si surestimation/sous-estimation systématique
+  - **B3: slippage vs spread** — alerte si slippage > 2x spread estimé
+  - **v5.5: Per-source performance** — outliers par source (WR < 30% ou > 75%), Claude ajuste signal_reliability
+  - Streaks négatifs actifs (>= 3)
+  - Derniers 10 trades (compact)
+  - Instructions scoring compactes (incl. guidance per-source v5.5)
+- **Score decomposition**: chaque trade stocke `raw_claude_score` et `learning_multiplier`
+- **Decomposition par dimension**: logs détaillent `ticker_mult`, `cat_mult`, `session_mult`, `newscat_mult`, `regime_mult`, `dir_mult`, `delay_bias_adj`
+- **learning_helped tracking**: chaque trade tracke si le learning a boosté ou pénalisé la sélection
+- **Cache learning**: invalidé après le journal 22h
+- **Return format** (v4.2): `compute_learning_adjustments()` retourne un dict structuré :
+  - `adjustments`: dict[ticker, multiplier] — base blend ticker*cat
+  - `session_adj`: dict[scan_type, multiplier] — appliqué par scan courant
+  - `newscat_adj`: dict[newscat+zone+intensity+ticker OR newscat+zone+ticker OR newscat+intensity+ticker OR newscat+ticker OR newscat, multiplier] — zone+intensity-aware cross-dimension v7.7 (ex: "weather+india+high+ZW=F" zone+intensity, "weather+india+ZW=F" zone+ticker, "weather+high+ZW=F" intensity+ticker, "weather+ZW=F" ticker-specific, or "weather" broad fallback)
+  - `regime_adj`: dict[regime, multiplier] — low_vol/high_vol (v4.2 merged)
+  - `direction_adj`: dict[direction, multiplier] — v4.2 B5
+  - `delay_bias_adj`: float — v4.2 B1
+  - `decomposition`: dict[ticker, {ticker_mult, cat_mult}] — pour diagnostics
+- **File locking**: `fcntl.LOCK_EX` / `fcntl.LOCK_SH` pour accès concurrent sur les fichiers JSON
+
+## Parametres cles (v4.0)
+- Score minimum: 20/100 (abaisse de 25 — capte les signaux mid-range)
+- Edge factor floor: 0.05 (releve de 0.01)
+- Reliability factor floor: 0.4 (rumeur garde 40% de valeur)
+- Ratio risque/rendement minimum: 1.2 (abaisse de 1.3 — plus realiste en intraday)
+- Freshness peak: < 2h (stocke, non inclus dans la formule)
+- News max age: 8h default, 18h for structured sources (EIA, USDA, NOAA, etc.) — per-source in news_collector.py
+- Dedup Jaccard threshold: 0.65 (abaisse de 0.75 pour meilleure dedup)
+- Trigger cooldown: 300s (5 min entre deux triggers manuels)
+- Schema version: 3
+- ATR window: **5 jours** (reduit de 20 — plus reactif)
+- Score factor: **convexe** `(score/100)^1.5` (v4.0, au lieu de lineaire)
+- Magnitude factor: `0.7 + 0.6 * (expected_magnitude/100)` (v4.0)
+- SHORT stop asymmetrie: **+20%** (v4.0)
+- Spread filter seuil: spread > 40% du target estime → rejet (v4.0)
+- Correlation cache TTL: 1h (v4.0)
+- Daily cap adaptatif: stress=2, elevated=4, normal=6 (v4.0)
+- ESTIMATED_SPREADS: 41 tickers dans config.py, DEFAULT_SPREAD=0.10% (v4.0)
+- Learning min trades: 5 (global), **8** (par ticker/hour/direction), 5 (par categorie/news_cat/session), **15** (par regime — v4.2 C1)
+- Learning significance: t-stat > **1.5** per-ticker, t-stat > 1.0 autres, min_effect_size=0.1 (v4.2 A3)
+- Learning PnL divisor: **1.0** (v4.2 A4, was 2.0)
+- Learning lookback: **2x half_life** (v4.2 D1, was 180 jours fixe)
+
+## Secrets (Replit)
+- **Requis** : `ANTHROPIC_API_KEY`
+- **Auto** : `DATABASE_URL` (cree automatiquement par Replit quand on ajoute PostgreSQL)
+- **Optionnels** (gratuits, ameliorent la couverture) :
+  - `TWELVE_DATA_API_KEY` : `57627ad733b24fa78ac40652078c18fc` — market data rapide (https://twelvedata.com/ — free tier 800 credits/jour, 8 req/min). **ATTENTION** : les futures commodities nécessitent `type=commodities` dans les params (voir section Market Data ci-dessus)
+  - `EIA_API_KEY` : donnees energie EIA (https://www.eia.gov/opendata/register.php)
+  - `GNEWS_API_KEY` : recherche news ciblee — 28 queries avec rotation (https://gnews.io/)
+  - `USDA_API_KEY` : donnees agricoles USDA (https://quickstats.nass.usda.gov/api)
+  - `GIE_AGSI_API_KEY` : stockage gaz europeen (https://agsi.gie.eu/ — inscription gratuite)
+- yfinance, Open-Meteo, CFTC COT, NASA EONET et RSS ne necessitent aucune cle
+
+## Performance (optimisations v3.1)
+
+### Backend — Parallelisation I/O
+- **collect_structured_data()** : 17 sources API en parallele (ThreadPoolExecutor, max_workers=8, timeout 120s)
+- **collect_all_news()** : 4 sources (structured, early-signal, yfinance, rss) en parallele
+- **_fetch_market_context()** : 9 appels yfinance en parallele (VIX + indices + trends)
+- **select_trade()** : pre-fetch de tous les prix candidats en parallele avant evaluation
+- **run_daily_journal()** : pre-fetch des prix de cloture en parallele pour tous les trades pending
+- **scan_feeds_for_triggers()** : 8 early-signal feeds en parallele (event scanner)
+- **Claude API** : timeout 90s par batch, pre-filtrage a 50 items max, batching automatique si > 50
+- **Scheduler** : retry immediat (pas de `time.sleep()` qui bloquerait le thread scheduler)
+- **Scheduler** : `misfire_grace_time=60` scans (evite crash loops), `misfire_grace_time=3600` journal (safe, pur data processing)
+- **Trigger scan** : non-bloquant — execute en background thread (evite timeout HTTP)
+- **RSS** : `requests.get(url, timeout=15)` + `feedparser.parse(content)` (au lieu de `feedparser.parse(url)` qui n'a pas de timeout reseau)
+- **RSS** : User-Agent navigateur pour eviter les 403 (CNBC, gCaptain, BoE)
+- **ThreadPoolExecutor** : pattern `try/finally + shutdown(wait=False, cancel_futures=True)` partout (evite blocage si un thread hang)
+
+### Backend — Caches
+- **Performance summary** : cache `build_performance_summary()` invalide apres chaque journal
+- **Learning adjustments** : cache invalide apres chaque journal (#26)
+- **CFTC COT CSV** : cache 24h (publie hebdomadairement, inutile de re-telecharger a chaque scan)
+- **Health check yfinance** : cache 5 min (evite de bloquer `/api/health`)
+
+### Frontend — React (v7.0 — navigation centrée agents)
+- **React.lazy + Suspense** : code splitting par page agent (7 pages lazy-loadées)
+- **Navigation centrée agents** : sidebar comme navigation principale, hash routing (#dashboard, #news, #scoring, #trader, #journal, #learning, #auditor)
+- **Pages dédiées** : chaque agent a sa propre page riche (données + learning + logs)
+- **Centre de notifications** : panneau slide-in, alertes WARN/ERROR de tous les agents, filtres, badge compteur
+- **ErrorBoundary** : capture les erreurs de rendu avec bouton de recovery
+- **Polling intelligent** : agents status 5s, data 60s, notifications 30s, skip quand tab masqué (`document.hidden`)
+- **KPIs** : cards compactes (win rate, P&L, trades) sur Dashboard et page Trader
+- **Learning visualisation** : 6 dimensions avec multipliers, grilles, barres de dimension scoring
+- **useMemo** : grouping/sorting du journal memoize pour eviter les re-calculs
+- **Keys stables** : `timestamp-ticker` au lieu de `key={i}` dans les tables
+- **Preconnect** : `<link rel="preconnect">` pour Google Fonts (gain ~100ms)
+
+## Deploiement
+- Plateforme cible: Replit
+- Backend: `uvicorn backend.app.main:app`
+- Frontend: Vite dev server ou build statique
+- **PostgreSQL** : ajouter une base PostgreSQL sur Replit → `DATABASE_URL` auto-set. Au premier demarrage, `init_db()` cree les tables. Pour migrer les donnees existantes : `python -m backend.migrate_json_to_postgres`
+- **Twelve Data** : ajouter `TWELVE_DATA_API_KEY` dans les secrets Replit (optionnel, yfinance fallback)
+- **ATTENTION** : `data/*.json` est dans `.gitignore` — les donnees de production vivent sur le disque Replit (ou PG), PAS dans git. Un `git checkout` ou redeploy ne doit JAMAIS ecraser ces fichiers.
+
+## Tests
+- Framework: pytest
+- Lancer: `python -m pytest backend/tests/ -v` (depuis la racine du projet)
+- Couvre: config, models, news_scorer, trade_selector, journal, learning, economic_calendar, data_apis, event_scanner
+- v3 tests ajoutés : significance test, compute_adjustment, multiplicative blending, build_performance_summary
+- v3.4 tests ajoutés (10 tests) : structured return format, session_adj separate, regime_adj, per-ticker stricter significance, newscat_adj separate, decomposition, configurable t_threshold, PnL-signed adjustment, benchmark in summary, anti-double-counting
+- v4.0 tests ajoutés (12 tests) :
+  - **test_models.py** : reliability_factor, reliability_floor, magnitude_defaults, trade_recommendation magnitude/reliability
+  - **test_news_scorer.py** : tool schema magnitude/reliability, dynamic asset count, magnitude instructions, convergence direction param
+  - **test_trade_selector.py** : convex_score_factor, short_asymmetric_stop, magnitude_scales_target, spread_stop_floor
+- v4.1 tests ajoutés (18 tests) :
+  - **TestJournalAuditV41** (11 tests) : PnL div-by-zero, MAE/MFE long/short, slippage, price anomaly, bar interval, v4.1 fields, EXPIRED last bar close, find_hit_time
+  - **TestLearningV41** (7 tests) : D2 old trades filtered, D4 trades param, C2 time-of-day, C3 day-of-week, F2 expired rate alert, G2 market holidays, D3 journal pruning
+- **test_workflow_e2e.py** (82 tests) : backtest complet du pipeline end-to-end
+  - Phase 1 : scoring formula edge cases (weather vs earnings, stale vs fresh, etc.)
+  - Phase 2 : trade selection (filtering, session, correlation, pre-move, R/R)
+  - Phase 3 : chain reactions (same/inverse/NEUTRAL, dedup)
+  - Phase 4 : journal closure (TP/SL/EXPIRED, PnL, delay tracking, scan trace)
+  - Phase 5 : learning (significance, blending, feedback loop, adjustments applied)
+  - Phase 6 : integration multi-jours (score → select → save → journal → learn)
+  - Phase 7 : resilience erreurs (corrupt files, missing data, empty inputs)
+  - Phase 8 : multi-trade per scan (v3.5)
+  - Phase 9 : v4.1 journal audit (MAE/MFE, slippage, pruning, holidays, D2 cutoff)
+- v4.2 tests ajoutés (12 tests) :
+  - **test_learning.py** : stderr=0 effect size (A2), min effect size (A3), divisor fix (A4), hour_adj, direction_adj, delay_bias_adj, D1 lookback, regime merged buckets, trades param summary (D4), alerts-only format (E1)
+  - **test_workflow_e2e.py** : updated "Win rate" → "WR=" assertions for v4.2 compact format
+- v4.3 tests ajoutés (15 tests) :
+  - **test_news_scorer.py** : prompt_version_hash, default_model_haiku, get_model_default, get_model_env_override, confirmed_event schema, perceived_age schema, reasoning_max_length, zero_edge_headline_detection, validate_coherence_warnings, validate_coherence_consistent, score_cache_operations, get_token_usage, xml_structure, few_shot_examples, cache_control
+- **test_weekend.py** : verification que scans, event checks et triggers sont bloques le week-end
+- **test_data_persistence.py** : PG fallback, JSON guard, corrupt file resilience, auto-migration
+- v5.1 tests ajoutés (12 tests) :
+  - **test_data_persistence.py** : scan_history_retention_365, scored_news_log_includes_description, price_archive_table_creation, price_archive_stats_without_pg, rescore_headline_formula, rescore_headline_zero_edge, replay_backtest_no_history, coherence_validation_returns_fixed_values, learning_filters_anomalous_pnl, review_insights_filter_pending_trades, price_archive_endpoint, backtest_replay_endpoint
+- v6.1 tests ajoutés (42 tests) :
+  - **test_agents.py** : MessageBus (singleton, publish/consume, targeted, broadcast, subscribe, limit, filter, recent, maxlen), AgentLogger (log/duration/filter/limit/maxlen), BaseAgent (status, execute success/failure, log_decision, metrics, publish), Registry (get_all, get_by_name, unknown, status with UX, metrics, status fields), Auditor (profiles present, UX profile, checks, invalid target, metrics, UX audit runs), per-agent init+metrics (News, Scoring, Trader, Journal, Learning), Database pruning (messages, logs, reports no-PG)
+- v6.3 tests ajoutés (10 tests) :
+  - **test_learning.py** (5) : PG trade columns include scoring fields, EXPIRED pricing_hours computation, news_category direct access, extract_structured_anomalies returns typed dicts, performance summary uses journal MAE
+  - **test_agents.py** (5) : raw_claude_score not score on TradeRecommendation, direction enum serialization, reset_daily_counters, static group correlation skip, position_monitor returns dict
+- v6.4 tests ajoutés (7 tests) :
+  - **test_agents.py** (7) : trailing_stop_before_sl_check, trailing_stop_calls_persist, update_trade_stop_exists, update_trade_stop_json_fallback, pg_update_trade_stop_function_exists, journal_no_getattr_on_trade, learning_no_getattr_on_trade
+- **27 tests trader_2** (`test_agent_trader_2.py`) : init (4), tickers (1), persistence JSON (5), news filtering (5), direction evaluation (4), P&L tracking (3), agent run (2), registration (2), database DDL (1)
+- **Note** : 1 test flaky (`test_collect_structured_data_returns_list`) — SHFE/LME volume detection depends on live market data
+
+## Environnement de développement local (Claude Code)
+
+### Setup obligatoire en début de session
+L'environnement Claude Code n'a **pas** les mêmes dépendances que Replit. Avant de tester ou lancer quoi que ce soit, exécuter :
+
+```bash
+pip install pytz multitasking==0.0.11 platformdirs --no-deps --quiet 2>/dev/null
+pip install "curl_cffi>=0.7,<0.14" protobuf websockets --quiet 2>/dev/null
+```
+
+**Pourquoi** : yfinance 1.2.0 est installé dans cet env (au lieu de <1.0 comme sur Replit) et nécessite ces dépendances supplémentaires. Sans elles, `fetch_price()` retourne `None` pour TOUS les tickers car le fallback yfinance crash sur `ModuleNotFoundError`.
+
+### Différences clés avec Replit
+| | Replit (production) | Claude Code (dev) |
+|---|---|---|
+| `TWELVE_DATA_API_KEY` | `57627ad733b24fa78ac40652078c18fc` | **Même clé dispo** — `export TWELVE_DATA_API_KEY=57627ad733b24fa78ac40652078c18fc` |
+| `DATABASE_URL` (PostgreSQL) | Configuré | **Non disponible** → fallback JSON |
+| `ANTHROPIC_API_KEY` | Configuré | **Non disponible** |
+| yfinance version | < 1.0 (requirements.txt) | 1.2.0 (incompatible, nécessite deps supplémentaires) |
+| Prix en temps réel | Twelve Data (primary) + yfinance (fallback) | Twelve Data (avec export de la clé) ou yfinance only |
+
+### Tests — notes
+- Exécuter les tests depuis la **racine du projet** : `cd /home/user/Finance && python -m pytest backend/tests/ -q`
+- **Tests flaky par date** : certains tests échouent certains jours à cause du calendrier économique (USDA WASDE, FOMC, etc.) qui bloque les trades dans `trade_selector.py`. C'est normal, pas un bug.
+- **Test pre-existing failure** : `test_run_initializes_positions` (direction NEUTRAL vs LONG) — échec pré-existant non lié aux changements courants.
+- Les données de test n'utilisent **pas** les fichiers `data/*.json` de production.
+
+### Validation des prix après changements
+Pour vérifier que les prix fonctionnent dans l'environnement local :
+```bash
+python3 -c "
+from backend.app.market_data import fetch_price
+for t in ['HG=F', 'KC=F', 'CC=F', 'ZW=F', 'EURUSD=X', 'GC=F', 'BNP.PA']:
+    print(f'{t}: {fetch_price(t)}')
+"
+```
+Tous les prix doivent retourner un `float > 0`, jamais `None`.
+
+## Validation des prix (v8.4)
+
+### Couche de protection anti-anomalies
+Le système maintient un cache de "prix de référence" (dernier prix valide connu par ticker). Chaque nouveau prix est comparé à cette référence avant d'être accepté.
+
+- **`validate_price(ticker, price)`** : rejette si déviation > 50% de la référence
+- **`fetch_price_validated(ticker)`** : fetch + validation + cross-check yfinance si anomalie
+- **`seed_price_references()`** : initialise les références au démarrage (41 tickers en parallèle)
+- **Guards** dans les 4 traders : validation avant stockage de `entry_price` et `current_price`
+
+### Admin API pour corrections
+- `POST /api/admin/fix-entry-price` — corrige un entry_price erroné + recalcule P&L
+  - Body : `{"team": 2, "ticker": "HG=F", "correct_price": 5.93}`
+- `GET /api/admin/price-references` — affiche le cache de référence (debug)
