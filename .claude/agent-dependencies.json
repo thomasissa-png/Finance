@@ -1,0 +1,104 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "description": "Graphe de dépendances inter-agents — utilisé par l'orchestrateur pour valider les prérequis",
+    "updated": "2026-04-02"
+  },
+  "agents": {
+    "creative-strategy": {
+      "requires": [],
+      "produces": ["docs/strategy/brand-platform.md", "docs/strategy/personas.md", "docs/strategy/creative-brief.md", "docs/strategy/competitive-benchmark.md"],
+      "handoff_to": ["ux", "copywriter", "design", "product-manager"]
+    },
+    "product-manager": {
+      "requires": ["creative-strategy"],
+      "produces": ["docs/product/product-vision.md", "docs/product/roadmap.md", "docs/product/functional-specs.md", "docs/product/backlog.md", "docs/product/execution-plan.md"],
+      "handoff_to": ["ux", "data-analyst", "fullstack", "qa"]
+    },
+    "data-analyst": {
+      "requires": ["product-manager", "creative-strategy"],
+      "produces": ["docs/analytics/kpi-framework.md", "docs/analytics/tracking-plan.md", "docs/analytics/dashboard-specs.md"],
+      "handoff_to": ["fullstack", "growth", "legal"]
+    },
+    "ux": {
+      "requires": ["creative-strategy", "product-manager"],
+      "produces": ["docs/ux/user-flows.md", "docs/ux/wireframes.md", "docs/ux/ux-audit.md", "docs/ux/onboarding-flow.md", "docs/ux/ux-review.md"],
+      "handoff_to": ["design", "fullstack", "qa"]
+    },
+    "design": {
+      "requires": ["creative-strategy", "ux"],
+      "produces": ["docs/design/design-system.md", "docs/design/design-tokens.json", "docs/design/component-library.md", "docs/design/page-compositions.md"],
+      "handoff_to": ["fullstack", "qa"]
+    },
+    "fullstack": {
+      "requires": ["design", "product-manager", "ux"],
+      "produces": ["src/", "docs/dev-decisions.md", "docs/api-documentation.md", "tests/screenshots/"],
+      "handoff_to": ["qa", "infrastructure"]
+    },
+    "qa": {
+      "requires": ["product-manager", "ux", "fullstack"],
+      "produces": ["docs/qa/qa-strategy.md", "docs/qa/TESTING.md", "tests/"],
+      "handoff_to": ["infrastructure"]
+    },
+    "infrastructure": {
+      "requires": ["fullstack"],
+      "produces": ["docs/infra/infrastructure.md", "docs/infra/performance-audit.md", "docs/infra/security-checklist.md"],
+      "handoff_to": ["fullstack"]
+    },
+    "copywriter": {
+      "requires": ["creative-strategy"],
+      "produces": ["docs/copy/brand-voice.md", "docs/copy/landing-page-copy.md", "docs/copy/email-sequences.md", "docs/copy/ux-writing-guide.md"],
+      "handoff_to": ["fullstack", "seo"]
+    },
+    "seo": {
+      "requires": ["creative-strategy", "copywriter"],
+      "produces": ["docs/seo/seo-strategy.md", "docs/seo/keyword-map.md", "docs/seo/metadata-templates.md", "docs/seo/topical-map.md"],
+      "handoff_to": ["fullstack", "geo"]
+    },
+    "geo": {
+      "requires": ["creative-strategy", "seo"],
+      "produces": ["docs/geo/geo-strategy.md", "docs/geo/content-restructuring.md", "docs/geo/llm-content-templates.md"],
+      "handoff_to": ["growth", "fullstack"]
+    },
+    "growth": {
+      "requires": ["product-manager", "data-analyst", "seo"],
+      "produces": ["docs/growth/growth-strategy.md", "docs/growth/acquisition-plan.md", "docs/growth/funnel-audit.md", "docs/growth/earned-media-plan.md"],
+      "handoff_to": ["social", "copywriter", "data-analyst"]
+    },
+    "social": {
+      "requires": ["creative-strategy", "copywriter", "growth"],
+      "produces": ["docs/social/social-strategy.md", "docs/social/editorial-calendar.md", "docs/social/content-templates.md"],
+      "handoff_to": ["copywriter", "growth"]
+    },
+    "legal": {
+      "requires": ["product-manager"],
+      "produces": ["docs/legal/legal-audit.md", "docs/legal/cgu-draft.md", "docs/legal/privacy-policy.md", "docs/legal/rgpd-checklist.md"],
+      "handoff_to": ["fullstack", "infrastructure"]
+    },
+    "ia": {
+      "requires": ["product-manager"],
+      "produces": ["docs/ia/ai-architecture.md", "docs/ia/model-selection.md", "docs/ia/prompt-library.md"],
+      "handoff_to": ["fullstack", "infrastructure"]
+    },
+    "sales-enablement": {
+      "requires": ["creative-strategy", "product-manager"],
+      "produces": ["docs/sales/sales-playbook.md", "docs/sales/proposal-templates.md", "docs/sales/objection-handling.md", "docs/sales/roi-calculator-specs.md"],
+      "handoff_to": ["copywriter", "design", "fullstack"]
+    },
+    "reviewer": {
+      "requires": ["_all"],
+      "produces": ["docs/reviews/cross-review-report.md", "docs/reviews/consistency-audit.md"],
+      "handoff_to": ["orchestrator"]
+    },
+    "elon": {
+      "requires": [],
+      "produces": ["docs/reviews/elon-audit.md"],
+      "handoff_to": ["orchestrator"]
+    },
+    "moi": {
+      "requires": [],
+      "produces": [],
+      "handoff_to": ["orchestrator"]
+    }
+  }
+}

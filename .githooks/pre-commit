@@ -1,0 +1,18 @@
+#!/bin/sh
+# Guard: la section Gradient de CLAUDE.md doit rester sous 125 lignes (Règle n°7)
+# Le contenu custom du projet (hors marqueurs) n'est pas limité.
+MAX=125
+if [ -f "CLAUDE.md" ]; then
+  if grep -q "GRADIENT-AGENTS-START" CLAUDE.md; then
+    # Compter uniquement les lignes entre les marqueurs
+    LINES=$(sed -n '/GRADIENT-AGENTS-START/,/GRADIENT-AGENTS-END/p' CLAUDE.md | wc -l)
+  else
+    # Pas de marqueurs = tout le fichier est Gradient
+    LINES=$(wc -l < CLAUDE.md)
+  fi
+  if [ "$LINES" -gt "$MAX" ]; then
+    echo "BLOCKED: Gradient section in CLAUDE.md has $LINES lines (max $MAX)."
+    echo "Move content to .claude/agents/_base-agent-protocol.md or _gates.md."
+    exit 1
+  fi
+fi
