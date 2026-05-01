@@ -18,6 +18,8 @@ Systeme de news trading multi-agent (4 equipes) sur commodities, forex, indices,
 | 1 | 2026-05-01 | Claude Code | Auditor calendar_blocking check enrichi | complet | Spot-check live: KC=F exempt, forex sensible. Score 9 si per-ticker filter OK |
 | 1 | 2026-05-01 | Claude Code + Explore | Fix PG SSL connection drop (pool reset + retry) | complet | SSL drop a 07:45 tuait le scan 07:50 silencieusement. Fix: reset_pool(), try/except top-level dans pipeline, retry 3x |
 | 1 | 2026-05-01 | Claude Code + Explore | Scan watchdog + misfire_grace_time 900s | complet | Scan 17:00 saute par Replit container sleep. misfire 300→900s + watchdog toutes les 30min retrigger les scans manques |
+| 1 | 2026-05-01 | @data-analyst | Audit Data & KPIs — docs/audit/data-analyst.md | complet | 100% EXPIRED rate sur 30+ trades : hypothese principale = TP trop large pour volatilite intraday reelle. North Star Metric absent. Sharpe/drawdown absents Equipe 1. Backtest v5.1 jamais lance. |
+| 1 | 2026-05-01 | @product-manager | Audit Roadmap & Priorisation — docs/audit/product-manager.md | complet | Score 4/10 PM-readiness. Zero NSM, zero DoD, 100% EXPIRED = arret d'urgence produit. Roadmap 3 phases : Stop Bleeding (sem 1-2) → Validate Edge (sem 3-4) → Double Down ou Kill (mois 2). 8 items MUST P0, zero nouvelle feature autorisee avant validation edge. |
 
 ## Memo de reprise — derniere session
 
