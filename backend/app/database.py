@@ -1237,6 +1237,24 @@ def pg_load_scan_history() -> list[dict]:
     return _pg_retry(_load)
 
 
+def pg_get_latest_scan_info() -> dict | None:
+    """Fast lookup of the most recent scan_history entry (timestamp + scan_type only).
+
+    Used by /api/health and startup recovery to detect prolonged inactivity
+    without loading the full history. Returns None if the table is empty.
+    """
+    def _load():
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT timestamp, scan_type FROM scan_history "
+                    "ORDER BY timestamp DESC LIMIT 1"
+                )
+                row = cur.fetchone()
+                return dict(row) if row else None
+    return _pg_retry(_load)
+
+
 def pg_save_scan_history_entry(entry_dict: dict) -> None:
     """Insert a single scan history entry and prune old ones (>365 days).
 

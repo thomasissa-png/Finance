@@ -88,6 +88,12 @@ RESET_SCAN_COOLDOWN_MINUTES = 5
 _scan_dispatch_times: dict[str, datetime] = {}
 _scan_dispatch_lock = threading.Lock()
 
+# v8.7: Cached "latest scan" info for /api/health (avoids hitting DB on every ping).
+# Refreshed every 60s. Format: {"timestamp": datetime, "scan_type": str, "fetched_at": float}
+_latest_scan_cache: dict | None = None
+_latest_scan_cache_lock = threading.Lock()
+_LATEST_SCAN_CACHE_TTL_SEC = 60
+
 # Expected scan schedule (hour, minute) for watchdog detection
 _EXPECTED_SCANS = {
     "europe": (7, 50),
@@ -270,6 +276,60 @@ def _recover_pending_trades_on_startup() -> None:
     thread2.start()
 
 
+def _recover_missed_scans_on_startup() -> None:
+    """v8.7: Detect prolonged inactivity and trigger missed-scan recovery.
+
+    The existing watchdog (_run_scan_watchdog) only retroactively fires today's
+    missed scans on its 30-min cron. If the container slept for multiple days
+    (Replit free-tier inactivity), the cron won't catch up until 25-55 min after
+    boot. This function runs the watchdog ONCE immediately at startup if the
+    most recent scan in history is older than 24h, restoring same-day scans
+    without waiting for the cron tick.
+    """
+    def _worker():
+        try:
+            # Wait briefly for scheduler to fully initialize
+            import time as _time
+            _time.sleep(5)
+
+            latest = _get_latest_scan_info()
+            now = datetime.now(timezone.utc)
+            now_paris = datetime.now(PARIS_TZ)
+
+            if latest is None:
+                logger.info("Startup scan recovery: no scan history found — skipping")
+                return
+
+            age_hours = (now - latest["timestamp"]).total_seconds() / 3600
+
+            if age_hours <= 24:
+                logger.info(
+                    "Startup scan recovery: last scan %.1fh ago — within tolerance, skipping",
+                    age_hours,
+                )
+                return
+
+            if now_paris.weekday() >= 5 or now_paris.hour < 8 or now_paris.hour >= 20:
+                logger.info(
+                    "Startup scan recovery: last scan %.1fh ago, but outside business hours "
+                    "(%s %02d:%02d Paris) — deferring to next watchdog cron",
+                    age_hours, now_paris.strftime("%a"), now_paris.hour, now_paris.minute,
+                )
+                return
+
+            logger.warning(
+                "STARTUP RECOVERY: last scan was %.1fh ago (%s) — invoking watchdog "
+                "immediately to retrigger today's missed scans",
+                age_hours, latest["timestamp"].isoformat(),
+            )
+            _run_scan_watchdog()
+        except Exception as exc:
+            logger.error("Startup scan recovery failed: %s", exc)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="startup-scan-recovery")
+    thread.start()
+
+
 # ── Self-ping keepalive ──────────────────────────────────────
 # Replit autoscale kills apps with no inbound traffic.
 # This thread pings /api/health every 4 minutes to keep the process alive
@@ -318,6 +378,87 @@ def _get_existing_trade_tickers(exclude_key: str) -> list[str]:
                 if ticker:
                     tickers.append(ticker)
     return tickers
+
+
+def _get_latest_scan_info() -> dict | None:
+    """Return the most recent scan info: {"timestamp": datetime, "scan_type": str}.
+
+    v8.7: Used by /api/health (freshness gate) and startup recovery (multi-day
+    sleep detection). Tries in-memory _last_scans first (today only), then
+    falls back to scan_history (PG → JSON). Cached 60s to avoid hammering DB
+    on health pings.
+    """
+    global _latest_scan_cache
+    import time as _time
+
+    now_ts = _time.monotonic()
+
+    # 1. Check in-memory cache (60s TTL)
+    with _latest_scan_cache_lock:
+        if _latest_scan_cache is not None:
+            if now_ts - _latest_scan_cache.get("fetched_at", 0) < _LATEST_SCAN_CACHE_TTL_SEC:
+                return {
+                    "timestamp": _latest_scan_cache["timestamp"],
+                    "scan_type": _latest_scan_cache["scan_type"],
+                }
+
+    # 2. Try _last_scans (today only — fast, in-memory)
+    latest_ts: datetime | None = None
+    latest_key: str | None = None
+    with _scans_lock:
+        for key, scan_data in _last_scans.items():
+            if not isinstance(scan_data, dict):
+                continue
+            ts_raw = scan_data.get("timestamp")
+            if not ts_raw:
+                continue
+            try:
+                if isinstance(ts_raw, str):
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                else:
+                    ts = ts_raw
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if latest_ts is None or ts > latest_ts:
+                    latest_ts = ts
+                    latest_key = key
+            except Exception:
+                continue
+
+    # 3. Fall back to scan_history (PG fast path, JSON otherwise)
+    if latest_ts is None:
+        try:
+            if is_pg_enabled():
+                from .database import pg_get_latest_scan_info
+                row = pg_get_latest_scan_info()
+                if row:
+                    ts = row.get("timestamp")
+                    if isinstance(ts, str):
+                        ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if ts and ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    latest_ts = ts
+                    latest_key = row.get("scan_type")
+            else:
+                from .scan_history import load_scan_history
+                history = load_scan_history()
+                if history:
+                    last = max(history, key=lambda e: e.timestamp)
+                    latest_ts = last.timestamp
+                    if latest_ts and latest_ts.tzinfo is None:
+                        latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+                    latest_key = getattr(last, "scan_type", None)
+        except Exception as exc:
+            logger.warning("Failed to query latest scan info: %s", exc)
+            return None
+
+    if latest_ts is None:
+        return None
+
+    info = {"timestamp": latest_ts, "scan_type": latest_key or "unknown"}
+    with _latest_scan_cache_lock:
+        _latest_scan_cache = {**info, "fetched_at": now_ts}
+    return info
 
 
 def _run_scheduled_scan(scan_key: str) -> None:
@@ -1076,6 +1217,10 @@ async def lifespan(app: FastAPI):
     # Startup recovery: close any old PENDING trades that were missed by the 22:00 journal
     # (e.g., app was down overnight, Replit killed the process before journal ran)
     _recover_pending_trades_on_startup()
+
+    # v8.7: Detect multi-day inactivity (Replit container sleep) and retrigger
+    # today's missed scans without waiting for the 30-min watchdog cron.
+    _recover_missed_scans_on_startup()
 
     # Seed price references for anomaly detection (background, non-blocking)
     def _seed_prices():
@@ -2618,6 +2763,48 @@ def health():
 
     # Data storage — report mode without I/O
     status["persistence"] = "postgresql" if is_pg_enabled() else "json_files"
+
+    # v8.7: Last scan freshness gate — detects silent failures
+    # (Replit container sleep, scheduler stalls). The scheduler being "alive"
+    # is not enough — we must verify scans actually ran recently.
+    try:
+        latest = _get_latest_scan_info()
+        now = datetime.now(timezone.utc)
+        now_paris = datetime.now(PARIS_TZ)
+        is_business_hours = (
+            now_paris.weekday() < 5
+            and 8 <= now_paris.hour < 20
+        )
+        if latest is None:
+            scan_status = "no_data"
+            age_hours = None
+            scan_type = None
+            ts_iso = None
+        else:
+            age_hours = (now - latest["timestamp"]).total_seconds() / 3600
+            scan_type = latest["scan_type"]
+            ts_iso = latest["timestamp"].isoformat()
+            # Stale = >4h during business hours OR >24h regardless
+            if age_hours > 24:
+                scan_status = "stale_critical"
+            elif age_hours > 4 and is_business_hours:
+                scan_status = "stale"
+            else:
+                scan_status = "fresh"
+
+        status["last_scan"] = {
+            "status": scan_status,
+            "timestamp": ts_iso,
+            "scan_type": scan_type,
+            "age_hours": round(age_hours, 2) if age_hours is not None else None,
+            "business_hours": is_business_hours,
+        }
+        # Mark overall status degraded on prolonged silence
+        if scan_status in ("stale_critical", "stale"):
+            status["status"] = "degraded"
+    except Exception as exc:
+        logger.warning("Health: last_scan check failed: %s", exc)
+        status["last_scan"] = {"status": "unknown", "error": str(exc)}
 
     # Degraded only if the critical API key is missing
     if status["dependencies"].get("anthropic_key") == "missing":
