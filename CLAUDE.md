@@ -151,24 +151,24 @@ On doit etre capable d'edger sur TOUTES les commodities. Si les trades commodity
 ### Versions actuelles
 | Agent | Version | Dernier changement |
 |-------|---------|-------------------|
-| News | 7.8 | GNews noise filter (quoted phrases + blocklist), structured sources pool fix |
+| News | 7.7 | GNews noise filter (quoted phrases + blocklist), structured sources pool fix |
 | Scoring | 7.6 | S1-P2 signal accumulator race fix, S1-P4 fallback validation |
 | Scoring 2 | 8.2 | Thread-safe tokens, LRU cache cap, dead code cleanup, fallback validation |
 | Scoring 3 | 3.0 | Pure intraday 1H primary, daily directional filter, EMA 9/21, MACD 5/13/4, BB 12/1.8 |
 | Scoring 4 | 2.0 | Weekly config weights, tie→NEUTRAL, activation date |
 | Trader 1 | 6.7 | Enhanced logging (max_score, top_headline), save_trade error handling |
-| Trader 2 | 7.7 | Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once |
-| Trader 3 | 3.0 | Pure intraday — EOD_CLOSE at 19:45 CET, holdings 3-5h, ema_trend replaces ma_trend |
-| Trader 4 | 2.1 | Always-save after monitor, stale stop_price fix |
+| Trader 2 | 8.1 | Atomic file writes, price guard fix, ThreadPool shutdown, PG serialize-once |
+| Trader 3 | 3.1 | Pure intraday — EOD_CLOSE at 19:45 CET, holdings 3-5h, ema_trend replaces ma_trend |
+| Trader 4 | 2.2 | Always-save after monitor, stale stop_price fix |
 | Journal 1 | 4.1 | MAE/MFE, slippage, 15min bars |
 | Journal 2 | 7.2 | Atomic single-write (PG vs JSON branch), no triple write |
 | Journal 3 | 3.0 | Intraday force-close 24h safety net, supports EOD_CLOSE result type |
 | Journal 4 | 2.1 | Atomic single-write (PG vs JSON branch), no double write |
-| Learning 1 | 5.5 | Per-source performance tracking in Claude feedback |
-| Learning 2 | 7.4 | Zone+intensity-aware newscat cross-dimension |
+| Learning 1 | 5.6 | Per-source performance tracking in Claude feedback |
+| Learning 2 | 7.5 | Zone+intensity-aware newscat cross-dimension |
 | Learning 3 | 3.0 | Intraday decay 15j, EOD_CLOSE tracking, ema_trend replaces ma_trend |
-| Learning 4 | 2.1 | Weekly config disk persistence (survives restart) |
-| Infrastructure | 7.7 | Suppress transient SSL errors (INFO instead of WARN) |
+| Learning 4 | 2.2 | Weekly config disk persistence (survives restart) |
+| Infrastructure | 7.8 | Suppress transient SSL errors (INFO instead of WARN) |
 | Performance | 8.4 | Fix .values() on list crash in _compute_trader_3_kpis |
 | Auditor | 8.3 | Deep audit methods for Team 3 (scoring_3, trader_3, journal_3, learning_3) |
 

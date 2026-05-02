@@ -17,7 +17,7 @@ import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1149,6 +1149,24 @@ def _one_time_cleanup() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _last_scans
+    # v8.7: Sentry error tracking — gated on SENTRY_DSN env var.
+    # No-op when DSN is missing (e.g. local dev). Captures unhandled
+    # exceptions (registry pipeline, agents, scheduler jobs) so they
+    # surface as alerts instead of being lost in Replit logs.
+    sentry_dsn = os.environ.get("SENTRY_DSN")
+    if sentry_dsn:
+        try:
+            import sentry_sdk
+            sentry_sdk.init(
+                dsn=sentry_dsn,
+                traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+                environment=os.environ.get("SENTRY_ENVIRONMENT", "prod"),
+                # Don't send raw request bodies (may contain admin tokens)
+                send_default_pii=False,
+            )
+            logger.info("Sentry initialized (env=%s)", os.environ.get("SENTRY_ENVIRONMENT", "prod"))
+        except Exception as exc:
+            logger.warning("Sentry init failed: %s", exc)
     # Initialize PostgreSQL tables if DATABASE_URL is set
     init_db()
     # One-time cleanup for fresh start (runs only once, uses sentinel file)
@@ -1266,10 +1284,29 @@ if repl_slug and repl_owner:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if repl_slug else ["*"],  # Keep * for local dev
+    allow_origins=ALLOWED_ORIGINS,  # v8.7: explicit list always (no "*" fallback)
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Admin auth dependency ────────────────────────────────────────
+# v8.7: Authenticate destructive endpoints (/api/admin/*, /api/infrastructure/reset*).
+# Set ADMIN_API_TOKEN in Replit Secrets (e.g. `openssl rand -hex 32`).
+# In local dev (no REPL_SLUG, no token set): allowed.
+# In production (REPL_SLUG set, no token set): fails closed with 503.
+
+def require_admin_token(x_admin_token: str | None = Header(default=None)) -> None:
+    expected = os.environ.get("ADMIN_API_TOKEN")
+    if not expected:
+        if os.environ.get("REPL_SLUG"):
+            raise HTTPException(
+                status_code=503,
+                detail="Admin auth not configured (ADMIN_API_TOKEN env var missing)",
+            )
+        return  # Local dev: pass-through
+    if not x_admin_token or x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Admin-Token header")
 
 
 # ── Root endpoint — serves frontend in prod, health check in dev ──
@@ -2114,7 +2151,7 @@ def get_infra_report():
     return run_infra_report()
 
 
-@app.post("/api/infrastructure/reset")
+@app.post("/api/infrastructure/reset", dependencies=[Depends(require_admin_token)])
 def reset_all_data(password: str = ""):
     """Reset ALL trading data for a fresh start.
 
@@ -2212,7 +2249,7 @@ _TEAM_RESET_MAP: dict[int, dict] = {
 }
 
 
-@app.post("/api/infrastructure/reset-team/{team_id}")
+@app.post("/api/infrastructure/reset-team/{team_id}", dependencies=[Depends(require_admin_token)])
 def reset_team_data(team_id: int, password: str = ""):
     """Reset trading data for a SINGLE team (1-4).
 
@@ -2399,6 +2436,194 @@ def get_performance_history():
         "snapshots": agent._snapshots,
         "daily_reports": agent._daily_reports,
     }
+
+
+@app.get("/api/performance/kill-criteria")
+def get_kill_criteria():
+    """v8.7: Evaluate the 6 @elon kill criteria against current state.
+
+    Returns the live status of each kill criterion (PASS / FAIL / N/A) so
+    that Thomas can decide objectively whether to KILL or continue. The
+    bar is intentionally high — a single FAIL on any P0 criterion is
+    sufficient to recommend kill, but the final decision is human.
+
+    Criteria (from docs/audit/elon.md verdict PIVOT):
+    1. TP_HIT rate > 25% on last 4 weeks (≥10 actioned trades)
+    2. Sharpe ratio > 0.5 on backtest 90j (placeholder until backtest run)
+    3. Cost Anthropic < 3× P&L
+    4. At least 1 TP_HIT in last 60 days
+    5. Backtest vs live edge drift < 50% (placeholder)
+    6. Max drawdown < 10%
+    """
+    out = {
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "criteria": [],
+        "verdict": "INSUFFICIENT_DATA",
+        "fails": 0,
+    }
+    try:
+        from .learning import load_trades
+        from .models import TradeResult
+        trades = load_trades()
+        closed = [
+            t for t in trades
+            if t.result != TradeResult.PENDING
+            and t.pnl_pct is not None
+            and abs(t.pnl_pct) <= 50
+        ]
+        # Last 4 weeks window
+        from datetime import timedelta
+        cutoff_4w = datetime.now(timezone.utc) - timedelta(days=28)
+        recent = [
+            t for t in closed
+            if t.timestamp and t.timestamp.replace(tzinfo=timezone.utc) >= cutoff_4w
+        ] if closed else []
+        actioned = [t for t in recent if t.result in (TradeResult.TP_HIT, TradeResult.SL_HIT)]
+        tp_hits = [t for t in actioned if t.result == TradeResult.TP_HIT]
+
+        # Criterion 1: TP_HIT rate > 25% on last 4 weeks (≥10 actioned)
+        if len(actioned) >= 10:
+            tp_rate = len(tp_hits) / len(actioned) * 100
+            c1 = {
+                "id": 1,
+                "name": "TP_HIT rate > 25% (4w, ≥10 actioned)",
+                "value": round(tp_rate, 1),
+                "threshold": 25.0,
+                "status": "PASS" if tp_rate > 25 else "FAIL",
+            }
+        else:
+            c1 = {
+                "id": 1,
+                "name": "TP_HIT rate > 25% (4w, ≥10 actioned)",
+                "value": None,
+                "threshold": 25.0,
+                "status": "N/A",
+                "note": f"only {len(actioned)} actioned trades — need ≥10",
+            }
+        out["criteria"].append(c1)
+
+        # Criterion 4: at least 1 TP_HIT in last 60 days
+        cutoff_60d = datetime.now(timezone.utc) - timedelta(days=60)
+        tp_60d = [
+            t for t in closed
+            if t.result == TradeResult.TP_HIT
+            and t.timestamp
+            and t.timestamp.replace(tzinfo=timezone.utc) >= cutoff_60d
+        ]
+        c4 = {
+            "id": 4,
+            "name": "≥1 TP_HIT in last 60 days",
+            "value": len(tp_60d),
+            "threshold": 1,
+            "status": "PASS" if len(tp_60d) >= 1 else "FAIL",
+        }
+        out["criteria"].append(c4)
+
+        # Criterion 6: max drawdown < 10% (use Sharpe/DD from agent_performance if available)
+        agent = get_agent("performance")
+        max_dd = None
+        sharpe = None
+        if agent:
+            try:
+                t1_kpis = agent._compute_trader_1_kpis()
+                max_dd = t1_kpis.get("max_drawdown")
+                sharpe = t1_kpis.get("sharpe_ratio")
+            except Exception:
+                pass
+        if max_dd is not None:
+            c6 = {
+                "id": 6,
+                "name": "Max drawdown < 10%",
+                "value": max_dd,
+                "threshold": -10.0,
+                "status": "PASS" if max_dd > -10.0 else "FAIL",
+            }
+        else:
+            c6 = {"id": 6, "name": "Max drawdown < 10%", "value": None,
+                  "threshold": -10.0, "status": "N/A"}
+        out["criteria"].append(c6)
+
+        # Criterion 2: Sharpe > 0.5 (live; backtest placeholder)
+        if sharpe is not None:
+            c2 = {
+                "id": 2,
+                "name": "Sharpe ratio > 0.5 (live)",
+                "value": sharpe,
+                "threshold": 0.5,
+                "status": "PASS" if sharpe > 0.5 else "FAIL",
+            }
+        else:
+            c2 = {
+                "id": 2,
+                "name": "Sharpe ratio > 0.5 (live)",
+                "value": None,
+                "threshold": 0.5,
+                "status": "N/A",
+                "note": "needs ≥2 closed trades for stdev",
+            }
+        out["criteria"].append(c2)
+
+        # Criterion 3: cost Anthropic < 3× P&L
+        try:
+            from .news_scorer import get_token_usage
+            usage = get_token_usage()
+            scans = usage.get("scans", 0)
+            if scans > 0:
+                cost_per_scan = (
+                    (usage.get("input_tokens", 0) / 1_000_000) * 1.0
+                    + (usage.get("output_tokens", 0) / 1_000_000) * 5.0
+                ) / scans
+                monthly_cost = cost_per_scan * 4 * 30  # 4 scans/day * 30j
+                # P&L = sum of pnl_pct * notional. Using $1k notional placeholder.
+                total_pnl_dollars = sum(t.pnl_pct for t in closed) * 10  # $1k * pnl_pct/100
+                if abs(total_pnl_dollars) > 0.01:
+                    ratio = abs(monthly_cost / total_pnl_dollars)
+                    c3 = {
+                        "id": 3,
+                        "name": "Cost Anthropic < 3× |P&L|",
+                        "value": round(ratio, 2),
+                        "threshold": 3.0,
+                        "status": "PASS" if ratio < 3.0 else "FAIL",
+                        "monthly_cost_usd": round(monthly_cost, 2),
+                        "pnl_usd_at_1k_notional": round(total_pnl_dollars, 2),
+                    }
+                else:
+                    c3 = {"id": 3, "name": "Cost Anthropic < 3× |P&L|", "value": None,
+                          "threshold": 3.0, "status": "FAIL",
+                          "note": "P&L ≈ 0 → infinite ratio"}
+            else:
+                c3 = {"id": 3, "name": "Cost Anthropic < 3× |P&L|", "value": None,
+                      "threshold": 3.0, "status": "N/A",
+                      "note": "no scans recorded yet"}
+        except Exception as exc:
+            c3 = {"id": 3, "name": "Cost Anthropic < 3× |P&L|", "value": None,
+                  "threshold": 3.0, "status": "N/A", "error": str(exc)}
+        out["criteria"].append(c3)
+
+        # Criterion 5: backtest vs live edge drift (placeholder)
+        out["criteria"].append({
+            "id": 5,
+            "name": "Backtest vs live edge drift < 50%",
+            "value": None,
+            "threshold": 50.0,
+            "status": "N/A",
+            "note": "requires backtest v5.1 to be run first (POST /api/backtest/replay)",
+        })
+
+        # Aggregate verdict
+        fails = sum(1 for c in out["criteria"] if c["status"] == "FAIL")
+        out["fails"] = fails
+        if fails >= 2:
+            out["verdict"] = "KILL_RECOMMENDED"
+        elif fails == 1:
+            out["verdict"] = "PIVOT_OR_FIX"
+        elif any(c["status"] == "PASS" for c in out["criteria"]):
+            out["verdict"] = "OK"
+        else:
+            out["verdict"] = "INSUFFICIENT_DATA"
+    except Exception as exc:
+        out["error"] = str(exc)
+    return out
 
 
 @app.post("/api/performance/trigger/{action}")
@@ -2813,6 +3038,51 @@ def health():
     return status
 
 
+# ── AI / Claude API observability ────────────────────────────────
+
+@app.get("/api/ai/token-usage")
+def ai_token_usage():
+    """v8.7: Expose Claude API token usage for cost monitoring.
+
+    Returns cumulative input/output tokens, cache hit/creation tokens,
+    and a coarse cost estimate (Haiku 4.5 pricing). In-process counters
+    reset on container restart (Replit). For persistent tracking,
+    a `claude_usage` PG table is on the roadmap (P2).
+    """
+    out = {
+        "scoring_1": {},
+        "scoring_2": {},
+        "estimated_monthly_cost_usd": None,
+        "note": "in-process counters; reset on app restart",
+    }
+    try:
+        from .news_scorer import get_token_usage as scorer_usage
+        out["scoring_1"] = scorer_usage()
+    except Exception as exc:
+        out["scoring_1"] = {"error": str(exc)}
+    try:
+        from .agents.agent_scoring_2 import get_trend_token_usage
+        out["scoring_2"] = get_trend_token_usage()
+    except Exception:
+        # Scoring 2 may not expose token tracking yet — silent fallback
+        out["scoring_2"] = {"note": "not exposed"}
+    # Coarse cost estimate (Haiku 4.5 default: $1/MTok in, $5/MTok out — verify with WebSearch).
+    # Roughly project monthly assuming current usage continues at the same rate.
+    try:
+        s1 = out["scoring_1"] if isinstance(out["scoring_1"], dict) else {}
+        scans = s1.get("scans", 0)
+        if scans and scans > 0:
+            input_tok = s1.get("input_tokens", 0)
+            output_tok = s1.get("output_tokens", 0)
+            cost_per_scan = (input_tok / 1_000_000) * 1.0 + (output_tok / 1_000_000) * 5.0
+            cost_per_scan = cost_per_scan / scans if scans else 0
+            # 4 scans/day * 30 days
+            out["estimated_monthly_cost_usd"] = round(cost_per_scan * 4 * 30, 2)
+    except Exception:
+        pass
+    return out
+
+
 # ── Source Health Monitoring ──────────────────────────────────────
 
 @app.get("/api/source-health")
@@ -2860,7 +3130,7 @@ def source_health_weekly():
 # ── Admin: Price corrections ────────────────────────────────────────
 
 
-@app.post("/api/admin/fix-entry-price")
+@app.post("/api/admin/fix-entry-price", dependencies=[Depends(require_admin_token)])
 def fix_entry_price(body: dict):
     """Fix a bad entry_price for any team's position.
 
@@ -2996,7 +3266,7 @@ def fix_entry_price(body: dict):
     return result
 
 
-@app.get("/api/admin/price-references")
+@app.get("/api/admin/price-references", dependencies=[Depends(require_admin_token)])
 def get_price_references():
     """Get current price reference cache (for debugging price anomalies)."""
     from .market_data import _price_reference, _price_ref_lock

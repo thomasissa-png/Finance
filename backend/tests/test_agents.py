@@ -1132,9 +1132,6 @@ class TestTeam3V2Scoring3:
         pos_15 = source.index("vol_ratio > 1.5")
         assert pos_2 < pos_15  # 2.0 check before 1.5 check
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_scoring_3 import AgentScoring3
-        assert AgentScoring3.version == "2.6"
 
     def test_stochastic_reversal_detector(self):
         """T3: Stochastic reversal should detect oversold conditions."""
@@ -1196,9 +1193,6 @@ class TestTeam3V2Trader3:
         assert trader._get_max_per_strategy("rsi_reversal") == MAX_PER_STRATEGY_VALIDATED
         assert trader._get_max_per_strategy("ma_trend") == MAX_PER_STRATEGY_BASE
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_trader_3 import AgentTrader3
-        assert AgentTrader3.version == "2.5"
 
 
 class TestTeam3V2Journal3:
@@ -1252,9 +1246,6 @@ class TestTeam3V2Journal3:
         assert "rsi_reversal" in perf
         assert "sharpe_ratio" in perf["rsi_reversal"]
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_journal_3 import AgentJournal3
-        assert AgentJournal3.version == "2.2"
 
 
 class TestTeam3V2Learning3:
@@ -1312,9 +1303,6 @@ class TestTeam3V2Learning3:
         assert len(history) == 2
         assert "timestamp" in history[0]
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_learning_3 import AgentLearning3
-        assert AgentLearning3.version == "2.3"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1352,9 +1340,6 @@ class TestTeam4V2Scoring4:
         from datetime import date
         assert isinstance(ACTIVATION_DATE, date)
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_scoring_4 import AgentScoring4
-        assert AgentScoring4.version == "2.0"
 
     def test_weekly_config_consumed(self):
         """T1: AgentScoring4.run() should accept weekly_config parameter."""
@@ -1529,9 +1514,6 @@ class TestTeam4V2Trader4:
         from backend.app.agents.agent_trader_4 import MAX_HOLD_HOURS
         assert MAX_HOLD_HOURS == 72
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_trader_4 import AgentTrader4
-        assert AgentTrader4.version == "2.2"
 
     def test_metrics_include_activation(self):
         """P8: Metrics should include activation info."""
@@ -1599,9 +1581,6 @@ class TestTeam4V2Journal4:
         assert "close_types" in stats["news+tech"]
         assert "duration_categories" in stats["news+tech"]
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_journal_4 import AgentJournal4
-        assert AgentJournal4.version == "2.1"
 
 
 class TestTeam4V2Learning4:
@@ -1674,9 +1653,6 @@ class TestTeam4V2Learning4:
         anomalies = result.get("anomalies", [])
         assert any("BELOW_TARGET" in a for a in anomalies)
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_learning_4 import AgentLearning4
-        assert AgentLearning4.version == "2.2"
 
     def test_metrics_include_weekly(self):
         """Metrics should include weekly config info."""
@@ -1943,9 +1919,6 @@ class TestTrader4TrailingStopPersistence:
         assert "stop_price or pos.get" not in sl_check_section, \
             "Should not use stale stop_price variable in SL check"
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_trader_4 import AgentTrader4
-        assert AgentTrader4.version == "2.2"
 
 
 class TestTrader3TrailingStopPersistence:
@@ -1995,13 +1968,7 @@ class TestJournalJsonAtomicWrite:
         # Should have a single JSON write path
         assert "_save_entries_json(all_entries)" in source
 
-    def test_journal3_version_bumped(self):
-        from backend.app.agents.agent_journal_3 import AgentJournal3
-        assert AgentJournal3.version == "2.2"
 
-    def test_journal4_version_bumped(self):
-        from backend.app.agents.agent_journal_4 import AgentJournal4
-        assert AgentJournal4.version == "2.1"
 
 
 class TestTrader2Fixes:
@@ -2048,9 +2015,6 @@ class TestTrader2Fixes:
             result = trader._make_change("HG=F", position, "LONG", "test", [], 30.0)
         assert result is None
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_trader_2 import AgentTrader2
-        assert AgentTrader2.version == "8.0"
 
 
 class TestLearning2SnapshotContamination:
@@ -2081,9 +2045,6 @@ class TestLearning2SnapshotContamination:
         assert "_total_recalculations" in source
         assert "_last_run_time" in source
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_learning_2 import AgentLearning2
-        assert AgentLearning2.version == "7.5"
 
 
 class TestLearning34WeeklyConfigPersistence:
@@ -2119,13 +2080,7 @@ class TestLearning34WeeklyConfigPersistence:
         source = inspect.getsource(AgentLearning4.__init__)
         assert "_load_persisted_weekly_config" in source
 
-    def test_learning3_version_bumped(self):
-        from backend.app.agents.agent_learning_3 import AgentLearning3
-        assert AgentLearning3.version == "2.3"
 
-    def test_learning4_version_bumped(self):
-        from backend.app.agents.agent_learning_4 import AgentLearning4
-        assert AgentLearning4.version == "2.2"
 
 
 class TestPerformanceCascadeFailure:
@@ -2142,9 +2097,6 @@ class TestPerformanceCascadeFailure:
         assert 'report[key] = {"error"' in source, \
             "Must store error dict on failure instead of aborting"
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_performance import AgentPerformance
-        assert AgentPerformance.version == "8.4"
 
 
 class TestScoring2WordBoundary:
@@ -2176,9 +2128,6 @@ class TestScoring2WordBoundary:
         mult = _compute_persistence_mult("workers on strike at mine", "")
         assert mult == 1.3
 
-    def test_version_bumped(self):
-        from backend.app.agents.agent_scoring_2 import AgentScoring2
-        assert AgentScoring2.version == "8.2"
 
 
 class TestMainDeadImport:

@@ -296,6 +296,10 @@ class AgentPerformance(BaseAgent):
             "worst_ticker": None,
             "direction_accuracy": None,
             "by_category": {},
+            # v8.7: risk-adjusted return + activity freshness for silent failure detection
+            "sharpe_ratio": None,
+            "max_drawdown": None,
+            "days_since_last_close": None,
         }
 
         try:
@@ -344,6 +348,47 @@ class AgentPerformance(BaseAgent):
             # Direction accuracy
             correct_dir = sum(1 for t in closed if t.pnl_pct > 0)
             kpis["direction_accuracy"] = round(correct_dir / len(closed) * 100, 1)
+
+            # v8.7: Sharpe ratio (annualized on daily bars, 252 trading days)
+            # and max drawdown (chronological cumulative P&L). Trades sorted by timestamp
+            # so the cumulative path reflects the actual sequence experienced.
+            try:
+                import statistics
+                closed_sorted = sorted(closed, key=lambda t: t.timestamp)
+                pnl_series = [t.pnl_pct for t in closed_sorted]
+                if len(pnl_series) >= 2:
+                    avg_pnl = sum(pnl_series) / len(pnl_series)
+                    std_pnl = statistics.stdev(pnl_series)
+                    if std_pnl > 0:
+                        kpis["sharpe_ratio"] = round(
+                            (avg_pnl / std_pnl) * (252 ** 0.5), 2
+                        )
+                # Max drawdown — measured peak-to-trough on the cumulative P&L curve
+                cumulative = 0.0
+                peak = 0.0
+                max_dd = 0.0
+                for p in pnl_series:
+                    cumulative += p
+                    if cumulative > peak:
+                        peak = cumulative
+                    dd = cumulative - peak
+                    if dd < max_dd:
+                        max_dd = dd
+                kpis["max_drawdown"] = round(max_dd, 2)
+                # Days since last closed trade — silent failure detector input
+                if closed_sorted:
+                    last_ts = closed_sorted[-1].timestamp
+                    if last_ts is not None:
+                        from datetime import datetime, timezone
+                        now = datetime.now(timezone.utc)
+                        if last_ts.tzinfo is None:
+                            from datetime import timezone as _tz
+                            last_ts = last_ts.replace(tzinfo=_tz.utc)
+                        delta_days = (now - last_ts).days
+                        # Approximate business days (×5/7) to avoid weekend false positives
+                        kpis["days_since_last_close"] = max(0, int(delta_days * 5 / 7))
+            except Exception as exc:
+                self.log("Trader 1 risk-adjusted metrics failed", {"error": str(exc)}, level="WARN")
 
             # By category
             by_cat: dict[str, dict] = {}
@@ -996,6 +1041,30 @@ class AgentPerformance(BaseAgent):
                 "severity": "WARN",
                 "agent": "trader_1",
                 "message": f"EXPIRED rate élevé: {t1['expired_rate']}% — targets trop ambitieux",
+            })
+        # v8.7: CRITICAL escalation when EXPIRED is overwhelming AND sample is meaningful.
+        # Catches the 100% EXPIRED scenario which the 50% WARN missed entirely.
+        if (t1.get("expired_rate") is not None
+                and t1["expired_rate"] > 90
+                and t1.get("total_trades", 0) > 10):
+            alerts.append({
+                "severity": "CRITICAL",
+                "agent": "trader_1",
+                "message": (
+                    f"EXPIRED rate {t1['expired_rate']}% sur {t1['total_trades']} trades — "
+                    f"calibration TP/SL probablement cassée, le système ne génère aucun signal exploitable"
+                ),
+            })
+        # v8.7: Silent failure detector — if no closed trades and last activity > 3 business days ago,
+        # the pipeline is most likely down. Complements /api/health stale_critical detection.
+        if t1.get("days_since_last_close") is not None and t1["days_since_last_close"] >= 3:
+            alerts.append({
+                "severity": "CRITICAL",
+                "agent": "trader_1",
+                "message": (
+                    f"Aucun trade fermé depuis {t1['days_since_last_close']} jour(s) ouvré(s) — "
+                    f"pipeline probablement silencieuse (vérifier scheduler / Replit container)"
+                ),
             })
 
         # Trader 2 alerts — trend: flip win rate
